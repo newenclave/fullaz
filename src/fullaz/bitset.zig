@@ -1,5 +1,6 @@
 const std = @import("std");
 const WordT = @import("wordt.zig").WordT;
+const errors = @import("errors.zig");
 
 inline fn ceilWords(value: usize, bits_per_word: usize) usize {
     return (value + bits_per_word - 1) / bits_per_word;
@@ -11,9 +12,14 @@ inline fn bitmapSizeInBytes(value: usize, bits_per_word: usize, word_bytes: usiz
     return words * word_bytes;
 }
 
-pub fn maxObjectsByWords(comptime Word: type, capacity: usize, object_size: usize) struct { usize, usize } {
+pub const CapacityResult = struct {
+    bitmap_words: usize,
+    objects: usize,
+};
+
+pub fn maxObjectsByWords(comptime Word: type, capacity: usize, object_size: usize) CapacityResult {
     if (capacity == 0 or object_size == 0) {
-        return .{ 0, 0 };
+        return .{ .bitmap_words = 0, .objects = 0 };
     }
     const bits_per_word: usize = @bitSizeOf(Word);
     const word_bytes = @sizeOf(Word);
@@ -34,13 +40,20 @@ pub fn maxObjectsByWords(comptime Word: type, capacity: usize, object_size: usiz
         }
     }
     const bit_map_words = if (best == 0) 0 else ceilWords(best, bits_per_word);
-    return .{ bit_map_words, best };
+    return .{ .bitmap_words = bit_map_words, .objects = best };
 }
 
 pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
     const W = WordT(Word, Endian);
     const BitsPerWord: usize = @bitSizeOf(Word);
     const ShiftT = std.math.Log2Int(Word);
+
+    comptime {
+        switch (@typeInfo(Word)) {
+            .int => {},
+            else => @compileError("BitSet Word must be integer; got " ++ @typeName(Word)),
+        }
+    }
 
     return struct {
         pub const Self = @This();
@@ -50,7 +63,9 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
         max_bits: usize,
 
         pub fn initConst(bytes: []const u8, maximum: usize) !Self {
-            if (bytes.len % @sizeOf(W) != 0) return error.BadLength;
+            if (bytes.len % @sizeOf(W) != 0) {
+                return errors.BufferError.BadLength;
+            }
             const words = std.mem.bytesAsSlice(W, bytes);
             const cap_bits = words.len * BitsPerWord;
             return .{
@@ -62,7 +77,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
         pub fn initMutable(bytes: []u8, maximum: usize) !Self {
             if (bytes.len % @sizeOf(W) != 0) {
-                return error.BadLength;
+                return errors.BufferError.BadLength;
             }
             const words = std.mem.bytesAsSlice(W, bytes);
             const cap_bits = words.len * BitsPerWord;
@@ -83,26 +98,26 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
         pub fn set(self: *Self, bit_pos: usize) !void {
             if (bit_pos >= self.max_bits) {
-                return;
+                return errors.Common.IndexOutOfBounds;
             }
             const words = try self.requireWritable();
             const bucket = bit_pos / BitsPerWord;
             const pos = bit_pos % BitsPerWord;
-            var v: Word = words[bucket].get();
+            var v: Word = words.ptr[bucket].get();
             v |= (@as(Word, 1) << @as(ShiftT, @intCast(pos)));
-            words[bucket].set(v);
+            words.ptr[bucket].set(v);
         }
 
         pub fn clear(self: *Self, bit_pos: usize) !void {
             if (bit_pos >= self.max_bits) {
-                return;
+                return errors.Common.IndexOutOfBounds;
             }
             const words = try self.requireWritable();
             const bucket = bit_pos / BitsPerWord;
             const pos = bit_pos % BitsPerWord;
-            var v: Word = words[bucket].get();
+            var v: Word = words.ptr[bucket].get();
             v &= ~(@as(Word, 1) << @intCast(pos));
-            words[bucket].set(v);
+            words.ptr[bucket].set(v);
         }
 
         pub fn reset(self: *Self) !void {
@@ -118,7 +133,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
             }
             const bucket = bit_pos / BitsPerWord;
             const pos = bit_pos % BitsPerWord;
-            const v: Word = self.words_ro[bucket].get();
+            const v: Word = self.words_ro.ptr[bucket].get();
             return (v & (@as(Word, 1) << @as(ShiftT, @intCast(pos)))) != 0;
         }
 
@@ -128,7 +143,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
             var b: usize = 0;
             while (b < n_words) : (b += 1) {
-                const v: Word = self.words_ro[b].get();
+                const v: Word = self.words_ro.ptr[b].get();
                 if (v == full) {
                     continue;
                 }
@@ -137,7 +152,9 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
                 const first_zero: usize = if (inv != 0) @intCast(@ctz(inv)) else scanFirstZero(v);
 
                 const bit_pos = b * BitsPerWord + first_zero;
-                if (bit_pos < self.max_bits) return bit_pos;
+                if (bit_pos < self.max_bits) {
+                    return bit_pos;
+                }
             }
             return null;
         }
@@ -147,7 +164,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
             var b: usize = 0;
             while (b < n_words) : (b += 1) {
-                const v: Word = self.words_ro[b].get();
+                const v: Word = self.words_ro.ptr[b].get();
                 if (v == 0) {
                     continue;
                 }
@@ -161,7 +178,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
         pub fn popcount(self: *const Self) usize {
             var total: usize = 0;
-            for (self.words_ro) |w| {
+            for (self.words_ro) |*w| {
                 const v: Word = w.get();
                 total += @intCast(@popCount(v));
             }
@@ -170,14 +187,16 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
         // --- helpers ---
         fn requireWritable(self: *Self) ![]W {
-            if (self.words_rw) |w| return w;
-            return error.ReadOnly;
+            if (self.words_rw) |w| {
+                return w;
+            }
+            return errors.Common.ReadOnly;
         }
 
         inline fn scanFirstZero(v: Word) usize {
             var i: usize = 0;
             while (i < BitsPerWord) : (i += 1) {
-                if ((v & (@as(Word, 1) << @as(ShiftT, @intCast(i)))) == 0) {
+                if ((v & (@as(Word, 1) << @intCast(i))) == 0) {
                     return i;
                 }
             }

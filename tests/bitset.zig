@@ -281,22 +281,22 @@ inline fn ceilWords(x: usize, comptime Word: type) usize {
 
 test "max_objects_by_words: zero capacity" {
     const r32 = maxObjectsByWords(u32, 0, 16);
-    try expectEqual(@as(usize, 0), r32[0]);
-    try expectEqual(@as(usize, 0), r32[1]);
+    try expectEqual(@as(usize, 0), r32.bitmap_words);
+    try expectEqual(@as(usize, 0), r32.objects);
 
     const r64 = maxObjectsByWords(u64, 0, 16);
-    try expectEqual(@as(usize, 0), r64[0]);
-    try expectEqual(@as(usize, 0), r64[1]);
+    try expectEqual(@as(usize, 0), r64.bitmap_words);
+    try expectEqual(@as(usize, 0), r64.objects);
 }
 
 test "max_objects_by_words: zero object_size" {
     const r32 = maxObjectsByWords(u32, 1024, 0);
-    try expectEqual(@as(usize, 0), r32[0]);
-    try expectEqual(@as(usize, 0), r32[1]);
+    try expectEqual(@as(usize, 0), r32.bitmap_words);
+    try expectEqual(@as(usize, 0), r32.objects);
 
     const r64 = maxObjectsByWords(u64, 1024, 0);
-    try expectEqual(@as(usize, 0), r64[0]);
-    try expectEqual(@as(usize, 0), r64[1]);
+    try expectEqual(@as(usize, 0), r64.bitmap_words);
+    try expectEqual(@as(usize, 0), r64.objects);
 }
 
 test "max_objects_by_words: exact fit, u32" {
@@ -306,8 +306,8 @@ test "max_objects_by_words: exact fit, u32" {
     const object_size = 16;
 
     const r = maxObjectsByWords(u32, capacity, object_size);
-    const best = r[1];
-    const words = r[0];
+    const best = r.objects;
+    const words = r.bitmap_words;
 
     // Проверяем, что найденное решение действительно влазит,
     // а +1 уже не влазит.
@@ -329,8 +329,8 @@ test "max_objects_by_words: exact fit, u64" {
     const object_size = 16;
 
     const r = maxObjectsByWords(u64, capacity, object_size);
-    const best = r[1];
-    const words = r[0];
+    const best = r.objects;
+    const words = r.bitmap_words;
 
     //const bpw = bits_per_word(u64); // 64 бита
     const word_bytes = @sizeOf(u64); // 8 байт
@@ -357,19 +357,19 @@ test "max_objects_by_words: one byte short prevents extra object (u32)" {
     const capacity_exact = target_objects * object_size + bitmap_bytes;
 
     const r_exact = maxObjectsByWords(u32, capacity_exact, object_size);
-    try expectEqual(bitmap_words, r_exact[0]);
-    try expectEqual(target_objects, r_exact[1]);
+    try expectEqual(bitmap_words, r_exact.bitmap_words);
+    try expectEqual(target_objects, r_exact.objects);
 
     const r_short = maxObjectsByWords(u32, capacity_exact - 1, object_size);
     // На один байт меньше — уже не поместится target_objects, должно быть < target_objects
-    try expect(r_short[1] < target_objects);
+    try expect(r_short.objects < target_objects);
 }
 
 test "max_objects_by_words: stress different capacities (u64)" {
     const object_size = 10;
     inline for (.{ 1, 2, 3, 7, 8, 9, 15, 16, 31, 32, 63, 64, 127, 128, 1024 }) |cap| {
         const r = maxObjectsByWords(u64, cap, object_size);
-        const best = r[1];
+        const best = r.objects;
 
         // Проверяем корректность: best — максимальный
         const word_bytes = @sizeOf(u64); // 8
@@ -388,8 +388,8 @@ test "max_objects_by_words: large capacity scaling (u32)" {
     const cap = 10_000;
 
     const r = maxObjectsByWords(u32, cap, object_size);
-    const best = r[1];
-    const words = r[0];
+    const best = r.objects;
+    const words = r.bitmap_words;
 
     const word_bytes = @sizeOf(u32); // 4
     const bitmap_bytes = ceilWords(best, u32) * word_bytes;
