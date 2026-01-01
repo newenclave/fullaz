@@ -77,7 +77,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
         pub fn initMutable(bytes: []u8, maximum: usize) !Self {
             if (bytes.len % @sizeOf(W) != 0) {
-                return errors.BufferError.BadLength;
+                return error.BadLength;
             }
             const words = std.mem.bytesAsSlice(W, bytes);
             const cap_bits = words.len * BitsPerWord;
@@ -98,7 +98,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
         pub fn set(self: *Self, bit_pos: usize) !void {
             if (bit_pos >= self.max_bits) {
-                return errors.Common.IndexOutOfBounds;
+                return error.IndexOutOfBounds;
             }
             const words = try self.requireWritable();
             const bucket = bit_pos / BitsPerWord;
@@ -110,7 +110,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
         pub fn clear(self: *Self, bit_pos: usize) !void {
             if (bit_pos >= self.max_bits) {
-                return errors.Common.IndexOutOfBounds;
+                return error.IndexOutOfBounds;
             }
             const words = try self.requireWritable();
             const bucket = bit_pos / BitsPerWord;
@@ -190,7 +190,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
             if (self.words_rw) |w| {
                 return w;
             }
-            return errors.Common.ReadOnly;
+            return error.ReadOnly;
         }
 
         inline fn scanFirstZero(v: Word) usize {

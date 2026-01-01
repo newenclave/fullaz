@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const errors = @import("fullaz").errors;
-const BufferError = errors.BufferError;
 
 const fullaz = @import("fullaz");
 const WordT = fullaz.WordT;
@@ -26,7 +25,7 @@ fn WordViewConst(comptime T: type, comptime Endian: std.builtin.Endian) type {
 
         bytes: []const u8,
 
-        pub fn init(src: []const u8) BufferError!Self {
+        pub fn init(src: []const u8) !Self {
             if (src.len < byte_count) {
                 return error.BufferTooSmall;
             }
@@ -55,7 +54,7 @@ fn WordViewMut(comptime T: type, comptime Endian: std.builtin.Endian) type {
 
         bytes: []u8,
 
-        pub fn init(dst: []u8) BufferError!Self {
+        pub fn init(dst: []u8) !Self {
             if (dst.len < byte_count) {
                 return error.BufferTooSmall;
             }

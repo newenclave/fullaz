@@ -1,5 +1,4 @@
 const std = @import("std");
-const BufferError = @import("errors.zig").BufferError;
 
 pub fn WordT(comptime T: type, comptime Endian: std.builtin.Endian) type {
     comptime {
@@ -49,7 +48,7 @@ pub fn WordT(comptime T: type, comptime Endian: std.builtin.Endian) type {
             return .{ .bytes = bytes };
         }
 
-        pub fn fromSlice(src: []const u8) BufferError!Self {
+        pub fn fromSlice(src: []const u8) !Self {
             if (src.len < byte_count) {
                 return error.BufferTooSmall;
             }
@@ -58,7 +57,7 @@ pub fn WordT(comptime T: type, comptime Endian: std.builtin.Endian) type {
             return self;
         }
 
-        pub fn writeTo(self: *const Self, dst: []u8) BufferError!void {
+        pub fn writeTo(self: *const Self, dst: []u8) !void {
             if (dst.len < byte_count) {
                 return error.BufferTooSmall;
             }
