@@ -232,3 +232,48 @@ test "Bpt Random insertion" {
 
     inserted_keys.deinit(gpa.allocator());
 }
+
+test "Bpt Update values" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        _ = gpa.deinit();
+    }
+
+    const TreeTest = BptTest(u32, 5, algos.CmpNum(u32).asc);
+    var tree_test = try TreeTest.init(gpa.allocator());
+    defer tree_test.deinit();
+
+    var bptree = try tree_test.createTree();
+    defer bptree.deinit();
+
+    for (0..100) |i| {
+        const key = @as(u32, @intCast(i));
+        var buf: [32]u8 = undefined;
+        const value = try std.fmt.bufPrint(&buf, "{}", .{key});
+        _ = try bptree.insert(key, value);
+    }
+
+    // Update values
+    for (0..100) |i| {
+        const key = @as(u32, @intCast(i));
+        var buf: [32]u8 = undefined;
+        const new_value = try std.fmt.bufPrint(&buf, "updated_{}", .{key});
+        _ = try bptree.update(key, new_value); // Insert should update existing key
+    }
+
+    // Verify updates
+    for (0..100) |i| {
+        const key = @as(u32, @intCast(i));
+        if (try bptree.find(key)) |itr_const| {
+            defer itr_const.deinit();
+            const value = (try itr_const.get()).?.value;
+            const expected_value = try format(tree_test.allocator, "updated_{:0}", .{key});
+            defer tree_test.allocator.free(expected_value);
+
+            // Include the sentinel in the slice: expected_value has len N but the sentinel is at [N]
+            try expect(strCmp(value[0..], expected_value[0 .. expected_value.len + 1]) == .eq);
+        } else {
+            try expect(false); // Key should exist
+        }
+    }
+}

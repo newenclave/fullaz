@@ -346,6 +346,36 @@ pub fn Bpt(comptime ModelT: type) type {
             return false;
         }
 
+        pub fn update(self: *Self, key: KeyLikeType, value: ValueInType) !bool {
+            const accessor = self.model.getAccessor();
+            if (accessor.getRoot()) |root| {
+                const search = try self.findLeafWith(key, root);
+                if (search.leaf) |leaf_const| {
+                    var leaf = leaf_const;
+                    defer accessor.deinitLeaf(leaf);
+                    if (search.found) {
+                        if (try leaf_const.canUpdateValue(search.position, key, value)) {
+                            try leaf.updateValue(search.position, value);
+                            return true;
+                        } else {
+                            // check if we can borrow from neighbors
+                            // need to rebalance...
+                            var right = try self.handleLeafOverflow(&leaf);
+                            defer accessor.deinitLeaf(right);
+
+                            if (search.position < leaf.size()) {
+                                try leaf.updateValue(search.position, value);
+                            } else {
+                                try right.updateValue(search.position - leaf.size(), value);
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
         pub fn remove(self: *Self, key: KeyLikeType) !bool {
             const accessor = self.model.getAccessor();
             if (accessor.getRoot()) |root| {

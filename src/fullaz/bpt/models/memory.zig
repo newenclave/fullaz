@@ -251,6 +251,27 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             }
         }
 
+        pub fn canUpdateValue(self: *const Self, pos: usize, _: KeyLikeType, _: ValueInType) !bool {
+            if (self.leaf) |leaf| {
+                return pos < leaf.keys.len;
+            }
+            return error.InvalidNode;
+        }
+
+        pub fn updateValue(self: *Self, pos: usize, value: ValueInType) !void {
+            if (self.leaf) |leaf| {
+                if (pos < leaf.values.len) {
+                    const len = @min(16, value.len);
+                    @memset(leaf.values.ptrAt(pos).?, 0);
+                    @memcpy(leaf.values.ptrAt(pos).?[0..len], value[0..len]);
+                    return;
+                } else {
+                    return error.OutOfBounds;
+                }
+            }
+            return error.InvalidNode;
+        }
+
         pub fn erase(self: *Self, pos: usize) !void {
             if (self.leaf) |leaf| {
                 try leaf.keys.remove(pos);
