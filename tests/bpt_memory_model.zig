@@ -84,7 +84,7 @@ test "Bpt Create with Memory model" {
         const key = @as(u32, @intCast(i));
         var buf: [32]u8 = undefined;
         const value = try std.fmt.bufPrint(&buf, "{}", .{key});
-        try bptree.insert(key, value);
+        _ = try bptree.insert(key, value);
     }
 
     for (0..500) |i| {
@@ -121,7 +121,7 @@ test "Bpt Find non-existing key" {
         const key = @as(u32, @intCast(i * 2)); // Insert even keys only
         var buf: [32]u8 = undefined;
         const value = try std.fmt.bufPrint(&buf, "{}", .{key});
-        try bptree.insert(key, value);
+        _ = try bptree.insert(key, value);
     }
 
     // Now try to find odd keys, which do not exist
@@ -149,7 +149,7 @@ test "Bpt remove values" {
         const key = @as(u32, @intCast(i));
         var buf: [32]u8 = undefined;
         const value = try std.fmt.bufPrint(&buf, "{}", .{key});
-        try bptree.insert(key, value);
+        _ = try bptree.insert(key, value);
     }
 
     // Now remove keys 0 to 49
@@ -180,4 +180,55 @@ test "Bpt remove values" {
             }
         }
     }
+}
+
+test "Bpt Random insertion" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        _ = gpa.deinit();
+    }
+
+    const TreeTest = BptTest(u32, 5, algos.CmpNum(u32).asc);
+    var tree_test = try TreeTest.init(gpa.allocator());
+    defer tree_test.deinit();
+
+    var bptree = try tree_test.createTree();
+    defer bptree.deinit();
+
+    var prng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    const random = prng.random();
+
+    const total_inserts = 1000;
+    var inserted_keys = try std.ArrayList(u32).initCapacity(gpa.allocator(), total_inserts);
+    errdefer inserted_keys.deinit(gpa.allocator());
+
+    for (0..total_inserts) |_| {
+        const key = random.int(u32);
+        var buf: [32]u8 = undefined;
+        const value = try std.fmt.bufPrint(&buf, "{}", .{key});
+        if (try bptree.insert(key, value)) {
+            try inserted_keys.append(gpa.allocator(), key);
+        }
+    }
+
+    // Verify all inserted keys
+    for (inserted_keys.items) |key| {
+        if (try bptree.find(key)) |itr_const| {
+            defer itr_const.deinit();
+            const value = (try itr_const.get()).?.value;
+            const expected_value = try format(tree_test.allocator, "{:0}", .{key});
+            defer tree_test.allocator.free(expected_value);
+
+            // Include the sentinel in the slice: expected_value has len N but the sentinel is at [N]
+            try expect(strCmp(value[0..], expected_value[0 .. expected_value.len + 1]) == .eq);
+        } else {
+            try expect(false); // Key should exist
+        }
+    }
+
+    inserted_keys.deinit(gpa.allocator());
 }

@@ -313,7 +313,7 @@ pub fn Bpt(comptime ModelT: type) type {
             }
         }
 
-        pub fn insert(self: *Self, key: KeyLikeType, value: ValueInType) !void {
+        pub fn insert(self: *Self, key: KeyLikeType, value: ValueInType) !bool {
             const accessor = self.model.getAccessor();
             if (accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
@@ -326,10 +326,11 @@ pub fn Bpt(comptime ModelT: type) type {
                     } else {
                         if (self.rebalance_policy == .neighbor_share) {
                             if (try self.tryLeafNeighborShare(&leaf, key, value, search.position)) {
-                                return;
+                                return true;
                             }
                         }
                         try self.handleLeafOverflowDefault(&leaf, key, value, search.position);
+                        return true;
                     }
                 } else {
                     //std.debug.print("Key {} already exists in leaf id: {}\n", .{ key, search.leaf.?.id() });
@@ -340,7 +341,9 @@ pub fn Bpt(comptime ModelT: type) type {
                 try leaf.insertValue(0, key, value);
                 //std.debug.print("Created leaf node with id: {}\n", .{leafId.id()});
                 accessor.setRoot(leaf.id());
+                return true;
             }
+            return false;
         }
 
         pub fn remove(self: *Self, key: KeyLikeType) !bool {
