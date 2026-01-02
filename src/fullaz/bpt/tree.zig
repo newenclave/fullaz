@@ -137,7 +137,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 return null;
             }
 
-            pub fn deinit(self: *ItrSelf) void {
+            pub fn deinit(self: ItrSelf) void {
                 if (self.model) |model| {
                     model.getAccessor().deinitLeaf(self.node);
                 }
@@ -198,6 +198,10 @@ pub fn Bpt(comptime ModelT: type) type {
 
         pub fn init(model: *ModelT, repalance_policy: RebalancePolicy) Self {
             return Self{ .model = model, .rebalance_policy = repalance_policy };
+        }
+
+        pub fn deinit(_: Self) void {
+            // nothing to do for now :)
         }
 
         pub fn iterator(self: *const Self) !?Iterator {
@@ -339,7 +343,7 @@ pub fn Bpt(comptime ModelT: type) type {
             }
         }
 
-        fn remove(self: *Self, key: KeyLikeType) !bool {
+        pub fn remove(self: *Self, key: KeyLikeType) !bool {
             const accessor = self.model.getAccessor();
             if (accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);

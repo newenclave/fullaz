@@ -43,13 +43,29 @@ pub fn build(b: *std.Build) void {
 
     mod_tests.root_module.addImport("fullaz", mod);
 
+    const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
+    if (test_filter) |filter| {
+        mod_tests.filters = &.{filter};
+    }
+
+    // Install test executable for debugging
+    const install_tests = b.addInstallArtifact(mod_tests, .{});
+
     const run_mod_tests = b.addRunArtifact(mod_tests);
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
     });
 
+    if (test_filter) |filter| {
+        exe_tests.filters = &.{filter};
+    }
+
     const run_exe_tests = b.addRunArtifact(exe_tests);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    // Add install-tests step for debugging
+    const install_test_step = b.step("install-tests", "Install test executable for debugging");
+    install_test_step.dependOn(&install_tests.step);
 }

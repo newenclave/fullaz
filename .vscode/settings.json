@@ -3,5 +3,6 @@
         "build",
         "test",
         "-Dtest-filter=${filter}"
-    ]
+    ],
+    "zig.enableDebugCodeLens": false
 }
