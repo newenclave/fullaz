@@ -8,3 +8,5 @@ pub const algorithm = @import("fullaz/algorithm.zig");
 pub const StaticVector = @import("fullaz/static_vector.zig").StaticVector;
 
 pub const bpt = @import("fullaz/bpt/package.zig");
+
+pub const slots = @import("fullaz/slots/package.zig");

@@ -8,7 +8,7 @@ pub fn WordT(comptime T: type, comptime Endian: std.builtin.Endian) type {
         }
     }
 
-    return struct {
+    return extern struct {
         const Self = @This();
         pub const byte_count: usize = @sizeOf(T);
 
