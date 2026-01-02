@@ -4,3 +4,7 @@ pub const WordBe = @import("fullaz/wordt.zig").WordBe;
 pub const errors = @import("fullaz/errors.zig");
 pub const BitSet = @import("fullaz/bitset.zig").BitSet;
 pub const maxObjectsByWords = @import("fullaz/bitset.zig").maxObjectsByWords;
+pub const algorithm = @import("fullaz/algorithm.zig");
+pub const StaticVector = @import("fullaz/static_vector.zig").StaticVector;
+
+pub const bpt = @import("fullaz/bpt/package.zig");
