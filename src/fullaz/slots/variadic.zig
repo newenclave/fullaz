@@ -70,6 +70,9 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             const slots = self.entriesConst();
             var used = @sizeOf(Header) + slots.len * @sizeOf(Entry);
             for (slots) |*s| {
+                if (s.offset.get() == SLOT_INVALID) {
+                    continue;
+                }
                 const len: T = s.length.get();
                 const fixed: T = self.fixLength(len);
                 used += @as(usize, fixed);
@@ -81,12 +84,39 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn canInsert(self: *const Self, needed: usize) !bool {
-            const space_needed = self.needSpace(needed);
+            const space_needed = self.needSpace(needed, true);
             if (space_needed <= self.availableSpace()) {
                 return true;
             }
             return space_needed <= try self.availableAfterCompact();
         }
+
+        pub fn canUpdate(self: *const Self, entry: usize, needed: usize) !bool {
+            const slots = self.entriesConst();
+            if (entry >= slots.len) {
+                return error.InvalidEntry;
+            }
+
+            const old_payload: T = slots[entry].length.get();
+            const old_alloc: usize = @intCast(self.fixLength(old_payload));
+
+            const new_alloc: usize = @intCast(self.fixLength(@intCast(needed)));
+
+            if (new_alloc <= old_alloc) {
+                return true;
+            }
+
+            const available = self.availableSpace();
+
+            if (available + old_alloc >= new_alloc) {
+                return true;
+            }
+
+            const available_after_compact = try self.availableAfterCompact();
+            return available_after_compact + old_alloc >= new_alloc;
+        }
+
+        // pub fn update(self: *Self, pos: usize, data: []const u8) !void {}
 
         pub fn insertAt(self: *Self, pos: usize, data: []const u8) !Entry {
             if (is_const) @compileError("Cannot insert into const buffer");
@@ -97,6 +127,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             }
 
             const entry = try self.allocateEntryAt(pos);
+
             try self.insertImpl(data, entry);
             return entry.*;
         }
@@ -104,12 +135,13 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         pub fn insert(self: *Self, data: []const u8) !Entry {
             if (is_const) @compileError("Cannot insert into const buffer");
 
-            const needed = self.needSpace(data.len);
+            const needed = self.needSpace(data.len, true);
             if (needed > self.availableSpace()) {
                 return error.NotEnoughSpace;
             }
 
             const new_entry = self.allocateEntry();
+
             try self.insertImpl(data, new_entry);
             return new_entry.*;
         }
@@ -130,7 +162,11 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
             var hdr = self.headerMut();
             hdr.entry_count.set(hdr.entry_count.get() - 1);
+            hdr.free_begin.set(hdr.free_begin.get() - @as(T, @sizeOf(Entry)));
+
             try self.pushFreeSlot(&slot, fp);
+            // slot.length.set(0);
+            // slot.offset.set(SLOT_INVALID);
         }
 
         pub fn getMutValue(self: *Self, entry: usize) ![]u8 {
@@ -243,12 +279,13 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             self.headerMut().freed.set(0);
         }
 
-        fn fixLength(_: Self, len: T) T {
+        pub fn fixLength(_: Self, len: T) T {
             return if (len < @sizeOf(FreedEntry)) @sizeOf(FreedEntry) else len;
         }
 
-        fn needSpace(self: *const Self, needed: usize) usize {
-            return (@intCast(self.fixLength(@intCast(needed)) + @sizeOf(Entry)));
+        fn needSpace(self: *const Self, needed: usize, need_entry: bool) usize {
+            const entry_size: usize = if (need_entry) @sizeOf(Entry) else 0;
+            return (@intCast(self.fixLength(@intCast(needed)) + entry_size));
         }
 
         fn getMutValueByEntry(self: *Self, entry: *const Entry) ![]u8 {
@@ -272,11 +309,87 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return free_header;
         }
 
+        const FreeSlotInfo = struct {
+            ptr: *FreedEntry,
+            offset: T,
+        };
+
+        pub fn popFreeSlot(self: *Self, size: usize) !?FreeSlotInfo {
+            const need: T = @intCast(self.fixLength(@intCast(size)));
+
+            if (try self.findFreeSlotfor(@intCast(need))) |fs_info| {
+                const fs = fs_info.ptr;
+
+                try self.splitFreeSlot(&fs_info, size);
+
+                const next = fs.next.get();
+                const prev = fs.prev.get();
+
+                if (next != SLOT_INVALID) {
+                    var next_fs = try self.getFreeSlotByOffest(next);
+                    next_fs.prev = fs.prev;
+                }
+
+                if (prev != SLOT_INVALID) {
+                    var prev_fs = try self.getFreeSlotByOffest(prev);
+                    prev_fs.next = fs.next;
+                }
+
+                var hdr = self.headerMut();
+                if (fs_info.offset == hdr.freed.get()) {
+                    hdr.freed.set(next);
+                }
+
+                fs.next.set(SLOT_INVALID);
+                fs.prev.set(SLOT_INVALID);
+
+                return fs_info;
+            }
+
+            return null;
+        }
+
+        pub fn findFreeSlotfor(self: *Self, size: usize) !?FreeSlotInfo {
+            const hdr = self.headerMut();
+            var current_free = hdr.freed.get();
+            while (current_free != SLOT_INVALID) {
+                var fs = try self.getFreeSlotByOffest(current_free);
+                std.debug.print("fs len: {} -> {}\n", .{ fs.lenght.get(), size });
+                if (fs.lenght.get() >= size) {
+                    return .{ .ptr = fs, .offset = current_free };
+                }
+                current_free = fs.next.get();
+            }
+            return null;
+        }
+
+        pub fn splitFreeSlot(self: *Self, fs_info: *const FreeSlotInfo, len: usize) !void {
+            var fs = fs_info.ptr;
+            const alloc_len: T = self.fixLength(@intCast(len));
+            const f_len: usize = @intCast(fs.lenght.get());
+            if ((alloc_len + @sizeOf(FreedEntry) <= f_len)) {
+                const new_offset: T = fs_info.offset + alloc_len;
+                var new_fs = try self.getFreeSlotByOffest(new_offset);
+                new_fs.lenght.set(@intCast(f_len - alloc_len));
+                new_fs.next.set(fs.next.get());
+                new_fs.prev.set(fs_info.offset);
+
+                const next = fs.next.get();
+                if (next != SLOT_INVALID) {
+                    var next_ptr = try self.getFreeSlotByOffest(next);
+                    next_ptr.prev.set(new_offset);
+                }
+
+                fs.next.set(new_offset);
+                fs.lenght.set(alloc_len);
+            }
+        }
+
         fn pushFreeSlot(self: *Self, entry: *const Entry, fs: *FreedEntry) !void {
             var hdr = self.headerMut();
 
             fs.next = hdr.freed;
-            fs.lenght = entry.length;
+            fs.lenght.set(self.fixLength(entry.length.get()));
             fs.prev.set(0);
 
             const next_offset = hdr.freed.get();
@@ -287,7 +400,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             hdr.freed = entry.offset;
         }
 
-        fn getFreeSlotByOffest(self: *Self, offset: T) !*FreedEntry {
+        pub fn getFreeSlotByOffest(self: *Self, offset: T) !*FreedEntry {
             if (offset <= self.body.len - @sizeOf(FreedEntry)) {
                 return @ptrCast(&self.body[@intCast(offset)]);
             }
@@ -299,14 +412,22 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
             const allocated_len = self.fixLength(@as(T, @intCast(data.len)));
 
-            const new_end = header.free_end.get() - allocated_len;
-            const start: usize = @intCast(new_end);
-            @memcpy(self.body[start..][0..data.len], data);
+            if (try self.popFreeSlot(allocated_len)) |fs| {
+                entry.length.set(@intCast(data.len));
+                entry.offset.set(fs.offset);
 
-            entry.length.set(@intCast(data.len));
-            entry.offset.set(new_end);
+                const start: usize = @intCast(fs.offset);
+                @memcpy(self.body[start..][0..data.len], data);
+            } else {
+                const new_end = header.free_end.get() - allocated_len;
+                const start: usize = @intCast(new_end);
+                @memcpy(self.body[start..][0..data.len], data);
 
-            header.free_end.set(new_end);
+                entry.length.set(@intCast(data.len));
+                entry.offset.set(new_end);
+
+                header.free_end.set(new_end);
+            }
         }
 
         fn allocateEntry(self: *Self) *Entry {
@@ -348,8 +469,6 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             for (pos..slots.len - 1) |i| {
                 slots[i] = slots[i + 1];
             }
-            var hdr = self.headerMut();
-            hdr.free_begin.set(hdr.free_begin.get() - @as(T, @sizeOf(Entry)));
         }
 
         fn getEntry(self: *const Self, index: usize) ?Entry {
