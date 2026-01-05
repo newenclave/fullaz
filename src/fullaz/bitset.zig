@@ -1,5 +1,5 @@
 const std = @import("std");
-const WordT = @import("wordt.zig").WordT;
+const WordT = @import("packed_int.zig").WordT;
 const errors = @import("errors.zig");
 
 inline fn ceilWords(value: usize, bits_per_word: usize) usize {

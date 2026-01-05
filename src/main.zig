@@ -23,20 +23,20 @@ pub fn main() !void {
     _ = try slot.insert(&[_]u8{ 0, 1, 2, 3, 4, 5 });
     _ = try slot.insert(&[_]u8{ 0, 1, 2, 3, 4, 5, 6 });
 
-    var value = try slot.getConstValue(0);
+    var value = try slot.get(0);
     std.debug.print("Retrieved 0 entry value: {any}\n", .{value});
 
-    value = try slot.getConstValue(1);
+    value = try slot.get(1);
     std.debug.print("Retrieved entry value: {any}\n", .{value});
 
-    value = try slot.getMutValue(1);
+    value = try slot.getMut(1);
     std.debug.print("Retrieved entry mut value: {any}\n", .{value});
 
     var entries = slot.entriesMut();
     std.debug.print("Entries length: {}\n", .{entries.len});
     for (entries, 0..) |e, idx| {
         std.debug.print("\tEntry {}: offset {}, length {} ", .{ idx, e.offset.get(), e.length.get() });
-        std.debug.print("{any}\n", .{try slot.getConstValue(idx)});
+        std.debug.print("{any}\n", .{try slot.get(idx)});
     }
 
     try slot.remove(0);
@@ -47,17 +47,17 @@ pub fn main() !void {
     std.debug.print("Entries length: {}\n", .{entries.len});
     for (entries, 0..) |e, idx| {
         std.debug.print("\tEntry {}: offset {}, length {} ", .{ idx, e.offset.get(), e.length.get() });
-        std.debug.print("{any}\n", .{try slot.getConstValue(idx)});
+        std.debug.print("{any}\n", .{try slot.get(idx)});
     }
 
     std.debug.print("Available space: {} : {}\n", .{ slot.availableSpace(), try slot.availableAfterCompact() });
-    try slot.compact();
+    try slot.compactInPlace();
     std.debug.print("Available space after compact: {}\n", .{slot.availableSpace()});
 
     entries = slot.entriesMut();
     std.debug.print("Entries length: {}\n", .{entries.len});
     for (entries, 0..) |e, idx| {
         std.debug.print("\tEntry {}: offset {}, length {} ", .{ idx, e.offset.get(), e.length.get() });
-        std.debug.print("{any}\n", .{try slot.getConstValue(idx)});
+        std.debug.print("{any}\n", .{try slot.get(idx)});
     }
 }

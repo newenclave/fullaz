@@ -1,26 +1,27 @@
 const std = @import("std");
-const WordT = @import("../wordt.zig").WordT;
+
+const PackedInt = @import("../packed_int.zig").PackedInt;
 
 pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime is_const: bool) type {
-    const IndexType = WordT(T, Endian);
+    const IndexType = PackedInt(T, Endian);
 
     const SLOT_INVALID: T = 0;
 
-    const Entry = extern struct {
+    const Entry = struct {
         offset: IndexType,
         length: IndexType,
     };
 
-    const FreedEntry = extern struct {
-        prev: IndexType,
-        next: IndexType,
-        lenght: IndexType,
+    const FreedEntry = struct {
+        prev: IndexType = undefined,
+        next: IndexType = undefined,
+        length: IndexType = undefined,
     };
 
     const EntrySlice = []Entry;
     const EntrySliceConst = []const Entry;
 
-    const Header = extern struct {
+    const Header = struct {
         entry_count: IndexType,
         free_begin: IndexType,
         free_end: IndexType,
@@ -36,6 +37,12 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
     }
 
     const BufferType = if (is_const) []const u8 else []u8;
+
+    const AvailableStatus = enum {
+        enough,
+        need_compact,
+        not_enough,
+    };
 
     return struct {
         const Self = @This();
@@ -83,93 +90,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return self.body.len - used;
         }
 
-        pub fn canInsert(self: *const Self, needed: usize) !bool {
-            const space_needed = self.needSpace(needed, true);
-            if (space_needed <= self.availableSpace()) {
-                return true;
-            }
-            return space_needed <= try self.availableAfterCompact();
-        }
-
-        pub fn canUpdate(self: *const Self, entry: usize, needed: usize) !bool {
-            const slots = self.entriesConst();
-            if (entry >= slots.len) {
-                return error.InvalidEntry;
-            }
-
-            const old_payload: T = slots[entry].length.get();
-            const old_alloc: usize = @intCast(self.fixLength(old_payload));
-
-            const new_alloc: usize = @intCast(self.fixLength(@intCast(needed)));
-
-            if (new_alloc <= old_alloc) {
-                return true;
-            }
-
-            const available = self.availableSpace();
-
-            if (available + old_alloc >= new_alloc) {
-                return true;
-            }
-
-            const available_after_compact = try self.availableAfterCompact();
-            return available_after_compact + old_alloc >= new_alloc;
-        }
-
-        // pub fn update(self: *Self, pos: usize, data: []const u8) !void {}
-
-        pub fn insertAt(self: *Self, pos: usize, data: []const u8) !Entry {
-            if (is_const) @compileError("Cannot insert into const buffer");
-
-            const needed = self.needSpace(data.len);
-            if (needed > self.availableSpace()) {
-                return error.NotEnoughSpace;
-            }
-
-            const entry = try self.allocateEntryAt(pos);
-
-            try self.insertImpl(data, entry);
-            return entry.*;
-        }
-
-        pub fn insert(self: *Self, data: []const u8) !Entry {
-            if (is_const) @compileError("Cannot insert into const buffer");
-
-            const needed = self.needSpace(data.len, true);
-            if (needed > self.availableSpace()) {
-                return error.NotEnoughSpace;
-            }
-
-            const new_entry = self.allocateEntry();
-
-            try self.insertImpl(data, new_entry);
-            return new_entry.*;
-        }
-
-        pub fn remove(self: *Self, entry: usize) !void {
-            if (is_const) @compileError("Cannot remove from const buffer");
-            const slots = self.entriesMut();
-
-            if (entry >= slots.len) {
-                return error.InvalidEntry;
-            }
-            var slot = slots[entry];
-
-            std.debug.print("Removing {} {}\n", .{ slot.offset.get(), slot.length.get() });
-
-            const fp = self.formatFreeSlot(&slot);
-            try self.shrink(entry);
-
-            var hdr = self.headerMut();
-            hdr.entry_count.set(hdr.entry_count.get() - 1);
-            hdr.free_begin.set(hdr.free_begin.get() - @as(T, @sizeOf(Entry)));
-
-            try self.pushFreeSlot(&slot, fp);
-            // slot.length.set(0);
-            // slot.offset.set(SLOT_INVALID);
-        }
-
-        pub fn getMutValue(self: *Self, entry: usize) ![]u8 {
+        pub fn getMut(self: *Self, entry: usize) ![]u8 {
             if (is_const) @compileError("Cannot get mutable value from const buffer");
             const slots = self.entriesMut();
 
@@ -181,7 +102,17 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return self.getMutValueByEntry(&slot);
         }
 
-        pub fn getConstValue(self: *const Self, entry: usize) ![]const u8 {
+        fn getMutValueByEntry(self: *Self, slot: *const Entry) ![]u8 {
+            if (is_const) @compileError("Cannot get mutable value from const buffer");
+            const offset: usize = @intCast(slot.offset.get());
+            const length: usize = @intCast(slot.length.get());
+            if (offset + length > self.body.len) {
+                return error.InvalidEntry;
+            }
+            return self.body[offset..][0..length];
+        }
+
+        pub fn get(self: *const Self, entry: usize) ![]const u8 {
             const slots = self.entriesConst();
             if (entry >= slots.len) {
                 return error.InvalidEntry;
@@ -195,36 +126,196 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return self.body[offset..][0..length];
         }
 
-        pub fn headerConst(self: *const Self) *const Header {
-            return @ptrCast(&self.body[0]);
+        pub fn free(self: *Self, entry: usize) !void {
+            if (is_const) @compileError("Cannot remove from const buffer");
+            var slots = self.entriesMut();
+            if (entry >= slots.len) {
+                return error.InvalidEntry;
+            }
+
+            const slot_offset = slots[entry].offset.get();
+            const slot_length = slots[entry].length.get();
+
+            var hdr = self.headerMut();
+            if (hdr.free_end.get() == slot_offset) {
+                hdr.free_end.set(slot_offset + self.fixLength(slot_length));
+            } else {
+                self.pushFreeSlot(slots[entry].offset.get(), slots[entry].length.get());
+            }
+
+            slots[entry].offset.set(SLOT_INVALID);
+            slots[entry].length.set(0);
         }
 
-        pub fn headerMut(self: *Self) *Header {
-            if (is_const) @compileError("Cannot get mutable header from const buffer");
-            return @ptrCast(&self.body[0]);
+        pub fn findFreeEntry(self: *const Self) ?usize {
+            const slots = self.entriesConst();
+            for (slots, 0..) |s, i| {
+                if (s.offset.get() == SLOT_INVALID) {
+                    return i;
+                }
+            }
+            return null;
         }
 
-        pub fn entriesConst(self: *const Self) EntrySliceConst {
-            const header = self.headerConst();
-            const first_entry_ptr: [*]const Entry = @ptrCast(&self.body[@sizeOf(Header)]);
-            return first_entry_ptr[0..header.entry_count.get()];
+        pub fn remove(self: *Self, entry: usize) !void {
+            if (is_const) @compileError("Cannot remove from const buffer");
+            const slots = self.entriesMut();
+            if (entry >= slots.len) {
+                return error.InvalidEntry;
+            }
+
+            const slot_offset = slots[entry].offset.get();
+            const slot_length = slots[entry].length.get();
+
+            var hdr = self.headerMut();
+            if (hdr.free_end.get() == slot_offset) {
+                hdr.free_end.set(slot_offset + self.fixLength(slot_length));
+            } else {
+                self.pushFreeSlot(slots[entry].offset.get(), slots[entry].length.get());
+            }
+
+            try self.shrink(entry);
+
+            hdr.entry_count.set(hdr.entry_count.get() - 1);
+            const old_begin = hdr.free_begin.get();
+            const new_begin = old_begin - @as(T, @sizeOf(Entry));
+            hdr.free_begin.set(new_begin);
         }
 
-        pub fn entriesMut(self: *Self) EntrySlice {
-            if (is_const) @compileError("Cannot get mutable entries from const buffer");
-            const header = self.headerConst();
-            const first_entry_ptr: [*]Entry = @ptrCast(&self.body[@sizeOf(Header)]);
-            return first_entry_ptr[0..header.entry_count.get()];
+        pub fn canUpdate(self: *const Self, entry: usize, len: usize) !AvailableStatus {
+            const fix_len: usize = @as(usize, self.fixLength(@as(T, @intCast(len))));
+            const slots = self.entriesConst();
+            if (entry >= slots.len) {
+                return error.InvalidEntry;
+            }
+
+            const old_len = @as(usize, slots[entry].length.get());
+            if (len <= old_len) {
+                return .enough;
+            }
+
+            if (self.findFreeSlot(@as(T, @intCast(fix_len)))) |_| {
+                return .enough;
+            }
+
+            const avail_after_compact = try self.availableAfterCompact() + old_len;
+            if (fix_len <= avail_after_compact) {
+                return .need_compact;
+            }
+            return .not_enough;
         }
 
-        pub fn compact(self: *Self) !void {
-            try self.compactInPlace();
+        pub fn canInsert(self: *const Self, len: usize) !AvailableStatus {
+            const fix_len: usize = @as(usize, self.fixLength(@as(T, @intCast(len))));
+
+            const available = self.availableSpace();
+
+            if (fix_len + @sizeOf(Entry) <= available) {
+                return .enough;
+            }
+
+            if (self.findFreeSlot(@as(T, @intCast(fix_len)))) |_| {
+                if (available >= @sizeOf(Entry)) {
+                    return .enough;
+                }
+            }
+
+            const avail_after_compact = try self.availableAfterCompact();
+            if (fix_len + @sizeOf(Entry) <= avail_after_compact) {
+                return .need_compact;
+            }
+            return .not_enough;
         }
 
-        // private functions can be added here
+        pub fn insert(self: *Self, data: []const u8) !usize {
+            if (is_const) @compileError("Cannot insert into const buffer");
 
-        // this algorith requires O(n^2) because it doesn't use any place to sort slots
-        fn compactInPlace(self: *Self) !void {
+            const len = data.len;
+            const buf = self.reserveGet(self.entriesConst().len, len) catch |err| {
+                return err;
+            };
+            const buf_fixed = buf[0..len];
+            @memcpy(buf_fixed, data);
+            return self.entriesConst().len - 1;
+        }
+
+        pub fn insertAt(self: *Self, pos: usize, data: []const u8) !void {
+            if (is_const) @compileError("Cannot insert into const buffer");
+
+            const len = data.len;
+            const buf = self.reserveGet(pos, len) catch |err| {
+                return err;
+            };
+            const buf_fixed = buf[0..len];
+            @memcpy(buf_fixed, data);
+        }
+
+        // private:
+
+        fn sliceAligned(buf: []u8, n: usize) ?[]T {
+            const p_aligned_opt = std.mem.alignPointer(buf.ptr, @alignOf(T));
+            if (p_aligned_opt == null) {
+                return null;
+            }
+            const p_aligned = p_aligned_opt.?;
+
+            const skipped = @intFromPtr(p_aligned) - @intFromPtr(buf.ptr);
+            if (skipped > buf.len) {
+                return null;
+            }
+            const tail = buf[skipped..];
+
+            const need_bytes = n * @sizeOf(T);
+            if (need_bytes > tail.len) {
+                return null;
+            }
+
+            const p_t: [*]T = @ptrCast(@alignCast(p_aligned));
+            return p_t[0..n];
+        }
+
+        fn offsetGt(slots: []const Entry, a: T, b: T) bool {
+            return slots[b].offset.get() < slots[a].offset.get();
+        }
+
+        pub fn compactWithBuffer(self: *Self, raw_buffer: []u8) !void {
+            const slots = self.entriesMut();
+            if (sliceAligned(raw_buffer, slots.len)) |buffer| {
+                var total_elements: usize = 0;
+                for (slots, 0..) |*s, idx| {
+                    if (s.offset.get() != SLOT_INVALID) {
+                        buffer[total_elements] = @intCast(idx);
+                        total_elements += 1;
+                    }
+                }
+                const offset_buf = buffer[0..total_elements];
+                std.sort.pdq(T, offset_buf, slots, offsetGt);
+
+                var new_end_usize: usize = self.body.len;
+                for (offset_buf) |idx| {
+                    const uidx: usize = @intCast(idx);
+                    const target_len = self.fixLength(slots[uidx].length.get());
+                    const old_off = slots[uidx].offset.get();
+
+                    new_end_usize -= target_len;
+
+                    const src = self.body[old_off .. old_off + target_len];
+                    const dst = self.body[new_end_usize .. new_end_usize + target_len];
+
+                    @memmove(dst, src);
+
+                    slots[uidx].offset.set(@intCast(new_end_usize));
+                }
+                self.headerMut().free_end.set(@intCast(new_end_usize));
+                self.headerMut().freed.set(0);
+            } else {
+                return error.BufferTooSmall;
+            }
+        }
+
+        // compact in place without any extra buffer
+        // this call completes in O(n^2) time
+        pub fn compactInPlace(self: *Self) !void {
             const slots = self.entriesMut();
 
             const base_end: T = @intCast(self.body.len);
@@ -283,177 +374,127 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return if (len < @sizeOf(FreedEntry)) @sizeOf(FreedEntry) else len;
         }
 
-        fn needSpace(self: *const Self, needed: usize, need_entry: bool) usize {
-            const entry_size: usize = if (need_entry) @sizeOf(Entry) else 0;
-            return (@intCast(self.fixLength(@intCast(needed)) + entry_size));
+        pub fn headerConst(self: *const Self) *const Header {
+            return @ptrCast(&self.body[0]);
         }
 
-        fn getMutValueByEntry(self: *Self, entry: *const Entry) ![]u8 {
-            const offset: usize = @intCast(entry.offset.get());
-            const length: usize = @intCast(entry.length.get());
-
-            if (offset + length > self.body.len) {
-                return error.InvalidEntry;
-            }
-
-            return self.body[offset..][0..length];
+        pub fn headerMut(self: *Self) *Header {
+            if (is_const) @compileError("Cannot get mutable header from const buffer");
+            return @ptrCast(&self.body[0]);
         }
 
-        fn formatFreeSlot(self: *Self, entry: *const Entry) *FreedEntry {
-            const off: usize = @intCast(entry.offset.get());
-            var free_header: *FreedEntry = @ptrCast(&self.body[off]);
+        pub fn resizeGet(self: *Self, pos: usize, len: usize) ![]u8 {
+            if (is_const) @compileError("Cannot insert into const buffer");
 
-            free_header.lenght.set(self.fixLength(entry.length.get()));
-            free_header.next.set(0);
-            free_header.prev.set(0);
-            return free_header;
-        }
-
-        const FreeSlotInfo = struct {
-            ptr: *FreedEntry,
-            offset: T,
-        };
-
-        pub fn popFreeSlot(self: *Self, size: usize) !?FreeSlotInfo {
-            const need: T = @intCast(self.fixLength(@intCast(size)));
-
-            if (try self.findFreeSlotfor(@intCast(need))) |fs_info| {
-                const fs = fs_info.ptr;
-
-                try self.splitFreeSlot(&fs_info, size);
-
-                const next = fs.next.get();
-                const prev = fs.prev.get();
-
-                if (next != SLOT_INVALID) {
-                    var next_fs = try self.getFreeSlotByOffest(next);
-                    next_fs.prev = fs.prev;
-                }
-
-                if (prev != SLOT_INVALID) {
-                    var prev_fs = try self.getFreeSlotByOffest(prev);
-                    prev_fs.next = fs.next;
-                }
-
-                var hdr = self.headerMut();
-                if (fs_info.offset == hdr.freed.get()) {
-                    hdr.freed.set(next);
-                }
-
-                fs.next.set(SLOT_INVALID);
-                fs.prev.set(SLOT_INVALID);
-
-                return fs_info;
-            }
-
-            return null;
-        }
-
-        pub fn findFreeSlotfor(self: *Self, size: usize) !?FreeSlotInfo {
-            const hdr = self.headerMut();
-            var current_free = hdr.freed.get();
-            while (current_free != SLOT_INVALID) {
-                var fs = try self.getFreeSlotByOffest(current_free);
-                std.debug.print("fs len: {} -> {}\n", .{ fs.lenght.get(), size });
-                if (fs.lenght.get() >= size) {
-                    return .{ .ptr = fs, .offset = current_free };
-                }
-                current_free = fs.next.get();
-            }
-            return null;
-        }
-
-        pub fn splitFreeSlot(self: *Self, fs_info: *const FreeSlotInfo, len: usize) !void {
-            var fs = fs_info.ptr;
-            const alloc_len: T = self.fixLength(@intCast(len));
-            const f_len: usize = @intCast(fs.lenght.get());
-            if ((alloc_len + @sizeOf(FreedEntry) <= f_len)) {
-                const new_offset: T = fs_info.offset + alloc_len;
-                var new_fs = try self.getFreeSlotByOffest(new_offset);
-                new_fs.lenght.set(@intCast(f_len - alloc_len));
-                new_fs.next.set(fs.next.get());
-                new_fs.prev.set(fs_info.offset);
-
-                const next = fs.next.get();
-                if (next != SLOT_INVALID) {
-                    var next_ptr = try self.getFreeSlotByOffest(next);
-                    next_ptr.prev.set(new_offset);
-                }
-
-                fs.next.set(new_offset);
-                fs.lenght.set(alloc_len);
-            }
-        }
-
-        fn pushFreeSlot(self: *Self, entry: *const Entry, fs: *FreedEntry) !void {
-            var hdr = self.headerMut();
-
-            fs.next = hdr.freed;
-            fs.lenght.set(self.fixLength(entry.length.get()));
-            fs.prev.set(0);
-
-            const next_offset = hdr.freed.get();
-            if (hdr.freed.get() != 0) {
-                var next_fs = try self.getFreeSlotByOffest(next_offset);
-                next_fs.prev = entry.offset;
-            }
-            hdr.freed = entry.offset;
-        }
-
-        pub fn getFreeSlotByOffest(self: *Self, offset: T) !*FreedEntry {
-            if (offset <= self.body.len - @sizeOf(FreedEntry)) {
-                return @ptrCast(&self.body[@intCast(offset)]);
-            }
-            return error.BadOffset;
-        }
-
-        fn insertImpl(self: *Self, data: []const u8, entry: *Entry) !void {
-            var header = self.headerMut();
-
-            const allocated_len = self.fixLength(@as(T, @intCast(data.len)));
-
-            if (try self.popFreeSlot(allocated_len)) |fs| {
-                entry.length.set(@intCast(data.len));
-                entry.offset.set(fs.offset);
-
-                const start: usize = @intCast(fs.offset);
-                @memcpy(self.body[start..][0..data.len], data);
-            } else {
-                const new_end = header.free_end.get() - allocated_len;
-                const start: usize = @intCast(new_end);
-                @memcpy(self.body[start..][0..data.len], data);
-
-                entry.length.set(@intCast(data.len));
-                entry.offset.set(new_end);
-
-                header.free_end.set(new_end);
-            }
-        }
-
-        fn allocateEntry(self: *Self) *Entry {
-            const header = self.headerMut();
-            const entry_count = header.entry_count.get();
-            const first_entry_ptr: [*]Entry = @ptrCast(&self.body[@sizeOf(Header)]);
-            const new_entry_ptr = &first_entry_ptr[@intCast(entry_count)];
-            header.entry_count.set(entry_count + 1);
-            header.free_begin.set(header.free_begin.get() + @as(T, @sizeOf(Entry)));
-            return new_entry_ptr;
-        }
-
-        fn allocateEntryAt(self: *Self, pos: usize) !*Entry {
-            if (pos > self.headerConst().entry_count.get()) {
+            if (pos > self.entriesConst().len) {
                 return error.InvalidPosition;
             }
-            _ = self.allocateEntry();
-            var slots = self.entriesMut();
-            var len = slots.len - 1;
-            while (len > pos) : (len -= 1) {
-                slots[len] = slots[len - 1];
+
+            if (len >= self.body.len) {
+                return error.NotEnoughSpace;
             }
-            return &slots[pos];
+            const slots = self.entriesMut();
+            const old_len = @as(usize, slots[pos].length.get());
+            if (len == old_len) {
+                const offset: usize = @intCast(slots[pos].offset.get());
+                return self.body[offset .. offset + len];
+            }
+
+            if (len < old_len) {
+                const offset: usize = @intCast(slots[pos].offset.get());
+                slots[pos].length.set(@as(T, @intCast(len)));
+
+                const remain_slot_len = old_len - len;
+                if (remain_slot_len >= @as(usize, @sizeOf(FreedEntry))) {
+                    const new_free_offset = @as(T, @intCast(offset + len));
+                    const new_free_length = @as(T, @intCast(remain_slot_len));
+                    self.pushFreeSlot(new_free_offset, new_free_length);
+                }
+
+                return self.body[offset .. offset + len];
+            }
+
+            return self.reserveGetExpand(pos, len, false);
         }
 
-        fn expand(self: *Self, pos: usize) !void {
+        pub fn reserveGet(self: *Self, pos: usize, len: usize) ![]u8 {
+            return self.reserveGetExpand(pos, len, true);
+        }
+
+        fn reserveGetExpand(self: *Self, pos: usize, len: usize, need_slot: bool) ![]u8 {
+            if (is_const) @compileError("Cannot insert into const buffer");
+
+            if (pos > self.entriesConst().len) {
+                return error.InvalidPosition;
+            }
+
+            if (len >= self.body.len) {
+                return error.NotEnoughSpace;
+            }
+
+            const fix_len: usize = @intCast(self.fixLength(@intCast(len)));
+
+            const entry_len: usize = if (need_slot) @sizeOf(Entry) else 0;
+
+            if (fix_len + entry_len > self.availableSpace()) {
+                if (self.findFreeSlot(@intCast(fix_len))) |fs_info| {
+                    const fs = fs_info.ptr;
+                    const slot_len = fs.length.get();
+
+                    const slot_offset: usize = @intCast(fs_info.offset);
+                    self.popFreeSlot(fs);
+
+                    const remain_slot_len = slot_len - @as(T, @intCast(fix_len));
+                    if (remain_slot_len >= @as(T, @sizeOf(FreedEntry))) {
+                        const new_free_offset = @as(T, @intCast(slot_offset)) + @as(T, @intCast(fix_len));
+                        const new_free_length = remain_slot_len;
+                        self.pushFreeSlot(new_free_offset, new_free_length);
+                    }
+
+                    const buf = self.body[slot_offset .. slot_offset + @as(usize, @intCast(slot_len))];
+                    if (need_slot) {
+                        self.increaseEntryCount();
+                        self.expand(pos);
+                    }
+
+                    var slots = self.entriesMut();
+                    slots[pos].length.set(@as(T, @intCast(len)));
+                    slots[pos].offset.set(@as(T, @intCast(slot_offset)));
+
+                    return buf[0..len];
+                }
+                return error.NotEnoughSpace;
+            }
+
+            const buf = self.allocateSpace(fix_len);
+            self.decreaseFreeEnd(fix_len);
+
+            if (need_slot) {
+                self.increaseEntryCount();
+                self.expand(pos);
+            }
+
+            var slots = self.entriesMut();
+            slots[pos].length.set(@as(T, @intCast(len)));
+            slots[pos].offset.set(self.headerConst().free_end.get());
+
+            return buf;
+        }
+
+        pub fn entriesConst(self: *const Self) EntrySliceConst {
+            const header = self.headerConst();
+            const first_entry_ptr: [*]const Entry = @ptrCast(&self.body[@sizeOf(Header)]);
+            return first_entry_ptr[0..header.entry_count.get()];
+        }
+
+        pub fn entriesMut(self: *Self) EntrySlice {
+            if (is_const) @compileError("Cannot get mutable entries from const buffer");
+            const header = self.headerConst();
+            const first_entry_ptr: [*]Entry = @ptrCast(&self.body[@sizeOf(Header)]);
+            return first_entry_ptr[0..header.entry_count.get()];
+        }
+
+        fn expand(self: *Self, pos: usize) void {
             var slots = self.entriesMut();
             var len = slots.len - 1;
             while (len > pos) : (len -= 1) {
@@ -471,10 +512,95 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             }
         }
 
-        fn getEntry(self: *const Self, index: usize) ?Entry {
-            const entries = self.entriesConst();
-            if (index < entries.len) {
-                return entries[index];
+        // returns buffer body[free_end - len..free_end]
+        // it doesn't decrease free_end
+        pub fn allocateSpace(self: *Self, len: usize) []u8 {
+            const header = self.headerConst();
+            const old_end: usize = @intCast(header.free_end.get());
+            const new_end: usize = old_end - len;
+            return self.body[new_end..][0..len];
+        }
+
+        fn decreaseFreeEnd(self: *Self, len: usize) void {
+            const header = self.headerMut();
+            const shift: T = @intCast(len);
+            const old_end = header.free_end.get();
+            header.free_end.set(old_end - shift);
+        }
+
+        // adds an entry at the end of the entries.
+        // it doesn't increase entry_count and free_beg
+        fn allocateEntry(self: *Self) *Entry {
+            const header = self.headerMut();
+            const entry_count = header.entry_count.get();
+            const first_entry_ptr: [*]Entry = @ptrCast(&self.body[@sizeOf(Header)]);
+            const new_entry_ptr = &first_entry_ptr[@intCast(entry_count)];
+            return new_entry_ptr;
+        }
+
+        fn increaseEntryCount(self: *Self) void {
+            const header = self.headerMut();
+            const entry_count = header.entry_count.get();
+            const new_free_begin: usize = @sizeOf(Entry) + @as(usize, @intCast(header.free_begin.get()));
+            header.entry_count.set(entry_count + 1);
+            header.free_begin.set(@as(T, @intCast(new_free_begin)));
+        }
+
+        // Free slots management
+        fn pushFreeSlot(self: *Self, offset: T, length: T) void {
+            if (is_const) @compileError("Cannot push free slot into const buffer");
+            var hdr = self.headerMut();
+            const freed_head = hdr.freed.get();
+
+            var freed_entry: FreedEntry = .{};
+            freed_entry.prev.set(0);
+            freed_entry.next.set(freed_head);
+            freed_entry.length.set(self.fixLength(length));
+
+            const freed_offset_usize: usize = @intCast(offset);
+            const freed_entry_ptr: *FreedEntry = @ptrCast(&self.body[freed_offset_usize]);
+            freed_entry_ptr.* = freed_entry;
+
+            if (freed_head != 0) {
+                const old_head_ptr: *FreedEntry = @ptrCast(&self.body[@intCast(freed_head)]);
+                old_head_ptr.prev.set(offset);
+            }
+
+            hdr.freed.set(offset);
+        }
+
+        fn popFreeSlot(self: *Self, fs: *const FreedEntry) void {
+            if (is_const) @compileError("Cannot pop free slot from const buffer");
+            var hdr = self.headerMut();
+            const prev = fs.prev.get();
+            const next = fs.next.get();
+            if (prev != SLOT_INVALID) {
+                const prev_ptr: *FreedEntry = @ptrCast(&self.body[@intCast(prev)]);
+                prev_ptr.next.set(next);
+            } else {
+                hdr.freed.set(next);
+            }
+            if (next != SLOT_INVALID) {
+                const next_ptr: *FreedEntry = @ptrCast(&self.body[@intCast(next)]);
+                next_ptr.prev.set(prev);
+            }
+        }
+
+        const FreeSlotInfo = struct {
+            ptr: *FreedEntry,
+            offset: T,
+        };
+
+        fn findFreeSlot(self: *const Self, needed: T) ?FreeSlotInfo {
+            const fixed_len = self.fixLength(needed);
+            var current_offset = self.headerConst().freed.get();
+            while (current_offset != SLOT_INVALID) {
+                const current_ptr: *FreedEntry = @ptrCast(&self.body[@intCast(current_offset)]);
+                const current_len = current_ptr.length.get();
+                if (current_len >= fixed_len) {
+                    return .{ .ptr = current_ptr, .offset = current_offset };
+                }
+                current_offset = current_ptr.next.get();
             }
             return null;
         }

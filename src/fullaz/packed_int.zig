@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn WordT(comptime T: type, comptime Endian: std.builtin.Endian) type {
+pub fn PackedInt(comptime T: type, comptime Endian: std.builtin.Endian) type {
     comptime {
         const ti = @typeInfo(T);
         if (ti != .int) {
@@ -66,10 +66,10 @@ pub fn WordT(comptime T: type, comptime Endian: std.builtin.Endian) type {
     };
 }
 
-pub fn WordLe(comptime T: type) type {
-    return WordT(T, .little);
+pub fn PackedIntLe(comptime T: type) type {
+    return PackedInt(T, .little);
 }
 
-pub fn WordBe(comptime T: type) type {
-    return WordT(T, .big);
+pub fn PackedIntBe(comptime T: type) type {
+    return PackedInt(T, .big);
 }
