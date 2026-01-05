@@ -3,9 +3,9 @@ const std = @import("std");
 const errors = @import("fullaz").errors;
 
 const fullaz = @import("fullaz");
-const WordT = fullaz.WordT;
-const WordLe = fullaz.WordLe;
-const WordBe = fullaz.WordBe;
+const PackedInt = fullaz.PackedInt;
+const PackedIntLe = fullaz.PackedIntLe;
+const PackedIntBe = fullaz.PackedIntBe;
 
 // ---------------------------------------------
 // A "view" wrapper for mapping onto a buffer.
@@ -87,7 +87,7 @@ fn expectBytesEqual(expected: []const u8, actual: []const u8) !void {
 // Tests: standalone WordT
 // ---------------------------------------------
 test "WordT: init/get/set roundtrip (u16 LE)" {
-    var w = WordLe(u16).init(0x1234);
+    var w = PackedIntLe(u16).init(0x1234);
     try std.testing.expectEqual(@as(u16, 0x1234), w.get());
 
     w.set(0xABCD);
@@ -98,7 +98,7 @@ test "WordT: init/get/set roundtrip (u16 LE)" {
 }
 
 test "WordT: init/get/set roundtrip (u16 BE)" {
-    var w = WordBe(u16).init(0x1234);
+    var w = PackedIntBe(u16).init(0x1234);
     try std.testing.expectEqual(@as(u16, 0x1234), w.get());
 
     w.set(0xABCD);
@@ -109,7 +109,7 @@ test "WordT: init/get/set roundtrip (u16 BE)" {
 }
 
 test "WordT: fromBytes works" {
-    const W = WordLe(u32);
+    const W = PackedIntLe(u32);
 
     const raw: [4]u8 = .{ 0x78, 0x56, 0x34, 0x12 }; // 0x12345678 LE
     const w = W.fromBytes(raw);
@@ -119,7 +119,7 @@ test "WordT: fromBytes works" {
 }
 
 test "WordT: fromSlice success and error" {
-    const W = WordBe(u32);
+    const W = PackedIntBe(u32);
 
     const ok_src: []const u8 = &[_]u8{ 0x12, 0x34, 0x56, 0x78, 0xAA };
     const w_ok = try W.fromSlice(ok_src);
@@ -130,7 +130,7 @@ test "WordT: fromSlice success and error" {
 }
 
 test "WordT: writeTo success and error" {
-    const W = WordLe(u64);
+    const W = PackedIntLe(u64);
 
     const w = W.init(0x1122334455667788);
 
@@ -144,11 +144,11 @@ test "WordT: writeTo success and error" {
 }
 
 test "WordT: min/max sanity for signed and unsigned" {
-    try std.testing.expectEqual(std.math.maxInt(u16), WordLe(u16).max());
-    try std.testing.expectEqual(std.math.minInt(u16), WordLe(u16).min());
+    try std.testing.expectEqual(std.math.maxInt(u16), PackedIntLe(u16).max());
+    try std.testing.expectEqual(std.math.minInt(u16), PackedIntLe(u16).min());
 
-    try std.testing.expectEqual(std.math.maxInt(i32), WordBe(i32).max());
-    try std.testing.expectEqual(std.math.minInt(i32), WordBe(i32).min());
+    try std.testing.expectEqual(std.math.maxInt(i32), PackedIntBe(i32).max());
+    try std.testing.expectEqual(std.math.minInt(i32), PackedIntBe(i32).min());
 }
 
 test "WordT: randomized roundtrip for multiple types/endians" {
@@ -157,7 +157,7 @@ test "WordT: randomized roundtrip for multiple types/endians" {
 
     inline for (.{ u16, u32, u64, i16, i32, i64 }) |T| {
         inline for (.{ std.builtin.Endian.little, std.builtin.Endian.big }) |E| {
-            const W = WordT(T, E);
+            const W = PackedInt(T, E);
 
             var i: usize = 0;
             while (i < 200) : (i += 1) {

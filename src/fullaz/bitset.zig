@@ -1,5 +1,5 @@
 const std = @import("std");
-const WordT = @import("packed_int.zig").WordT;
+const PackedInt = @import("packed_int.zig").PackedInt;
 const errors = @import("errors.zig");
 
 inline fn ceilWords(value: usize, bits_per_word: usize) usize {
@@ -44,7 +44,7 @@ pub fn maxObjectsByWords(comptime Word: type, capacity: usize, object_size: usiz
 }
 
 pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
-    const W = WordT(Word, Endian);
+    const W = PackedInt(Word, Endian);
     const BitsPerWord: usize = @bitSizeOf(Word);
     const ShiftT = std.math.Log2Int(Word);
 
