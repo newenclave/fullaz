@@ -773,8 +773,10 @@ pub fn Bpt(comptime ModelT: type) type {
                     const child_id = try left.getChild(left.size()); // right most child
 
                     try self.setChildParent(child_id, inode.id());
-                    try self.updateInodeKey(&parent, pos_in_parent - 1, key);
                     try inode.insertChild(0, parent_key, child_id);
+
+                    // TODO: check if we can use getKey here instead
+                    try self.updateInodeKey(&parent, pos_in_parent - 1, key);
 
                     try self.swapChildren(left, left.size(), left.size() - 1);
                     try left.erase(left.size() - 1);
@@ -806,6 +808,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     const key = self.model.keyBorrowAsLike(&borrow_key);
                     const child_id = try right.getChild(0);
 
+                    // TODO: check if we can use getKey here instead
                     try self.setChildParent(child_id, inode.id());
                     try self.updateInodeKey(&parent, pos_in_parent, key);
 
