@@ -24,6 +24,20 @@ pub fn TypeMap(comptime T: type) type {
     };
 }
 
+fn KeyBorrowTypeWrapper(comptime KeyType: type) type {
+    return struct {
+        const Self = @This();
+        key: KeyType,
+        sanitize_ptr: ?*u32 = null,
+        fn init(key: KeyType, sanitize_ptr: ?*u32) Self {
+            return Self{
+                .key = key,
+                .sanitize_ptr = sanitize_ptr,
+            };
+        }
+    };
+}
+
 fn SimpleVector(comptime KeyT: type, comptime N: usize) type {
     return StaticVector(KeyT, N, void, null);
 }
@@ -94,8 +108,8 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
 
         const KeyType = KeyT;
         const KeyLikeType = KeyType;
-        const KeyOutType = KeyType;
-        const KeyBorrowType = KeyType;
+        const KeyOutType = *KeyType;
+        const KeyBorrowType = KeyBorrowTypeWrapper(KeyT);
 
         leaf: ?*MemoryLeafType = null,
         self_id: MemoryPidType = 0,
@@ -140,16 +154,16 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
         pub fn getKey(self: *const Self, pos: usize) !KeyOutType {
             if (self.leaf) |leaf| {
                 if (pos < leaf.keys.len) {
-                    return leaf.keys.data[pos];
+                    return &leaf.keys.data[pos];
                 }
                 return error.OutOfBounds;
             }
             return error.InvalidNode;
         }
 
-        pub fn borrowKey(self: *const Self, pos: usize) !KeyBorrowType {
-            return self.getKey(pos);
-        }
+        // pub fn borrowKey(self: *const Self, pos: usize) !KeyBorrowType {
+        //     return self.getKey(pos);
+        // }
 
         pub fn getValue(self: *const Self, pos: usize) !ValueOutType {
             if (self.leaf) |leaf| {
@@ -161,15 +175,15 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             return error.InvalidNode;
         }
 
-        pub fn borrowValue(self: *const Self, pos: usize) !ValueBorrowType {
-            if (self.leaf) |leaf| {
-                if (pos < leaf.values.len) {
-                    return leaf.values.data[pos];
-                }
-                return error.OutOfBounds;
-            }
-            return error.InvalidNode;
-        }
+        // pub fn borrowValue(self: *const Self, pos: usize) !ValueBorrowType {
+        //     if (self.leaf) |leaf| {
+        //         if (pos < leaf.values.len) {
+        //             return leaf.values.data[pos];
+        //         }
+        //         return error.OutOfBounds;
+        //     }
+        //     return error.InvalidNode;
+        // }
 
         pub fn keysEqual(_: *const Self, k1: KeyLikeType, k2: KeyLikeType) bool {
             return cmp(k1, k2) == .eq;
@@ -285,6 +299,7 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
     return struct {
         const Self = @This();
         const KeyLikeType = KeyT;
+        const KeyOutType = *KeyT;
 
         const MemoryInodeType = MemoryInode(KeyT, maximum_elements);
 
@@ -332,19 +347,19 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
             return cmp(k1, k2) == .eq;
         }
 
-        pub fn getKey(self: *const Self, pos: usize) !KeyLikeType {
+        pub fn getKey(self: *const Self, pos: usize) !KeyOutType {
             if (self.inode) |inode| {
                 if (pos < inode.keys.len) {
-                    return inode.keys.data[pos];
+                    return &inode.keys.data[pos];
                 }
                 return error.OutOfBounds;
             }
             return error.InvalidNode;
         }
 
-        pub fn borrowKey(self: *const Self, pos: usize) !KeyLikeType {
-            return self.getKey(pos);
-        }
+        // pub fn borrowKey(self: *const Self, pos: usize) !KeyLikeType {
+        //     return self.getKey(pos);
+        // }
 
         pub fn getChild(self: *const Self, pos: usize) !MemoryPidType {
             if (self.inode) |inode| {
@@ -457,6 +472,8 @@ fn AccessorModel(comptime KeyT: type, comptime maximum_elements: usize, comptime
         const LeafType = MemLeafType(KeyT, maximum_elements, cmp);
         const InodeType = MemInodeType(KeyT, maximum_elements, cmp);
 
+        const KeyBorrowType = LeafType.KeyBorrowType;
+
         const RootType = usize;
         root: ?RootType = null,
         nodes: std.ArrayList(?*NodeType),
@@ -487,6 +504,20 @@ fn AccessorModel(comptime KeyT: type, comptime maximum_elements: usize, comptime
                 }
             }
             self.nodes.deinit(self.allocator);
+        }
+
+        pub fn borrowKeyfromInode(self: *Self, inode: *const InodeType, pos: usize) !KeyBorrowType {
+            return KeyBorrowType.init((try inode.getKey(pos)).*, try self.allocator.create(u32));
+        }
+
+        pub fn borrowKeyfromLeaf(self: *Self, leaf: *const LeafType, pos: usize) !KeyBorrowType {
+            return KeyBorrowType.init((try leaf.getKey(pos)).*, try self.allocator.create(u32));
+        }
+
+        pub fn deinitBorrowKey(self: *Self, key: KeyBorrowType) void {
+            if (key.sanitize_ptr) |ptr| {
+                self.allocator.destroy(ptr);
+            }
         }
 
         pub fn deinitLeaf(self: *Self, leaf: ?LeafType) void {
@@ -637,8 +668,8 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
         const Self = @This();
 
         pub const KeyLikeType = KeyT;
-        pub const KeyOutType = KeyT;
-        pub const KeyBorrowType = KeyT;
+        pub const KeyOutType = *KeyT;
+        pub const KeyBorrowType = KeyBorrowTypeWrapper(KeyT);
 
         pub const ValueBorrowType = MemoryLeaf(KeyT, maximum_elements).ValueType;
 
@@ -668,15 +699,19 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
         }
 
         pub fn keyBorrowAsLike(_: *const Self, key: *const KeyBorrowType) KeyLikeType {
-            return key.*;
+            return key.key;
         }
 
         pub fn keyOutAsLike(_: *const Self, key: KeyOutType) KeyLikeType {
-            return key;
+            return key.*;
         }
 
         pub fn valueBorrowAsIn(_: *const Self, value: *const ValueBorrowType) ValueInType {
             return value[0..];
+        }
+
+        pub fn valueOutAsIn(_: *const Self, value: ValueOutType) ValueInType {
+            return value;
         }
 
         pub fn isValidId(_: *const Self, pid: ?MemoryPidType) bool {

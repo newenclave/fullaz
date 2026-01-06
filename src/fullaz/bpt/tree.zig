@@ -395,7 +395,10 @@ pub fn Bpt(comptime ModelT: type) type {
         // private methods
 
         fn removeImpl(self: *Self, leaf: *LeafType, pos: usize) !void {
-            const key = try leaf.borrowKey(pos);
+            const accessor = self.model.getAccessor();
+            const key = try accessor.borrowKeyfromLeaf(leaf, pos);
+            defer accessor.deinitBorrowKey(key);
+
             try leaf.erase(pos);
             if (pos == 0 and leaf.size() > 0) {
                 try self.fixParentIndex(leaf);
@@ -656,11 +659,11 @@ pub fn Bpt(comptime ModelT: type) type {
                     var parent = parent_const;
                     const pos_in_parent = try self.findChidIndexInParentId(parent.id(), leaf.id());
                     if (parent.canUpdateKey(pos_in_parent, key_like)) {
-                        const borrowed_key = try left.borrowKey(left.size() - 1);
-                        const borrowed_value = try left.borrowValue(left.size() - 1);
+                        const out_key = try left.getKey(left.size() - 1);
+                        const out_value = try left.getValue(left.size() - 1);
 
-                        const key = self.model.keyBorrowAsLike(&borrowed_key);
-                        const value = self.model.valueBorrowAsIn(&borrowed_value);
+                        const key = self.model.keyOutAsLike(out_key);
+                        const value = self.model.valueOutAsIn(out_value);
 
                         try leaf.insertValue(0, key, value);
                         try left.erase(left.size() - 1);
@@ -685,11 +688,11 @@ pub fn Bpt(comptime ModelT: type) type {
                     var parent = parent_const;
                     const pos_in_parent = try self.findChidIndexInParentId(parent.id(), leaf.id());
                     if (parent.canUpdateKey(pos_in_parent, key_like)) {
-                        const borrowed_key = try right.borrowKey(0);
-                        const borrowed_value = try right.borrowValue(0);
+                        const out_key = try right.getKey(0);
+                        const out_value = try right.getValue(0);
 
-                        const key = self.model.keyBorrowAsLike(&borrowed_key);
-                        const value = self.model.valueBorrowAsIn(&borrowed_value);
+                        const key = self.model.keyOutAsLike(out_key);
+                        const value = self.model.valueOutAsIn(out_value);
 
                         try leaf.insertValue(leaf.size(), key, value);
                         try right.erase(0);
@@ -758,10 +761,14 @@ pub fn Bpt(comptime ModelT: type) type {
                     defer accessor.deinitInode(parent_const);
                     var parent = parent_const;
                     const pos_in_parent = try self.findChidIndexInParentId(parent.id(), inode.id());
-                    const borrow_parent_key = try parent.getKey(pos_in_parent - 1);
-                    const borrow_key = try left.borrowKey(left.size() - 1);
 
-                    const parent_key = self.model.keyOutAsLike(borrow_parent_key);
+                    const borrow_parent_key = try accessor.borrowKeyfromInode(&parent, pos_in_parent - 1);
+                    defer accessor.deinitBorrowKey(borrow_parent_key);
+
+                    const borrow_key = try accessor.borrowKeyfromInode(left, left.size() - 1);
+                    defer accessor.deinitBorrowKey(borrow_key);
+
+                    const parent_key = self.model.keyBorrowAsLike(&borrow_parent_key);
                     const key = self.model.keyBorrowAsLike(&borrow_key);
                     const child_id = try left.getChild(left.size()); // right most child
 
@@ -788,10 +795,14 @@ pub fn Bpt(comptime ModelT: type) type {
 
                     var parent = parent_const;
                     const pos_in_parent = try self.findChidIndexInParentId(parent.id(), inode.id());
-                    const borrow_parent_key = try parent.getKey(pos_in_parent);
-                    const borrow_key = try right.borrowKey(0);
 
-                    const parent_key = self.model.keyOutAsLike(borrow_parent_key);
+                    const borrow_parent_key = try accessor.borrowKeyfromInode(&parent, pos_in_parent);
+                    defer accessor.deinitBorrowKey(borrow_parent_key);
+
+                    const borrow_key = try accessor.borrowKeyfromInode(right, 0);
+                    defer accessor.deinitBorrowKey(borrow_key);
+
+                    const parent_key = self.model.keyBorrowAsLike(&borrow_parent_key);
                     const key = self.model.keyBorrowAsLike(&borrow_key);
                     const child_id = try right.getChild(0);
 
@@ -871,11 +882,11 @@ pub fn Bpt(comptime ModelT: type) type {
                         var right_sibling = right_sibling_const;
                         if (accessor.canMergeLeafs(leaf, &right_sibling)) {
                             for (0..right_sibling.size()) |i| {
-                                const borrowed_key = try right_sibling.borrowKey(i);
-                                const borrowed_value = try right_sibling.borrowValue(i);
+                                const out_key = try right_sibling.getKey(i);
+                                const out_value = try right_sibling.getValue(i);
 
-                                const key = self.model.keyBorrowAsLike(&borrowed_key);
-                                const value = self.model.valueBorrowAsIn(&borrowed_value);
+                                const key = self.model.keyOutAsLike(out_key);
+                                const value = self.model.valueOutAsIn(out_value);
 
                                 try leaf.insertValue(leaf.size(), key, value);
                             }
@@ -946,14 +957,14 @@ pub fn Bpt(comptime ModelT: type) type {
 
                             const right_pos = try self.findChidIndexInParentId(parent.id(), right_id);
                             const borrow_separator_key = try parent.getKey(right_pos - 1);
-                            const separator_key = self.model.keyBorrowAsLike(&borrow_separator_key);
+                            const separator_key = self.model.keyOutAsLike(borrow_separator_key);
                             const last_node_child = try inode.getChild(inode.size());
 
                             try inode.insertChild(inode.size(), separator_key, last_node_child);
                             for (0..right_sibling.size()) |i| {
-                                const borrowed_key = try right_sibling.borrowKey(i);
+                                const out_key = try right_sibling.getKey(i);
                                 const child_id = try right_sibling.getChild(i);
-                                const key = self.model.keyBorrowAsLike(&borrowed_key);
+                                const key = self.model.keyOutAsLike(out_key);
 
                                 try inode.insertChild(inode.size(), key, child_id);
                                 try self.setChildParent(child_id, inode.id());
@@ -1023,7 +1034,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     const keyPos = leaf.keyPosition(key) catch return not_found;
                     if (keyPos < leaf.size()) {
                         const existingKey = try leaf.getKey(keyPos);
-                        const eq = leaf.keysEqual(existingKey, key);
+                        const eq = leaf.keysEqual(self.model.keyOutAsLike(existingKey), key);
                         return .{ .leaf = leaf.move(), .position = keyPos, .found = eq };
                     }
                     return .{ .leaf = leaf.move(), .position = keyPos, .found = false };
@@ -1071,8 +1082,11 @@ pub fn Bpt(comptime ModelT: type) type {
                 var nr = nr_const;
                 right_leaf.setParent(nr.id());
                 leaf.setParent(nr.id());
+
                 const first_key = try right_leaf.getKey(0);
-                try nr.insertChild(0, first_key, leaf_if);
+                const first_key_like = self.model.keyOutAsLike(first_key);
+
+                try nr.insertChild(0, first_key_like, leaf_if);
                 try nr.updateChild(1, right_leaf.id());
                 accessor.setRoot(nr.id());
             } else {
@@ -1085,7 +1099,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     parent = p;
                 }
                 var pos_child = try parent.getChild(pos);
-                const key_like = self.model.keyOutAsLike(split_result.middle_key);
+                const key_like = split_result.middle_key;
 
                 try self.handleInodeOverflowDefault(&parent, key_like, pos_child, pos);
 
@@ -1101,17 +1115,18 @@ pub fn Bpt(comptime ModelT: type) type {
 
                 right_leaf.setParent(parent.id());
                 const first_key = try right_leaf.getKey(0);
+                const first_key_like = self.model.keyOutAsLike(first_key);
                 pos_child = try parent.getChild(pos);
 
                 // TODO: investigate why this happens
-                if (parent.canInsertChild(pos, first_key, pos_child)) {
+                if (parent.canInsertChild(pos, first_key_like, pos_child)) {
                     // all good
                 } else {
                     std.debug.print("Parent inode id: {} cannot insert child at pos: {} with key: {}\n", .{ parent.id(), pos, first_key });
                     @breakpoint();
                 }
 
-                try parent.insertChild(pos, first_key, pos_child);
+                try parent.insertChild(pos, first_key_like, pos_child);
                 try parent.updateChild(pos + 1, right_leaf.id());
             }
             return right_leaf.move();
@@ -1145,7 +1160,10 @@ pub fn Bpt(comptime ModelT: type) type {
             }
             const res = try self.splitInode(inode);
             var right_inode = res.right;
-            defer accessor.deinitInode(right_inode);
+            defer {
+                accessor.deinitInode(right_inode);
+                accessor.deinitBorrowKey(res.middle_key);
+            }
 
             if (new_root) |nr_const| {
                 var nr = nr_const;
@@ -1164,7 +1182,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     parent = p;
                 }
                 var pos_child = try parent.getChild(pos);
-                const key_like = self.model.keyOutAsLike(res.middle_key);
+                const key_like = self.model.keyBorrowAsLike(&res.middle_key);
 
                 try self.handleInodeOverflowDefault(&parent, key_like, pos_child, pos);
 
@@ -1235,7 +1253,8 @@ pub fn Bpt(comptime ModelT: type) type {
                 return;
             }
             const first_key = try child.getKey(0);
-            if (!parent.canUpdateKey(pos, first_key)) {
+            const first_key_like = self.model.keyOutAsLike(first_key);
+            if (!parent.canUpdateKey(pos, first_key_like)) {
                 var right = try self.handleInodeOverflow(parent);
                 const key_like = self.model.keyOutAsLike(first_key);
                 if (pos < parent.size()) {
@@ -1245,7 +1264,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     try right.updateKey(new_pos, key_like);
                 }
             } else {
-                try parent.updateKey(pos, first_key);
+                try parent.updateKey(pos, first_key_like);
             }
         }
 
@@ -1284,11 +1303,11 @@ pub fn Bpt(comptime ModelT: type) type {
             defer self.model.getAccessor().deinitLeaf(right);
 
             for (mid..maximum) |i| {
-                const key = try leaf.borrowKey(i);
-                const value = try leaf.borrowValue(i);
+                const out_key = try leaf.getKey(i);
+                const out_value = try leaf.getValue(i);
 
-                const key_like = self.model.keyBorrowAsLike(&key);
-                const value_in = self.model.valueBorrowAsIn(&value);
+                const key_like = self.model.keyOutAsLike(out_key);
+                const value_in = self.model.valueOutAsIn(out_value);
 
                 try right.insertValue(right.size(), key_like, value_in);
             }
@@ -1333,12 +1352,13 @@ pub fn Bpt(comptime ModelT: type) type {
             var right = try accessor.createInode();
             defer accessor.deinitInode(right);
 
-            const middle_key = try inode.borrowKey(mid);
+            const middle_key = try accessor.borrowKeyfromInode(inode, mid);
+
             right.setParent(inode.getParent());
             for (mid + 1..maximum) |i| {
-                const key = try inode.borrowKey(i);
+                const out_key = try inode.getKey(i);
                 const child_id = try inode.getChild(i);
-                const key_like = self.model.keyBorrowAsLike(&key);
+                const key_like = self.model.keyOutAsLike(out_key);
                 try self.setChildParent(child_id, right.id());
                 try right.insertChild(right.size(), key_like, child_id);
             }
