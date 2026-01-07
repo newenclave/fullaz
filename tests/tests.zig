@@ -7,4 +7,5 @@ test {
     _ = @import("algorithm.zig");
     _ = @import("bpt_memory_model.zig");
     _ = @import("slots_variadic.zig");
+    _ = @import("device_memory_block.zig");
 }

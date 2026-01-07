@@ -1259,6 +1259,7 @@ pub fn Bpt(comptime ModelT: type) type {
             const first_key_like = self.model.keyOutAsLike(first_key);
             if (!parent.canUpdateKey(pos, first_key_like)) {
                 var right = try self.handleInodeOverflow(parent);
+                defer self.model.getAccessor().deinitInode(right);
                 const key_like = self.model.keyOutAsLike(first_key);
                 if (pos < parent.size()) {
                     try parent.updateKey(pos, key_like);
@@ -1272,13 +1273,17 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         pub fn updateInodeKey(self: *Self, inode: *InodeType, pos: usize, key: KeyLikeType) !void {
+            const accessor = self.model.getAccessor();
             if (!inode.canUpdateKey(pos, key)) {
                 var right = try self.handleInodeOverflow(inode);
+                // TODO: check if we need to deinit right here
+                defer accessor.deinitInode(right);
                 if (pos < inode.size()) {
                     try inode.updateKey(pos, key);
                 } else if (pos == inode.size()) {
-                    if (try self.model.getAccessor().loadInode(inode.getParent())) |parent_const| {
+                    if (try accessor.loadInode(inode.getParent())) |parent_const| {
                         var parent = parent_const;
+                        defer accessor.deinitInode(parent);
                         const parent_pos = try self.findChidIndexInParentId(parent.id(), inode.id());
                         try self.updateInodeKey(&parent, parent_pos, key);
                     }

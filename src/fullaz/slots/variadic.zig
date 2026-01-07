@@ -7,12 +7,12 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
     const SLOT_INVALID: T = 0;
 
-    const Entry = struct {
+    const Entry = extern struct {
         offset: IndexType,
         length: IndexType,
     };
 
-    const FreedEntry = struct {
+    const FreedEntry = extern struct {
         prev: IndexType = undefined,
         next: IndexType = undefined,
         length: IndexType = undefined,
@@ -21,7 +21,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
     const EntrySlice = []Entry;
     const EntrySliceConst = []const Entry;
 
-    const Header = struct {
+    const Header = extern struct {
         entry_count: IndexType,
         free_begin: IndexType,
         free_end: IndexType,
@@ -133,6 +133,10 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
                 return error.InvalidEntry;
             }
 
+            if (slots[entry].offset.get() == SLOT_INVALID) {
+                return; // already freed no op
+            }
+
             const slot_offset = slots[entry].offset.get();
             const slot_length = slots[entry].length.get();
 
@@ -222,6 +226,28 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
             const avail_after_compact = try self.availableAfterCompact();
             if (fix_len + @sizeOf(Entry) <= avail_after_compact) {
+                return .need_compact;
+            }
+            return .not_enough;
+        }
+
+        pub fn canMergeWith(self: *const Self, other: *const Self) !AvailableStatus {
+            const other_slots = other.entriesConst();
+            var needed: usize = 0;
+
+            // Add data sizes
+            for (other_slots) |*s| {
+                if (s.offset.get() != SLOT_INVALID) {
+                    needed += (self.fixLength(s.length.get()) + @sizeOf(Entry));
+                }
+            }
+
+            const available = self.availableSpace();
+            if (needed <= available) {
+                return .enough;
+            }
+            const avail_after_compact = try self.availableAfterCompact();
+            if (needed <= avail_after_compact) {
                 return .need_compact;
             }
             return .not_enough;

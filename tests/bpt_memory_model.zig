@@ -277,3 +277,97 @@ test "Bpt Update values" {
         }
     }
 }
+
+test "Some stress test" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer {
+        _ = gpa.deinit();
+    }
+
+    const KeyType = f32;
+
+    const TreeTest = BptTest(f32, 5, algos.CmpNum(f32).asc);
+    var tree_test = try TreeTest.init(gpa.allocator());
+    defer tree_test.deinit();
+
+    var bptree = try tree_test.createTree();
+    defer bptree.deinit();
+
+    var prng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    const random = prng.random();
+
+    for (0..500) |_| {
+        //_ = i;
+        _ = random.int(u32) % 200;
+        const key = random.int(u32) % 500;
+        var buf: [32]u8 = undefined;
+        const value = try std.fmt.bufPrint(&buf, "{}", .{key});
+        _ = try bptree.insert(@as(KeyType, @floatFromInt(key)), value);
+    }
+
+    for (0..500) |i| {
+        _ = i;
+        _ = random.int(u32) % 200;
+        const key = random.int(u32) % 500;
+        var buf: [32]u8 = undefined;
+        const value = try std.fmt.bufPrint(&buf, "{}", .{key + 666_1000});
+        _ = try bptree.update(@as(KeyType, @floatFromInt(key)), value);
+    }
+
+    for (0..413) |_| {
+        const key = random.int(u32) % 500;
+        _ = try bptree.remove(@floatFromInt(key));
+    }
+
+    if (try bptree.iterator()) |itr_const| {
+        var itr = itr_const;
+        defer itr.deinit();
+
+        while (try itr.next()) |vals| {
+            _ = vals.key.*;
+        }
+
+        while (try itr.prev()) |vals| {
+            _ = vals.key.*;
+        }
+        while (try itr.next()) |vals| {
+            _ = vals.key.*;
+        }
+    }
+
+    if (try bptree.iteratorFromEnd()) |itr_const| {
+        var itr = itr_const;
+        defer itr.deinit();
+        while (try itr.prev()) |vals| {
+            if (try bptree.find(vals.key.*)) |fi_const| {
+                var fi = fi_const;
+                defer fi.deinit();
+                if (try fi.get()) |v| {
+                    _ = v;
+                    try expect(true);
+                } else {
+                    try expect(false);
+                }
+            }
+        }
+        while (try itr.next()) |vals| {
+            _ = vals.key.*;
+        }
+    }
+
+    if (try bptree.lowerBound(10000)) |itr_const| {
+        var itr = itr_const;
+        defer itr.deinit();
+        while (try itr.prev()) |vals| {
+            _ = vals.key.*;
+        }
+
+        while (try itr.next()) |vals| {
+            _ = vals.key.*;
+        }
+    }
+}

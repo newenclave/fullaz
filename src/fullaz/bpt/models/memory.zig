@@ -460,7 +460,7 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
     };
 }
 
-fn AccessorModel(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp: anytype) type {
+fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp: anytype) type {
     return struct {
         const Self = @This();
 
@@ -676,7 +676,7 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
         pub const ValueInType = TypeMap(ValueBorrowType).View;
         pub const ValueOutType = TypeMap(ValueBorrowType).View;
 
-        pub const AccessorType = AccessorModel(KeyT, maximum_elements, cmp);
+        pub const AccessorType = Accessor(KeyT, maximum_elements, cmp);
         pub const LeafType = AccessorType.LeafType;
         pub const InodeType = AccessorType.InodeType;
 
