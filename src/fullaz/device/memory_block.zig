@@ -3,7 +3,7 @@ const std = @import("std");
 pub fn MemoryBlock(comptime BlockIdT: type) type {
     return struct {
         const Self = @This();
-        const BlockId = BlockIdT;
+        pub const BlockId = BlockIdT;
 
         allocator: std.mem.Allocator,
         block_size: usize,
@@ -38,13 +38,13 @@ pub fn MemoryBlock(comptime BlockIdT: type) type {
             return self.storage.items.len / self.block_size;
         }
 
-        pub fn appendBlock(self: *Self) !BlockId {
+        pub fn appendBlock(self: *Self) anyerror!BlockId {
             const old_size = self.storage.items.len;
             try self.storage.resize(self.allocator, old_size + self.block_size);
             return @as(BlockId, @intCast(old_size / self.block_size));
         }
 
-        pub fn readBlock(self: *const Self, block_id: BlockId, output: []u8) !void {
+        pub fn readBlock(self: *const Self, block_id: BlockId, output: []u8) anyerror!void {
             const offset = @as(usize, @intCast(block_id)) * self.block_size;
             if (offset + self.block_size > self.storage.items.len) {
                 return error.InvalidBlockId;
@@ -55,7 +55,7 @@ pub fn MemoryBlock(comptime BlockIdT: type) type {
             @memcpy(output_slice, stored_slice);
         }
 
-        pub fn writeBlock(self: *const Self, block_id: BlockId, output: []u8) !void {
+        pub fn writeBlock(self: *const Self, block_id: BlockId, output: []u8) anyerror!void {
             const offset: usize = @as(usize, @intCast(block_id)) * self.block_size;
             if (offset + self.block_size > self.storage.items.len) {
                 return error.InvalidBlockId;

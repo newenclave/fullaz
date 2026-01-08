@@ -922,7 +922,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     defer accessor.deinitLeaf(left_sibling);
                     if (try self.leafMergeWithRight(&left_sibling)) {
                         accessor.deinitLeaf(leaf.*);
-                        leaf.* = left_sibling.move();
+                        leaf.* = left_sibling.take();
                         return true;
                     }
                 }
@@ -996,7 +996,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     defer accessor.deinitInode(left_sibling);
                     if (try self.inodeMergeWithRight(&left_sibling)) {
                         accessor.deinitInode(inode.*);
-                        inode.* = left_sibling.move();
+                        inode.* = left_sibling.take();
                         return true;
                     }
                 }
@@ -1038,9 +1038,9 @@ pub fn Bpt(comptime ModelT: type) type {
                     if (keyPos < leaf.size()) {
                         const existingKey = try leaf.getKey(keyPos);
                         const eq = leaf.keysEqual(self.model.keyOutAsLike(existingKey), key);
-                        return .{ .leaf = leaf.move(), .position = keyPos, .found = eq };
+                        return .{ .leaf = leaf.take(), .position = keyPos, .found = eq };
                     }
-                    return .{ .leaf = leaf.move(), .position = keyPos, .found = false };
+                    return .{ .leaf = leaf.take(), .position = keyPos, .found = false };
                 } else if (try accessor.loadInode(current)) |inode| {
                     defer accessor.deinitInode(inode);
                     const keyPos = inode.keyPosition(key) catch return not_found;
@@ -1078,7 +1078,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 new_root = try accessor.createInode();
             }
             var split_result = try self.splitLeaf(leaf);
-            var right_leaf = split_result.right.move();
+            var right_leaf = split_result.right.take();
             defer accessor.deinitLeaf(right_leaf);
 
             if (new_root) |nr_const| { // leaf is root
@@ -1132,7 +1132,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 try parent.insertChild(pos, first_key_like, pos_child);
                 try parent.updateChild(pos + 1, right_leaf.id());
             }
-            return right_leaf.move();
+            return right_leaf.take();
         }
 
         // TODO: refactor to avoid code duplication with handleInodeOverflow and error list is too long
@@ -1200,7 +1200,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 try parent.insertChild(pos, key_like, pos_child);
                 try parent.updateChild(pos + 1, right_inode.id());
             }
-            return right_inode.move();
+            return right_inode.take();
         }
 
         fn findChidIndexInParentInode(self: *Self, child: *const InodeType) !usize {
@@ -1341,7 +1341,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
             const mid_key = try right.getKey(0);
             return SplitLeafResult{
-                .right = right.move(),
+                .right = right.take(),
                 .middle_key = self.model.keyOutAsLike(mid_key),
             };
         }
@@ -1380,7 +1380,7 @@ pub fn Bpt(comptime ModelT: type) type {
             }
 
             return SplitInodeResult{
-                .right = right.move(),
+                .right = right.take(),
                 .middle_key = middle_key,
             };
         }

@@ -123,7 +123,7 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             };
         }
 
-        pub fn move(self: *Self) Self {
+        pub fn take(self: *Self) Self {
             const res = self.*;
             self.leaf = null;
             self.keep_ptr = null;
@@ -315,7 +315,7 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
             };
         }
 
-        pub fn move(self: *Self) Self {
+        pub fn take(self: *Self) Self {
             const res = self.*;
             self.inode = null;
             self.keep_ptr = null;

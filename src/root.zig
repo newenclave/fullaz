@@ -12,3 +12,5 @@ pub const bpt = @import("fullaz/bpt/package.zig");
 pub const slots = @import("fullaz/slots/package.zig");
 
 pub const device = @import("fullaz/device/package.zig");
+
+pub const PageCache = @import("fullaz/page_cache.zig").PageCache;
