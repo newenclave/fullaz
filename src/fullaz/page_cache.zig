@@ -81,6 +81,8 @@ pub fn PageCache(comptime DeviceT: type) type {
 
         const FrameHashMap = std.AutoHashMap(PageId, *Frame);
 
+        pub const Handle = PageHandle;
+
         device: *UnderlyingDevice = undefined,
         allocator: std.mem.Allocator = undefined,
         maximum_pages: usize = 0,
@@ -132,7 +134,7 @@ pub fn PageCache(comptime DeviceT: type) type {
             self.frames_cache.deinit();
         }
 
-        pub fn getTemporaryPage(self: *Self) !PageHandle {
+        pub fn getTemporaryPage(self: *Self) !Handle {
             if (try self.findPopFreeFrame()) |ff| {
                 ff.frame_type = .temporary;
                 const page_offset: usize = ff.frame_id * self.device.blockSize();
@@ -146,7 +148,7 @@ pub fn PageCache(comptime DeviceT: type) type {
             return error.NoFreeFrames;
         }
 
-        pub fn fetch(self: *Self, page_id: PageId) !PageHandle {
+        pub fn fetch(self: *Self, page_id: PageId) !Handle {
             if (self.frames_cache.get(page_id)) |frame| {
                 self.moveToHead(frame);
                 return PageHandle.init(frame);
@@ -174,7 +176,7 @@ pub fn PageCache(comptime DeviceT: type) type {
             return error.NoFreeFrames;
         }
 
-        pub fn create(self: *Self) !PageHandle {
+        pub fn create(self: *Self) !Handle {
             if (try self.findPopFreeFrame()) |ff| {
                 const page_offset: usize = ff.frame_id * self.device.blockSize();
                 const page_len = self.device.blockSize();
