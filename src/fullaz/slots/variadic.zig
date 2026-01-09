@@ -2,7 +2,7 @@ const std = @import("std");
 
 const PackedInt = @import("../packed_int.zig").PackedInt;
 
-pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime is_const: bool) type {
+pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
     const IndexType = PackedInt(T, Endian);
 
     const SLOT_INVALID: T = 0;
@@ -36,7 +36,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         std.debug.assert(@offsetOf(Header, "freed") == @sizeOf(T) * 3);
     }
 
-    const BufferType = if (is_const) []const u8 else []u8;
+    const BufferType = if (read_only) []const u8 else []u8;
 
     const AvailableStatus = enum {
         enough,
@@ -48,7 +48,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         const Self = @This();
         body: BufferType,
 
-        pub fn init(body: if (is_const) []const u8 else []u8) !Self {
+        pub fn init(body: BufferType) !Self {
             if (body.len < @sizeOf(Header)) {
                 return error.BufferTooSmall;
             }
@@ -58,7 +58,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn formatHeader(self: *Self) void {
-            if (is_const) @compileError("Cannot format header on const buffer");
+            if (read_only) @compileError("Cannot format header on const buffer");
             var header = self.headerMut();
             header.entry_count.set(0);
             header.free_begin.set(@intCast(@sizeOf(Header)));
@@ -91,7 +91,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn getMut(self: *Self, entry: usize) ![]u8 {
-            if (is_const) @compileError("Cannot get mutable value from const buffer");
+            if (read_only) @compileError("Cannot get mutable value from const buffer");
             const slots = self.entriesMut();
 
             if (entry >= slots.len) {
@@ -103,7 +103,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         fn getMutValueByEntry(self: *Self, slot: *const Entry) ![]u8 {
-            if (is_const) @compileError("Cannot get mutable value from const buffer");
+            if (read_only) @compileError("Cannot get mutable value from const buffer");
             const offset: usize = @intCast(slot.offset.get());
             const length: usize = @intCast(slot.length.get());
             if (offset + length > self.body.len) {
@@ -127,7 +127,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn free(self: *Self, entry: usize) !void {
-            if (is_const) @compileError("Cannot remove from const buffer");
+            if (read_only) @compileError("Cannot remove from const buffer");
             var slots = self.entriesMut();
             if (entry >= slots.len) {
                 return error.InvalidEntry;
@@ -162,7 +162,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn remove(self: *Self, entry: usize) !void {
-            if (is_const) @compileError("Cannot remove from const buffer");
+            if (read_only) @compileError("Cannot remove from const buffer");
             const slots = self.entriesMut();
             if (entry >= slots.len) {
                 return error.InvalidEntry;
@@ -254,7 +254,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn insert(self: *Self, data: []const u8) !usize {
-            if (is_const) @compileError("Cannot insert into const buffer");
+            if (read_only) @compileError("Cannot insert into const buffer");
 
             const len = data.len;
             const buf = self.reserveGet(self.entriesConst().len, len) catch |err| {
@@ -266,7 +266,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn insertAt(self: *Self, pos: usize, data: []const u8) !void {
-            if (is_const) @compileError("Cannot insert into const buffer");
+            if (read_only) @compileError("Cannot insert into const buffer");
 
             const len = data.len;
             const buf = self.reserveGet(pos, len) catch |err| {
@@ -405,12 +405,12 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn headerMut(self: *Self) *Header {
-            if (is_const) @compileError("Cannot get mutable header from const buffer");
+            if (read_only) @compileError("Cannot get mutable header from const buffer");
             return @ptrCast(&self.body[0]);
         }
 
         pub fn resizeGet(self: *Self, pos: usize, len: usize) ![]u8 {
-            if (is_const) @compileError("Cannot insert into const buffer");
+            if (read_only) @compileError("Cannot insert into const buffer");
 
             if (pos > self.entriesConst().len) {
                 return error.InvalidPosition;
@@ -448,7 +448,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         fn reserveGetExpand(self: *Self, pos: usize, len: usize, need_slot: bool) ![]u8 {
-            if (is_const) @compileError("Cannot insert into const buffer");
+            if (read_only) @compileError("Cannot insert into const buffer");
 
             if (pos > self.entriesConst().len) {
                 return error.InvalidPosition;
@@ -514,7 +514,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn entriesMut(self: *Self) EntrySlice {
-            if (is_const) @compileError("Cannot get mutable entries from const buffer");
+            if (read_only) @compileError("Cannot get mutable entries from const buffer");
             const header = self.headerConst();
             const first_entry_ptr: [*]Entry = @ptrCast(&self.body[@sizeOf(Header)]);
             return first_entry_ptr[0..header.entry_count.get()];
@@ -574,7 +574,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
         // Free slots management
         fn pushFreeSlot(self: *Self, offset: T, length: T) void {
-            if (is_const) @compileError("Cannot push free slot into const buffer");
+            if (read_only) @compileError("Cannot push free slot into const buffer");
             var hdr = self.headerMut();
             const freed_head = hdr.freed.get();
 
@@ -596,7 +596,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         fn popFreeSlot(self: *Self, fs: *const FreedEntry) void {
-            if (is_const) @compileError("Cannot pop free slot from const buffer");
+            if (read_only) @compileError("Cannot pop free slot from const buffer");
             var hdr = self.headerMut();
             const prev = fs.prev.get();
             const next = fs.next.get();

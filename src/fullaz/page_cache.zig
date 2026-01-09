@@ -1,5 +1,5 @@
 const std = @import("std");
-const assertBlockDevice = @import("device/package.zig").interfaces.assertBlockDevice;
+const assertBlockDevice = @import("device/device.zig").interfaces.assertBlockDevice;
 
 pub fn PageCache(comptime DeviceT: type) type {
     // Compile-time check that DeviceT is a valid block device

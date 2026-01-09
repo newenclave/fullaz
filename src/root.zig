@@ -7,10 +7,12 @@ pub const maxObjectsByWords = @import("fullaz/bitset.zig").maxObjectsByWords;
 pub const algorithm = @import("fullaz/algorithm.zig");
 pub const StaticVector = @import("fullaz/static_vector.zig").StaticVector;
 
-pub const bpt = @import("fullaz/bpt/package.zig");
+pub const bpt = @import("fullaz/bpt/bpt.zig");
 
-pub const slots = @import("fullaz/slots/package.zig");
+pub const slots = @import("fullaz/slots/slots.zig");
 
-pub const device = @import("fullaz/device/package.zig");
+pub const device = @import("fullaz/device/device.zig");
 
 pub const PageCache = @import("fullaz/page_cache.zig").PageCache;
+
+pub const page = @import("fullaz/page/page.zig");

@@ -9,4 +9,5 @@ test {
     _ = @import("slots_variadic.zig");
     _ = @import("device_memory_block.zig");
     _ = @import("page_cache.zig");
+    _ = @import("pages.zig");
 }
