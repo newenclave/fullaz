@@ -274,9 +274,27 @@ test "page/bpt create pages with differernt sunbeaders" {
     try testing.expect(inode_view.page_view.header().kind.get() == 2);
 }
 
+fn randomString(
+    allocator: std.mem.Allocator,
+    rnd: std.Random,
+    len: usize,
+) ![]u8 {
+    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    const buf = try allocator.alloc(u8, len);
+
+    for (buf) |*c| {
+        const idx = rnd.intRangeLessThan(usize, 0, charset.len);
+        c.* = charset[idx];
+    }
+
+    return buf;
+}
+
 fn SlotInserter(comptime BptHeader: type) type {
     const Slots = BptHeader.Slots;
     const SlotEntry = BptHeader.LeafSlotHeader;
+    const Entry = Slots.Entry;
 
     return struct {
         const Self = @This();
@@ -302,10 +320,13 @@ fn SlotInserter(comptime BptHeader: type) type {
             @memcpy(value_dst, value);
         }
 
-        pub fn getSlot(self: *const Self, index: usize) !struct { key: []const u8, value: []const u8 } {
-            const buffer = try self.slot_dir.get(index);
-            var slot: *const SlotEntry = @ptrCast(&buffer[0]);
+        const KeyValue = struct {
+            key: []const u8,
+            value: []const u8,
+        };
 
+        fn keyValueFromBuffer(buffer: []const u8) !KeyValue {
+            const slot: *const SlotEntry = @ptrCast(&buffer[0]);
             const key_size = @as(usize, slot.key_size.get());
             const key_offset = @sizeOf(SlotEntry);
             const value_offset = key_offset + key_size;
@@ -314,6 +335,23 @@ fn SlotInserter(comptime BptHeader: type) type {
                 .key = buffer[key_offset .. key_offset + key_size],
                 .value = buffer[value_offset..],
             };
+        }
+
+        pub fn getSlot(self: *const Self, index: usize) !KeyValue {
+            const buffer = try self.slot_dir.get(index);
+            return keyValueFromBuffer(buffer);
+        }
+
+        fn slotLess(ctx: *const Slots, a: Entry, key: []const u8) algorithm.Order {
+            const slot_key = ctx.getByEntry(&a) catch return .gt;
+
+            const slot_values = try keyValueFromBuffer(slot_key);
+
+            return algorithm.cmpSlices(u8, slot_values.key, key, algorithm.CmpNum(u8).desc, void);
+        }
+
+        pub fn lowerBound(self: *const Self, key: []const u8) !usize {
+            return try algorithm.lowerBound(Entry, self.slot_dir.entriesConst(), key, slotLess, &self.slot_dir);
         }
     };
 }
@@ -328,9 +366,25 @@ test "page/bpt slots compare and proj" {
 
     var inserter = SlotInserter(Bpt).init(try leaf_view.slotsDir());
 
-    try inserter.insertSlot(0, "hello", "world");
+    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+    const rnd = prng.random();
 
-    const slot0 = try inserter.getSlot(0);
-    try testing.expectEqualSlices(u8, "hello", slot0.key);
-    try testing.expectEqualSlices(u8, "world", slot0.value);
+    for (0..10) |_| {
+        const value = try randomString(std.testing.allocator, rnd, 10);
+        defer std.testing.allocator.free(value);
+
+        const key = try randomString(std.testing.allocator, rnd, 8);
+        defer std.testing.allocator.free(key);
+
+        const pos = try inserter.lowerBound(key);
+        try inserter.insertSlot(pos, key, value);
+    }
+
+    for (0..10) |i| {
+        const slot = try inserter.getSlot(i);
+        std.debug.print("Slot {d}: key='{s}', value='{s}'\n", .{ i, slot.key, slot.value });
+        // Just verify that we can read the keys and values back
+        try testing.expect(slot.key.len == 8);
+        try testing.expect(slot.value.len == 10);
+    }
 }

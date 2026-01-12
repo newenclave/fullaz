@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const Order = enum { lt, eq, gt, unordered };
 
-pub fn cmpNum(a: anytype, b: @TypeOf(a)) Order {
+pub fn cmpNum(_: anytype, a: anytype, b: @TypeOf(a)) Order {
     const T = @TypeOf(a);
     const is_float = @typeInfo(T) == .float or @typeInfo(T) == .comptime_float;
     const is_int = @typeInfo(T) == .int or @typeInfo(T) == .comptime_int;
@@ -39,16 +39,16 @@ pub fn cmpNum(a: anytype, b: @TypeOf(a)) Order {
 
 pub fn CmpNum(comptime T: type) type {
     return struct {
-        pub fn asc(a: T, b: T) Order {
-            return cmpNum(a, b);
+        pub fn asc(ctx: anytype, a: T, b: T) Order {
+            return cmpNum(ctx, a, b);
         }
-        pub fn desc(a: T, b: T) Order {
-            return cmpNum(b, a);
+        pub fn desc(ctx: anytype, a: T, b: T) Order {
+            return cmpNum(ctx, b, a);
         }
     };
 }
 
-pub fn cmpSlices(comptime T: type, a: []const T, b: []const T, cmp: anytype) Order {
+pub fn cmpSlices(comptime T: type, a: []const T, b: []const T, cmp: anytype, ctx: anytype) Order {
     const SliceT = @TypeOf(a);
     comptime {
         const ti = @typeInfo(SliceT);
@@ -63,7 +63,7 @@ pub fn cmpSlices(comptime T: type, a: []const T, b: []const T, cmp: anytype) Ord
     const n = @min(a.len, b.len);
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        const res = cmp(a[i], b[i]);
+        const res = cmp(ctx, a[i], b[i]);
         if (res != .eq) {
             return res;
         }
@@ -89,13 +89,13 @@ pub fn CmpSlices(comptime T: type) type {
     };
 }
 
-pub fn lowerBound(comptime T: type, items: []const T, key: T, cmp: anytype) !usize {
+pub fn lowerBound(comptime T: type, items: []const T, key: anytype, cmp: anytype, ctx: anytype) !usize {
     var lo: usize = 0;
     var hi: usize = items.len;
 
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
-        switch (cmp(items[mid], key)) {
+        switch (cmp(ctx, items[mid], key)) {
             .lt => lo = mid + 1,
             .eq, .gt => hi = mid,
             .unordered => return error.Unordered,
@@ -104,13 +104,13 @@ pub fn lowerBound(comptime T: type, items: []const T, key: T, cmp: anytype) !usi
     return lo;
 }
 
-pub fn upperBound(comptime T: type, items: []const T, key: T, cmp: anytype) !usize {
+pub fn upperBound(comptime T: type, items: []const T, key: anytype, cmp: anytype, ctx: anytype) !usize {
     var lo: usize = 0;
     var hi: usize = items.len;
 
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
-        switch (cmp(items[mid], key)) {
+        switch (cmp(ctx, items[mid], key)) {
             .gt => hi = mid,
             .lt, .eq => lo = mid + 1,
             .unordered => return error.Unordered,

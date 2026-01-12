@@ -186,13 +186,13 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
         // }
 
         pub fn keysEqual(_: *const Self, k1: KeyLikeType, k2: KeyLikeType) bool {
-            return cmp(k1, k2) == .eq;
+            return cmp(void, k1, k2) == .eq;
         }
 
         pub fn keyPosition(self: *const Self, key: KeyType) !usize {
             if (self.leaf) |leaf| {
                 const slice = leaf.keys.data[0..self.leaf.?.keys.len];
-                const pos = try algos.lowerBound(KeyType, slice, key, cmp);
+                const pos = try algos.lowerBound(KeyType, slice, key, cmp, @as(?u32, null));
                 return pos;
             } else {
                 return error.InvalidNode;
@@ -344,7 +344,7 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
         }
 
         pub fn keysEqual(_: *const Self, k1: KeyLikeType, k2: KeyLikeType) bool {
-            return cmp(k1, k2) == .eq;
+            return cmp(void, k1, k2) == .eq;
         }
 
         pub fn getKey(self: *const Self, pos: usize) !KeyOutType {
@@ -376,7 +376,7 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
         pub fn keyPosition(self: *const Self, key: KeyLikeType) !usize {
             if (self.inode) |inode| {
                 const slice = inode.keys.data[0..self.inode.?.keys.len];
-                const pos = try algos.upperBound(KeyLikeType, slice, key, cmp);
+                const pos = try algos.upperBound(KeyLikeType, slice, key, cmp, @as(?u32, null));
                 return pos;
             }
             return error.InvalidNode;

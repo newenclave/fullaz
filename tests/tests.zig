@@ -6,6 +6,7 @@ test {
     _ = @import("static_vector.zig");
     _ = @import("algorithm.zig");
     _ = @import("bpt_memory_model.zig");
+    _ = @import("bpt_paged_model.zig");
     _ = @import("slots_variadic.zig");
     _ = @import("device_memory_block.zig");
     _ = @import("page_cache.zig");

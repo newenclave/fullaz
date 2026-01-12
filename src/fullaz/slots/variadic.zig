@@ -7,7 +7,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
     const SLOT_INVALID: T = 0;
 
-    const Entry = extern struct {
+    const EntryHeader = extern struct {
         offset: IndexType,
         length: IndexType,
     };
@@ -17,9 +17,6 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         next: IndexType = undefined,
         length: IndexType = undefined,
     };
-
-    const EntrySlice = []Entry;
-    const EntrySliceConst = []const Entry;
 
     const Header = extern struct {
         entry_count: IndexType,
@@ -46,6 +43,11 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
     return struct {
         const Self = @This();
+
+        pub const Entry = EntryHeader;
+        pub const EntrySlice = []Entry;
+        pub const EntrySliceConst = []const Entry;
+
         body: BufferType,
 
         pub fn init(body: BufferType) !Self {
@@ -102,8 +104,17 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return self.getMutValueByEntry(&slot);
         }
 
-        fn getMutValueByEntry(self: *Self, slot: *const Entry) ![]u8 {
+        pub fn getMutByEntry(self: *Self, slot: *const Entry) ![]u8 {
             if (read_only) @compileError("Cannot get mutable value from const buffer");
+            const offset: usize = @intCast(slot.offset.get());
+            const length: usize = @intCast(slot.length.get());
+            if (offset + length > self.body.len) {
+                return error.InvalidEntry;
+            }
+            return self.body[offset..][0..length];
+        }
+
+        pub fn getByEntry(self: *const Self, slot: *const Entry) ![]const u8 {
             const offset: usize = @intCast(slot.offset.get());
             const length: usize = @intCast(slot.length.get());
             if (offset + length > self.body.len) {
