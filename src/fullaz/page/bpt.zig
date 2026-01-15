@@ -167,13 +167,17 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             const value_dst = new_buffer[@sizeOf(LeafSlotHeaderType) + old_value.key.len ..][0..value.len];
             @memcpy(value_dst, value);
 
+            const tail_buf = tmp_buf[new_total_size..];
+
             const update_status = try self.canUpdateValue(pos, old_value.key, value);
             if (update_status == .not_enough) {
                 return error.NotEnoughSpaceForUpdate;
             } else if (update_status == .need_compact) {
                 var slot_dir = try self.slotsDirMut();
                 try slot_dir.free(pos);
-                try slot_dir.compactInPlace();
+                slot_dir.compactWithBuffer(tail_buf) catch {
+                    try slot_dir.compactInPlace();
+                };
             }
             var slot_dir = try self.slotsDirMut();
             const buffer = try slot_dir.resizeGet(pos, new_total_size);
