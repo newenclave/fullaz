@@ -68,6 +68,11 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             header.freed.set(0);
         }
 
+        pub fn capacityFor(self: *const Self, obj_len: usize) usize {
+            const total_size = self.body.len - @sizeOf(Header);
+            return total_size / (@sizeOf(Entry) + obj_len);
+        }
+
         pub fn availableSpace(self: *const Self) usize {
             const header = self.headerConst();
             const free_begin = header.free_begin.get();

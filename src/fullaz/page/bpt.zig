@@ -150,6 +150,36 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             return try algorithm.lowerBound(ConstSlotsDirType.Entry, slot_dir.entriesConst(), key, Wrapper.less, &wrapper);
         }
 
+        pub fn canUpdateValue(self: *const Self, pos: usize, key: []const u8, value: []const u8) !AvailableStatus {
+            const slot_dir = try self.slotsDir();
+            const status = try slot_dir.canUpdate(pos, @sizeOf(LeafSlotHeaderType) + key.len + value.len);
+            return status;
+        }
+
+        pub fn updateValue(self: *Self, pos: usize, value: []const u8, tmp_buf: []u8) !void {
+            const old_value = try self.get(pos);
+            const new_total_size = @sizeOf(LeafSlotHeaderType) + old_value.key.len + value.len;
+            var new_buffer = tmp_buf[0..new_total_size];
+            var slot: *LeafSlotHeaderType = @ptrCast(&new_buffer[0]);
+            slot.key_size.set(@as(@TypeOf(slot.key_size.get()), @intCast(old_value.key.len)));
+            const key_dst = new_buffer[@sizeOf(LeafSlotHeaderType)..][0..old_value.key.len];
+            @memcpy(key_dst, old_value.key);
+            const value_dst = new_buffer[@sizeOf(LeafSlotHeaderType) + old_value.key.len ..][0..value.len];
+            @memcpy(value_dst, value);
+
+            const update_status = try self.canUpdateValue(pos, old_value.key, value);
+            if (update_status == .not_enough) {
+                return error.NotEnoughSpaceForUpdate;
+            } else if (update_status == .need_compact) {
+                var slot_dir = try self.slotsDirMut();
+                try slot_dir.free(pos);
+                try slot_dir.compactInPlace();
+            }
+            var slot_dir = try self.slotsDirMut();
+            const buffer = try slot_dir.resizeGet(pos, new_total_size);
+            @memcpy(buffer, new_buffer);
+        }
+
         pub fn get(self: *const Self, pos: usize) !KeyValue {
             const slot_dir = try self.slotsDir();
             const slot_buffer = try slot_dir.get(pos);
@@ -298,5 +328,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
 
         pub const InodeSlotHeader = InodeSlotHeaderType;
         pub const LeafSlotHeader = LeafSlotHeaderType;
+
+        pub const SlotsAvailableStatus = ConstSlotsDirType.AvailableStatus;
     };
 }
