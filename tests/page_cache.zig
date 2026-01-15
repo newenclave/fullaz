@@ -39,7 +39,7 @@ test "PageCache: fetch loads page from device" {
     var handle = try cache.fetch(0);
     defer handle.deinit();
 
-    const data = handle.getData();
+    const data = try handle.getData();
     try testing.expectEqual(@as(u8, 0xAB), data[0]);
     try testing.expectEqual(@as(u8, 0xCD), data[1]);
 }
@@ -64,7 +64,7 @@ test "PageCache: fetch same page returns cached frame" {
 
     // Both handles should point to the same frame
     try testing.expectEqual(handle1.frame, handle2.frame);
-    try testing.expectEqual(@as(usize, 2), handle1.frame.ref_count);
+    try testing.expectEqual(@as(usize, 2), handle1.frame.?.ref_count);
 }
 
 test "PageCache: create allocates new page" {
@@ -84,7 +84,7 @@ test "PageCache: create allocates new page" {
     try testing.expectEqual(initial_blocks + 1, device.blocksCount());
 
     // Data should be zeroed
-    const data = handle.getData();
+    const data = try handle.getData();
     for (data) |byte| {
         try testing.expectEqual(@as(u8, 0), byte);
     }
@@ -106,7 +106,7 @@ test "PageCache: markDirty and flush" {
     defer handle.deinit();
 
     // Modify data
-    handle.getDataMut()[0] = 0xFF;
+    (try handle.getDataMut())[0] = 0xFF;
 
     // Flush
     try cache.flush(0);
@@ -202,7 +202,7 @@ test "PageCache: dirty page writeback on eviction" {
     // Fetch and modify page 0
     {
         var h0 = try cache.fetch(0);
-        h0.getDataMut()[0] = 0x42;
+        (try h0.getDataMut())[0] = 0x42;
         h0.deinit();
     }
 
@@ -258,12 +258,12 @@ test "PageCache: clone increases ref_count" {
     var handle = try cache.fetch(0);
     defer handle.deinit();
 
-    try testing.expectEqual(@as(usize, 1), handle.frame.ref_count);
+    try testing.expectEqual(@as(usize, 1), handle.frame.?.ref_count);
 
-    var cloned = handle.clone();
+    var cloned = try handle.clone();
     defer cloned.deinit();
 
-    try testing.expectEqual(@as(usize, 2), handle.frame.ref_count);
+    try testing.expectEqual(@as(usize, 2), handle.frame.?.ref_count);
     try testing.expectEqual(handle.frame, cloned.frame);
 }
 
@@ -282,12 +282,12 @@ test "PageCache: flushAll writes all dirty pages" {
     // Fetch and modify multiple pages
     {
         var h0 = try cache.fetch(0);
-        h0.getDataMut()[0] = 0x11;
+        (try h0.getDataMut())[0] = 0x11;
         h0.deinit();
     }
     {
         var h1 = try cache.fetch(1);
-        h1.getDataMut()[0] = 0x22;
+        (try h1.getDataMut())[0] = 0x22;
         h1.deinit();
     }
 

@@ -35,41 +35,69 @@ pub fn PageCache(comptime DeviceT: type) type {
 
     const PageHandle = struct {
         const Self = @This();
-        frame: *Frame,
+        frame: ?*Frame,
 
         fn init(frame: *Frame) Self {
             const res = Self{
                 .frame = frame,
             };
-            res.frame.ref_count += 1;
+            res.frame.?.ref_count += 1;
             return res;
         }
 
-        pub fn markDirty(self: *Self) void {
-            if (self.frame.frame_type != .temporary) {
-                self.frame.frame_type = .dirty;
+        pub fn markDirty(self: *Self) !void {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            if (self.frame.?.frame_type != .temporary) {
+                self.frame.?.frame_type = .dirty;
             }
         }
 
-        pub fn pid(self: *const Self) DeviceT.BlockId {
-            return self.frame.pid;
+        pub fn pid(self: *const Self) !DeviceT.BlockId {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            return self.frame.?.pid;
         }
 
         pub fn deinit(self: *Self) void {
-            self.frame.ref_count -= 1;
+            if (self.frame) |frame_const| {
+                var frame = frame_const;
+                frame.ref_count -= 1;
+                self.frame = null;
+            }
         }
 
-        pub fn getData(self: *const Self) []const u8 {
-            return self.frame.data;
+        pub fn getData(self: *const Self) ![]const u8 {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            return self.frame.?.data;
         }
 
-        pub fn getDataMut(self: *Self) []u8 {
-            self.markDirty();
-            return self.frame.data;
+        pub fn getDataMut(self: *Self) ![]u8 {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            try self.markDirty();
+            return self.frame.?.data;
         }
 
-        pub fn clone(self: *const Self) Self {
-            return Self.init(self.frame);
+        pub fn clone(self: *const Self) !Self {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            return Self.init(self.frame.?);
+        }
+
+        pub fn take(self: *Self) !Self {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            const res = Self.init(self.frame.?);
+            self.deinit();
+            return res;
         }
     };
 

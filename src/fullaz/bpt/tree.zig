@@ -60,7 +60,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 if (self.node) |node| {
                     return switch (self.cursor) {
                         .on => |i| blk: {
-                            if (i >= node.size()) {
+                            if (i >= try node.size()) {
                                 break :blk null;
                             }
                             break :blk Result{
@@ -80,7 +80,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 if (self.node) |node| {
                     switch (self.cursor) {
                         .before_first => {
-                            if (node.size() > 0) {
+                            if (try node.size() > 0) {
                                 self.cursor = .{ .on = 0 };
                             } else {
                                 if (!try self.moveNext(node.getNext())) {
@@ -91,7 +91,7 @@ pub fn Bpt(comptime ModelT: type) type {
                         },
                         .on => |i| {
                             const next_idx = i + 1;
-                            if (next_idx >= node.size()) {
+                            if (next_idx >= try node.size()) {
                                 if (!try self.moveNext(node.getNext())) {
                                     self.cursor = .after_last;
                                     return null;
@@ -122,8 +122,8 @@ pub fn Bpt(comptime ModelT: type) type {
                             }
                         },
                         .after_last => {
-                            if (node.size() > 0) {
-                                self.cursor = .{ .on = node.size() - 1 };
+                            if (try node.size() > 0) {
+                                self.cursor = .{ .on = try node.size() - 1 };
                             } else {
                                 if (!try self.movePrev(node.getPrev())) {
                                     self.cursor = .before_first;
@@ -150,7 +150,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     const accessor = model.getAccessor();
                     while (pid_opt) |pid| {
                         if (try accessor.loadLeaf(pid)) |next_node| {
-                            if (next_node.size() > 0) {
+                            if (try next_node.size() > 0) {
                                 accessor.deinitLeaf(self.node);
                                 self.node = next_node;
                                 self.cursor = .{ .on = 0 };
@@ -174,10 +174,10 @@ pub fn Bpt(comptime ModelT: type) type {
                     const accessor = model.getAccessor();
                     while (pid_opt) |pid| {
                         if (try accessor.loadLeaf(pid)) |prev_node| {
-                            if (prev_node.size() > 0) {
+                            if (try prev_node.size() > 0) {
                                 accessor.deinitLeaf(self.node);
                                 self.node = prev_node;
-                                self.cursor = .{ .on = prev_node.size() - 1 };
+                                self.cursor = .{ .on = try prev_node.size() - 1 };
                                 return true;
                             }
                             pid_opt = prev_node.getPrev();
@@ -273,9 +273,9 @@ pub fn Bpt(comptime ModelT: type) type {
                 defer accessor.deinitLeaf(const_leaf);
                 var leaf = const_leaf;
                 // It's a leaf node
-                std.debug.print("<id:{} p:{?} size:{}> * [", .{ leaf.id(), leaf.getParent(), leaf.size() });
+                std.debug.print("<id:{} p:{?} size:{}> * [", .{ leaf.id(), leaf.getParent(), try leaf.size() });
 
-                const n = leaf.size();
+                const n = try leaf.size();
                 for (0..n) |i| {
                     if (i > 0) {
                         std.debug.print(", ", .{});
@@ -289,7 +289,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 accessor.deinitInode(inode);
 
                 // It's an inode
-                const n = inode.size();
+                const n = try inode.size();
                 std.debug.print("<id:{} p:{?} size:{}> [", .{ inode.id(), inode.getParent(), n });
 
                 for (0..n) |i| {
@@ -320,7 +320,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 defer accessor.deinitLeaf(search.leaf);
                 if (!search.found) {
                     var leaf = search.leaf.?;
-                    if (leaf.canInsertValue(search.position, key, value)) {
+                    if (try leaf.canInsertValue(search.position, key, value)) {
                         try leaf.insertValue(search.position, key, value);
                         //std.debug.print("Key {} inserted into leaf id: {}\n", .{ key, leaf.id() });
                     } else {
@@ -363,10 +363,10 @@ pub fn Bpt(comptime ModelT: type) type {
                             var right = try self.handleLeafOverflow(&leaf);
                             defer accessor.deinitLeaf(right);
 
-                            if (search.position < leaf.size()) {
+                            if (search.position < try leaf.size()) {
                                 try leaf.updateValue(search.position, value);
                             } else {
-                                try right.updateValue(search.position - leaf.size(), value);
+                                try right.updateValue(search.position - try leaf.size(), value);
                             }
                             return true;
                         }
@@ -400,7 +400,7 @@ pub fn Bpt(comptime ModelT: type) type {
             defer accessor.deinitBorrowKey(key);
 
             try leaf.erase(pos);
-            if (pos == 0 and leaf.size() > 0) {
+            if (pos == 0 and try leaf.size() > 0) {
                 try self.fixParentIndex(leaf);
             }
             try self.leafHandleUnderflow(leaf, self.model.keyBorrowAsLike(&key));
@@ -410,7 +410,7 @@ pub fn Bpt(comptime ModelT: type) type {
         fn inodeHandleUnderflow(self: *Self, inode: *InodeType, key: KeyLikeType) !void {
             const accessor = self.model.getAccessor();
             const key_pos = try inode.keyPosition(key);
-            if (key_pos > 0 and key_pos <= inode.size()) {
+            if (key_pos > 0 and key_pos <= try inode.size()) {
                 const left_key_out = try inode.getKey(key_pos - 1);
                 const left_key = self.model.keyOutAsLike(left_key_out);
                 if (inode.keysEqual(left_key, key)) {
@@ -429,7 +429,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 }
             }
 
-            if (!try self.inodeTryMerge(inode) and inode.isUnderflowed()) {
+            if (!try self.inodeTryMerge(inode) and try inode.isUnderflowed()) {
                 _ = try self.inodeTryBorrow(inode, 0);
             }
 
@@ -444,7 +444,7 @@ pub fn Bpt(comptime ModelT: type) type {
         fn leafHandleUnderflow(self: *Self, leaf: *LeafType, key: KeyLikeType) !void {
             const accessor = self.model.getAccessor();
 
-            if (!try self.leafTryMerge(leaf) and leaf.isUnderflowed()) {
+            if (!try self.leafTryMerge(leaf) and try leaf.isUnderflowed()) {
                 _ = try self.leafTryBorrow(leaf, 0);
             }
 
@@ -464,13 +464,13 @@ pub fn Bpt(comptime ModelT: type) type {
             const root_id = accessor.getRoot().?;
             if (try accessor.loadLeaf(root_id)) |root_leaf| {
                 defer accessor.deinitLeaf(root_leaf);
-                if (root_leaf.size() == 0) {
+                if (try root_leaf.size() == 0) {
                     accessor.setRoot(null);
                     try accessor.destroy(root_id);
                 }
             } else if (try accessor.loadInode(root_id)) |root_inode| {
                 defer accessor.deinitInode(root_inode);
-                if (root_inode.size() == 0) {
+                if (try root_inode.size() == 0) {
                     const child_id = try root_inode.getChild(0);
                     accessor.setRoot(child_id);
                     try accessor.destroy(root_id);
@@ -502,7 +502,7 @@ pub fn Bpt(comptime ModelT: type) type {
             while (!try accessor.isLeafId(res)) {
                 if (try accessor.loadInode(res)) |next| {
                     defer accessor.deinitInode(next);
-                    res = try next.getChild(next.size());
+                    res = try next.getChild(try next.size());
                 }
             }
             return res;
@@ -512,7 +512,7 @@ pub fn Bpt(comptime ModelT: type) type {
         fn tryLeafNeighborShare(self: *Self, leaf: *LeafType, key: KeyLikeType, value: ValueInType, position: usize) !bool {
             const accessor = self.model.getAccessor();
             const is_first = position == 0;
-            const is_last = position == leaf.size();
+            const is_last = position == try leaf.size();
             if (try self.leafGiveToLeft(leaf, if (is_first) 1 else 0)) {
                 if (is_first) {
                     // do not use getPrev here, as we need onthe the same inode level
@@ -520,7 +520,7 @@ pub fn Bpt(comptime ModelT: type) type {
                         if (try accessor.loadLeaf(left_id)) |left_sibling_const| {
                             var left_sibling = left_sibling_const;
                             defer accessor.deinitLeaf(left_sibling);
-                            try left_sibling.insertValue(left_sibling.size(), key, value);
+                            try left_sibling.insertValue(try left_sibling.size(), key, value);
                             //std.debug.print("Key {} inserted into leaf id: {} after borrowing from left sibling id: {}\n", .{ key, left_sibling.id(), left_id });
                             return true;
                         }
@@ -573,7 +573,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     if (try accessor.loadLeaf(left_sibling_id)) |left_sibling_const| {
                         defer accessor.deinitLeaf(left_sibling_const);
                         var left_sibling = left_sibling_const;
-                        if (left_sibling.size() < (left_sibling.capacity() - additional_elements)) {
+                        if (try left_sibling.size() < (try left_sibling.capacity() - additional_elements)) {
                             return try self.leafBorrowFromRight(&left_sibling, leaf, additional_elements);
                         }
                     }
@@ -595,7 +595,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     if (try accessor.loadLeaf(right_sibling_id)) |right_sibling_const| {
                         defer accessor.deinitLeaf(right_sibling_const);
                         var right_sibling = right_sibling_const;
-                        if (right_sibling.size() < (right_sibling.capacity() - additional_elements)) {
+                        if (try right_sibling.size() < (try right_sibling.capacity() - additional_elements)) {
                             //std.debug.print("right_sibling id: {}\n", .{right_sibling.id()});
                             return try self.leafBorrowFromLeft(&right_sibling, leaf, additional_elements);
                         }
@@ -617,7 +617,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     if (try accessor.loadInode(left_sibling_id)) |left_sibling_const| {
                         defer accessor.deinitInode(left_sibling_const);
                         var left_sibling = left_sibling_const;
-                        if (left_sibling.size() < (left_sibling.capacity() - additional_elements)) {
+                        if (try left_sibling.size() < (try left_sibling.capacity() - additional_elements)) {
                             return try self.inodeBorrowFromRight(&left_sibling, inode, additional_elements);
                         }
                     }
@@ -638,7 +638,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     if (try accessor.loadInode(right_sibling_id)) |right_sibling_const| {
                         defer accessor.deinitInode(right_sibling_const);
                         var right_sibling = right_sibling_const;
-                        if (right_sibling.size() < (right_sibling.capacity() - additional_elements)) {
+                        if (try right_sibling.size() < (try right_sibling.capacity() - additional_elements)) {
                             return try self.inodeBorrowFromLeft(&right_sibling, inode, additional_elements);
                         }
                     }
@@ -648,25 +648,25 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         fn leafBorrowFromLeft(self: *Self, leaf: *LeafType, left: *LeafType, additional_elements: usize) !bool {
-            const max_elements = leaf.capacity();
+            const max_elements = try leaf.capacity();
             const min_elements = (max_elements + 1) / 2 - 1;
             const accessor = self.model.getAccessor();
-            if (left.size() > (min_elements + additional_elements)) {
-                const key_to_check = try left.getKey(left.size() - 1);
+            if (try left.size() > (min_elements + additional_elements)) {
+                const key_to_check = try left.getKey(try left.size() - 1);
                 const key_like = self.model.keyOutAsLike(key_to_check);
                 if (try accessor.loadInode(leaf.getParent())) |parent_const| {
                     defer accessor.deinitInode(parent_const);
                     var parent = parent_const;
                     const pos_in_parent = try self.findChidIndexInParentId(parent.id(), leaf.id());
-                    if (parent.canUpdateKey(pos_in_parent, key_like)) {
-                        const out_key = try left.getKey(left.size() - 1);
-                        const out_value = try left.getValue(left.size() - 1);
+                    if (try parent.canUpdateKey(pos_in_parent, key_like)) {
+                        const out_key = try left.getKey(try left.size() - 1);
+                        const out_value = try left.getValue(try left.size() - 1);
 
                         const key = self.model.keyOutAsLike(out_key);
                         const value = self.model.valueOutAsIn(out_value);
 
                         try leaf.insertValue(0, key, value);
-                        try left.erase(left.size() - 1);
+                        try left.erase(try left.size() - 1);
                         try parent.updateKey(pos_in_parent - 1, self.model.keyOutAsLike(try leaf.getKey(0)));
                         return true;
                     }
@@ -676,10 +676,10 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         fn leafBorrowFromRight(self: *Self, leaf: *LeafType, right: *LeafType, additional_elements: usize) !bool {
-            const max_elements = leaf.capacity();
+            const max_elements = try leaf.capacity();
             const min_elements = (max_elements + 1) / 2 - 1;
             const accessor = self.model.getAccessor();
-            if (right.size() > (min_elements + additional_elements)) {
+            if (try right.size() > (min_elements + additional_elements)) {
                 const key_to_check = try right.getKey(1);
                 const key_like = self.model.keyOutAsLike(key_to_check);
                 if (try accessor.loadInode(leaf.getParent())) |parent_const| {
@@ -687,14 +687,14 @@ pub fn Bpt(comptime ModelT: type) type {
 
                     var parent = parent_const;
                     const pos_in_parent = try self.findChidIndexInParentId(parent.id(), leaf.id());
-                    if (parent.canUpdateKey(pos_in_parent, key_like)) {
+                    if (try parent.canUpdateKey(pos_in_parent, key_like)) {
                         const out_key = try right.getKey(0);
                         const out_value = try right.getValue(0);
 
                         const key = self.model.keyOutAsLike(out_key);
                         const value = self.model.valueOutAsIn(out_value);
 
-                        try leaf.insertValue(leaf.size(), key, value);
+                        try leaf.insertValue(try leaf.size(), key, value);
                         try right.erase(0);
                         try parent.updateKey(pos_in_parent, self.model.keyOutAsLike(try right.getKey(0)));
                         return true;
@@ -753,10 +753,10 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         fn inodeBorrowFromLeft(self: *Self, inode: *InodeType, left: *InodeType, additional_elements: usize) !bool {
-            const max_elements = inode.capacity();
+            const max_elements = try inode.capacity();
             const min_elements = (max_elements + 1) / 2 - 1;
             const accessor = self.model.getAccessor();
-            if (left.size() > min_elements + additional_elements) {
+            if (try left.size() > min_elements + additional_elements) {
                 if (try accessor.loadInode(inode.getParent())) |parent_const| {
                     defer accessor.deinitInode(parent_const);
                     var parent = parent_const;
@@ -765,12 +765,12 @@ pub fn Bpt(comptime ModelT: type) type {
                     const borrow_parent_key = try accessor.borrowKeyfromInode(&parent, pos_in_parent - 1);
                     defer accessor.deinitBorrowKey(borrow_parent_key);
 
-                    const borrow_key = try accessor.borrowKeyfromInode(left, left.size() - 1);
+                    const borrow_key = try accessor.borrowKeyfromInode(left, try left.size() - 1);
                     defer accessor.deinitBorrowKey(borrow_key);
 
                     const parent_key = self.model.keyBorrowAsLike(&borrow_parent_key);
                     const key = self.model.keyBorrowAsLike(&borrow_key);
-                    const child_id = try left.getChild(left.size()); // right most child
+                    const child_id = try left.getChild(try left.size()); // right most child
 
                     try self.setChildParent(child_id, inode.id());
                     try inode.insertChild(0, parent_key, child_id);
@@ -778,8 +778,8 @@ pub fn Bpt(comptime ModelT: type) type {
                     // TODO: check if we can use getKey here instead
                     try self.updateInodeKey(&parent, pos_in_parent - 1, key);
 
-                    try self.swapChildren(left, left.size(), left.size() - 1);
-                    try left.erase(left.size() - 1);
+                    try self.swapChildren(left, try left.size(), try left.size() - 1);
+                    try left.erase(try left.size() - 1);
 
                     return true;
                 }
@@ -788,10 +788,10 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         fn inodeBorrowFromRight(self: *Self, inode: *InodeType, right: *InodeType, additional_elements: usize) !bool {
-            const max_elements = inode.capacity();
+            const max_elements = try inode.capacity();
             const min_elements = (max_elements + 1) / 2 - 1;
             const accessor = self.model.getAccessor();
-            if (right.size() > min_elements + additional_elements) {
+            if (try right.size() > min_elements + additional_elements) {
                 if (try accessor.loadInode(inode.getParent())) |parent_const| {
                     defer accessor.deinitInode(parent_const);
 
@@ -812,9 +812,9 @@ pub fn Bpt(comptime ModelT: type) type {
                     try self.setChildParent(child_id, inode.id());
                     try self.updateInodeKey(&parent, pos_in_parent, key);
 
-                    const last_child = try inode.getChild(inode.size());
-                    try inode.insertChild(inode.size(), parent_key, last_child);
-                    try inode.updateChild(inode.size(), child_id);
+                    const last_child = try inode.getChild(try inode.size());
+                    try inode.insertChild(try inode.size(), parent_key, last_child);
+                    try inode.updateChild(try inode.size(), child_id);
 
                     try right.erase(0);
 
@@ -883,22 +883,22 @@ pub fn Bpt(comptime ModelT: type) type {
                         defer accessor.deinitLeaf(right_sibling_const);
 
                         var right_sibling = right_sibling_const;
-                        if (accessor.canMergeLeafs(leaf, &right_sibling)) {
-                            for (0..right_sibling.size()) |i| {
+                        if (try accessor.canMergeLeafs(leaf, &right_sibling)) {
+                            for (0..try right_sibling.size()) |i| {
                                 const out_key = try right_sibling.getKey(i);
                                 const out_value = try right_sibling.getValue(i);
 
                                 const key = self.model.keyOutAsLike(out_key);
                                 const value = self.model.valueOutAsIn(out_value);
 
-                                try leaf.insertValue(leaf.size(), key, value);
+                                try leaf.insertValue(try leaf.size(), key, value);
                             }
-                            leaf.setNext(right_sibling.getNext());
+                            try leaf.setNext(right_sibling.getNext());
                             if (right_sibling.getNext()) |next_id| {
                                 if (try accessor.loadLeaf(next_id)) |next_leaf_const| {
                                     defer accessor.deinitLeaf(next_leaf_const);
                                     var next_leaf = next_leaf_const;
-                                    next_leaf.setPrev(leaf.id());
+                                    try next_leaf.setPrev(leaf.id());
                                 }
                             }
                             const right_pos = try self.findChidIndexInParentId(parent_const.id(), right_id);
@@ -922,7 +922,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     defer accessor.deinitLeaf(left_sibling);
                     if (try self.leafMergeWithRight(&left_sibling)) {
                         accessor.deinitLeaf(leaf.*);
-                        leaf.* = left_sibling.take();
+                        leaf.* = try left_sibling.take();
                         return true;
                     }
                 }
@@ -931,7 +931,7 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         fn leafTryMerge(self: *Self, leaf: *LeafType) !bool {
-            if (leaf.size() == 0) {
+            if (try leaf.size() == 0) {
                 //@breakpoint();
             }
 
@@ -953,7 +953,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 if (try accessor.loadInode(right_id)) |right_sibling_const| {
                     defer accessor.deinitInode(right_sibling_const);
                     var right_sibling = right_sibling_const;
-                    if (accessor.canMergeInodes(inode, &right_sibling)) {
+                    if (try accessor.canMergeInodes(inode, &right_sibling)) {
                         if (try accessor.loadInode(inode.getParent())) |parent_const| {
                             defer accessor.deinitInode(parent_const);
                             var parent = parent_const;
@@ -961,20 +961,20 @@ pub fn Bpt(comptime ModelT: type) type {
                             const right_pos = try self.findChidIndexInParentId(parent.id(), right_id);
                             const borrow_separator_key = try parent.getKey(right_pos - 1);
                             const separator_key = self.model.keyOutAsLike(borrow_separator_key);
-                            const last_node_child = try inode.getChild(inode.size());
+                            const last_node_child = try inode.getChild(try inode.size());
 
-                            try inode.insertChild(inode.size(), separator_key, last_node_child);
-                            for (0..right_sibling.size()) |i| {
+                            try inode.insertChild(try inode.size(), separator_key, last_node_child);
+                            for (0..try right_sibling.size()) |i| {
                                 const out_key = try right_sibling.getKey(i);
                                 const child_id = try right_sibling.getChild(i);
                                 const key = self.model.keyOutAsLike(out_key);
 
-                                try inode.insertChild(inode.size(), key, child_id);
+                                try inode.insertChild(try inode.size(), key, child_id);
                                 try self.setChildParent(child_id, inode.id());
                             }
 
-                            const right_most_child = try right_sibling.getChild(right_sibling.size());
-                            try inode.updateChild(inode.size(), right_most_child);
+                            const right_most_child = try right_sibling.getChild(try right_sibling.size());
+                            try inode.updateChild(try inode.size(), right_most_child);
                             try self.setChildParent(right_most_child, inode.id());
                             try self.swapChildren(&parent, right_pos - 1, right_pos);
 
@@ -996,7 +996,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     defer accessor.deinitInode(left_sibling);
                     if (try self.inodeMergeWithRight(&left_sibling)) {
                         accessor.deinitInode(inode.*);
-                        inode.* = left_sibling.take();
+                        inode.* = try left_sibling.take();
                         return true;
                     }
                 }
@@ -1035,12 +1035,12 @@ pub fn Bpt(comptime ModelT: type) type {
                     var leaf = leaf_const;
                     defer accessor.deinitLeaf(leaf);
                     const keyPos = leaf.keyPosition(key) catch return not_found;
-                    if (keyPos < leaf.size()) {
+                    if (keyPos < try leaf.size()) {
                         const existingKey = try leaf.getKey(keyPos);
                         const eq = leaf.keysEqual(self.model.keyOutAsLike(existingKey), key);
-                        return .{ .leaf = leaf.take(), .position = keyPos, .found = eq };
+                        return .{ .leaf = try leaf.take(), .position = keyPos, .found = eq };
                     }
-                    return .{ .leaf = leaf.take(), .position = keyPos, .found = false };
+                    return .{ .leaf = try leaf.take(), .position = keyPos, .found = false };
                 } else if (try accessor.loadInode(current)) |inode| {
                     defer accessor.deinitInode(inode);
                     const keyPos = inode.keyPosition(key) catch return not_found;
@@ -1054,8 +1054,8 @@ pub fn Bpt(comptime ModelT: type) type {
         fn handleLeafOverflowDefault(self: *Self, leaf: *LeafType, key: KeyLikeType, value: ValueInType, pos: usize) !void {
             var res = try self.handleLeafOverflow(leaf);
             defer self.model.getAccessor().deinitLeaf(res);
-            if (leaf.size() < pos) {
-                const insert_pos = pos - leaf.size();
+            if (try leaf.size() < pos) {
+                const insert_pos = pos - try leaf.size();
                 try res.insertValue(insert_pos, key, value);
                 if (insert_pos == 0) {
                     try self.fixParentIndex(&res);
@@ -1078,13 +1078,13 @@ pub fn Bpt(comptime ModelT: type) type {
                 new_root = try accessor.createInode();
             }
             var split_result = try self.splitLeaf(leaf);
-            var right_leaf = split_result.right.take();
+            var right_leaf = try split_result.right.take();
             defer accessor.deinitLeaf(right_leaf);
 
             if (new_root) |nr_const| { // leaf is root
                 var nr = nr_const;
-                right_leaf.setParent(nr.id());
-                leaf.setParent(nr.id());
+                try right_leaf.setParent(nr.id());
+                try leaf.setParent(nr.id());
 
                 const first_key = try right_leaf.getKey(0);
                 const first_key_like = self.model.keyOutAsLike(first_key);
@@ -1116,13 +1116,13 @@ pub fn Bpt(comptime ModelT: type) type {
 
                 pos = try self.findChidIndexInParentId(new_parent_id, leaf.id());
 
-                right_leaf.setParent(parent.id());
+                try right_leaf.setParent(parent.id());
                 const first_key = try right_leaf.getKey(0);
                 const first_key_like = self.model.keyOutAsLike(first_key);
                 pos_child = try parent.getChild(pos);
 
                 // TODO: investigate why this happens
-                if (parent.canInsertChild(pos, first_key_like, pos_child)) {
+                if (try parent.canInsertChild(pos, first_key_like, pos_child)) {
                     // all good
                 } else {
                     std.debug.print("Parent inode id: {} cannot insert child at pos: {} with key: {}\n", .{ parent.id(), pos, first_key });
@@ -1132,13 +1132,13 @@ pub fn Bpt(comptime ModelT: type) type {
                 try parent.insertChild(pos, first_key_like, pos_child);
                 try parent.updateChild(pos + 1, right_leaf.id());
             }
-            return right_leaf.take();
+            return try right_leaf.take();
         }
 
         // TODO: refactor to avoid code duplication with handleInodeOverflow and error list is too long
         fn handleInodeOverflowDefault(self: *Self, inode: *InodeType, key: KeyLikeType, child_opt: ?NodedIdType, pos: usize) error{ Full, OutOfMemory, InvalidNode, ChildNotFoundInParent, NoParent, OutOfBounds }!void {
             if (child_opt) |child| {
-                if (!inode.canInsertChild(pos, key, child)) {
+                if (!try inode.canInsertChild(pos, key, child)) {
                     if (self.rebalance_policy == .neighbor_share) {
                         if (try self.inodeGiveToLeft(inode, 1)) {
                             return;
@@ -1170,11 +1170,11 @@ pub fn Bpt(comptime ModelT: type) type {
 
             if (new_root) |nr_const| {
                 var nr = nr_const;
-                inode.setParent(nr.id());
+                try inode.setParent(nr.id());
                 try nr.insertChild(0, self.model.keyBorrowAsLike(&res.middle_key), inode.id());
                 try nr.updateChild(1, right_inode.id());
-                inode.setParent(nr.id());
-                right_inode.setParent(nr.id());
+                try inode.setParent(nr.id());
+                try right_inode.setParent(nr.id());
                 accessor.setRoot(nr.id());
             } else {
                 var parent: InodeType = undefined;
@@ -1196,11 +1196,11 @@ pub fn Bpt(comptime ModelT: type) type {
                     parent = p;
                 }
                 pos_child = try parent.getChild(pos);
-                right_inode.setParent(parent.id());
+                try right_inode.setParent(parent.id());
                 try parent.insertChild(pos, key_like, pos_child);
                 try parent.updateChild(pos + 1, right_inode.id());
             }
-            return right_inode.take();
+            return try right_inode.take();
         }
 
         fn findChidIndexInParentInode(self: *Self, child: *const InodeType) !usize {
@@ -1219,7 +1219,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 if (try accessor.loadInode(parent_id)) |parent| {
                     defer accessor.deinitInode(parent);
 
-                    const n = parent.size();
+                    const n = try parent.size();
                     for (0..n + 1) |i| { // + right most child
                         const cid = try parent.getChild(i);
                         if (cid == child) {
@@ -1252,19 +1252,19 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         pub fn updateParentInodeKey(self: *Self, parent: *InodeType, pos: usize, child: *const LeafType) !void {
-            if (child.size() == 0) {
+            if (try child.size() == 0) {
                 return;
             }
             const first_key = try child.getKey(0);
             const first_key_like = self.model.keyOutAsLike(first_key);
-            if (!parent.canUpdateKey(pos, first_key_like)) {
+            if (!try parent.canUpdateKey(pos, first_key_like)) {
                 var right = try self.handleInodeOverflow(parent);
                 defer self.model.getAccessor().deinitInode(right);
                 const key_like = self.model.keyOutAsLike(first_key);
-                if (pos < parent.size()) {
+                if (pos < try parent.size()) {
                     try parent.updateKey(pos, key_like);
-                } else if (pos > parent.size()) {
-                    const new_pos = pos - parent.size() - 1;
+                } else if (pos > try parent.size()) {
+                    const new_pos = pos - try parent.size() - 1;
                     try right.updateKey(new_pos, key_like);
                 }
             } else {
@@ -1274,21 +1274,21 @@ pub fn Bpt(comptime ModelT: type) type {
 
         pub fn updateInodeKey(self: *Self, inode: *InodeType, pos: usize, key: KeyLikeType) !void {
             const accessor = self.model.getAccessor();
-            if (!inode.canUpdateKey(pos, key)) {
+            if (!try inode.canUpdateKey(pos, key)) {
                 var right = try self.handleInodeOverflow(inode);
                 // TODO: check if we need to deinit right here
                 defer accessor.deinitInode(right);
-                if (pos < inode.size()) {
+                if (pos < try inode.size()) {
                     try inode.updateKey(pos, key);
-                } else if (pos == inode.size()) {
+                } else if (pos == try inode.size()) {
                     if (try accessor.loadInode(inode.getParent())) |parent_const| {
                         var parent = parent_const;
                         defer accessor.deinitInode(parent);
                         const parent_pos = try self.findChidIndexInParentId(parent.id(), inode.id());
                         try self.updateInodeKey(&parent, parent_pos, key);
                     }
-                } else if (pos > inode.size()) {
-                    const new_pos = pos - inode.size() - 1;
+                } else if (pos > try inode.size()) {
+                    const new_pos = pos - try inode.size() - 1;
                     try right.updateKey(new_pos, key);
                 }
             } else {
@@ -1302,7 +1302,7 @@ pub fn Bpt(comptime ModelT: type) type {
         };
 
         fn splitLeaf(self: *Self, leaf: *LeafType) !SplitLeafResult {
-            const maximum = leaf.size();
+            const maximum = try leaf.size();
             const mid = maximum / 2;
             const mode_id = leaf.id();
             const accessor = self.model.getAccessor();
@@ -1317,20 +1317,20 @@ pub fn Bpt(comptime ModelT: type) type {
                 const key_like = self.model.keyOutAsLike(out_key);
                 const value_in = self.model.valueOutAsIn(out_value);
 
-                try right.insertValue(right.size(), key_like, value_in);
+                try right.insertValue(try right.size(), key_like, value_in);
             }
-            right.setParent(leaf.getParent());
-            right.setPrev(mode_id);
+            try right.setParent(leaf.getParent());
+            try right.setPrev(mode_id);
             if (leaf.getNext()) |ln| {
-                right.setNext(ln);
+                try right.setNext(ln);
             }
-            leaf.setNext(right.id());
+            try leaf.setNext(right.id());
             {
                 if (right.getNext()) |next_id| {
                     if (try accessor.loadLeaf(next_id)) |next_leaf_const| {
                         defer accessor.deinitLeaf(next_leaf_const);
                         var next_leaf = next_leaf_const;
-                        next_leaf.setPrev(right.id());
+                        try next_leaf.setPrev(right.id());
                     }
                 }
             }
@@ -1341,7 +1341,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
             const mid_key = try right.getKey(0);
             return SplitLeafResult{
-                .right = right.take(),
+                .right = try right.take(),
                 .middle_key = self.model.keyOutAsLike(mid_key),
             };
         }
@@ -1353,7 +1353,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
         fn splitInode(self: *Self, inode: *InodeType) !SplitInodeResult {
             const accessor = self.model.getAccessor();
-            const maximum = inode.size();
+            const maximum = try inode.size();
             const mid = maximum / 2;
             const reduce_size = (maximum - mid);
 
@@ -1362,25 +1362,25 @@ pub fn Bpt(comptime ModelT: type) type {
 
             const middle_key = try accessor.borrowKeyfromInode(inode, mid);
 
-            right.setParent(inode.getParent());
+            try right.setParent(inode.getParent());
             for (mid + 1..maximum) |i| {
                 const out_key = try inode.getKey(i);
                 const child_id = try inode.getChild(i);
                 const key_like = self.model.keyOutAsLike(out_key);
                 try self.setChildParent(child_id, right.id());
-                try right.insertChild(right.size(), key_like, child_id);
+                try right.insertChild(try right.size(), key_like, child_id);
             }
             const last_child_id = try inode.getChild(maximum);
             try self.setChildParent(last_child_id, right.id());
-            try right.updateChild(right.size(), last_child_id);
+            try right.updateChild(try right.size(), last_child_id);
             for (0..reduce_size) |_| {
-                const last_child_pos = inode.size() - 1;
+                const last_child_pos = try inode.size() - 1;
                 try self.swapChildren(inode, last_child_pos, last_child_pos + 1);
                 try inode.erase(last_child_pos);
             }
 
             return SplitInodeResult{
-                .right = right.take(),
+                .right = try right.take(),
                 .middle_key = middle_key,
             };
         }
@@ -1397,11 +1397,11 @@ pub fn Bpt(comptime ModelT: type) type {
             if (try accessor.loadInode(child_id)) |child_inode_const| {
                 defer accessor.deinitInode(child_inode_const);
                 var child_inode = child_inode_const;
-                child_inode.setParent(parent_id);
+                try child_inode.setParent(parent_id);
             } else if (try accessor.loadLeaf(child_id)) |child_leaf_const| {
                 defer accessor.deinitLeaf(child_leaf_const);
                 var child_leaf = child_leaf_const;
-                child_leaf.setParent(parent_id);
+                try child_leaf.setParent(parent_id);
             } else {
                 return error.InvalidNode;
             }
@@ -1439,7 +1439,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 defer accessor.deinitInode(parent);
 
                 const pos = try self.findChidIndexInParentId(parent.id(), child_id);
-                if (pos < parent.size()) {
+                if (pos < try parent.size()) {
                     return try parent.getChild(pos + 1);
                 }
             }

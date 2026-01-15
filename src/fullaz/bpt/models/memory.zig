@@ -123,28 +123,28 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             };
         }
 
-        pub fn take(self: *Self) Self {
+        pub fn take(self: *Self) !Self {
             const res = self.*;
             self.leaf = null;
             self.keep_ptr = null;
             return res;
         }
 
-        pub fn size(self: *const Self) usize {
+        pub fn size(self: *const Self) !usize {
             if (self.leaf) |leaf| {
                 return leaf.keys.len;
             }
             return 0;
         }
 
-        pub fn capacity(self: *const Self) usize {
+        pub fn capacity(self: *const Self) !usize {
             if (self.leaf) |leaf| {
                 return leaf.keys.capacity();
             }
             return 0;
         }
 
-        pub fn isUnderflowed(self: *const Self) bool {
+        pub fn isUnderflowed(self: *const Self) !bool {
             if (self.leaf) |leaf| {
                 return leaf.keys.len < (leaf.keys.capacity() + 1) / 2;
             }
@@ -213,19 +213,19 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             return null;
         }
 
-        pub fn setNext(self: *Self, next_id: ?MemoryPidType) void {
+        pub fn setNext(self: *Self, next_id: ?MemoryPidType) !void {
             if (self.leaf) |leaf| {
                 leaf.next = next_id;
             }
         }
 
-        pub fn setPrev(self: *Self, prev_id: ?MemoryPidType) void {
+        pub fn setPrev(self: *Self, prev_id: ?MemoryPidType) !void {
             if (self.leaf) |leaf| {
                 leaf.prev = prev_id;
             }
         }
 
-        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) void {
+        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) !void {
             if (self.leaf) |leaf| {
                 leaf.parent_id = parent_id;
             }
@@ -238,16 +238,12 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             return std.math.maxInt(MemoryPidType);
         }
 
-        pub fn isValid(self: *const Self) bool {
-            return self.leaf != null;
-        }
-
         pub fn id(self: *const Self) MemoryPidType {
             return self.self_id;
         }
 
         // should habve this interface for B+ tree operations
-        pub fn canInsertValue(self: *const Self, _: usize, _: KeyLikeType, _: ValueInType) bool {
+        pub fn canInsertValue(self: *const Self, _: usize, _: KeyLikeType, _: ValueInType) !bool {
             if (self.leaf) |leaf| {
                 return !leaf.keys.full();
             }
@@ -315,28 +311,28 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
             };
         }
 
-        pub fn take(self: *Self) Self {
+        pub fn take(self: *Self) !Self {
             const res = self.*;
             self.inode = null;
             self.keep_ptr = null;
             return res;
         }
 
-        pub fn size(self: *const Self) usize {
+        pub fn size(self: *const Self) !usize {
             if (self.inode) |inode| {
                 return inode.keys.len;
             }
             return 0;
         }
 
-        pub fn capacity(self: *const Self) usize {
+        pub fn capacity(self: *const Self) !usize {
             if (self.inode) |inode| {
                 return inode.keys.capacity();
             }
             return 0;
         }
 
-        pub fn isUnderflowed(self: *const Self) bool {
+        pub fn isUnderflowed(self: *const Self) !bool {
             if (self.inode) |inode| {
                 return inode.keys.len < (inode.keys.capacity() + 1) / 2;
             }
@@ -382,14 +378,14 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
             return error.InvalidNode;
         }
 
-        pub fn canUpdateKey(self: *const Self, pos: usize, _: KeyLikeType) bool {
+        pub fn canUpdateKey(self: *const Self, pos: usize, _: KeyLikeType) !bool {
             if (self.inode) |inode| {
                 return pos < inode.keys.len;
             }
             return false;
         }
 
-        pub fn canInsertChild(self: *const Self, _: usize, _: KeyLikeType, _: MemoryPidType) bool {
+        pub fn canInsertChild(self: *const Self, _: usize, _: KeyLikeType, _: MemoryPidType) !bool {
             if (self.inode) |inode| {
                 return !inode.keys.full();
             }
@@ -437,7 +433,7 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
             return error.InvalidNode;
         }
 
-        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) void {
+        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) !void {
             if (self.inode) |inode| {
                 inode.parent_id = parent_id;
             }
@@ -450,9 +446,9 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
             return null;
         }
 
-        pub fn isValid(self: *const Self) bool {
-            return self.inode != null;
-        }
+        // pub fn isValid(self: *const Self) bool {
+        //     return self.inode != null;
+        // }
 
         pub fn id(self: *const Self) MemoryPidType {
             return self.self_id;
@@ -639,17 +635,17 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             }
         }
 
-        pub fn canMergeLeafs(_: *Self, left: *const LeafType, right: *const LeafType) bool {
-            const total_size = left.size() + right.size();
-            if (total_size <= left.capacity()) {
+        pub fn canMergeLeafs(_: *Self, left: *const LeafType, right: *const LeafType) !bool {
+            const total_size = try left.size() + try right.size();
+            if (total_size <= try left.capacity()) {
                 return true;
             }
             return false;
         }
 
-        pub fn canMergeInodes(_: *Self, left: *const InodeType, right: *const InodeType) bool {
-            const total_size = left.size() + right.size() + 1;
-            if (total_size <= left.capacity()) {
+        pub fn canMergeInodes(_: *Self, left: *const InodeType, right: *const InodeType) !bool {
+            const total_size = try left.size() + try right.size() + 1;
+            if (total_size <= try left.capacity()) {
                 return true;
             }
             return false;

@@ -35,18 +35,18 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
     const BufferType = if (read_only) []const u8 else []u8;
 
-    const AvailableStatus = enum {
-        enough,
-        need_compact,
-        not_enough,
-    };
-
     return struct {
         const Self = @This();
 
         pub const Entry = EntryHeader;
         pub const EntrySlice = []Entry;
         pub const EntrySliceConst = []const Entry;
+
+        pub const AvailableStatus = enum {
+            enough,
+            need_compact,
+            not_enough,
+        };
 
         body: BufferType,
 
@@ -518,6 +518,11 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return buf;
         }
 
+        pub fn size(self: *const Self) usize {
+            const header = self.headerConst();
+            return @as(usize, @intCast(header.entry_count.get()));
+        }
+
         pub fn entriesConst(self: *const Self) EntrySliceConst {
             const header = self.headerConst();
             const first_entry_ptr: [*]const Entry = @ptrCast(&self.body[@sizeOf(Header)]);
@@ -624,7 +629,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         const FreeSlotInfo = struct {
-            ptr: *FreedEntry,
+            ptr: *const FreedEntry,
             offset: T,
         };
 
@@ -632,7 +637,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             const fixed_len = self.fixLength(needed);
             var current_offset = self.headerConst().freed.get();
             while (current_offset != SLOT_INVALID) {
-                const current_ptr: *FreedEntry = @ptrCast(&self.body[@intCast(current_offset)]);
+                const current_ptr: *const FreedEntry = @ptrCast(&self.body[@intCast(current_offset)]);
                 const current_len = current_ptr.length.get();
                 if (current_len >= fixed_len) {
                     return .{ .ptr = current_ptr, .offset = current_offset };

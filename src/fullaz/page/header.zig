@@ -22,7 +22,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
 
     return struct {
         const Self = @This();
-        const DataType = if (read_only) []const u8 else []u8;
+        pub const DataType = if (read_only) []const u8 else []u8;
 
         pub const PageHeader = Header(PageIdT, IndexT, Endian);
 
@@ -100,7 +100,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return self.page[subhdr_end..metadata_end];
         }
 
-        pub fn data(self: *Self) []const u8 {
+        pub fn data(self: *const Self) []const u8 {
             const all_heades_len = self.allHeadersSize();
             return self.page[all_heades_len..];
         }

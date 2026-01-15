@@ -27,9 +27,9 @@ test "Algorithm cmpSlices function" {
     const slice2 = [_]u8{ 1, 2, 3, 5 };
     const slice3 = [_]u8{ 1, 2, 3, 4 };
 
-    try expect(algorithm.cmpSlices(u8, slice1[0..], slice2[0..], algorithm.CmpNum(u8).asc, void) == .lt);
-    try expect(algorithm.cmpSlices(u8, slice2[0..], slice1[0..], algorithm.CmpNum(u8).asc, void) == .gt);
-    try expect(algorithm.cmpSlices(u8, slice1[0..], slice3[0..], algorithm.CmpNum(u8).asc, void) == .eq);
+    try expect(try algorithm.cmpSlices(u8, slice1[0..], slice2[0..], algorithm.CmpNum(u8).asc, void) == .lt);
+    try expect(try algorithm.cmpSlices(u8, slice2[0..], slice1[0..], algorithm.CmpNum(u8).asc, void) == .gt);
+    try expect(try algorithm.cmpSlices(u8, slice1[0..], slice3[0..], algorithm.CmpNum(u8).asc, void) == .eq);
 }
 
 test "Algorithm cmpSlices function floats" {
@@ -40,11 +40,11 @@ test "Algorithm cmpSlices function floats" {
 
     const cmp = algorithm.CmpNum(f32).asc;
 
-    try expect(algorithm.cmpSlices(f32, slice1[0..], slice2[0..], cmp, void) == .lt);
-    try expect(algorithm.cmpSlices(f32, slice2[0..], slice1[0..], cmp, void) == .gt);
-    try expect(algorithm.cmpSlices(f32, slice1[0..], slice3[0..], cmp, void) == .eq);
-    try expect(algorithm.cmpSlices(f32, slice1[0..], slice3[0..], cmp, void) == .eq);
-    try expect(algorithm.cmpSlices(f32, slicenan[0..], slice1[0..], cmp, void) == .unordered);
-    try expect(algorithm.cmpSlices(f32, slice1[0..], slicenan[0..], cmp, void) == .unordered);
-    try expect(algorithm.cmpSlices(f32, slicenan[0..], slicenan[0..], cmp, void) == .eq);
+    try expect(try algorithm.cmpSlices(f32, slice1[0..], slice2[0..], cmp, void) == .lt);
+    try expect(try algorithm.cmpSlices(f32, slice2[0..], slice1[0..], cmp, void) == .gt);
+    try expect(try algorithm.cmpSlices(f32, slice1[0..], slice3[0..], cmp, void) == .eq);
+    try expect(try algorithm.cmpSlices(f32, slice1[0..], slice3[0..], cmp, void) == .eq);
+    try expect(try algorithm.cmpSlices(f32, slicenan[0..], slice1[0..], cmp, void) == .unordered);
+    try expect(try algorithm.cmpSlices(f32, slice1[0..], slicenan[0..], cmp, void) == .unordered);
+    try expect(try algorithm.cmpSlices(f32, slicenan[0..], slicenan[0..], cmp, void) == .eq);
 }

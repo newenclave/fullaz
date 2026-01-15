@@ -291,70 +291,11 @@ fn randomString(
     return buf;
 }
 
-fn SlotInserter(comptime BptHeader: type) type {
-    const Slots = BptHeader.Slots;
-    const SlotEntry = BptHeader.LeafSlotHeader;
-    const Entry = Slots.Entry;
-
-    return struct {
-        const Self = @This();
-        slot_dir: Slots,
-
-        pub fn init(slot_dir: Slots) Self {
-            return .{
-                .slot_dir = slot_dir,
-            };
-        }
-
-        pub fn insertSlot(self: *Self, index: usize, key: []const u8, value: []const u8) !void {
-            const total_size: usize = @sizeOf(SlotEntry) + key.len + value.len;
-            var buffer = try self.slot_dir.reserveGet(index, total_size);
-            var slot: *SlotEntry = @ptrCast(&buffer[0]);
-
-            slot.key_size.set(@as(@TypeOf(slot.key_size.get()), @intCast(key.len)));
-
-            const key_dst = buffer[@sizeOf(SlotEntry)..][0..key.len];
-            @memcpy(key_dst, key);
-
-            const value_dst = buffer[@sizeOf(SlotEntry) + key.len ..][0..value.len];
-            @memcpy(value_dst, value);
-        }
-
-        const KeyValue = struct {
-            key: []const u8,
-            value: []const u8,
-        };
-
-        fn keyValueFromBuffer(buffer: []const u8) !KeyValue {
-            const slot: *const SlotEntry = @ptrCast(&buffer[0]);
-            const key_size = @as(usize, slot.key_size.get());
-            const key_offset = @sizeOf(SlotEntry);
-            const value_offset = key_offset + key_size;
-
-            return .{
-                .key = buffer[key_offset .. key_offset + key_size],
-                .value = buffer[value_offset..],
-            };
-        }
-
-        pub fn getSlot(self: *const Self, index: usize) !KeyValue {
-            const buffer = try self.slot_dir.get(index);
-            return keyValueFromBuffer(buffer);
-        }
-
-        fn slotLess(ctx: *const Slots, a: Entry, key: []const u8) algorithm.Order {
-            const slot_key = ctx.getByEntry(&a) catch return .gt;
-
-            const slot_values = try keyValueFromBuffer(slot_key);
-
-            return algorithm.cmpSlices(u8, slot_values.key, key, algorithm.CmpNum(u8).desc, void);
-        }
-
-        pub fn lowerBound(self: *const Self, key: []const u8) !usize {
-            return try algorithm.lowerBound(Entry, self.slot_dir.entriesConst(), key, slotLess, &self.slot_dir);
-        }
-    };
-}
+const MyCmp = struct {
+    pub fn cmp(_: void, a: []const u8, b: []const u8) !algorithm.Order {
+        return try algorithm.cmpSlices(u8, a, b, algorithm.CmpNum(u8).asc, {});
+    }
+};
 
 test "page/bpt slots compare and proj" {
     var leaf_buffer: [1024]u8 = undefined;
@@ -363,8 +304,6 @@ test "page/bpt slots compare and proj" {
     var leaf_view = Bpt.LeafSubheaderView.init(&leaf_buffer);
     try leaf_view.formatPage(1, 2, 0);
     leaf_view.subheaderMut().formatHeader();
-
-    var inserter = SlotInserter(Bpt).init(try leaf_view.slotsDir());
 
     var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const rnd = prng.random();
@@ -376,15 +315,52 @@ test "page/bpt slots compare and proj" {
         const key = try randomString(std.testing.allocator, rnd, 8);
         defer std.testing.allocator.free(key);
 
-        const pos = try inserter.lowerBound(key);
-        try inserter.insertSlot(pos, key, value);
+        const pos = try leaf_view.lowerBoundWith(key, MyCmp.cmp, {});
+        try testing.expect(try leaf_view.canInsert(pos, key, value) != .not_enough);
+        if (pos > 0) {
+            try testing.expect(try leaf_view.canUpdate(0, key, value) != .not_enough);
+        }
+        try leaf_view.insert(pos, key, value);
     }
 
+    // for (0..10) |i| {
+    //     const slot = try leaf_view.get(i);
+    //     std.debug.print("Slot {d}: key='{s}', value='{s}'\n", .{ i, slot.key, slot.value });
+    //     // Just verify that we can read the keys and values back
+    //     try testing.expect(slot.key.len == 8);
+    //     try testing.expect(slot.value.len == 10);
+    // }
+}
+
+test "page/bpt slots compare and proj inodes" {
+    var leaf_buffer: [1024]u8 = undefined;
+    @memset(&leaf_buffer, 0);
+    const Bpt = page.bpt.Bpt(u32, u16, .little, false);
+    var inode_view = Bpt.InodeSubheaderView.init(&leaf_buffer);
+    try inode_view.formatPage(1, 2, 0);
+
+    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+    const rnd = prng.random();
+
     for (0..10) |i| {
-        const slot = try inserter.getSlot(i);
-        std.debug.print("Slot {d}: key='{s}', value='{s}'\n", .{ i, slot.key, slot.value });
-        // Just verify that we can read the keys and values back
-        try testing.expect(slot.key.len == 8);
-        try testing.expect(slot.value.len == 10);
+        const value = try randomString(std.testing.allocator, rnd, 10);
+        defer std.testing.allocator.free(value);
+
+        const key = try randomString(std.testing.allocator, rnd, 8);
+        defer std.testing.allocator.free(key);
+
+        const pos = try inode_view.upperBoundWith(key, MyCmp.cmp, {});
+        try testing.expect(try inode_view.canInsert(pos, key, @as(u32, @intCast(i))) != .not_enough);
+        if (i > 0) {
+            try testing.expect(try inode_view.canUpdate(0, key, @as(u32, @intCast(i))) != .not_enough);
+        }
+        try inode_view.insert(pos, key, @as(u32, @intCast(i)));
     }
+
+    // for (0..10) |i| {
+    //     const slot = try inode_view.get(i);
+    //     std.debug.print("Slot {d}: key='{s}', child='{}'\n", .{ i, slot.key, slot.child });
+    //     // Just verify that we can read the keys and values back
+    //     try testing.expect(slot.key.len == 8);
+    // }
 }
