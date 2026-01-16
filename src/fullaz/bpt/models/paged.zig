@@ -541,12 +541,9 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
         }
 
         pub fn destroy(_: *Self, id: BlockIdType) !void {
+            _ = id;
             // TODO: implement free pages
             //try self.ctx.cache.destroy(id);
-            // if (id == 182) {
-            //     @breakpoint();
-            // }
-            std.debug.print("remove {}\n", .{id});
         }
     };
 

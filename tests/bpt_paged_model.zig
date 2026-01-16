@@ -1871,7 +1871,7 @@ test "Bpt Remove values" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, keyCmp, void);
 
     var device = try Device.init(allocator, 1024);
     defer device.deinit();
