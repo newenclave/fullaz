@@ -1,6 +1,8 @@
 const std = @import("std");
 const MemoryDevice = @import("fullaz").device.MemoryBlock;
 const PageCache = @import("fullaz").PageCache;
+const assertBlockDevice = @import("fullaz").device.interfaces.assertBlockDevice;
+const isBlockDevice = @import("fullaz").device.interfaces.isBlockDevice;
 
 const testing = std.testing;
 
@@ -350,6 +352,7 @@ test "PageCache: fetch moves page to LRU head" {
 
 test "PageCache: NoFreeFrames when all pinned" {
     const allocator = testing.allocator;
+
     var device = try MemoryDevice(u32).init(allocator, 256);
     defer device.deinit();
 

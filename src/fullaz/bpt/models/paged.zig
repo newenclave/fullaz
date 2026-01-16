@@ -10,7 +10,7 @@ pub const Settings = struct {
     inode_page_kind: u16 = 1,
 };
 
-pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime Ctx: type) type {
+pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, comptime cmp: anytype, comptime Ctx: type) type {
     const BlockDevice = PageCacheType.UnderlyingDevice;
     const PageHandle = PageCacheType.Handle;
     const BlockIdType = BlockDevice.BlockId;
@@ -23,6 +23,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
 
     const Context = struct {
         cache: *PageCacheType = undefined,
+        storage_mgr: *StorageManager = undefined,
         cts: Ctx = undefined,
         settings: Settings = undefined,
     };
@@ -404,7 +405,6 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
         const RootType = BlockIdType;
 
         ctx: Context = undefined,
-        root: ?RootType = null,
 
         fn init(ctx: Context) Self {
             return .{
@@ -418,13 +418,19 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
 
         // TODO: root is temporary here. It needs to be passed by a parameter
         pub fn getRoot(self: *const Self) ?RootType {
-            return self.root;
+            return self.ctx.storage_mgr.getRoot();
         }
-        pub fn setRoot(self: *Self, new_root: ?RootType) void {
-            self.root = new_root;
+
+        pub fn setRoot(self: *Self, new_root: ?RootType) !void {
+            return try self.ctx.storage_mgr.setRoot(new_root);
         }
+
         pub fn hasRoot(self: *const Self) bool {
-            return self.root != null;
+            return self.ctx.storage_mgr.hasRoot();
+        }
+
+        pub fn destroy(self: *Self, id: BlockIdType) !void {
+            return self.ctx.storage_mgr.destroyPage(id);
         }
 
         pub fn createLeaf(self: *Self) !LeafImpl {
@@ -539,12 +545,6 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
             const additional_key_len = self.ctx.settings.maximum_key_size + @sizeOf(BlockIdType);
             return try slots_dir_a.canMergeWithAdditional(&slots_dir_b, additional_key_len) != .not_enough;
         }
-
-        pub fn destroy(_: *Self, id: BlockIdType) !void {
-            _ = id;
-            // TODO: implement free pages
-            //try self.ctx.cache.destroy(id);
-        }
     };
 
     return struct {
@@ -567,9 +567,10 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
 
         accessor: AccessorType,
 
-        pub fn init(device: *PageCacheType, settings: Settings, ctx: Ctx) Self {
+        pub fn init(device: *PageCacheType, storage_mgr: *StorageManager, settings: Settings, ctx: Ctx) Self {
             const context = Context{
                 .cache = device,
+                .storage_mgr = storage_mgr,
                 .cts = ctx,
                 .settings = settings,
             };

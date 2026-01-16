@@ -478,7 +478,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
         pub fn getRoot(self: *const Self) ?RootType {
             return self.root;
         }
-        pub fn setRoot(self: *Self, new_root: ?RootType) void {
+        pub fn setRoot(self: *Self, new_root: ?RootType) !void {
             self.root = new_root;
         }
         pub fn hasRoot(self: *const Self) bool {

@@ -8,17 +8,40 @@ fn keyCmp(ctx: anytype, k1: []const u8, k2: []const u8) algorithm.Order {
     return algorithm.cmpSlices(u8, k1, k2, algorithm.CmpNum(u8).asc, ctx) catch .gt;
 }
 
+const NoneStorageManager = struct {
+    root_block_id: ?u32 = null,
+
+    pub fn getRoot(self: *@This()) ?u32 {
+        return self.root_block_id;
+    }
+
+    pub fn setRoot(self: *@This(), root: ?u32) !void {
+        self.root_block_id = root;
+        // Persist to disk header, etc.
+    }
+
+    pub fn hasRoot(self: *@This()) bool {
+        return self.root_block_id != null;
+    }
+
+    pub fn destroyPage(_: *@This(), id: u32) !void {
+        _ = id;
+        // Implement page destruction logic, e.g., add to free list
+    }
+};
+
 test "Create a bpt" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
     defer tree.deinit();
@@ -30,13 +53,14 @@ test "test models functionality" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
 
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     const available_before = cache.availableFrames();
@@ -73,13 +97,14 @@ test "LeafImpl: newly created leaf has size 0" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -92,13 +117,14 @@ test "LeafImpl: capacity is greater than 0" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -112,13 +138,14 @@ test "LeafImpl: insertValue and getKey/getValue" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -139,13 +166,14 @@ test "LeafImpl: insert multiple values and verify order" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -172,13 +200,14 @@ test "LeafImpl: keysEqual compares correctly" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -193,12 +222,14 @@ test "LeafImpl: keyPosition finds correct position" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -235,13 +266,14 @@ test "LeafImpl: setNext/getNext and setPrev/getPrev" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -272,13 +304,14 @@ test "LeafImpl: setParent/getParent" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -300,13 +333,14 @@ test "LeafImpl: id returns correct block id" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -321,13 +355,14 @@ test "LeafImpl: canInsertValue checks capacity" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
+    var store_mgr = NoneStorageManager{};
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -348,13 +383,14 @@ test "LeafImpl: isUnderflowed for empty leaf" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -368,13 +404,14 @@ test "LeafImpl: take transfers ownership" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -400,13 +437,14 @@ test "LeafImpl: linked list operations with multiple leaves" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -439,13 +477,14 @@ test "LeafImpl: updateValue modifies existing value" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -470,13 +509,14 @@ test "LeafImpl: updateValue triggers compaction when needed" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -539,13 +579,14 @@ test "LeafImpl: erase removes entry and decreases size" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -572,13 +613,14 @@ test "LeafImpl: erase first element" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -597,13 +639,14 @@ test "LeafImpl: erase last element" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -622,13 +665,14 @@ test "LeafImpl: erase all elements one by one" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -655,13 +699,14 @@ test "InodeImpl: newly created inode has size 0" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -674,13 +719,14 @@ test "InodeImpl: capacity is greater than 0" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -694,13 +740,14 @@ test "InodeImpl: insertChild and getKey/getChild" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -721,13 +768,14 @@ test "InodeImpl: insert multiple children and verify order" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -754,13 +802,14 @@ test "InodeImpl: keysEqual compares correctly" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -775,13 +824,14 @@ test "InodeImpl: keyPosition finds correct position (upperBound)" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -812,13 +862,14 @@ test "InodeImpl: setParent/getParent" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -840,13 +891,14 @@ test "InodeImpl: id returns correct block id" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -861,13 +913,14 @@ test "InodeImpl: canInsertChild checks capacity" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -881,13 +934,14 @@ test "InodeImpl: isUnderflowed for empty inode" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -901,13 +955,14 @@ test "InodeImpl: take transfers ownership" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -932,13 +987,14 @@ test "InodeImpl: updateChild modifies existing child id" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -959,13 +1015,14 @@ test "InodeImpl: canUpdateKey checks capacity" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -984,13 +1041,14 @@ test "InodeImpl: erase removes entry and decreases size" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -1019,13 +1077,14 @@ test "InodeImpl: erase first element" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -1045,13 +1104,14 @@ test "InodeImpl: erase last element" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -1071,13 +1131,14 @@ test "InodeImpl: erase all elements one by one" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
     var inode = try accessor.createInode();
@@ -1104,7 +1165,7 @@ test "PageCache: no frame leaks after mixed Leaf and Inode operations" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
@@ -1114,7 +1175,8 @@ test "PageCache: no frame leaks after mixed Leaf and Inode operations" {
     const available_before = cache.availableFrames();
     try std.testing.expectEqual(@as(usize, 8), available_before);
 
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
     var accessor = model.getAccessor();
 
     // Test block 1: Create and deinit leaves
@@ -1228,13 +1290,14 @@ test "Accessor: createLeaf and createInode create different page types" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1252,13 +1315,14 @@ test "Accessor: loadLeaf returns null for inode page" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1276,13 +1340,14 @@ test "Accessor: loadInode returns null for leaf page" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1300,13 +1365,14 @@ test "Accessor: loadLeaf returns leaf for leaf page" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1329,13 +1395,14 @@ test "Accessor: loadInode returns inode for inode page" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1358,13 +1425,14 @@ test "Accessor: loadLeaf with null returns null" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1376,13 +1444,14 @@ test "Accessor: loadInode with null returns null" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1394,13 +1463,14 @@ test "Accessor: isLeafId returns true for leaf page" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1415,13 +1485,14 @@ test "Accessor: isLeafId returns false for inode page" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1436,13 +1507,14 @@ test "Accessor: borrowKeyfromLeaf borrows key correctly" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1461,13 +1533,14 @@ test "Accessor: borrowKeyfromInode borrows key correctly" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1486,13 +1559,14 @@ test "Accessor: canMergeLeafs returns true for empty leaves" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1510,13 +1584,14 @@ test "Accessor: canMergeInodes returns true for empty inodes" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1534,13 +1609,14 @@ test "Accessor: canMergeLeafs with small data returns true" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1560,13 +1636,14 @@ test "Accessor: deinitLeaf handles null gracefully" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1578,13 +1655,14 @@ test "Accessor: deinitInode handles null gracefully" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var accessor = model.getAccessor();
 
@@ -1596,7 +1674,7 @@ test "Accessor: no frame leaks with page type mismatch" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
@@ -1605,7 +1683,8 @@ test "Accessor: no frame leaks with page type mismatch" {
 
     const available_before = cache.availableFrames();
 
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
     var accessor = model.getAccessor();
 
     // Create an inode
@@ -1634,7 +1713,7 @@ test "BtpTree: Create and insert" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
@@ -1643,7 +1722,8 @@ test "BtpTree: Create and insert" {
 
     const available_before = cache.availableFrames();
 
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
     var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
     // Create an inode
@@ -1700,13 +1780,14 @@ test "Bpt/paged Create with model" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
     var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
 
     for (0..500) |i| {
@@ -1745,13 +1826,14 @@ test "Bpt Random insertion" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
     var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
 
     var prng = std.Random.DefaultPrng.init(blk: {
@@ -1808,13 +1890,14 @@ test "Bpt Update values" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 1024);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
     var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
 
     const elements_to_insert = 50000;
@@ -1871,13 +1954,14 @@ test "Bpt Remove values" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCache, keyCmp, void);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
     var device = try Device.init(allocator, 1024);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
-    var model = BptModel.init(&cache, .{}, {});
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
     var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
 
     const elements_to_insert = 50000;

@@ -379,7 +379,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 defer accessor.deinitLeaf(leaf);
                 try leaf.insertValue(0, key, value);
                 //std.debug.print("Created leaf node with id: {}\n", .{leafId.id()});
-                accessor.setRoot(leaf.id());
+                try accessor.setRoot(leaf.id());
                 return true;
             }
             return false;
@@ -504,14 +504,14 @@ pub fn Bpt(comptime ModelT: type) type {
             if (try accessor.loadLeaf(root_id)) |root_leaf| {
                 defer accessor.deinitLeaf(root_leaf);
                 if (try root_leaf.size() == 0) {
-                    accessor.setRoot(null);
+                    try accessor.setRoot(null);
                     try accessor.destroy(root_id);
                 }
             } else if (try accessor.loadInode(root_id)) |root_inode| {
                 defer accessor.deinitInode(root_inode);
                 if (try root_inode.size() == 0) {
                     const child_id = try root_inode.getChild(0);
-                    accessor.setRoot(child_id);
+                    try accessor.setRoot(child_id);
                     try accessor.destroy(root_id);
                 }
             }
@@ -1130,7 +1130,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
                 try nr.insertChild(0, first_key_like, leaf_if);
                 try nr.updateChild(1, right_leaf.id());
-                accessor.setRoot(nr.id());
+                try accessor.setRoot(nr.id());
             } else {
                 var parent: InodeType = undefined;
                 defer accessor.deinitInode(parent);
@@ -1228,7 +1228,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 try nr.updateChild(1, right_inode.id());
                 try inode.setParent(nr.id());
                 try right_inode.setParent(nr.id());
-                accessor.setRoot(nr.id());
+                try accessor.setRoot(nr.id());
             } else {
                 var parent: InodeType = undefined;
                 defer accessor.deinitInode(parent);
