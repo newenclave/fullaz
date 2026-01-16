@@ -676,7 +676,7 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
         pub const LeafType = AccessorType.LeafType;
         pub const InodeType = AccessorType.InodeType;
 
-        pub const NodedIdType = usize;
+        pub const NodeIdType = usize;
 
         accessor: AccessorType = undefined,
 
@@ -702,9 +702,9 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
             return key.*;
         }
 
-        pub fn valueBorrowAsIn(_: *const Self, value: *const ValueBorrowType) ValueInType {
-            return value[0..];
-        }
+        // pub fn valueBorrowAsIn(_: *const Self, value: *const ValueBorrowType) ValueInType {
+        //     return value[0..];
+        // }
 
         pub fn valueOutAsIn(_: *const Self, value: ValueOutType) ValueInType {
             return value;

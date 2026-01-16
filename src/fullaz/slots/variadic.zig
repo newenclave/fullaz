@@ -106,7 +106,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             }
 
             const slot = slots[entry];
-            return self.getMutValueByEntry(&slot);
+            return self.getMutByEntry(&slot);
         }
 
         pub fn getMutByEntry(self: *Self, slot: *const Entry) ![]u8 {
@@ -248,8 +248,14 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn canMergeWith(self: *const Self, other: *const Self) !AvailableStatus {
+            return self.canMergeWithAdditional(other, 0);
+        }
+
+        pub fn canMergeWithAdditional(self: *const Self, other: *const Self, add_size: usize) !AvailableStatus {
             const other_slots = other.entriesConst();
-            var needed: usize = 0;
+            const fixed_add_size = if (add_size == 0) 0 else @as(usize, self.fixLength(@as(T, @intCast(add_size))));
+            const full_add_size = (fixed_add_size + @as(usize, if (fixed_add_size == 0) 0 else @sizeOf(Entry)));
+            var needed: usize = full_add_size;
 
             // Add data sizes
             for (other_slots) |*s| {

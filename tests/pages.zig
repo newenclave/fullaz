@@ -352,7 +352,7 @@ test "page/bpt slots compare and proj inodes" {
         const pos = try inode_view.upperBoundWith(key, MyCmp.cmp, {});
         try testing.expect(try inode_view.canInsert(pos, key, @as(u32, @intCast(i))) != .not_enough);
         if (i > 0) {
-            try testing.expect(try inode_view.canUpdate(0, key, @as(u32, @intCast(i))) != .not_enough);
+            try testing.expect(try inode_view.canUpdate(0, key) != .not_enough);
         }
         try inode_view.insert(pos, key, @as(u32, @intCast(i)));
     }

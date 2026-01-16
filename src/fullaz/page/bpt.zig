@@ -159,11 +159,19 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         pub fn updateValue(self: *Self, pos: usize, value: []const u8, tmp_buf: []u8) !void {
             const old_value = try self.get(pos);
             const new_total_size = @sizeOf(LeafSlotHeaderType) + old_value.key.len + value.len;
+
+            if (tmp_buf.len < new_total_size) {
+                return error.NotEnoughTemporaryBuffer;
+            }
+
             var new_buffer = tmp_buf[0..new_total_size];
+
             var slot: *LeafSlotHeaderType = @ptrCast(&new_buffer[0]);
             slot.key_size.set(@as(@TypeOf(slot.key_size.get()), @intCast(old_value.key.len)));
+
             const key_dst = new_buffer[@sizeOf(LeafSlotHeaderType)..][0..old_value.key.len];
             @memcpy(key_dst, old_value.key);
+
             const value_dst = new_buffer[@sizeOf(LeafSlotHeaderType) + old_value.key.len ..][0..value.len];
             @memcpy(value_dst, value);
 
@@ -283,10 +291,48 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             return try slot_dir.canInsert(total_size);
         }
 
-        pub fn canUpdate(self: *const Self, pos: usize, key: []const u8, _: PageIdT) !AvailableStatus {
+        pub fn canUpdate(self: *const Self, pos: usize, key: []const u8) !AvailableStatus {
             const total_size: usize = @sizeOf(InodeSlotHeaderType) + key.len;
             var slot_dir = try self.slotsDir();
             return try slot_dir.canUpdate(pos, total_size);
+        }
+
+        pub fn updateChild(self: *Self, pos: usize, child: PageIdT) !void {
+            var slot_dir = try self.slotsDirMut();
+            const buffer = try slot_dir.getMut(pos);
+            var slot: *InodeSlotHeaderType = @ptrCast(&buffer[0]);
+            slot.child.set(child);
+        }
+
+        pub fn updateKey(self: *Self, pos: usize, key: []const u8, tmp_buf: []u8) !void {
+            const old_value = try self.get(pos);
+            const new_total_size = @sizeOf(InodeSlotHeaderType) + key.len;
+            if (tmp_buf.len < new_total_size) {
+                return error.NotEnoughTemporaryBuffer;
+            }
+            var new_buffer = tmp_buf[0..new_total_size];
+
+            var slot: *InodeSlotHeaderType = @ptrCast(&new_buffer[0]);
+            slot.child.set(old_value.child);
+
+            const key_dst = new_buffer[@sizeOf(InodeSlotHeaderType)..][0..key.len];
+            @memcpy(key_dst, key);
+
+            const tail_buf = tmp_buf[new_total_size..];
+
+            const update_status = try self.canUpdate(pos, key);
+            if (update_status == .not_enough) {
+                return error.NotEnoughSpaceForUpdate;
+            } else if (update_status == .need_compact) {
+                var slot_dir = try self.slotsDirMut();
+                try slot_dir.free(pos);
+                slot_dir.compactWithBuffer(tail_buf) catch {
+                    try slot_dir.compactInPlace();
+                };
+            }
+            var slot_dir = try self.slotsDirMut();
+            const buffer = try slot_dir.resizeGet(pos, new_total_size);
+            @memcpy(buffer, new_buffer);
         }
 
         pub fn upperBoundWith(

@@ -47,6 +47,7 @@ pub fn MemoryBlock(comptime BlockIdT: type) type {
         pub fn readBlock(self: *const Self, block_id: BlockId, output: []u8) anyerror!void {
             const offset = @as(usize, @intCast(block_id)) * self.block_size;
             if (offset + self.block_size > self.storage.items.len) {
+                std.debug.print("Invalid block_id: {}, offset: {}, storage size: {}\n", .{ block_id, offset, self.storage.items.len });
                 return error.InvalidBlockId;
             }
             const output_len = @min(output.len, self.block_size);
