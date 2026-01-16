@@ -1817,7 +1817,7 @@ test "Bpt Update values" {
     var model = BptModel.init(&cache, .{}, {});
     var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
 
-    const elements_to_insert = 5000;
+    const elements_to_insert = 50000;
 
     for (0..elements_to_insert) |i| {
         const key = @as(u32, @intCast(i));
@@ -1829,8 +1829,8 @@ test "Bpt Update values" {
     }
 
     //try cache.flushAll();
-    std.debug.print("Tree after insertion:\n", .{});
-    _ = try tree.dumpFormatted(formatKey, formatValue);
+    // std.debug.print("Tree after insertion:\n", .{});
+    // _ = try tree.dumpFormatted(formatKey, formatValue);
 
     // Update values
     for (0..elements_to_insert) |i| {
@@ -1839,9 +1839,6 @@ test "Bpt Update values" {
         const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
         var buf: [32]u8 = undefined;
         const new_value = try std.fmt.bufPrint(&buf, "updated_{}", .{key});
-        // if (i == 7) {
-        //     @breakpoint();
-        // }
         //std.debug.print("Updating key: {s} to value: {s}\n", .{ key_out, new_value });
         try std.testing.expect(try tree.update(key_out, new_value)); // Insert should update existing key
     }
@@ -1866,6 +1863,6 @@ test "Bpt Update values" {
             try std.testing.expect(false); // Key should exist
         }
     }
-    std.debug.print("Tree after updates:\n", .{});
-    _ = try tree.dumpFormatted(formatKey, formatValue);
+    // std.debug.print("Tree after updates:\n", .{});
+    // _ = try tree.dumpFormatted(formatKey, formatValue);
 }

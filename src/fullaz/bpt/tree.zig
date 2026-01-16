@@ -18,7 +18,6 @@ pub fn Bpt(comptime ModelT: type) type {
 
         pub const ValueInType = ModelT.ValueInType;
         pub const ValueOutType = ModelT.ValueOutType;
-        //pub const ValueBorrowType = ModelT.ValueBorrowType;
         pub const NodeIdType = ModelT.NodeIdType;
 
         pub const InodeType = ModelT.InodeType;
