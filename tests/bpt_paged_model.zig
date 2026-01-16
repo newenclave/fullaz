@@ -30,6 +30,64 @@ const NoneStorageManager = struct {
     }
 };
 
+fn TestContext(comptime page_size: usize, comptime cache_frames: usize) type {
+    return struct {
+        const Self = @This();
+        pub const Device = dev.MemoryBlock(u32);
+        pub const PageCache = PageCacheT(Device);
+        pub const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+        pub const Tree = bpt.Bpt(BptModel);
+
+        allocator: std.mem.Allocator,
+        device: *Device,
+        cache: *PageCache,
+        store_mgr: *NoneStorageManager,
+        model: BptModel,
+
+        pub fn init(allocator: std.mem.Allocator) !Self {
+            const device = try allocator.create(Device);
+            errdefer allocator.destroy(device);
+            device.* = try Device.init(allocator, page_size);
+            errdefer device.deinit();
+
+            const cache = try allocator.create(PageCache);
+            errdefer allocator.destroy(cache);
+            cache.* = try PageCache.init(device, allocator, cache_frames);
+            errdefer cache.deinit();
+
+            const store_mgr = try allocator.create(NoneStorageManager);
+            errdefer allocator.destroy(store_mgr);
+            store_mgr.* = NoneStorageManager{};
+
+            const model = BptModel.init(cache, store_mgr, .{}, {});
+
+            return .{
+                .allocator = allocator,
+                .device = device,
+                .cache = cache,
+                .store_mgr = store_mgr,
+                .model = model,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.cache.deinit();
+            self.allocator.destroy(self.cache);
+            self.device.deinit();
+            self.allocator.destroy(self.device);
+            self.allocator.destroy(self.store_mgr);
+        }
+
+        pub fn createTree(self: *Self) Tree {
+            return Tree.init(&self.model, .neighbor_share);
+        }
+
+        pub fn getAccessor(self: *Self) *BptModel.AccessorType {
+            return self.model.getAccessor();
+        }
+    };
+}
+
 test "Create a bpt" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
@@ -51,19 +109,11 @@ test "Create a bpt" {
 
 test "test models functionality" {
     const allocator = std.testing.allocator;
-    const Device = dev.MemoryBlock(u32);
-    const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
-    var store_mgr = NoneStorageManager{};
-    var device = try Device.init(allocator, 4096);
+    var ctx = try TestContext(4096, 8).init(allocator);
+    defer ctx.deinit();
 
-    defer device.deinit();
-    var cache = try PageCache.init(&device, allocator, 8);
-    defer cache.deinit();
-    var model = BptModel.init(&cache, &store_mgr, .{}, {});
-
-    var accessor = model.getAccessor();
-    const available_before = cache.availableFrames();
+    var accessor = ctx.getAccessor();
+    const available_before = ctx.cache.availableFrames();
 
     var leaf = try accessor.createLeaf();
     const leaf_load = try accessor.loadLeaf(try leaf.handle.pid());
@@ -85,7 +135,7 @@ test "test models functionality" {
 
     //std.testing.expect(inode_taken.size() == 0);
 
-    const available_after = cache.availableFrames();
+    const available_after = ctx.cache.availableFrames();
     try std.testing.expect(available_before == available_after);
 }
 
@@ -115,18 +165,10 @@ test "LeafImpl: newly created leaf has size 0" {
 
 test "LeafImpl: capacity is greater than 0" {
     const allocator = std.testing.allocator;
-    const Device = dev.MemoryBlock(u32);
-    const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+    var ctx = try TestContext(4096, 8).init(allocator);
+    defer ctx.deinit();
 
-    var store_mgr = NoneStorageManager{};
-    var device = try Device.init(allocator, 4096);
-    defer device.deinit();
-    var cache = try PageCache.init(&device, allocator, 8);
-    defer cache.deinit();
-    var model = BptModel.init(&cache, &store_mgr, .{}, {});
-
-    var accessor = model.getAccessor();
+    var accessor = ctx.getAccessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -1952,17 +1994,9 @@ test "Bpt Update values" {
 
 test "Bpt Remove values" {
     const allocator = std.testing.allocator;
-    const Device = dev.MemoryBlock(u32);
-    const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
-
-    var device = try Device.init(allocator, 1024);
-    defer device.deinit();
-    var cache = try PageCache.init(&device, allocator, 8);
-    defer cache.deinit();
-    var store_mgr = NoneStorageManager{};
-    var model = BptModel.init(&cache, &store_mgr, .{}, {});
-    var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
+    var ctx = try TestContext(4096, 8).init(allocator);
+    defer ctx.deinit();
+    var tree = ctx.createTree();
 
     const elements_to_insert = 50000;
 
