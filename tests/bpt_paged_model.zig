@@ -1866,3 +1866,61 @@ test "Bpt Update values" {
     // std.debug.print("Tree after updates:\n", .{});
     // _ = try tree.dumpFormatted(formatKey, formatValue);
 }
+
+test "Bpt Remove values" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCacheT(Device), keyCmp, void);
+
+    var device = try Device.init(allocator, 1024);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+    var model = BptModel.init(&cache, .{}, {});
+    var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
+
+    const elements_to_insert = 50000;
+
+    for (0..elements_to_insert) |i| {
+        const key = @as(u32, @intCast(i));
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        var buf: [32]u8 = undefined;
+        const value = try std.fmt.bufPrint(&buf, "{}", .{key});
+        _ = try tree.insert(key_out, value);
+    }
+
+    //try cache.flushAll();
+    // std.debug.print("Tree after insertion:\n", .{});
+    // _ = try tree.dumpFormatted(formatKey, formatValue);
+
+    // Update values
+    for (0..elements_to_insert / 2) |i| {
+        const key = @as(u32, @intCast(i));
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        try std.testing.expect(try tree.remove(key_out));
+    }
+
+    // Verify updates
+    for (0..elements_to_insert) |i| {
+        const key = @as(u32, @intCast(i));
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        if (try tree.find(key_out)) |itr_const| {
+            defer itr_const.deinit();
+            const value = (try itr_const.get()).?.value;
+            const expected_value = try format(allocator, "{}", .{key});
+            defer allocator.free(expected_value);
+
+            const res = strCmp(value[0..], expected_value[0..expected_value.len]);
+            //std.debug.print("Key: {s}, Value: {s}, Expected: {s} res {any}\n", .{ key_out, value, expected_value, res });
+
+            // Include the sentinel in the slice: expected_value has len N but the sentinel is at [N]
+            try std.testing.expect(res == .eq);
+        }
+    }
+    // std.debug.print("Tree after updates:\n", .{});
+    // _ = try tree.dumpFormatted(formatKey, formatValue);
+}

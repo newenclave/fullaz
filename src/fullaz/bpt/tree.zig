@@ -697,7 +697,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     defer accessor.deinitInode(parent_const);
                     var parent = parent_const;
                     const pos_in_parent = try self.findChidIndexInParentId(parent.id(), leaf.id());
-                    if (try parent.canUpdateKey(pos_in_parent, key_like)) {
+                    if (try parent.canUpdateKey(pos_in_parent - 1, key_like)) {
                         const out_key = try left.getKey(try left.size() - 1);
                         const out_value = try left.getValue(try left.size() - 1);
 

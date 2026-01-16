@@ -206,6 +206,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             const fix_len: usize = @as(usize, self.fixLength(@as(T, @intCast(len))));
             const slots = self.entriesConst();
             if (entry >= slots.len) {
+                @breakpoint();
                 return error.InvalidEntry;
             }
 

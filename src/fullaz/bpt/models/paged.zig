@@ -6,8 +6,8 @@ const bpt_page = @import("../../page/bpt.zig");
 pub const Settings = struct {
     maximum_key_size: usize = 128,
     maximum_value_size: usize = 128,
-    leaf_page_id: u16 = 0,
-    inode_page_id: u16 = 1,
+    leaf_page_kind: u16 = 0,
+    inode_page_kind: u16 = 1,
 };
 
 pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime Ctx: type) type {
@@ -24,10 +24,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
     const Context = struct {
         cache: *PageCacheType = undefined,
         cts: Ctx = undefined,
-        maximum_key_size: usize = 128,
-        maximum_value_size: usize = 128,
-        leaf_page_id: u16 = 0,
-        inode_page_id: u16 = 1,
+        settings: Settings = undefined,
     };
 
     const LeafImpl = struct {
@@ -65,7 +62,8 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
 
         pub fn capacity(self: *const Self) !usize {
             const view = PageViewTypeConst.init(try self.handle.getData());
-            return (try view.slotsDir()).capacityFor(self.ctx.maximum_key_size + self.ctx.maximum_value_size);
+            const maximum_slot_size = self.ctx.settings.maximum_key_size + self.ctx.settings.maximum_value_size;
+            return (try view.slotsDir()).capacityFor(maximum_slot_size);
         }
 
         pub fn isUnderflowed(self: *const Self) !bool {
@@ -164,7 +162,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
 
         pub fn canInsertValue(self: *const Self, pos: usize, key: KeyType, value: ValueType) !bool {
             _ = pos;
-            if (key.len > self.ctx.maximum_key_size or value.len > self.ctx.maximum_value_size) {
+            if (key.len > self.ctx.settings.maximum_key_size or value.len > self.ctx.settings.maximum_value_size) {
                 return error.KeyOrValueTooLarge;
             }
             const view = PageViewTypeConst.init(try self.handle.getData());
@@ -173,7 +171,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
         }
 
         pub fn insertValue(self: *Self, pos: usize, key: KeyType, value: ValueType) !void {
-            if (key.len > self.ctx.maximum_key_size or value.len > self.ctx.maximum_value_size) {
+            if (key.len > self.ctx.settings.maximum_key_size or value.len > self.ctx.settings.maximum_value_size) {
                 return error.KeyOrValueTooLarge;
             }
 
@@ -255,7 +253,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
         // move this call to page/bpt.zig? cuz it knows about headers and such
         pub fn capacity(self: *const Self) !usize {
             const view = PageViewTypeConst.init(try self.handle.getData());
-            return (try view.slotsDir()).capacityFor(self.ctx.maximum_key_size + @sizeOf(BlockIdType));
+            return (try view.slotsDir()).capacityFor(self.ctx.settings.maximum_key_size + @sizeOf(BlockIdType));
         }
 
         pub fn isUnderflowed(self: *const Self) !bool {
@@ -310,7 +308,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
         // TODO: move it to page/bpt.zig?
         pub fn canInsertChild(self: *const Self, pos: usize, key: KeyType, _: BlockIdType) !bool {
             _ = pos;
-            if (key.len > self.ctx.maximum_key_size) {
+            if (key.len > self.ctx.settings.maximum_key_size) {
                 return error.KeyOrValueTooLarge;
             }
 
@@ -320,7 +318,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
         }
 
         pub fn insertChild(self: *Self, pos: usize, key: KeyType, child_id: BlockIdType) !void {
-            if (key.len > self.ctx.maximum_key_size) {
+            if (key.len > self.ctx.settings.maximum_key_size) {
                 return error.KeyOrValueTooLarge;
             }
 
@@ -434,7 +432,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
             defer ph.deinit();
             const pid = try ph.pid();
             var page_view = LeafImpl.PageViewType.init(try ph.getDataMut());
-            try page_view.formatPage(self.ctx.leaf_page_id, pid, 0);
+            try page_view.formatPage(self.ctx.settings.leaf_page_kind, pid, 0);
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
         }
 
@@ -443,7 +441,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
             defer ph.deinit();
             const pid = try ph.pid();
             var page_view = InodeImpl.PageViewType.init(try ph.getDataMut());
-            try page_view.formatPage(self.ctx.inode_page_id, pid, 0);
+            try page_view.formatPage(self.ctx.settings.inode_page_kind, pid, 0);
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
 
@@ -451,7 +449,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
             if (id_opt) |id| {
                 var ph = try self.ctx.cache.fetch(id);
                 const view = LeafImpl.PageViewTypeConst.init(try ph.getData());
-                if (view.page_view.header().kind.get() != self.ctx.leaf_page_id) {
+                if (view.page_view.header().kind.get() != self.ctx.settings.leaf_page_kind) {
                     ph.deinit();
                     return null;
                 }
@@ -464,7 +462,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
             if (id_opt) |id| {
                 var ph = try self.ctx.cache.fetch(id);
                 const view = InodeImpl.PageViewTypeConst.init(try ph.getData());
-                if (view.page_view.header().kind.get() != self.ctx.inode_page_id) {
+                if (view.page_view.header().kind.get() != self.ctx.settings.inode_page_kind) {
                     ph.deinit();
                     return null;
                 }
@@ -477,7 +475,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const view = LeafImpl.PageViewTypeConst.init(try ph.getData());
-            return (view.page_view.header().kind.get() == self.ctx.leaf_page_id);
+            return (view.page_view.header().kind.get() == self.ctx.settings.leaf_page_kind);
         }
 
         pub fn deinitLeaf(_: *Self, leaf: ?LeafImpl) void {
@@ -538,13 +536,17 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
             const view_b = InodeImpl.PageViewTypeConst.init(try right.handle.getData());
             const slots_dir_a = try view_a.slotsDir();
             const slots_dir_b = try view_b.slotsDir();
-            const additional_key_len = self.ctx.maximum_key_size + @sizeOf(BlockIdType);
+            const additional_key_len = self.ctx.settings.maximum_key_size + @sizeOf(BlockIdType);
             return try slots_dir_a.canMergeWithAdditional(&slots_dir_b, additional_key_len) != .not_enough;
         }
 
-        pub fn destroy(_: *Self, _: BlockIdType) !void {
+        pub fn destroy(_: *Self, id: BlockIdType) !void {
             // TODO: implement free pages
             //try self.ctx.cache.destroy(id);
+            // if (id == 182) {
+            //     @breakpoint();
+            // }
+            std.debug.print("remove {}\n", .{id});
         }
     };
 
@@ -572,8 +574,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime cmp: anytype, comptime 
             const context = Context{
                 .cache = device,
                 .cts = ctx,
-                .maximum_key_size = settings.maximum_key_size,
-                .maximum_value_size = settings.maximum_value_size,
+                .settings = settings,
             };
             return .{
                 .accessor = AccessorImpl.init(context),
