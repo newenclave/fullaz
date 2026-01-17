@@ -1,7 +1,15 @@
+const std = @import("std");
 fn checkFnSignature(comptime T: type, comptime name: []const u8, comptime Expected: type) bool {
-    if (!@hasDecl(T, name)) return false;
+    if (!@hasDecl(T, name)) {
+        std.debug.print("Missing declaration: {s}\n", .{name});
+        return false;
+    }
     const Actual = @TypeOf(@field(T, name));
-    return Actual == Expected;
+    if (Actual == Expected) {
+        return true;
+    }
+    std.debug.print("Signature mismatch for {s}: expected {any}, got {any}\n", .{ name, Expected, Actual });
+    return false;
 }
 
 /// Compile-time concept check for block device types.

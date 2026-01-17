@@ -35,41 +35,69 @@ pub fn PageCache(comptime DeviceT: type) type {
 
     const PageHandle = struct {
         const Self = @This();
-        frame: *Frame,
+        frame: ?*Frame,
 
         fn init(frame: *Frame) Self {
             const res = Self{
                 .frame = frame,
             };
-            res.frame.ref_count += 1;
+            res.frame.?.ref_count += 1;
             return res;
         }
 
-        pub fn markDirty(self: *Self) void {
-            if (self.frame.frame_type != .temporary) {
-                self.frame.frame_type = .dirty;
+        pub fn markDirty(self: *Self) !void {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            if (self.frame.?.frame_type != .temporary) {
+                self.frame.?.frame_type = .dirty;
             }
         }
 
-        pub fn pid(self: *const Self) DeviceT.BlockId {
-            return self.frame.pid;
+        pub fn pid(self: *const Self) !DeviceT.BlockId {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            return self.frame.?.pid;
         }
 
         pub fn deinit(self: *Self) void {
-            self.frame.ref_count -= 1;
+            if (self.frame) |frame_const| {
+                var frame = frame_const;
+                frame.ref_count -= 1;
+                self.frame = null;
+            }
         }
 
-        pub fn getData(self: *const Self) []const u8 {
-            return self.frame.data;
+        pub fn getData(self: *const Self) ![]const u8 {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            return self.frame.?.data;
         }
 
-        pub fn getDataMut(self: *Self) []u8 {
-            self.markDirty();
-            return self.frame.data;
+        pub fn getDataMut(self: *Self) ![]u8 {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            try self.markDirty();
+            return self.frame.?.data;
         }
 
-        pub fn clone(self: *const Self) Self {
-            return Self.init(self.frame);
+        pub fn clone(self: *const Self) !Self {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            return Self.init(self.frame.?);
+        }
+
+        pub fn take(self: *Self) !Self {
+            if (self.frame == null) {
+                return error.InvalidPageHandle;
+            }
+            const res = Self.init(self.frame.?);
+            self.deinit();
+            return res;
         }
     };
 
@@ -120,7 +148,7 @@ pub fn PageCache(comptime DeviceT: type) type {
         pub fn deinit(self: *Self) void {
             for (self.frames.items) |*frame| {
                 if (frame.ref_count != 0) {
-                    std.debug.panic("Deinit called on PageCache with pinned pages. pid: {} fid: {} ref_count: {}\n", .{ frame.pid, frame.frame_id, frame.ref_count });
+                    //std.debug.panic("Deinit called on PageCache with pinned pages. pid: {} fid: {} ref_count: {}\n", .{ frame.pid, frame.frame_id, frame.ref_count });
                 }
                 if (frame.frame_type == .dirty) {
                     // Write back dirty page
@@ -156,6 +184,8 @@ pub fn PageCache(comptime DeviceT: type) type {
 
             if (try self.findPopFreeFrame()) |ff| {
                 ff.pid = page_id;
+                ff.frame_type = .clean;
+
                 const page_offset: usize = ff.frame_id * self.device.blockSize();
                 const page_len = self.device.blockSize();
 
@@ -178,6 +208,7 @@ pub fn PageCache(comptime DeviceT: type) type {
 
         pub fn create(self: *Self) !Handle {
             if (try self.findPopFreeFrame()) |ff| {
+                ff.frame_type = .dirty;
                 const page_offset: usize = ff.frame_id * self.device.blockSize();
                 const page_len = self.device.blockSize();
 
@@ -231,19 +262,24 @@ pub fn PageCache(comptime DeviceT: type) type {
             }
         }
 
+        fn evict(self: *Self, frame: *Frame) !void {
+            self.removeFromLruList(frame);
+            if (frame.frame_type == .dirty) {
+                try self.device.writeBlock(frame.pid, frame.data);
+                frame.frame_type = .clean;
+            }
+            if (frame.frame_type != .temporary) {
+                _ = self.frames_cache.remove(frame.pid);
+            }
+        }
+
         fn findPopFreeFrame(self: *Self) !?*Frame {
             var result_frame: ?*Frame = null;
 
             if (self.popFreeFrame()) |ff| {
                 result_frame = ff;
             } else if (self.findLastUsedFrame()) |lu| {
-                // Evict lu
-                self.removeFromLruList(lu);
-                if (lu.frame_type == .dirty) {
-                    try self.device.writeBlock(lu.pid, lu.data);
-                    lu.frame_type = .clean;
-                }
-                _ = self.frames_cache.remove(lu.pid);
+                try self.evict(lu);
                 result_frame = lu;
             }
             return result_frame;

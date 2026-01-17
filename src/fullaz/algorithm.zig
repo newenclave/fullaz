@@ -48,8 +48,11 @@ pub fn CmpNum(comptime T: type) type {
     };
 }
 
-pub fn cmpSlices(comptime T: type, a: []const T, b: []const T, cmp: anytype, ctx: anytype) Order {
+pub fn cmpSlices(comptime T: type, a: []const T, b: []const T, cmp: anytype, ctx: anytype) !Order {
     const SliceT = @TypeOf(a);
+    const CmpReturnType = @TypeOf(cmp(ctx, a[0], a[0]));
+    const is_error_union = @typeInfo(CmpReturnType) == .error_union;
+
     comptime {
         const ti = @typeInfo(SliceT);
         if (ti != .pointer or ti.pointer.size != .slice) {
@@ -63,7 +66,14 @@ pub fn cmpSlices(comptime T: type, a: []const T, b: []const T, cmp: anytype, ctx
     const n = @min(a.len, b.len);
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        const res = cmp(ctx, a[i], b[i]);
+        const res = blk: {
+            const raw = cmp(ctx, a[i], b[i]);
+            if (comptime is_error_union) {
+                break :blk try raw;
+            } else {
+                break :blk raw;
+            }
+        };
         if (res != .eq) {
             return res;
         }
@@ -80,22 +90,33 @@ pub fn cmpSlices(comptime T: type, a: []const T, b: []const T, cmp: anytype, ctx
 
 pub fn CmpSlices(comptime T: type) type {
     return struct {
-        pub fn asc(a: []const T, b: []const T, cmp: anytype) Order {
-            return cmpSlices(a, b, cmp);
+        pub fn asc(a: []const T, b: []const T, cmp: anytype, ctx: anytype) !Order {
+            return try cmpSlices(a, b, cmp, ctx);
         }
-        pub fn desc(a: []const T, b: []const T, cmp: anytype) Order {
-            return cmpSlices(b, a, cmp);
+        pub fn desc(a: []const T, b: []const T, cmp: anytype, ctx: anytype) !Order {
+            return try cmpSlices(b, a, cmp, ctx);
         }
     };
 }
 
 pub fn lowerBound(comptime T: type, items: []const T, key: anytype, cmp: anytype, ctx: anytype) !usize {
+    const CmpReturnType = @TypeOf(cmp(ctx, items[0], key));
+    const is_error_union = @typeInfo(CmpReturnType) == .error_union;
+
     var lo: usize = 0;
     var hi: usize = items.len;
 
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
-        switch (cmp(ctx, items[mid], key)) {
+        const result = blk: {
+            const raw = cmp(ctx, items[mid], key);
+            if (comptime is_error_union) {
+                break :blk try raw;
+            } else {
+                break :blk raw;
+            }
+        };
+        switch (result) {
             .lt => lo = mid + 1,
             .eq, .gt => hi = mid,
             .unordered => return error.Unordered,
@@ -105,12 +126,23 @@ pub fn lowerBound(comptime T: type, items: []const T, key: anytype, cmp: anytype
 }
 
 pub fn upperBound(comptime T: type, items: []const T, key: anytype, cmp: anytype, ctx: anytype) !usize {
+    const CmpReturnType = @TypeOf(cmp(ctx, items[0], key));
+    const is_error_union = @typeInfo(CmpReturnType) == .error_union;
+
     var lo: usize = 0;
     var hi: usize = items.len;
 
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
-        switch (cmp(ctx, items[mid], key)) {
+        const result = blk: {
+            const raw = cmp(ctx, items[mid], key);
+            if (comptime is_error_union) {
+                break :blk try raw;
+            } else {
+                break :blk raw;
+            }
+        };
+        switch (result) {
             .gt => hi = mid,
             .lt, .eq => lo = mid + 1,
             .unordered => return error.Unordered,

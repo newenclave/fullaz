@@ -35,18 +35,18 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
     const BufferType = if (read_only) []const u8 else []u8;
 
-    const AvailableStatus = enum {
-        enough,
-        need_compact,
-        not_enough,
-    };
-
     return struct {
         const Self = @This();
 
         pub const Entry = EntryHeader;
         pub const EntrySlice = []Entry;
         pub const EntrySliceConst = []const Entry;
+
+        pub const AvailableStatus = enum {
+            enough,
+            need_compact,
+            not_enough,
+        };
 
         body: BufferType,
 
@@ -66,6 +66,11 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             header.free_begin.set(@intCast(@sizeOf(Header)));
             header.free_end.set(@intCast(self.body.len));
             header.freed.set(0);
+        }
+
+        pub fn capacityFor(self: *const Self, obj_len: usize) usize {
+            const total_size = self.body.len - @sizeOf(Header);
+            return total_size / (@sizeOf(Entry) + obj_len);
         }
 
         pub fn availableSpace(self: *const Self) usize {
@@ -101,7 +106,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             }
 
             const slot = slots[entry];
-            return self.getMutValueByEntry(&slot);
+            return self.getMutByEntry(&slot);
         }
 
         pub fn getMutByEntry(self: *Self, slot: *const Entry) ![]u8 {
@@ -201,6 +206,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             const fix_len: usize = @as(usize, self.fixLength(@as(T, @intCast(len))));
             const slots = self.entriesConst();
             if (entry >= slots.len) {
+                @breakpoint();
                 return error.InvalidEntry;
             }
 
@@ -243,8 +249,14 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn canMergeWith(self: *const Self, other: *const Self) !AvailableStatus {
+            return self.canMergeWithAdditional(other, 0);
+        }
+
+        pub fn canMergeWithAdditional(self: *const Self, other: *const Self, add_size: usize) !AvailableStatus {
             const other_slots = other.entriesConst();
-            var needed: usize = 0;
+            const fixed_add_size = if (add_size == 0) 0 else @as(usize, self.fixLength(@as(T, @intCast(add_size))));
+            const full_add_size = (fixed_add_size + @as(usize, if (fixed_add_size == 0) 0 else @sizeOf(Entry)));
+            var needed: usize = full_add_size;
 
             // Add data sizes
             for (other_slots) |*s| {
@@ -518,6 +530,11 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return buf;
         }
 
+        pub fn size(self: *const Self) usize {
+            const header = self.headerConst();
+            return @as(usize, @intCast(header.entry_count.get()));
+        }
+
         pub fn entriesConst(self: *const Self) EntrySliceConst {
             const header = self.headerConst();
             const first_entry_ptr: [*]const Entry = @ptrCast(&self.body[@sizeOf(Header)]);
@@ -624,7 +641,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         const FreeSlotInfo = struct {
-            ptr: *FreedEntry,
+            ptr: *const FreedEntry,
             offset: T,
         };
 
@@ -632,7 +649,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             const fixed_len = self.fixLength(needed);
             var current_offset = self.headerConst().freed.get();
             while (current_offset != SLOT_INVALID) {
-                const current_ptr: *FreedEntry = @ptrCast(&self.body[@intCast(current_offset)]);
+                const current_ptr: *const FreedEntry = @ptrCast(&self.body[@intCast(current_offset)]);
                 const current_len = current_ptr.length.get();
                 if (current_len >= fixed_len) {
                     return .{ .ptr = current_ptr, .offset = current_offset };
