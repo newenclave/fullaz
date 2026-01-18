@@ -37,11 +37,11 @@ pub fn isBlockDevice(comptime T: type) bool {
 
     // Check for writeBlock function
     if (!@hasDecl(T, "writeBlock")) return false;
-    if (!checkFnSignature(T, "writeBlock", fn (*const T, T.BlockId, []u8) anyerror!void)) return false;
+    if (!checkFnSignature(T, "writeBlock", fn (*T, T.BlockId, []u8) anyerror!void)) return false;
 
     // Check for appendBlock function
     if (!@hasDecl(T, "appendBlock")) return false;
-    if (!checkFnSignature(T, "appendBlock", fn (*const T) anyerror!T.BlockId)) return false;
+    if (!checkFnSignature(T, "appendBlock", fn (*T) anyerror!T.BlockId)) return false;
 
     return true;
 }
@@ -72,7 +72,7 @@ pub fn assertBlockDevice(comptime T: type) void {
     if (!@hasDecl(T, "writeBlock")) {
         @compileError("BlockDevice requires 'fn writeBlock(*const Self, BlockId, []u8) !void'");
     }
-    if (!checkFnSignature(T, "writeBlock", fn (*const T, T.BlockId, []u8) anyerror!void)) {
+    if (!checkFnSignature(T, "writeBlock", fn (*T, T.BlockId, []u8) anyerror!void)) {
         @compileError("BlockDevice 'writeBlock' has incorrect signature; expected 'fn (*const Self, BlockId, []u8) !void'");
     }
 

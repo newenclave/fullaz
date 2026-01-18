@@ -356,8 +356,11 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn updateKey(self: *Self, pos: usize, key: KeyType) !void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            if (key.len > self.ctx.settings.maximum_key_size) {
+                return error.KeyOrValueTooLarge;
+            }
 
+            var view = PageViewType.init(try self.handle.getDataMut());
             var tmp_buf = try self.ctx.cache.getTemporaryPage();
             defer tmp_buf.deinit();
 
@@ -423,7 +426,6 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             // nothing to do yet
         }
 
-        // TODO: root is temporary here. It needs to be passed by a parameter
         pub fn getRoot(self: *const Self) ?RootType {
             return self.ctx.storage_mgr.getRoot();
         }
@@ -549,7 +551,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             const view_b = InodeImpl.PageViewTypeConst.init(try right.handle.getData());
             const slots_dir_a = try view_a.slotsDir();
             const slots_dir_b = try view_b.slotsDir();
-            const additional_key_len = self.ctx.settings.maximum_key_size + @sizeOf(BlockIdType);
+            const additional_key_len = view_a.total_slot_size(self.ctx.settings.maximum_key_size);
             return try slots_dir_a.canMergeWithAdditional(&slots_dir_b, additional_key_len) != .not_enough;
         }
     };

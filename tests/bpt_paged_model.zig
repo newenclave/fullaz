@@ -1996,9 +1996,13 @@ test "Bpt Update values" {
     // _ = try tree.dumpFormatted(formatKey, formatValue);
 }
 
-test "Bpt Remove values" {
-    const allocator = std.testing.allocator;
-    var ctx = try TestContext(1024, 8).init(allocator);
+test "Bpt/paged Remove values" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    //const allocator = std.testing.allocator;
+    var ctx = try TestContext(4096 * 2, 32).init(allocator);
     defer ctx.deinit();
     var tree = ctx.createTree();
 
@@ -2043,6 +2047,8 @@ test "Bpt Remove values" {
             try std.testing.expect(res == .eq);
         }
     }
+    std.debug.print("Blocks allocated: {}\n", .{ctx.device.blocksCount()});
+    std.debug.print("len={} cap={}\n", .{ ctx.device.storage.items.len, ctx.device.storage.capacity });
     // std.debug.print("Tree after updates:\n", .{});
     // _ = try tree.dumpFormatted(formatKey, formatValue);
 }

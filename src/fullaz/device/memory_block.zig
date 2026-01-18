@@ -56,7 +56,7 @@ pub fn MemoryBlock(comptime BlockIdT: type) type {
             @memcpy(output_slice, stored_slice);
         }
 
-        pub fn writeBlock(self: *const Self, block_id: BlockId, output: []u8) anyerror!void {
+        pub fn writeBlock(self: *Self, block_id: BlockId, output: []u8) anyerror!void {
             const offset: usize = @as(usize, @intCast(block_id)) * self.block_size;
             if (offset + self.block_size > self.storage.items.len) {
                 return error.InvalidBlockId;

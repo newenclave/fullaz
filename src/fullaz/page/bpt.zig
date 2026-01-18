@@ -39,6 +39,9 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         const SubheaderType = LeafSubheaderType;
         const SlotHeaderType = LeafSlotHeaderType;
 
+        const KeyType = []const u8;
+        const ValueType = []const u8;
+
         pub const KeyValue = struct {
             key: []const u8,
             value: []const u8,
@@ -54,6 +57,10 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
 
         pub fn page(self: *const Self) DataType {
             return self.page_view.page;
+        }
+
+        pub fn total_slot_size(_: *const Self, key_len: usize, value_len: usize) usize {
+            return key_len + value_len + @sizeOf(SlotHeaderType);
         }
 
         pub fn entries(self: *const Self) !usize {
@@ -73,7 +80,8 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         }
 
         pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) !void {
-            self.page_view.formatPage(kind, page_id, @as(IndexT, @intCast(@sizeOf(SubheaderType))), metadata_len);
+            const subheader_size = @as(IndexT, @intCast(@sizeOf(SubheaderType)));
+            self.page_view.formatPage(kind, page_id, subheader_size, metadata_len);
             const data = self.page_view.dataMut();
             var sl = try SlotsDirType.init(data);
             self.subheaderMut().formatHeader();
@@ -223,6 +231,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
 
         const SubheaderType = InodeSubheaderType;
         const SlotHeaderType = InodeSlotHeaderType;
+        const KeyType = []const u8;
 
         const KeyChild = struct {
             key: []const u8,
@@ -239,6 +248,10 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
 
         pub fn page(self: *const Self) DataType {
             return self.page_view.page;
+        }
+
+        pub fn total_slot_size(_: *const Self, key_len: usize) usize {
+            return key_len + @sizeOf(SlotHeaderType);
         }
 
         fn keyChildFromBuffer(buffer: []const u8) !KeyChild {
