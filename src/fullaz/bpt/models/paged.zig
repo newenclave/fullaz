@@ -64,7 +64,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         pub fn capacity(self: *const Self) !usize {
             const view = PageViewTypeConst.init(try self.handle.getData());
             const maximum_slot_size = self.ctx.settings.maximum_key_size + self.ctx.settings.maximum_value_size;
-            return (try view.slotsDir()).capacityFor(maximum_slot_size);
+            return try view.capacityFor(maximum_slot_size);
         }
 
         pub fn isUnderflowed(self: *const Self) !bool {
@@ -162,13 +162,11 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn canInsertValue(self: *const Self, pos: usize, key: KeyType, value: ValueType) !bool {
-            _ = pos;
             if (key.len > self.ctx.settings.maximum_key_size or value.len > self.ctx.settings.maximum_value_size) {
                 return error.KeyOrValueTooLarge;
             }
             const view = PageViewTypeConst.init(try self.handle.getData());
-            const total_size: usize = key.len + value.len + @sizeOf(u16); // key_size header
-            return try (try view.slotsDir()).canInsert(total_size) != .not_enough;
+            return try view.canInsert(pos, key, value) != .not_enough;
         }
 
         pub fn insertValue(self: *Self, pos: usize, key: KeyType, value: ValueType) !void {
@@ -176,22 +174,29 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
                 return error.KeyOrValueTooLarge;
             }
 
+            var tmp_page = try self.ctx.cache.getTemporaryPage();
+            defer tmp_page.deinit();
+
             const view = PageViewTypeConst.init(try self.handle.getData());
-            const total_size: usize = key.len + value.len + @sizeOf(u16); // key_size header
-            const res = try (try view.slotsDir()).canInsert(total_size);
+            const res = try view.canInsert(pos, key, value);
             if (res == .not_enough) {
                 return error.Full;
             } else if (res == .need_compact) {
                 var view_mut = PageViewType.init(try self.handle.getDataMut());
                 // TODO: check if possible to pass a buffer here to compact with the buffer
                 var slots_dir = try view_mut.slotsDirMut();
-                try slots_dir.compactInPlace();
+                slots_dir.compactWithBuffer(try tmp_page.getDataMut()) catch {
+                    try slots_dir.compactInPlace();
+                };
             }
             var view_mut = PageViewType.init(try self.handle.getDataMut());
             try view_mut.insert(pos, key, value);
         }
 
         pub fn canUpdateValue(self: *const Self, pos: usize, key: KeyType, value: ValueType) !bool {
+            if (value.len > self.ctx.settings.maximum_value_size) {
+                return error.KeyOrValueTooLarge;
+            }
             const view = PageViewTypeConst.init(try self.handle.getData());
             return try view.canUpdateValue(pos, key, value) != .not_enough;
         }
@@ -251,10 +256,9 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return (try view.slotsDir()).size();
         }
 
-        // move this call to page/bpt.zig? cuz it knows about headers and such
         pub fn capacity(self: *const Self) !usize {
             const view = PageViewTypeConst.init(try self.handle.getData());
-            return (try view.slotsDir()).capacityFor(self.ctx.settings.maximum_key_size + @sizeOf(BlockIdType));
+            return try view.capacityFor(self.ctx.settings.maximum_key_size);
         }
 
         pub fn isUnderflowed(self: *const Self) !bool {
@@ -307,21 +311,22 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         // TODO: move it to page/bpt.zig?
-        pub fn canInsertChild(self: *const Self, pos: usize, key: KeyType, _: BlockIdType) !bool {
-            _ = pos;
+        pub fn canInsertChild(self: *const Self, pos: usize, key: KeyType, cid: BlockIdType) !bool {
             if (key.len > self.ctx.settings.maximum_key_size) {
                 return error.KeyOrValueTooLarge;
             }
 
             const view = PageViewTypeConst.init(try self.handle.getData());
-            const total_size: usize = key.len + @sizeOf(BlockIdType) + @sizeOf(u16); // key_size header
-            return try (try view.slotsDir()).canInsert(total_size) != .not_enough;
+            return try view.canInsert(pos, key, cid) != .not_enough;
         }
 
         pub fn insertChild(self: *Self, pos: usize, key: KeyType, child_id: BlockIdType) !void {
             if (key.len > self.ctx.settings.maximum_key_size) {
                 return error.KeyOrValueTooLarge;
             }
+
+            var tmp_page = try self.ctx.cache.getTemporaryPage();
+            defer tmp_page.deinit();
 
             var view = PageViewTypeConst.init(try self.handle.getData());
             const current_available = try view.canInsert(pos, key, child_id);
@@ -330,7 +335,9 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             } else if (current_available == .need_compact) {
                 var view_mut = PageViewType.init(try self.handle.getDataMut());
                 var slots_dir = try view_mut.slotsDirMut();
-                try slots_dir.compactInPlace();
+                slots_dir.compactWithBuffer(try tmp_page.getDataMut()) catch {
+                    try slots_dir.compactInPlace();
+                };
             }
             var view_mut = PageViewType.init(try self.handle.getDataMut());
             try view_mut.insert(pos, key, child_id);

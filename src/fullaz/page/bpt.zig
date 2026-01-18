@@ -36,6 +36,9 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         const DataType = if (read_only) []const u8 else []u8;
         const PageViewType = HeaderPageView;
 
+        const SubheaderType = LeafSubheaderType;
+        const SlotHeaderType = LeafSlotHeaderType;
+
         pub const KeyValue = struct {
             key: []const u8,
             value: []const u8,
@@ -58,9 +61,9 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         }
 
         fn keyValueFromBuffer(buffer: []const u8) !KeyValue {
-            const slot: *const LeafSlotHeaderType = @ptrCast(&buffer[0]);
+            const slot: *const SlotHeaderType = @ptrCast(&buffer[0]);
             const key_size = @as(usize, slot.key_size.get());
-            const key_offset = @sizeOf(LeafSlotHeaderType);
+            const key_offset = @sizeOf(SlotHeaderType);
             const value_offset = key_offset + key_size;
 
             return .{
@@ -70,19 +73,19 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         }
 
         pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) !void {
-            self.page_view.formatPage(kind, page_id, @as(IndexT, @intCast(@sizeOf(LeafSubheaderType))), metadata_len);
+            self.page_view.formatPage(kind, page_id, @as(IndexT, @intCast(@sizeOf(SubheaderType))), metadata_len);
             const data = self.page_view.dataMut();
             var sl = try SlotsDirType.init(data);
             self.subheaderMut().formatHeader();
             sl.formatHeader();
         }
 
-        pub fn subheader(self: *const Self) *const LeafSubheaderType {
+        pub fn subheader(self: *const Self) *const SubheaderType {
             const subhdr = self.page_view.subheader();
             return @ptrCast(@alignCast(&subhdr[0]));
         }
 
-        pub fn subheaderMut(self: *Self) *LeafSubheaderType {
+        pub fn subheaderMut(self: *Self) *SubheaderType {
             if (read_only) {
                 @compileError("Cannot get mutable subheader from a read-only page");
             }
@@ -101,28 +104,27 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         }
 
         pub fn insert(self: *Self, index: usize, key: []const u8, value: []const u8) !void {
-            const total_size: usize = @sizeOf(LeafSlotHeaderType) + key.len + value.len;
+            const total_size: usize = @sizeOf(SlotHeaderType) + key.len + value.len;
             var slot_dir = try self.slotsDirMut();
             var buffer = try slot_dir.reserveGet(index, total_size);
-            var slot: *LeafSlotHeaderType = @ptrCast(&buffer[0]);
+            var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
 
             slot.key_size.set(@as(@TypeOf(slot.key_size.get()), @intCast(key.len)));
 
-            const key_dst = buffer[@sizeOf(LeafSlotHeaderType)..][0..key.len];
+            const key_dst = buffer[@sizeOf(SlotHeaderType)..][0..key.len];
             @memcpy(key_dst, key);
 
-            const value_dst = buffer[@sizeOf(LeafSlotHeaderType) + key.len ..][0..value.len];
+            const value_dst = buffer[@sizeOf(SlotHeaderType) + key.len ..][0..value.len];
             @memcpy(value_dst, value);
         }
 
-        pub fn canInsert(self: *const Self, _: usize, key: []const u8, value: []const u8) !AvailableStatus {
-            const total_size: usize = @sizeOf(LeafSlotHeaderType) + key.len + value.len;
-            var slot_dir = try self.slotsDir();
-            return try slot_dir.canInsert(total_size);
+        pub fn capacityFor(self: *const Self, data_len: usize) !usize {
+            const maximum_slot_size = data_len + @sizeOf(SlotHeaderType);
+            return (try self.slotsDir()).capacityFor(maximum_slot_size);
         }
 
         pub fn canUpdate(self: *const Self, pos: usize, key: []const u8, value: []const u8) !AvailableStatus {
-            const total_size: usize = @sizeOf(LeafSlotHeaderType) + key.len + value.len;
+            const total_size: usize = @sizeOf(SlotHeaderType) + key.len + value.len;
             var slot_dir = try self.slotsDir();
             return try slot_dir.canUpdate(pos, total_size);
         }
@@ -150,15 +152,21 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             return try algorithm.lowerBound(ConstSlotsDirType.Entry, slot_dir.entriesConst(), key, Wrapper.less, &wrapper);
         }
 
+        pub fn canInsert(self: *const Self, pos: usize, key: []const u8, value: []const u8) !AvailableStatus {
+            _ = pos;
+            const total_len = key.len + value.len + @sizeOf(SlotHeaderType);
+            return (try self.slotsDir()).canInsert(total_len);
+        }
+
         pub fn canUpdateValue(self: *const Self, pos: usize, key: []const u8, value: []const u8) !AvailableStatus {
             const slot_dir = try self.slotsDir();
-            const status = try slot_dir.canUpdate(pos, @sizeOf(LeafSlotHeaderType) + key.len + value.len);
+            const status = try slot_dir.canUpdate(pos, @sizeOf(SlotHeaderType) + key.len + value.len);
             return status;
         }
 
         pub fn updateValue(self: *Self, pos: usize, value: []const u8, tmp_buf: []u8) !void {
             const old_value = try self.get(pos);
-            const new_total_size = @sizeOf(LeafSlotHeaderType) + old_value.key.len + value.len;
+            const new_total_size = @sizeOf(SlotHeaderType) + old_value.key.len + value.len;
 
             if (tmp_buf.len < new_total_size) {
                 return error.NotEnoughTemporaryBuffer;
@@ -166,13 +174,13 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
 
             var new_buffer = tmp_buf[0..new_total_size];
 
-            var slot: *LeafSlotHeaderType = @ptrCast(&new_buffer[0]);
+            var slot: *SlotHeaderType = @ptrCast(&new_buffer[0]);
             slot.key_size.set(@as(@TypeOf(slot.key_size.get()), @intCast(old_value.key.len)));
 
-            const key_dst = new_buffer[@sizeOf(LeafSlotHeaderType)..][0..old_value.key.len];
+            const key_dst = new_buffer[@sizeOf(SlotHeaderType)..][0..old_value.key.len];
             @memcpy(key_dst, old_value.key);
 
-            const value_dst = new_buffer[@sizeOf(LeafSlotHeaderType) + old_value.key.len ..][0..value.len];
+            const value_dst = new_buffer[@sizeOf(SlotHeaderType) + old_value.key.len ..][0..value.len];
             @memcpy(value_dst, value);
 
             const tail_buf = tmp_buf[new_total_size..];
@@ -213,6 +221,9 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         const DataType = if (read_only) []const u8 else []u8;
         const PageViewType = HeaderPageView;
 
+        const SubheaderType = InodeSubheaderType;
+        const SlotHeaderType = InodeSlotHeaderType;
+
         const KeyChild = struct {
             key: []const u8,
             child: PageIdT,
@@ -231,8 +242,8 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         }
 
         fn keyChildFromBuffer(buffer: []const u8) !KeyChild {
-            const slot: *const InodeSlotHeaderType = @ptrCast(&buffer[0]);
-            const key_offset = @sizeOf(InodeSlotHeaderType);
+            const slot: *const SlotHeaderType = @ptrCast(&buffer[0]);
+            const key_offset = @sizeOf(SlotHeaderType);
             const key_size = @as(usize, buffer.len - key_offset);
             return .{
                 .key = buffer[key_offset .. key_offset + key_size],
@@ -241,7 +252,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         }
 
         pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) !void {
-            self.page_view.formatPage(kind, page_id, @as(IndexT, @intCast(@sizeOf(InodeSubheaderType))), metadata_len);
+            self.page_view.formatPage(kind, page_id, @as(IndexT, @intCast(@sizeOf(SubheaderType))), metadata_len);
 
             const data = self.page_view.dataMut();
             var sl = try SlotsDirType.init(data);
@@ -252,12 +263,12 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             sh.rightmost_child.set(PageIdType.max());
         }
 
-        pub fn subheader(self: *const Self) *const InodeSubheaderType {
+        pub fn subheader(self: *const Self) *const SubheaderType {
             const subhdr = self.page_view.subheader();
             return @ptrCast(@alignCast(&subhdr[0]));
         }
 
-        pub fn subheaderMut(self: *Self) *InodeSubheaderType {
+        pub fn subheaderMut(self: *Self) *SubheaderType {
             if (read_only) {
                 @compileError("Cannot get mutable subheader from a read-only page");
             }
@@ -276,23 +287,28 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         }
 
         pub fn insert(self: *Self, index: usize, key: []const u8, child: PageIdT) !void {
-            const total_size: usize = @sizeOf(InodeSlotHeaderType) + key.len;
+            const total_size: usize = @sizeOf(SlotHeaderType) + key.len;
             var slot_dir = try self.slotsDirMut();
             var buffer = try slot_dir.reserveGet(index, total_size);
-            var slot: *InodeSlotHeaderType = @ptrCast(&buffer[0]);
+            var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
             slot.child.set(child);
-            const key_dst = buffer[@sizeOf(InodeSlotHeaderType)..][0..key.len];
+            const key_dst = buffer[@sizeOf(SlotHeaderType)..][0..key.len];
             @memcpy(key_dst, key);
         }
 
+        pub fn capacityFor(self: *const Self, data_len: usize) !usize {
+            const maximum_slot_size = data_len + @sizeOf(SlotHeaderType);
+            return (try self.slotsDir()).capacityFor(maximum_slot_size);
+        }
+
         pub fn canInsert(self: *const Self, _: usize, key: []const u8, _: PageIdT) !AvailableStatus {
-            const total_size: usize = @sizeOf(InodeSlotHeaderType) + key.len;
+            const total_size: usize = @sizeOf(SlotHeaderType) + key.len;
             var slot_dir = try self.slotsDir();
             return try slot_dir.canInsert(total_size);
         }
 
         pub fn canUpdate(self: *const Self, pos: usize, key: []const u8) !AvailableStatus {
-            const total_size: usize = @sizeOf(InodeSlotHeaderType) + key.len;
+            const total_size: usize = @sizeOf(SlotHeaderType) + key.len;
             var slot_dir = try self.slotsDir();
             return try slot_dir.canUpdate(pos, total_size);
         }
@@ -300,22 +316,22 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         pub fn updateChild(self: *Self, pos: usize, child: PageIdT) !void {
             var slot_dir = try self.slotsDirMut();
             const buffer = try slot_dir.getMut(pos);
-            var slot: *InodeSlotHeaderType = @ptrCast(&buffer[0]);
+            var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
             slot.child.set(child);
         }
 
         pub fn updateKey(self: *Self, pos: usize, key: []const u8, tmp_buf: []u8) !void {
             const old_value = try self.get(pos);
-            const new_total_size = @sizeOf(InodeSlotHeaderType) + key.len;
+            const new_total_size = @sizeOf(SlotHeaderType) + key.len;
             if (tmp_buf.len < new_total_size) {
                 return error.NotEnoughTemporaryBuffer;
             }
             var new_buffer = tmp_buf[0..new_total_size];
 
-            var slot: *InodeSlotHeaderType = @ptrCast(&new_buffer[0]);
+            var slot: *SlotHeaderType = @ptrCast(&new_buffer[0]);
             slot.child.set(old_value.child);
 
-            const key_dst = new_buffer[@sizeOf(InodeSlotHeaderType)..][0..key.len];
+            const key_dst = new_buffer[@sizeOf(SlotHeaderType)..][0..key.len];
             @memcpy(key_dst, key);
 
             const tail_buf = tmp_buf[new_total_size..];

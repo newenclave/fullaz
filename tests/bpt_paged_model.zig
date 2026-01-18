@@ -3,15 +3,17 @@ const algorithm = @import("fullaz").algorithm;
 const bpt = @import("fullaz").bpt;
 const PageCacheT = @import("fullaz").PageCache;
 const dev = @import("fullaz").device;
+const assertIsStorageManager = @import("fullaz").bpt.models.interfaces.assertIsStorageManager;
 
 fn keyCmp(ctx: anytype, k1: []const u8, k2: []const u8) algorithm.Order {
     return algorithm.cmpSlices(u8, k1, k2, algorithm.CmpNum(u8).asc, ctx) catch .gt;
 }
 
 const NoneStorageManager = struct {
+    pub const RootType = u32;
     root_block_id: ?u32 = null,
 
-    pub fn getRoot(self: *@This()) ?u32 {
+    pub fn getRoot(self: *const @This()) ?u32 {
         return self.root_block_id;
     }
 
@@ -20,7 +22,7 @@ const NoneStorageManager = struct {
         // Persist to disk header, etc.
     }
 
-    pub fn hasRoot(self: *@This()) bool {
+    pub fn hasRoot(self: *const @This()) bool {
         return self.root_block_id != null;
     }
 
@@ -31,6 +33,8 @@ const NoneStorageManager = struct {
 };
 
 fn TestContext(comptime page_size: usize, comptime cache_frames: usize) type {
+    //assertIsStorageManager(NoneStorageManager);
+
     return struct {
         const Self = @This();
         pub const Device = dev.MemoryBlock(u32);
@@ -1994,7 +1998,7 @@ test "Bpt Update values" {
 
 test "Bpt Remove values" {
     const allocator = std.testing.allocator;
-    var ctx = try TestContext(4096, 8).init(allocator);
+    var ctx = try TestContext(1024, 8).init(allocator);
     defer ctx.deinit();
     var tree = ctx.createTree();
 

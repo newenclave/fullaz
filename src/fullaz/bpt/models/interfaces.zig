@@ -1,30 +1,38 @@
 const std = @import("std");
 
-fn checkFnSignature(comptime T: type, comptime name: []const u8, comptime Expected: type) bool {
+pub fn checkFnSignature(comptime T: type, comptime name: []const u8, comptime Expected: type) void {
     if (!@hasDecl(T, name)) {
-        std.debug.print("Missing declaration: {s}\n", .{name});
-        return false;
+        @compileError("Missing declaration: " ++ @typeName(T) ++ name);
     }
+
     const Actual = @TypeOf(@field(T, name));
-    if (Actual == Expected) {
-        return true;
+    if (Actual != Expected) {
+        @compileError("Signature mismatch: " ++ @typeName(T) ++ name ++ " expected: " ++ @typeName(Expected) ++ " got: " ++ @typeName(Actual));
     }
-    std.debug.print("Signature mismatch for {s}: expected {any}, got {any}\n", .{ name, Expected, Actual });
-    return false;
 }
 
 pub fn isStorageManager(comptime T: type) bool {
+    if (!@hasDecl(T, "RootType")) {
+        @compileError("RootType is missing");
+    }
+
     // Check for getRoot function
-    if (!checkFnSignature(T, "getRoot", fn (self: *@This()) ?u64)) return false;
+    checkFnSignature(T, "getRoot", fn (self: *const T) ?T.RootType);
 
     // Check for setRoot function
-    if (!checkFnSignature(T, "setRoot", fn (self: *@This(), root: ?u64) !void)) return false;
+    checkFnSignature(T, "setRoot", fn (self: *T, root: ?T.RootType) anyerror!void);
 
     // Check for hasRoot function
-    if (!checkFnSignature(T, "hasRoot", fn (self: *@This()) bool)) return false;
+    checkFnSignature(T, "hasRoot", fn (self: *const T) bool);
 
     // Check for destroyPage function
-    if (!checkFnSignature(T, "destroyPage", fn (self: *@This(), id: u64) !void)) return false;
+    checkFnSignature(T, "destroyPage", fn (self: *T, id: T.RootType) anyerror!void);
 
     return true;
+}
+
+pub fn assertIsStorageManager(comptime T: type) void {
+    if (!isStorageManager(T)) {
+        @compileError(@typeName(T) ++ " is not a Storage Managerimplementation.");
+    }
 }
