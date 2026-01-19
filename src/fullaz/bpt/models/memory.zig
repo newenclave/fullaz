@@ -5,12 +5,13 @@ const StaticVector = @import("../../static_vector.zig").StaticVector;
 const algos = @import("../../algorithm.zig");
 
 const MemoryPidType = usize;
+const EmptyError = error{};
 const ErrorSet = std.mem.Allocator.Error ||
     errors.SlotsError ||
     errors.PageError ||
     errors.OrderError ||
+    EmptyError ||
     errors.StaticVectorError;
-const EmptyError = error{};
 
 pub fn TypeMap(comptime T: type) type {
     const info = @typeInfo(T);
@@ -509,11 +510,11 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             self.nodes.deinit(self.allocator);
         }
 
-        pub fn borrowKeyfromInode(self: *Self, inode: *const InodeType, pos: usize) !KeyBorrowType {
+        pub fn borrowKeyfromInode(self: *Self, inode: *const InodeType, pos: usize) ErrorSet!KeyBorrowType {
             return KeyBorrowType.init((try inode.getKey(pos)).*, try self.allocator.create(u32));
         }
 
-        pub fn borrowKeyfromLeaf(self: *Self, leaf: *const LeafType, pos: usize) !KeyBorrowType {
+        pub fn borrowKeyfromLeaf(self: *Self, leaf: *const LeafType, pos: usize) ErrorSet!KeyBorrowType {
             return KeyBorrowType.init((try leaf.getKey(pos)).*, try self.allocator.create(u32));
         }
 
@@ -539,7 +540,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             }
         }
 
-        pub fn createLeaf(self: *Self) !LeafType {
+        pub fn createLeaf(self: *Self) ErrorSet!LeafType {
             const leaf = try self.allocator.create(NodeType);
             leaf.* = .{ .leaf = MemoryLeafType.init() };
             // initialize leaf if needed
@@ -549,7 +550,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             return leafResult;
         }
 
-        pub fn createInode(self: *Self) !InodeType {
+        pub fn createInode(self: *Self) ErrorSet!InodeType {
             const inode = try self.allocator.create(NodeType);
             inode.* = .{ .inode = MemoryInodeType.init() };
             // initialize inode if needed

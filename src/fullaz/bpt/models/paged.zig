@@ -36,7 +36,8 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         errors.SlotsError ||
         PageCacheType.Error ||
         errors.OrderError ||
-        errors.BptError;
+        errors.BptError ||
+        error{};
 
     const LeafImpl = struct {
         const Self = @This();
@@ -60,7 +61,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             self.handle.deinit();
         }
 
-        pub fn take(self: *Self) !Self {
+        pub fn take(self: *Self) Error!Self {
             return Self{
                 .handle = try self.handle.take(),
                 .self_id = self.self_id,
@@ -452,7 +453,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return self.ctx.storage_mgr.getRoot();
         }
 
-        pub fn setRoot(self: *Self, new_root: ?RootType) !void {
+        pub fn setRoot(self: *Self, new_root: ?RootType) ErrorSet!void {
             return try self.ctx.storage_mgr.setRoot(new_root);
         }
 
@@ -460,11 +461,11 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return self.ctx.storage_mgr.hasRoot();
         }
 
-        pub fn destroy(self: *Self, id: BlockIdType) !void {
+        pub fn destroy(self: *Self, id: BlockIdType) ErrorSet!void {
             return self.ctx.storage_mgr.destroyPage(id);
         }
 
-        pub fn createLeaf(self: *Self) !LeafImpl {
+        pub fn createLeaf(self: *Self) ErrorSet!LeafImpl {
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
@@ -473,7 +474,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
         }
 
-        pub fn createInode(self: *Self) !InodeImpl {
+        pub fn createInode(self: *Self) ErrorSet!InodeImpl {
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
@@ -482,7 +483,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
 
-        pub fn loadLeaf(self: *Self, id_opt: ?BlockIdType) !?LeafImpl {
+        pub fn loadLeaf(self: *Self, id_opt: ?BlockIdType) ErrorSet!?LeafImpl {
             if (id_opt) |id| {
                 var ph = try self.ctx.cache.fetch(id);
                 const view = LeafImpl.PageViewTypeConst.init(try ph.getData());
@@ -495,7 +496,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return null;
         }
 
-        pub fn loadInode(self: *Self, id_opt: ?BlockIdType) !?InodeImpl {
+        pub fn loadInode(self: *Self, id_opt: ?BlockIdType) ErrorSet!?InodeImpl {
             if (id_opt) |id| {
                 var ph = try self.ctx.cache.fetch(id);
                 const view = InodeImpl.PageViewTypeConst.init(try ph.getData());
@@ -508,7 +509,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return null;
         }
 
-        pub fn isLeafId(self: *Self, id: BlockIdType) !bool {
+        pub fn isLeafId(self: *Self, id: BlockIdType) ErrorSet!bool {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const view = LeafImpl.PageViewTypeConst.init(try ph.getData());
@@ -529,7 +530,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             }
         }
 
-        pub fn borrowKeyfromInode(self: *Self, inode: *const InodeImpl, pos: usize) !KeyBorrowImpl {
+        pub fn borrowKeyfromInode(self: *Self, inode: *const InodeImpl, pos: usize) ErrorSet!KeyBorrowImpl {
             const view = InodeImpl.PageViewTypeConst.init(try inode.handle.getData());
             const entry = try view.get(pos);
             const key = entry.key;
@@ -542,7 +543,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return KeyBorrowImpl.init(key_buf, ph);
         }
 
-        pub fn borrowKeyfromLeaf(self: *Self, leaf: *const LeafImpl, pos: usize) !KeyBorrowImpl {
+        pub fn borrowKeyfromLeaf(self: *Self, leaf: *const LeafImpl, pos: usize) ErrorSet!KeyBorrowImpl {
             const view = LeafImpl.PageViewTypeConst.init(try leaf.handle.getData());
             const entry = try view.get(pos);
             const key = entry.key;
@@ -560,7 +561,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             ph.deinit();
         }
 
-        pub fn canMergeLeafs(_: *Self, left: *const LeafImpl, right: *const LeafImpl) !bool {
+        pub fn canMergeLeafs(_: *Self, left: *const LeafImpl, right: *const LeafImpl) ErrorSet!bool {
             const view_a = LeafImpl.PageViewTypeConst.init(try left.handle.getData());
             const view_b = LeafImpl.PageViewTypeConst.init(try right.handle.getData());
             const slots_dir_a = try view_a.slotsDir();
@@ -568,7 +569,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return try slots_dir_a.canMergeWith(&slots_dir_b) != .not_enough;
         }
 
-        pub fn canMergeInodes(self: *Self, left: *const InodeImpl, right: *const InodeImpl) !bool {
+        pub fn canMergeInodes(self: *Self, left: *const InodeImpl, right: *const InodeImpl) ErrorSet!bool {
             const view_a = InodeImpl.PageViewTypeConst.init(try left.handle.getData());
             const view_b = InodeImpl.PageViewTypeConst.init(try right.handle.getData());
             const slots_dir_a = try view_a.slotsDir();

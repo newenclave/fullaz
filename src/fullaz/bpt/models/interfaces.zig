@@ -15,16 +15,43 @@ pub fn requireStorageManager(comptime T: type) void {
     requiresFnReturnsError(T, "destroyPage", &.{T.PageId}, void);
 }
 
-pub fn assertModelAccessor(comptime T: type) void {
-    _ = T;
+pub fn assertModelAccessor(comptime Model: type) void {
+    const A = Model.AccessorType;
+    const Error = Model.Error;
+    const NodeIdType = Model.NodeIdType;
+    const LeafType = Model.LeafType;
+    const InodeType = Model.InodeType;
+    const KeyBorrowType = Model.KeyBorrowType;
+
+    requiresFnSignature(A, "getRoot", fn (*const A) ?NodeIdType);
+    requiresFnReturnsError(A, "setRoot", &.{?NodeIdType}, void);
+    //requiresFnSignature(A, "setRoot", fn (*A, ?NodeIdType) Error!void);
+    requiresFnSignature(A, "hasRoot", fn (*const A) bool);
+    requiresFnSignature(A, "destroy", fn (*A, NodeIdType) Error!void);
+
+    requiresFnSignature(A, "createLeaf", fn (*A) Error!LeafType);
+    requiresFnSignature(A, "createInode", fn (*A) Error!InodeType);
+    requiresFnSignature(A, "loadLeaf", fn (*A, ?NodeIdType) Error!?LeafType);
+    requiresFnSignature(A, "loadInode", fn (*A, ?NodeIdType) Error!?InodeType);
+    requiresFnSignature(A, "deinitLeaf", fn (*A, ?LeafType) void);
+    requiresFnSignature(A, "deinitInode", fn (*A, ?InodeType) void);
+
+    requiresFnSignature(A, "isLeafId", fn (*A, NodeIdType) Error!bool);
+
+    requiresFnSignature(A, "borrowKeyfromInode", fn (*A, *const InodeType, usize) Error!KeyBorrowType);
+    requiresFnSignature(A, "borrowKeyfromLeaf", fn (*A, *const LeafType, usize) Error!KeyBorrowType);
+    requiresFnSignature(A, "deinitBorrowKey", fn (*A, KeyBorrowType) void);
+
+    requiresFnSignature(A, "canMergeLeafs", fn (*A, *const LeafType, *const LeafType) Error!bool);
+    requiresFnSignature(A, "canMergeInodes", fn (*A, *const InodeType, *const InodeType) Error!bool);
 }
 
-pub fn assertLeaf(comptime T: type) void {
-    _ = T;
+pub fn assertInode(comptime Model: type) void {
+    _ = Model;
 }
 
-pub fn assertInode(comptime T: type) void {
-    _ = T;
+pub fn assertLeaf(comptime Model: type) void {
+    _ = Model;
 }
 
 pub fn assertModel(comptime T: type) void {
@@ -39,13 +66,13 @@ pub fn assertModel(comptime T: type) void {
     requiresTypeDeclaration(T, "ValueOutType");
 
     requiresTypeDeclaration(T, "LeafType");
-    assertLeaf(T.LeafType);
+    assertLeaf(T);
 
     requiresTypeDeclaration(T, "InodeType");
-    assertInode(T.InodeType);
+    assertInode(T);
 
     requiresTypeDeclaration(T, "AccessorType");
-    assertModelAccessor(T.AccessorType);
+    assertModelAccessor(T);
 
     // calls:
     requiresFnSignature(T, "getAccessor", fn (*T) *T.AccessorType);
