@@ -7,25 +7,27 @@ const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
 
 pub fn requireStorageManager(comptime T: type) void {
-    requiresTypeDeclaration(T, "PageId");
     requiresErrorDeclaration(T, "Error");
+    const Error = T.Error;
+    requiresTypeDeclaration(T, "PageId");
     requiresFnSignature(T, "getRoot", fn (*const T) ?T.PageId);
-    requiresFnReturnsError(T, "setRoot", &.{?T.PageId}, void);
+    requiresFnSignature(T, "setRoot", fn (*T, ?T.PageId) Error!void);
     requiresFnSignature(T, "hasRoot", fn (*const T) bool);
-    requiresFnReturnsError(T, "destroyPage", &.{T.PageId}, void);
+    requiresFnSignature(T, "destroyPage", fn (*T, T.PageId) Error!void);
 }
 
 pub fn assertModelAccessor(comptime Model: type) void {
     const A = Model.AccessorType;
-    const Error = Model.Error;
+    requiresErrorDeclaration(A, "Error");
+    const Error = A.Error;
+
     const NodeIdType = Model.NodeIdType;
     const LeafType = Model.LeafType;
     const InodeType = Model.InodeType;
     const KeyBorrowType = Model.KeyBorrowType;
 
     requiresFnSignature(A, "getRoot", fn (*const A) ?NodeIdType);
-    requiresFnReturnsError(A, "setRoot", &.{?NodeIdType}, void);
-    //requiresFnSignature(A, "setRoot", fn (*A, ?NodeIdType) Error!void);
+    requiresFnSignature(A, "setRoot", fn (*A, ?NodeIdType) Error!void);
     requiresFnSignature(A, "hasRoot", fn (*const A) bool);
     requiresFnSignature(A, "destroy", fn (*A, NodeIdType) Error!void);
 
@@ -47,7 +49,9 @@ pub fn assertModelAccessor(comptime Model: type) void {
 }
 
 fn assertNodeCommon(comptime Model: type, comptime Node: type) void {
-    const Error = Model.Error;
+    requiresErrorDeclaration(Node, "Error");
+
+    const Error = Node.Error;
     const KeyLikeType = Model.KeyLikeType;
     const KeyOutType = Model.KeyOutType;
     const NodeIdType = Model.NodeIdType;

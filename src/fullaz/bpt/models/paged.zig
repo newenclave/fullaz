@@ -434,6 +434,8 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
     const AccessorImpl = struct {
         const Self = @This();
+        pub const Error = ErrorSet;
+
         pub const PageCache = PageCacheType;
         const RootType = BlockIdType;
 

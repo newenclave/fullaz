@@ -119,6 +119,8 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
         const KeyOutType = *KeyType;
         const KeyBorrowType = KeyBorrowTypeWrapper(KeyT);
 
+        pub const Error = ErrorSet;
+
         leaf: ?*MemoryLeafType = null,
         self_id: MemoryPidType = 0,
         keep_ptr: ?*u32 = null,
@@ -305,6 +307,8 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
         const KeyLikeType = KeyT;
         const KeyOutType = *KeyT;
 
+        pub const Error = ErrorSet;
+
         const MemoryInodeType = MemoryInode(KeyT, maximum_elements);
 
         inode: ?*MemoryInodeType = undefined,
@@ -478,6 +482,8 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
 
         const KeyBorrowType = LeafType.KeyBorrowType;
 
+        pub const Error = ErrorSet;
+
         const RootType = usize;
         root: ?RootType = null,
         nodes: std.ArrayList(?*NodeType),
@@ -486,7 +492,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
         pub fn getRoot(self: *const Self) ?RootType {
             return self.root;
         }
-        pub fn setRoot(self: *Self, new_root: ?RootType) EmptyError!void {
+        pub fn setRoot(self: *Self, new_root: ?RootType) Error!void {
             self.root = new_root;
         }
         pub fn hasRoot(self: *const Self) bool {
