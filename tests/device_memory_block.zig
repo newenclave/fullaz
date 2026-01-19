@@ -86,33 +86,35 @@ test "Write and read multiple blocks" {
 }
 
 test "Read invalid block returns error" {
-    const MemoryBlock = device.MemoryBlock;
+    const MemoryBlock = device.MemoryBlock(u32);
+    const Error = MemoryBlock.Error;
     const block_size = 64;
 
-    var mem_block = try MemoryBlock(u32).init(std.testing.allocator, block_size);
+    var mem_block = try MemoryBlock.init(std.testing.allocator, block_size);
     defer mem_block.deinit();
 
     var read_buf: [64]u8 = undefined;
 
     // Reading from empty storage should fail
-    try std.testing.expectError(error.InvalidBlockId, mem_block.readBlock(0, &read_buf));
+    try std.testing.expectError(Error.InvalidId, mem_block.readBlock(0, &read_buf));
 
     // Append one block
     _ = try mem_block.appendBlock();
 
     // Reading block 1 (doesn't exist) should fail
-    try std.testing.expectError(error.InvalidBlockId, mem_block.readBlock(1, &read_buf));
+    try std.testing.expectError(Error.InvalidId, mem_block.readBlock(1, &read_buf));
 }
 
 test "Write invalid block returns error" {
-    const MemoryBlock = device.MemoryBlock;
+    const MemoryBlock = device.MemoryBlock(u32);
+    const Error = MemoryBlock.Error;
     const block_size = 64;
 
-    var mem_block = try MemoryBlock(u32).init(std.testing.allocator, block_size);
+    var mem_block = try MemoryBlock.init(std.testing.allocator, block_size);
     defer mem_block.deinit();
 
     var write_buf: [64]u8 = undefined;
 
     // Writing to empty storage should fail
-    try std.testing.expectError(error.InvalidBlockId, mem_block.writeBlock(0, &write_buf));
+    try std.testing.expectError(Error.InvalidId, mem_block.writeBlock(0, &write_buf));
 }

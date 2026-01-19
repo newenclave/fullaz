@@ -1,4 +1,5 @@
 const std = @import("std");
+const errors = @import("errors.zig");
 const assertBlockDevice = @import("device/device.zig").interfaces.assertBlockDevice;
 
 pub fn PageCache(comptime DeviceT: type) type {
@@ -37,6 +38,8 @@ pub fn PageCache(comptime DeviceT: type) type {
         const Self = @This();
         frame: ?*Frame,
 
+        const Error = errors.PageError;
+
         fn init(frame: *Frame) Self {
             const res = Self{
                 .frame = frame,
@@ -45,18 +48,18 @@ pub fn PageCache(comptime DeviceT: type) type {
             return res;
         }
 
-        pub fn markDirty(self: *Self) !void {
+        pub fn markDirty(self: *Self) Error!void {
             if (self.frame == null) {
-                return error.InvalidPageHandle;
+                return Error.InvalidHandle;
             }
             if (self.frame.?.frame_type != .temporary) {
                 self.frame.?.frame_type = .dirty;
             }
         }
 
-        pub fn pid(self: *const Self) !DeviceT.BlockId {
+        pub fn pid(self: *const Self) Error!DeviceT.BlockId {
             if (self.frame == null) {
-                return error.InvalidPageHandle;
+                return Error.InvalidHandle;
             }
             return self.frame.?.pid;
         }
@@ -69,31 +72,31 @@ pub fn PageCache(comptime DeviceT: type) type {
             }
         }
 
-        pub fn getData(self: *const Self) ![]const u8 {
+        pub fn getData(self: *const Self) Error![]const u8 {
             if (self.frame == null) {
-                return error.InvalidPageHandle;
+                return Error.InvalidHandle;
             }
             return self.frame.?.data;
         }
 
-        pub fn getDataMut(self: *Self) ![]u8 {
+        pub fn getDataMut(self: *Self) Error![]u8 {
             if (self.frame == null) {
-                return error.InvalidPageHandle;
+                return Error.InvalidHandle;
             }
             try self.markDirty();
             return self.frame.?.data;
         }
 
-        pub fn clone(self: *const Self) !Self {
+        pub fn clone(self: *const Self) Error!Self {
             if (self.frame == null) {
-                return error.InvalidPageHandle;
+                return Error.InvalidHandle;
             }
             return Self.init(self.frame.?);
         }
 
-        pub fn take(self: *Self) !Self {
+        pub fn take(self: *Self) Error!Self {
             if (self.frame == null) {
-                return error.InvalidPageHandle;
+                return Error.InvalidHandle;
             }
             const res = Self.init(self.frame.?);
             self.deinit();
@@ -111,6 +114,11 @@ pub fn PageCache(comptime DeviceT: type) type {
 
         pub const Handle = PageHandle;
 
+        // Extract device error set from method signatures
+        const DeviceError = DeviceT.Error;
+
+        pub const Error = errors.CacheError || DeviceError || std.mem.Allocator.Error;
+
         device: *UnderlyingDevice = undefined,
         allocator: std.mem.Allocator = undefined,
         maximum_pages: usize = 0,
@@ -123,7 +131,7 @@ pub fn PageCache(comptime DeviceT: type) type {
         lru_tail: ?*Frame = null,
 
         // Placeholder for page cache implementation
-        pub fn init(underlying_device: *UnderlyingDevice, allocator: std.mem.Allocator, maximum_pages: usize) !Self {
+        pub fn init(underlying_device: *UnderlyingDevice, allocator: std.mem.Allocator, maximum_pages: usize) Error!Self {
             var res = Self{
                 .device = underlying_device,
                 .allocator = allocator,
@@ -162,7 +170,7 @@ pub fn PageCache(comptime DeviceT: type) type {
             self.frames_cache.deinit();
         }
 
-        pub fn getTemporaryPage(self: *Self) !Handle {
+        pub fn getTemporaryPage(self: *Self) Error!Handle {
             if (try self.findPopFreeFrame()) |ff| {
                 ff.frame_type = .temporary;
                 const page_offset: usize = ff.frame_id * self.device.blockSize();
@@ -173,10 +181,10 @@ pub fn PageCache(comptime DeviceT: type) type {
 
                 return PageHandle.init(ff);
             }
-            return error.NoFreeFrames;
+            return Error.NoFreeFrames;
         }
 
-        pub fn fetch(self: *Self, page_id: PageId) !Handle {
+        pub fn fetch(self: *Self, page_id: PageId) Error!Handle {
             if (self.frames_cache.get(page_id)) |frame| {
                 self.moveToHead(frame);
                 return PageHandle.init(frame);
@@ -203,10 +211,10 @@ pub fn PageCache(comptime DeviceT: type) type {
                 return PageHandle.init(ff);
             }
 
-            return error.NoFreeFrames;
+            return Error.NoFreeFrames;
         }
 
-        pub fn create(self: *Self) !Handle {
+        pub fn create(self: *Self) Error!Handle {
             if (try self.findPopFreeFrame()) |ff| {
                 ff.frame_type = .dirty;
                 const page_offset: usize = ff.frame_id * self.device.blockSize();
@@ -229,7 +237,7 @@ pub fn PageCache(comptime DeviceT: type) type {
                 try self.frames_cache.put(ff.pid, ff);
                 return PageHandle.init(ff);
             }
-            return error.NoFreeFrames;
+            return Error.NoFreeFrames;
         }
 
         pub fn availableFrames(self: *const Self) usize {
@@ -242,7 +250,7 @@ pub fn PageCache(comptime DeviceT: type) type {
             return count;
         }
 
-        pub fn flush(self: *Self, pid: PageId) !void {
+        pub fn flush(self: *Self, pid: PageId) Error!void {
             if (self.frames_cache.get(pid)) |frame| {
                 if (frame.frame_type == .dirty) {
                     try self.device.writeBlock(frame.pid, frame.data);
@@ -251,7 +259,7 @@ pub fn PageCache(comptime DeviceT: type) type {
             }
         }
 
-        pub fn flushAll(self: *Self) !void {
+        pub fn flushAll(self: *Self) Error!void {
             var it = self.frames_cache.iterator();
             while (it.next()) |entry| {
                 const frame = entry.value_ptr.*;
@@ -262,7 +270,7 @@ pub fn PageCache(comptime DeviceT: type) type {
             }
         }
 
-        fn evict(self: *Self, frame: *Frame) !void {
+        fn evict(self: *Self, frame: *Frame) Error!void {
             self.removeFromLruList(frame);
             if (frame.frame_type == .dirty) {
                 try self.device.writeBlock(frame.pid, frame.data);
@@ -273,7 +281,7 @@ pub fn PageCache(comptime DeviceT: type) type {
             }
         }
 
-        fn findPopFreeFrame(self: *Self) !?*Frame {
+        fn findPopFreeFrame(self: *Self) Error!?*Frame {
             var result_frame: ?*Frame = null;
 
             if (self.popFreeFrame()) |ff| {

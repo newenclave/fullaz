@@ -1,4 +1,5 @@
 const std = @import("std");
+const errors = @import("errors.zig");
 
 pub fn StaticVector(comptime T: type, comptime maximum_elements: usize, comptime DeinitCtx: type, comptime destructor: ?fn (DeinitCtx, *T) void) type {
     comptime {
@@ -12,6 +13,8 @@ pub fn StaticVector(comptime T: type, comptime maximum_elements: usize, comptime
         data: [maximum_elements]T = undefined,
         len: usize = 0,
         deinit_ctx: DeinitCtx = undefined,
+
+        pub const Error = errors.StaticVectorError;
 
         pub fn init(ctx: DeinitCtx) Self {
             return .{
@@ -37,9 +40,9 @@ pub fn StaticVector(comptime T: type, comptime maximum_elements: usize, comptime
             return self.len >= maximum_elements;
         }
 
-        pub fn pushBack(self: *Self, value: T) !void {
+        pub fn pushBack(self: *Self, value: T) Error!void {
             if (self.len >= maximum_elements) {
-                return error.Full;
+                return Error.NotEnoughSpace;
             }
             self.data[self.len] = value;
             self.len += 1;
@@ -61,21 +64,21 @@ pub fn StaticVector(comptime T: type, comptime maximum_elements: usize, comptime
             return null;
         }
 
-        pub fn insert(self: *Self, pos: usize, value: T) !void {
+        pub fn insert(self: *Self, pos: usize, value: T) Error!void {
             if (self.len >= maximum_elements) {
-                return error.Full;
+                return Error.NotEnoughSpace;
             }
             if (pos > self.len) {
-                return error.OutOfBounds;
+                return Error.OutOfBounds;
             }
             self.expand(pos);
             self.data[pos] = value;
             self.len += 1;
         }
 
-        pub fn remove(self: *Self, pos: usize) !void {
+        pub fn remove(self: *Self, pos: usize) Error!void {
             if (pos >= self.len) {
-                return error.OutOfBounds;
+                return Error.OutOfBounds;
             }
 
             if (destructor) |destruct| {

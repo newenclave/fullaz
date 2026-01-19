@@ -5,6 +5,8 @@ const testing = std.testing;
 const TestVariadic = Variadic(u16, .little, false);
 const TestVariadicConst = Variadic(u16, .little, true);
 
+const errors = @import("fullaz").errors;
+
 // Helper to create test sequences
 fn makeSeq(comptime N: usize) [N]u8 {
     comptime var result: [N]u8 = undefined;
@@ -32,11 +34,12 @@ test "Variadic: initialization" {
 }
 
 test "Variadic: initialization with small buffer fails" {
+    const Error = errors.SlotsError;
     var buffer: [4]u8 = undefined;
 
     // Should fail - buffer too small for header
     const result = TestVariadic.init(&buffer);
-    try testing.expectError(error.BufferTooSmall, result);
+    try testing.expectError(Error.BufferTooSmall, result);
 }
 
 test "Variadic: basic insert and retrieve" {
@@ -72,6 +75,7 @@ test "Variadic: insertAt specific position" {
 }
 
 test "Variadic: insertAt invalid position" {
+    const Error = errors.SlotsError;
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -80,7 +84,7 @@ test "Variadic: insertAt invalid position" {
 
     // Should fail - position 5 is beyond current entries
     const result = slots.insertAt(5, "Invalid");
-    try testing.expectError(error.InvalidPosition, result);
+    try testing.expectError(Error.OutOfBounds, result);
 }
 
 test "Variadic: remove entry" {
@@ -313,6 +317,7 @@ test "Variadic: free slot reuse" {
 }
 
 test "Variadic: boundary conditions - empty" {
+    const Error = errors.SlotsError;
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -321,7 +326,7 @@ test "Variadic: boundary conditions - empty" {
 
     // Getting from empty should fail
     const result = slots.get(0);
-    try testing.expectError(error.InvalidEntry, result);
+    try testing.expectError(Error.OutOfBounds, result);
 }
 
 test "Variadic: boundary conditions - full buffer" {
@@ -345,6 +350,7 @@ test "Variadic: boundary conditions - full buffer" {
 }
 
 test "Variadic: invalid entry access" {
+    const Error = errors.SlotsError;
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -353,7 +359,7 @@ test "Variadic: invalid entry access" {
 
     // Access beyond bounds
     const result = slots.get(10);
-    try testing.expectError(error.InvalidEntry, result);
+    try testing.expectError(Error.OutOfBounds, result);
 }
 
 test "Variadic: const buffer restrictions" {

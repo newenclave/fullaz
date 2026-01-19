@@ -4,6 +4,7 @@ const SubheaderView = @import("subheader.zig").View;
 const PackedInt = @import("../packed_int.zig").PackedInt;
 const slots = @import("../slots/slots.zig");
 const algorithm = @import("../algorithm.zig");
+const errors = @import("../errors.zig");
 
 pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
     const PageIdType = PackedInt(PageIdT, Endian);
@@ -14,6 +15,11 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
     const ConstSlotsDirType = slots.Variadic(IndexT, Endian, true);
 
     const AvailableStatus = ConstSlotsDirType.AvailableStatus;
+
+    const ErrorSet = errors.BptError ||
+        errors.OrderError ||
+        errors.PageError ||
+        errors.SlotsError;
 
     const LeafSubheaderType = extern struct {
         const Self = @This();
@@ -67,7 +73,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             return (try self.slotsDir()).size();
         }
 
-        fn keyValueFromBuffer(buffer: []const u8) !KeyValue {
+        fn keyValueFromBuffer(buffer: []const u8) KeyValue {
             const slot: *const SlotHeaderType = @ptrCast(&buffer[0]);
             const key_size = @as(usize, slot.key_size.get());
             const key_offset = @sizeOf(SlotHeaderType);
@@ -79,7 +85,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             };
         }
 
-        pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) !void {
+        pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) ErrorSet!void {
             const subheader_size = @as(IndexT, @intCast(@sizeOf(SubheaderType)));
             self.page_view.formatPage(kind, page_id, subheader_size, metadata_len);
             const data = self.page_view.dataMut();
@@ -101,17 +107,17 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             return @ptrCast(@alignCast(&subhdr[0]));
         }
 
-        pub fn slotsDirMut(self: *Self) !SlotsDirType {
+        pub fn slotsDirMut(self: *Self) ErrorSet!SlotsDirType {
             const data = self.page_view.dataMut();
             return try SlotsDirType.init(data);
         }
 
-        pub fn slotsDir(self: *const Self) !ConstSlotsDirType {
+        pub fn slotsDir(self: *const Self) ErrorSet!ConstSlotsDirType {
             const data = self.page_view.data();
             return try ConstSlotsDirType.init(data);
         }
 
-        pub fn insert(self: *Self, index: usize, key: []const u8, value: []const u8) !void {
+        pub fn insert(self: *Self, index: usize, key: []const u8, value: []const u8) ErrorSet!void {
             const total_size: usize = @sizeOf(SlotHeaderType) + key.len + value.len;
             var slot_dir = try self.slotsDirMut();
             var buffer = try slot_dir.reserveGet(index, total_size);
@@ -126,7 +132,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             @memcpy(value_dst, value);
         }
 
-        pub fn capacityFor(self: *const Self, data_len: usize) !usize {
+        pub fn capacityFor(self: *const Self, data_len: usize) ErrorSet!usize {
             const maximum_slot_size = data_len + @sizeOf(SlotHeaderType);
             return (try self.slotsDir()).capacityFor(maximum_slot_size);
         }
@@ -142,7 +148,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             key: []const u8,
             comptime cmp: anytype, // comparator function fn (ctx, a, b) algorithm.Order
             ctx: anytype, // context for comparator
-        ) !usize {
+        ) ErrorSet!usize {
             const Ctx = @TypeOf(ctx);
             const Wrapper = struct {
                 slot_dir: ConstSlotsDirType,
@@ -150,7 +156,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
 
                 fn less(wrapper: *const @This(), a: ConstSlotsDirType.Entry, key_b: []const u8) !algorithm.Order {
                     const slot_key = try wrapper.slot_dir.getByEntry(&a);
-                    const slot_values = try keyValueFromBuffer(slot_key);
+                    const slot_values = keyValueFromBuffer(slot_key);
                     return cmp(wrapper.user_ctx, slot_values.key, key_b);
                 }
             };
@@ -160,24 +166,24 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             return try algorithm.lowerBound(ConstSlotsDirType.Entry, slot_dir.entriesConst(), key, Wrapper.less, &wrapper);
         }
 
-        pub fn canInsert(self: *const Self, pos: usize, key: []const u8, value: []const u8) !AvailableStatus {
+        pub fn canInsert(self: *const Self, pos: usize, key: []const u8, value: []const u8) ErrorSet!AvailableStatus {
             _ = pos;
             const total_len = key.len + value.len + @sizeOf(SlotHeaderType);
             return (try self.slotsDir()).canInsert(total_len);
         }
 
-        pub fn canUpdateValue(self: *const Self, pos: usize, key: []const u8, value: []const u8) !AvailableStatus {
+        pub fn canUpdateValue(self: *const Self, pos: usize, key: []const u8, value: []const u8) ErrorSet!AvailableStatus {
             const slot_dir = try self.slotsDir();
             const status = try slot_dir.canUpdate(pos, @sizeOf(SlotHeaderType) + key.len + value.len);
             return status;
         }
 
-        pub fn updateValue(self: *Self, pos: usize, value: []const u8, tmp_buf: []u8) !void {
+        pub fn updateValue(self: *Self, pos: usize, value: []const u8, tmp_buf: []u8) ErrorSet!void {
             const old_value = try self.get(pos);
             const new_total_size = @sizeOf(SlotHeaderType) + old_value.key.len + value.len;
 
             if (tmp_buf.len < new_total_size) {
-                return error.NotEnoughTemporaryBuffer;
+                return ErrorSet.NotEnoughTemporaryBuffer;
             }
 
             var new_buffer = tmp_buf[0..new_total_size];
@@ -208,7 +214,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             @memcpy(buffer, new_buffer);
         }
 
-        pub fn get(self: *const Self, pos: usize) !KeyValue {
+        pub fn get(self: *const Self, pos: usize) ErrorSet!KeyValue {
             const slot_dir = try self.slotsDir();
             const slot_buffer = try slot_dir.get(pos);
             return keyValueFromBuffer(slot_buffer);
@@ -254,7 +260,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             return key_len + @sizeOf(SlotHeaderType);
         }
 
-        fn keyChildFromBuffer(buffer: []const u8) !KeyChild {
+        fn keyChildFromBuffer(buffer: []const u8) KeyChild {
             const slot: *const SlotHeaderType = @ptrCast(&buffer[0]);
             const key_offset = @sizeOf(SlotHeaderType);
             const key_size = @as(usize, buffer.len - key_offset);
@@ -264,7 +270,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             };
         }
 
-        pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) !void {
+        pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) ErrorSet!void {
             self.page_view.formatPage(kind, page_id, @as(IndexT, @intCast(@sizeOf(SubheaderType))), metadata_len);
 
             const data = self.page_view.dataMut();
@@ -289,17 +295,17 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             return @ptrCast(@alignCast(&subhdr[0]));
         }
 
-        pub fn slotsDirMut(self: *Self) !SlotsDirType {
+        pub fn slotsDirMut(self: *Self) ErrorSet!SlotsDirType {
             const data = self.page_view.dataMut();
             return try SlotsDirType.init(data);
         }
 
-        pub fn slotsDir(self: *const Self) !ConstSlotsDirType {
+        pub fn slotsDir(self: *const Self) ErrorSet!ConstSlotsDirType {
             const data = self.page_view.data();
             return try ConstSlotsDirType.init(data);
         }
 
-        pub fn insert(self: *Self, index: usize, key: []const u8, child: PageIdT) !void {
+        pub fn insert(self: *Self, index: usize, key: []const u8, child: PageIdT) ErrorSet!void {
             const total_size: usize = @sizeOf(SlotHeaderType) + key.len;
             var slot_dir = try self.slotsDirMut();
             var buffer = try slot_dir.reserveGet(index, total_size);
@@ -309,31 +315,31 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             @memcpy(key_dst, key);
         }
 
-        pub fn capacityFor(self: *const Self, data_len: usize) !usize {
+        pub fn capacityFor(self: *const Self, data_len: usize) ErrorSet!usize {
             const maximum_slot_size = data_len + @sizeOf(SlotHeaderType);
             return (try self.slotsDir()).capacityFor(maximum_slot_size);
         }
 
-        pub fn canInsert(self: *const Self, _: usize, key: []const u8, _: PageIdT) !AvailableStatus {
+        pub fn canInsert(self: *const Self, _: usize, key: []const u8, _: PageIdT) ErrorSet!AvailableStatus {
             const total_size: usize = @sizeOf(SlotHeaderType) + key.len;
             var slot_dir = try self.slotsDir();
             return try slot_dir.canInsert(total_size);
         }
 
-        pub fn canUpdate(self: *const Self, pos: usize, key: []const u8) !AvailableStatus {
+        pub fn canUpdate(self: *const Self, pos: usize, key: []const u8) ErrorSet!AvailableStatus {
             const total_size: usize = @sizeOf(SlotHeaderType) + key.len;
             var slot_dir = try self.slotsDir();
             return try slot_dir.canUpdate(pos, total_size);
         }
 
-        pub fn updateChild(self: *Self, pos: usize, child: PageIdT) !void {
+        pub fn updateChild(self: *Self, pos: usize, child: PageIdT) ErrorSet!void {
             var slot_dir = try self.slotsDirMut();
             const buffer = try slot_dir.getMut(pos);
             var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
             slot.child.set(child);
         }
 
-        pub fn updateKey(self: *Self, pos: usize, key: []const u8, tmp_buf: []u8) !void {
+        pub fn updateKey(self: *Self, pos: usize, key: []const u8, tmp_buf: []u8) ErrorSet!void {
             const old_value = try self.get(pos);
             const new_total_size = @sizeOf(SlotHeaderType) + key.len;
             if (tmp_buf.len < new_total_size) {
@@ -369,7 +375,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             key: []const u8,
             comptime cmp: anytype, // comparator function fn (ctx, a, b) algorithm.Order
             ctx: anytype, // context for comparator
-        ) !usize {
+        ) ErrorSet!usize {
             const Ctx = @TypeOf(ctx);
             const Wrapper = struct {
                 slot_dir: ConstSlotsDirType,
@@ -377,7 +383,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
 
                 fn less(wrapper: *const @This(), a: ConstSlotsDirType.Entry, key_b: []const u8) !algorithm.Order {
                     const slot_key = try wrapper.slot_dir.getByEntry(&a);
-                    const slot_values = try keyChildFromBuffer(slot_key);
+                    const slot_values = keyChildFromBuffer(slot_key);
                     return cmp(wrapper.user_ctx, slot_values.key, key_b);
                 }
             };
@@ -387,7 +393,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             return try algorithm.upperBound(ConstSlotsDirType.Entry, slot_dir.entriesConst(), key, Wrapper.less, &wrapper);
         }
 
-        pub fn get(self: *const Self, pos: usize) !KeyChild {
+        pub fn get(self: *const Self, pos: usize) ErrorSet!KeyChild {
             const slot_dir = try self.slotsDir();
             const slot_buffer = try slot_dir.get(pos);
             return keyChildFromBuffer(slot_buffer);
@@ -396,6 +402,8 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
 
     return struct {
         pub const Slots = SlotsDirType;
+
+        pub const Error = ErrorSet;
 
         pub const PageViewType = HeaderPageView;
 

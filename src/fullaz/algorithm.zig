@@ -1,4 +1,5 @@
 const std = @import("std");
+const errors = @import("errors.zig");
 
 pub const Order = enum { lt, eq, gt, unordered };
 
@@ -119,7 +120,7 @@ pub fn lowerBound(comptime T: type, items: []const T, key: anytype, cmp: anytype
         switch (result) {
             .lt => lo = mid + 1,
             .eq, .gt => hi = mid,
-            .unordered => return error.Unordered,
+            .unordered => return errors.OrderError.Unordered,
         }
     }
     return lo;
@@ -145,7 +146,7 @@ pub fn upperBound(comptime T: type, items: []const T, key: anytype, cmp: anytype
         switch (result) {
             .gt => hi = mid,
             .lt, .eq => lo = mid + 1,
-            .unordered => return error.Unordered,
+            .unordered => return errors.OrderError.Unordered,
         }
     }
     return lo;

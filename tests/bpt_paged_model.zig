@@ -10,15 +10,16 @@ fn keyCmp(ctx: anytype, k1: []const u8, k2: []const u8) algorithm.Order {
 }
 
 const NoneStorageManager = struct {
-    pub const RootType = u32;
+    pub const Self = @This();
     pub const PageId = u32;
+    pub const Error = error{};
     root_block_id: ?u32 = null,
 
     pub fn getRoot(self: *const @This()) ?u32 {
         return self.root_block_id;
     }
 
-    pub fn setRoot(self: *@This(), root: ?u32) !void {
+    pub fn setRoot(self: *@This(), root: ?u32) Error!void {
         self.root_block_id = root;
         // Persist to disk header, etc.
     }
@@ -27,7 +28,7 @@ const NoneStorageManager = struct {
         return self.root_block_id != null;
     }
 
-    pub fn destroyPage(_: *@This(), id: PageId) !void {
+    pub fn destroyPage(_: *@This(), id: PageId) Error!void {
         _ = id;
         // Implement page destruction logic, e.g., add to free list
     }
@@ -563,7 +564,9 @@ test "LeafImpl: updateValue triggers compaction when needed" {
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
     var store_mgr = NoneStorageManager{};
-    var model = BptModel.init(&cache, &store_mgr, .{}, {});
+    var model = BptModel.init(&cache, &store_mgr, .{
+        .maximum_value_size = 150,
+    }, {});
 
     var accessor = model.getAccessor();
     var leaf = try accessor.createLeaf();
@@ -1997,7 +2000,7 @@ test "Bpt Update values" {
     // _ = try tree.dumpFormatted(formatKey, formatValue);
 }
 
-test "Bpt/paged Remove values" {
+test "Bpt/paged Remove random values" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -2052,4 +2055,77 @@ test "Bpt/paged Remove values" {
     std.debug.print("len={} cap={}\n", .{ ctx.device.storage.items.len, ctx.device.storage.capacity });
     // std.debug.print("Tree after updates:\n", .{});
     // _ = try tree.dumpFormatted(formatKey, formatValue);
+}
+
+test "Bpt/paged Remove values" {
+    var prng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    const random = prng.random();
+
+    const allocator = std.testing.allocator;
+    var ctx = try TestContext(4096 / 6, 32).init(allocator);
+    defer ctx.deinit();
+    var tree = ctx.createTree();
+
+    const elements_to_insert = 50000;
+
+    var inserted_keys = try std.ArrayList(u32).initCapacity(allocator, elements_to_insert);
+    errdefer inserted_keys.deinit(allocator);
+
+    for (0..elements_to_insert) |_| {
+        const key = random.int(u32);
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        var buf: [32]u8 = undefined;
+        const value = try std.fmt.bufPrint(&buf, "{}", .{key});
+        if (try tree.insert(key_out, value)) {
+            //std.debug.print("Inserted key: {s}\n", .{key_out});
+            try inserted_keys.append(allocator, key);
+        }
+    }
+
+    std.debug.print("Inserted {} unique keys\n", .{inserted_keys.items.len});
+
+    //try cache.flushAll();
+    // std.debug.print("Tree after insertion:\n", .{});
+    // _ = try tree.dumpFormatted(formatKey, formatValue);
+
+    // Update values
+    for (0..elements_to_insert / 2) |i| {
+        if (i >= inserted_keys.items.len) break;
+
+        const key = inserted_keys.items[i];
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        try std.testing.expect(try tree.remove(key_out));
+    }
+
+    // Verify updates
+    for (0..elements_to_insert) |i| {
+        if (i >= inserted_keys.items.len) break;
+        const key = inserted_keys.items[i];
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        if (try tree.find(key_out)) |itr_const| {
+            defer itr_const.deinit();
+            const value = (try itr_const.get()).?.value;
+            const expected_value = try format(allocator, "{}", .{key});
+            defer allocator.free(expected_value);
+
+            const res = strCmp(value[0..], expected_value[0..expected_value.len]);
+            //std.debug.print("Key: {s}, Value: {s}, Expected: {s} res {any}\n", .{ key_out, value, expected_value, res });
+
+            // Include the sentinel in the slice: expected_value has len N but the sentinel is at [N]
+            try std.testing.expect(res == .eq);
+        }
+    }
+    std.debug.print("Blocks allocated: {}\n", .{ctx.device.blocksCount()});
+    std.debug.print("len={} cap={}\n", .{ ctx.device.storage.items.len, ctx.device.storage.capacity });
+    // std.debug.print("Tree after updates:\n", .{});
+    // _ = try tree.dumpFormatted(formatKey, formatValue);
+
+    inserted_keys.deinit(allocator);
 }

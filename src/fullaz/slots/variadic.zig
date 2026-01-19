@@ -1,4 +1,5 @@
 const std = @import("std");
+const errors = @import("../errors.zig");
 
 const PackedInt = @import("../packed_int.zig").PackedInt;
 
@@ -42,6 +43,8 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         pub const EntrySlice = []Entry;
         pub const EntrySliceConst = []const Entry;
 
+        pub const Error = errors.SlotsError;
+
         pub const AvailableStatus = enum {
             enough,
             need_compact,
@@ -50,9 +53,9 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
         body: BufferType,
 
-        pub fn init(body: BufferType) !Self {
+        pub fn init(body: BufferType) Error!Self {
             if (body.len < @sizeOf(Header)) {
-                return error.BufferTooSmall;
+                return Error.BufferTooSmall;
             }
             return .{
                 .body = body,
@@ -80,7 +83,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return @intCast(free_end - free_begin);
         }
 
-        pub fn availableAfterCompact(self: *const Self) !usize {
+        pub fn availableAfterCompact(self: *const Self) Error!usize {
             const slots = self.entriesConst();
             var used = @sizeOf(Header) + slots.len * @sizeOf(Entry);
             for (slots) |*s| {
@@ -92,61 +95,61 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
                 used += @as(usize, fixed);
             }
             if (used > self.body.len) {
-                return error.InconsistentLayout;
+                return Error.InconsistentLayout;
             }
             return self.body.len - used;
         }
 
-        pub fn getMut(self: *Self, entry: usize) ![]u8 {
+        pub fn getMut(self: *Self, entry: usize) Error![]u8 {
             if (read_only) @compileError("Cannot get mutable value from const buffer");
             const slots = self.entriesMut();
 
             if (entry >= slots.len) {
-                return error.InvalidEntry;
+                return Error.OutOfBounds;
             }
 
             const slot = slots[entry];
             return self.getMutByEntry(&slot);
         }
 
-        pub fn getMutByEntry(self: *Self, slot: *const Entry) ![]u8 {
+        pub fn getMutByEntry(self: *Self, slot: *const Entry) Error![]u8 {
             if (read_only) @compileError("Cannot get mutable value from const buffer");
             const offset: usize = @intCast(slot.offset.get());
             const length: usize = @intCast(slot.length.get());
             if (offset + length > self.body.len) {
-                return error.InvalidEntry;
+                return Error.OutOfBounds;
             }
             return self.body[offset..][0..length];
         }
 
-        pub fn getByEntry(self: *const Self, slot: *const Entry) ![]const u8 {
+        pub fn getByEntry(self: *const Self, slot: *const Entry) Error![]const u8 {
             const offset: usize = @intCast(slot.offset.get());
             const length: usize = @intCast(slot.length.get());
             if (offset + length > self.body.len) {
-                return error.InvalidEntry;
+                return Error.OutOfBounds;
             }
             return self.body[offset..][0..length];
         }
 
-        pub fn get(self: *const Self, entry: usize) ![]const u8 {
+        pub fn get(self: *const Self, entry: usize) Error![]const u8 {
             const slots = self.entriesConst();
             if (entry >= slots.len) {
-                return error.InvalidEntry;
+                return Error.OutOfBounds;
             }
             const slot = slots[entry];
             const offset: usize = @intCast(slot.offset.get());
             const length: usize = @intCast(slot.length.get());
             if (offset + length > self.body.len) {
-                return error.InvalidEntry;
+                return Error.OutOfBounds;
             }
             return self.body[offset..][0..length];
         }
 
-        pub fn free(self: *Self, entry: usize) !void {
+        pub fn free(self: *Self, entry: usize) Error!void {
             if (read_only) @compileError("Cannot remove from const buffer");
             var slots = self.entriesMut();
             if (entry >= slots.len) {
-                return error.InvalidEntry;
+                return Error.OutOfBounds;
             }
 
             if (slots[entry].offset.get() == SLOT_INVALID) {
@@ -177,11 +180,11 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return null;
         }
 
-        pub fn remove(self: *Self, entry: usize) !void {
+        pub fn remove(self: *Self, entry: usize) Error!void {
             if (read_only) @compileError("Cannot remove from const buffer");
             const slots = self.entriesMut();
             if (entry >= slots.len) {
-                return error.InvalidEntry;
+                return Error.OutOfBounds;
             }
 
             const slot_offset = slots[entry].offset.get();
@@ -202,12 +205,12 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             hdr.free_begin.set(new_begin);
         }
 
-        pub fn canUpdate(self: *const Self, entry: usize, len: usize) !AvailableStatus {
+        pub fn canUpdate(self: *const Self, entry: usize, len: usize) Error!AvailableStatus {
             const fix_len: usize = @as(usize, self.fixLength(@as(T, @intCast(len))));
             const slots = self.entriesConst();
             if (entry >= slots.len) {
-                @breakpoint();
-                return error.InvalidEntry;
+                std.debug.print("canUpdate: entry {} out of bounds (size {})\n", .{ entry, slots.len });
+                return Error.OutOfBounds;
             }
 
             const old_len = @as(usize, slots[entry].length.get());
@@ -226,7 +229,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return .not_enough;
         }
 
-        pub fn canInsert(self: *const Self, len: usize) !AvailableStatus {
+        pub fn canInsert(self: *const Self, len: usize) Error!AvailableStatus {
             const fix_len: usize = @as(usize, self.fixLength(@as(T, @intCast(len))));
 
             const available = self.availableSpace();
@@ -248,7 +251,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return .not_enough;
         }
 
-        pub fn canMergeWith(self: *const Self, other: *const Self) !AvailableStatus {
+        pub fn canMergeWith(self: *const Self, other: *const Self) Error!AvailableStatus {
             return self.canMergeWithAdditional(other, 0);
         }
 
@@ -276,7 +279,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return .not_enough;
         }
 
-        pub fn insert(self: *Self, data: []const u8) !usize {
+        pub fn insert(self: *Self, data: []const u8) Error!usize {
             if (read_only) @compileError("Cannot insert into const buffer");
 
             const len = data.len;
@@ -288,7 +291,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return self.entriesConst().len - 1;
         }
 
-        pub fn insertAt(self: *Self, pos: usize, data: []const u8) !void {
+        pub fn insertAt(self: *Self, pos: usize, data: []const u8) Error!void {
             if (read_only) @compileError("Cannot insert into const buffer");
 
             const len = data.len;
@@ -327,7 +330,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return slots[b].offset.get() < slots[a].offset.get();
         }
 
-        pub fn compactWithBuffer(self: *Self, raw_buffer: []u8) !void {
+        pub fn compactWithBuffer(self: *Self, raw_buffer: []u8) Error!void {
             const slots = self.entriesMut();
             if (sliceAligned(raw_buffer, slots.len)) |buffer| {
                 var total_elements: usize = 0;
@@ -358,13 +361,13 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
                 self.headerMut().free_end.set(@intCast(new_end_usize));
                 self.headerMut().freed.set(0);
             } else {
-                return error.BufferTooSmall;
+                return Error.BufferTooSmall;
             }
         }
 
         // compact in place without any extra buffer
         // this call completes in O(n^2) time
-        pub fn compactInPlace(self: *Self) !void {
+        pub fn compactInPlace(self: *Self) Error!void {
             const slots = self.entriesMut();
 
             const base_end: T = @intCast(self.body.len);
@@ -436,11 +439,11 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             if (read_only) @compileError("Cannot insert into const buffer");
 
             if (pos > self.entriesConst().len) {
-                return error.InvalidPosition;
+                return Error.OutOfBounds;
             }
 
             if (len >= self.body.len) {
-                return error.NotEnoughSpace;
+                return Error.NotEnoughSpace;
             }
             const slots = self.entriesMut();
             const old_len = @as(usize, slots[pos].length.get());
@@ -470,15 +473,15 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return self.reserveGetExpand(pos, len, true);
         }
 
-        fn reserveGetExpand(self: *Self, pos: usize, len: usize, need_slot: bool) ![]u8 {
+        fn reserveGetExpand(self: *Self, pos: usize, len: usize, need_slot: bool) Error![]u8 {
             if (read_only) @compileError("Cannot insert into const buffer");
 
             if (pos > self.entriesConst().len) {
-                return error.InvalidPosition;
+                return Error.OutOfBounds;
             }
 
             if (len >= self.body.len) {
-                return error.NotEnoughSpace;
+                return Error.NotEnoughSpace;
             }
 
             const fix_len: usize = @intCast(self.fixLength(@intCast(len)));
@@ -512,7 +515,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
                     return buf[0..len];
                 }
-                return error.NotEnoughSpace;
+                return Error.NotEnoughSpace;
             }
 
             const buf = self.allocateSpace(fix_len);
@@ -556,9 +559,9 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             }
         }
 
-        fn shrink(self: *Self, pos: usize) !void {
+        fn shrink(self: *Self, pos: usize) Error!void {
             if (pos > self.headerConst().entry_count.get()) {
-                return error.InvalidPosition;
+                return Error.OutOfBounds;
             }
             var slots = self.entriesMut();
             for (pos..slots.len - 1) |i| {

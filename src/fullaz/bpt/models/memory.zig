@@ -1,9 +1,16 @@
 const std = @import("std");
+const errors = @import("../../errors.zig");
 
 const StaticVector = @import("../../static_vector.zig").StaticVector;
 const algos = @import("../../algorithm.zig");
 
 const MemoryPidType = usize;
+const ErrorSet = std.mem.Allocator.Error ||
+    errors.SlotsError ||
+    errors.PageError ||
+    errors.OrderError ||
+    errors.StaticVectorError;
+const EmptyError = error{};
 
 pub fn TypeMap(comptime T: type) type {
     const info = @typeInfo(T);
@@ -123,56 +130,56 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             };
         }
 
-        pub fn take(self: *Self) !Self {
+        pub fn take(self: *Self) EmptyError!Self {
             const res = self.*;
             self.leaf = null;
             self.keep_ptr = null;
             return res;
         }
 
-        pub fn size(self: *const Self) !usize {
+        pub fn size(self: *const Self) EmptyError!usize {
             if (self.leaf) |leaf| {
                 return leaf.keys.len;
             }
             return 0;
         }
 
-        pub fn capacity(self: *const Self) !usize {
+        pub fn capacity(self: *const Self) EmptyError!usize {
             if (self.leaf) |leaf| {
                 return leaf.keys.capacity();
             }
             return 0;
         }
 
-        pub fn isUnderflowed(self: *const Self) !bool {
+        pub fn isUnderflowed(self: *const Self) EmptyError!bool {
             if (self.leaf) |leaf| {
                 return leaf.keys.len < (leaf.keys.capacity() + 1) / 2;
             }
             return false;
         }
 
-        pub fn getKey(self: *const Self, pos: usize) !KeyOutType {
+        pub fn getKey(self: *const Self, pos: usize) ErrorSet!KeyOutType {
             if (self.leaf) |leaf| {
                 if (pos < leaf.keys.len) {
                     return &leaf.keys.data[pos];
                 }
-                return error.OutOfBounds;
+                return ErrorSet.OutOfBounds;
             }
-            return error.InvalidNode;
+            return ErrorSet.InvalidId;
         }
 
         // pub fn borrowKey(self: *const Self, pos: usize) !KeyBorrowType {
         //     return self.getKey(pos);
         // }
 
-        pub fn getValue(self: *const Self, pos: usize) !ValueOutType {
+        pub fn getValue(self: *const Self, pos: usize) ErrorSet!ValueOutType {
             if (self.leaf) |leaf| {
                 if (pos < leaf.values.len) {
                     return leaf.values.data[pos][0..];
                 }
-                return error.OutOfBounds;
+                return ErrorSet.OutOfBounds;
             }
-            return error.InvalidNode;
+            return ErrorSet.InvalidId;
         }
 
         // pub fn borrowValue(self: *const Self, pos: usize) !ValueBorrowType {
@@ -189,13 +196,13 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             return cmp(void, k1, k2) == .eq;
         }
 
-        pub fn keyPosition(self: *const Self, key: KeyType) !usize {
+        pub fn keyPosition(self: *const Self, key: KeyType) ErrorSet!usize {
             if (self.leaf) |leaf| {
                 const slice = leaf.keys.data[0..self.leaf.?.keys.len];
                 const pos = try algos.lowerBound(KeyType, slice, key, cmp, @as(?u32, null));
                 return pos;
             } else {
-                return error.InvalidNode;
+                return ErrorSet.InvalidId;
             }
         }
 
@@ -213,19 +220,19 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             return null;
         }
 
-        pub fn setNext(self: *Self, next_id: ?MemoryPidType) !void {
+        pub fn setNext(self: *Self, next_id: ?MemoryPidType) EmptyError!void {
             if (self.leaf) |leaf| {
                 leaf.next = next_id;
             }
         }
 
-        pub fn setPrev(self: *Self, prev_id: ?MemoryPidType) !void {
+        pub fn setPrev(self: *Self, prev_id: ?MemoryPidType) EmptyError!void {
             if (self.leaf) |leaf| {
                 leaf.prev = prev_id;
             }
         }
 
-        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) !void {
+        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) EmptyError!void {
             if (self.leaf) |leaf| {
                 leaf.parent_id = parent_id;
             }
@@ -243,32 +250,32 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
         }
 
         // should habve this interface for B+ tree operations
-        pub fn canInsertValue(self: *const Self, _: usize, _: KeyLikeType, _: ValueInType) !bool {
+        pub fn canInsertValue(self: *const Self, _: usize, _: KeyLikeType, _: ValueInType) EmptyError!bool {
             if (self.leaf) |leaf| {
                 return !leaf.keys.full();
             }
             return false;
         }
 
-        pub fn insertValue(self: *Self, pos: usize, key: KeyType, value: ValueInType) !void {
+        pub fn insertValue(self: *Self, pos: usize, key: KeyType, value: ValueInType) ErrorSet!void {
             if (self.leaf) |leaf| {
                 try leaf.values.insert(pos, [_]u8{0} ** 16);
                 const len = @min(16, value.len);
                 @memcpy(leaf.values.ptrAt(pos).?[0..len], value[0..len]);
                 try leaf.keys.insert(pos, key);
             } else {
-                return error.InvalidNode;
+                return ErrorSet.InvalidId;
             }
         }
 
-        pub fn canUpdateValue(self: *const Self, pos: usize, _: KeyLikeType, _: ValueInType) !bool {
+        pub fn canUpdateValue(self: *const Self, pos: usize, _: KeyLikeType, _: ValueInType) ErrorSet!bool {
             if (self.leaf) |leaf| {
                 return pos < leaf.keys.len;
             }
-            return error.InvalidNode;
+            return ErrorSet.InvalidId;
         }
 
-        pub fn updateValue(self: *Self, pos: usize, value: ValueInType) !void {
+        pub fn updateValue(self: *Self, pos: usize, value: ValueInType) ErrorSet!void {
             if (self.leaf) |leaf| {
                 if (pos < leaf.values.len) {
                     const len = @min(16, value.len);
@@ -276,13 +283,13 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
                     @memcpy(leaf.values.ptrAt(pos).?[0..len], value[0..len]);
                     return;
                 } else {
-                    return error.OutOfBounds;
+                    return ErrorSet.OutOfBounds;
                 }
             }
-            return error.InvalidNode;
+            return ErrorSet.InvalidId;
         }
 
-        pub fn erase(self: *Self, pos: usize) !void {
+        pub fn erase(self: *Self, pos: usize) ErrorSet!void {
             if (self.leaf) |leaf| {
                 try leaf.keys.remove(pos);
                 try leaf.values.remove(pos);
@@ -343,70 +350,70 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
             return cmp(void, k1, k2) == .eq;
         }
 
-        pub fn getKey(self: *const Self, pos: usize) !KeyOutType {
+        pub fn getKey(self: *const Self, pos: usize) ErrorSet!KeyOutType {
             if (self.inode) |inode| {
                 if (pos < inode.keys.len) {
                     return &inode.keys.data[pos];
                 }
-                return error.OutOfBounds;
+                return ErrorSet.OutOfBounds;
             }
-            return error.InvalidNode;
+            return ErrorSet.InvalidId;
         }
 
         // pub fn borrowKey(self: *const Self, pos: usize) !KeyLikeType {
         //     return self.getKey(pos);
         // }
 
-        pub fn getChild(self: *const Self, pos: usize) !MemoryPidType {
+        pub fn getChild(self: *const Self, pos: usize) ErrorSet!MemoryPidType {
             if (self.inode) |inode| {
                 if (pos < inode.children.len) {
                     return inode.children.data[pos];
                 } else if (pos == inode.children.size()) {
                     return inode.right_most_child_id;
                 }
-                return error.OutOfBounds;
+                return ErrorSet.OutOfBounds;
             }
-            return error.InvalidNode;
+            return ErrorSet.InvalidId;
         }
 
-        pub fn keyPosition(self: *const Self, key: KeyLikeType) !usize {
+        pub fn keyPosition(self: *const Self, key: KeyLikeType) ErrorSet!usize {
             if (self.inode) |inode| {
                 const slice = inode.keys.data[0..self.inode.?.keys.len];
                 const pos = try algos.upperBound(KeyLikeType, slice, key, cmp, @as(?u32, null));
                 return pos;
             }
-            return error.InvalidNode;
+            return ErrorSet.InvalidId;
         }
 
-        pub fn canUpdateKey(self: *const Self, pos: usize, _: KeyLikeType) !bool {
+        pub fn canUpdateKey(self: *const Self, pos: usize, _: KeyLikeType) EmptyError!bool {
             if (self.inode) |inode| {
                 return pos < inode.keys.len;
             }
             return false;
         }
 
-        pub fn canInsertChild(self: *const Self, _: usize, _: KeyLikeType, _: MemoryPidType) !bool {
+        pub fn canInsertChild(self: *const Self, _: usize, _: KeyLikeType, _: MemoryPidType) EmptyError!bool {
             if (self.inode) |inode| {
                 return !inode.keys.full();
             }
             return false;
         }
 
-        pub fn insertChild(self: *Self, pos: usize, key: KeyLikeType, child_id: MemoryPidType) !void {
+        pub fn insertChild(self: *Self, pos: usize, key: KeyLikeType, child_id: MemoryPidType) ErrorSet!void {
             if (self.inode) |inode| {
                 try inode.children.insert(pos, child_id);
                 try inode.keys.insert(pos, key);
             }
         }
 
-        pub fn erase(self: *Self, pos: usize) !void {
+        pub fn erase(self: *Self, pos: usize) ErrorSet!void {
             if (self.inode) |inode| {
                 try inode.keys.remove(pos);
                 try inode.children.remove(pos);
             }
         }
 
-        pub fn updateChild(self: *Self, pos: usize, child_id: MemoryPidType) !void {
+        pub fn updateChild(self: *Self, pos: usize, child_id: MemoryPidType) ErrorSet!void {
             if (self.inode) |inode| {
                 if (pos < inode.children.len) {
                     inode.children.data[pos] = child_id;
@@ -415,25 +422,25 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
                     inode.right_most_child_id = child_id;
                     return;
                 } else {
-                    return error.OutOfBounds;
+                    return ErrorSet.OutOfBounds;
                 }
             }
-            return error.InvalidNode;
+            return ErrorSet.InvalidId;
         }
 
-        pub fn updateKey(self: *Self, pos: usize, key: KeyLikeType) !void {
+        pub fn updateKey(self: *Self, pos: usize, key: KeyLikeType) ErrorSet!void {
             if (self.inode) |inode| {
                 if (pos < inode.keys.len) {
                     inode.keys.data[pos] = key;
                     return;
                 } else {
-                    return error.OutOfBounds;
+                    return ErrorSet.OutOfBounds;
                 }
             }
-            return error.InvalidNode;
+            return ErrorSet.InvalidId;
         }
 
-        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) !void {
+        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) EmptyError!void {
             if (self.inode) |inode| {
                 inode.parent_id = parent_id;
             }
@@ -478,7 +485,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
         pub fn getRoot(self: *const Self) ?RootType {
             return self.root;
         }
-        pub fn setRoot(self: *Self, new_root: ?RootType) !void {
+        pub fn setRoot(self: *Self, new_root: ?RootType) EmptyError!void {
             self.root = new_root;
         }
         pub fn hasRoot(self: *const Self) bool {
@@ -552,10 +559,10 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             return inodeResult;
         }
 
-        pub fn loadLeaf(self: *Self, id_opt: ?MemoryPidType) !?LeafType {
+        pub fn loadLeaf(self: *Self, id_opt: ?MemoryPidType) ErrorSet!?LeafType {
             if (id_opt) |id| {
                 if (id >= self.nodes.items.len) {
-                    return error.InvalidNode;
+                    return ErrorSet.InvalidId;
                 }
                 const node_ptr = self.nodes.items[id];
                 if (node_ptr) |node| {
@@ -572,14 +579,14 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             return null;
         }
 
-        pub fn loadInode(self: *Self, id_opt: ?MemoryPidType) !?InodeType {
+        pub fn loadInode(self: *Self, id_opt: ?MemoryPidType) ErrorSet!?InodeType {
             if (id_opt) |id| {
                 if (id == std.math.maxInt(@TypeOf(id))) {
                     @breakpoint();
                 }
                 if (id >= self.nodes.items.len) {
                     //std.debug.print("id requested {}", .{id});
-                    return error.InvalidNode;
+                    return ErrorSet.InvalidId;
                 }
                 const node_ptr = self.nodes.items[id];
                 if (node_ptr) |node| {
@@ -596,9 +603,9 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             return null;
         }
 
-        pub fn isLeafId(self: *Self, id: MemoryPidType) !bool {
+        pub fn isLeafId(self: *Self, id: MemoryPidType) ErrorSet!bool {
             if (id >= self.nodes.items.len) {
-                return error.InvalidNode;
+                return ErrorSet.InvalidId;
             }
             const node_ptr = self.nodes.items[id];
             if (node_ptr) |node| {
@@ -610,9 +617,9 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             return false;
         }
 
-        pub fn isInodeId(self: *Self, id: MemoryPidType) !bool {
+        pub fn isInodeId(self: *Self, id: MemoryPidType) ErrorSet!bool {
             if (id >= self.nodes.items.len) {
-                return error.InvalidNode;
+                return ErrorSet.InvalidId;
             }
             const node_ptr = self.nodes.items[id];
             if (node_ptr) |node| {
@@ -624,9 +631,9 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             return false;
         }
 
-        pub fn destroy(self: *Self, id: MemoryPidType) !void {
+        pub fn destroy(self: *Self, id: MemoryPidType) ErrorSet!void {
             if (id >= self.nodes.items.len) {
-                return error.InvalidNode;
+                return ErrorSet.InvalidId;
             }
             const node_ptr = self.nodes.items[id];
             if (node_ptr) |node| {
@@ -635,7 +642,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             }
         }
 
-        pub fn canMergeLeafs(_: *Self, left: *const LeafType, right: *const LeafType) !bool {
+        pub fn canMergeLeafs(_: *Self, left: *const LeafType, right: *const LeafType) ErrorSet!bool {
             const total_size = try left.size() + try right.size();
             if (total_size <= try left.capacity()) {
                 return true;
@@ -643,7 +650,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             return false;
         }
 
-        pub fn canMergeInodes(_: *Self, left: *const InodeType, right: *const InodeType) !bool {
+        pub fn canMergeInodes(_: *Self, left: *const InodeType, right: *const InodeType) ErrorSet!bool {
             const total_size = try left.size() + try right.size() + 1;
             if (total_size <= try left.capacity()) {
                 return true;
@@ -678,9 +685,11 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
 
         pub const NodeIdType = usize;
 
+        pub const Error = ErrorSet;
+
         accessor: AccessorType = undefined,
 
-        pub fn init(allocator: std.mem.Allocator) !Self {
+        pub fn init(allocator: std.mem.Allocator) Error!Self {
             return Self{
                 .accessor = try AccessorType.init(allocator),
             };

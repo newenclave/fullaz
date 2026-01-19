@@ -1,6 +1,7 @@
 const StaticVector = @import("fullaz").StaticVector;
 const std = @import("std");
 const expect = std.testing.expect;
+const errors = @import("fullaz").errors;
 
 test "StaticVector basic operations" {
     var sv = StaticVector(u8, 64, void, null).init(undefined);
@@ -20,11 +21,12 @@ test "StaticVector basic operations" {
 }
 
 test "Static Vector overflow" {
+    const Error = errors.StaticVectorError;
     var sv = StaticVector(u8, 2, void, null).init(undefined);
     try sv.pushBack(1);
     try sv.pushBack(2);
     const result = sv.pushBack(3);
-    try expect(result == error.Full);
+    try expect(result == Error.NotEnoughSpace);
 }
 
 test "StaticVector ptrAt out of bounds" {
@@ -83,13 +85,14 @@ test "StaticVector remove elements" {
 }
 
 test "StaticVector pushBack until full" {
+    const Error = errors.StaticVectorError;
     var sv = StaticVector(u8, 3, void, null).init(undefined);
     for (0..3) |i| {
         try sv.pushBack(@intCast(i));
     }
     try expect(sv.full());
     const result = sv.pushBack(4);
-    try expect(result == error.Full);
+    try expect(result == Error.NotEnoughSpace);
 }
 
 test "StaticVector initialization with context" {
