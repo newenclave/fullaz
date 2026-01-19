@@ -5,6 +5,20 @@ const PageCacheT = @import("fullaz").PageCache;
 const dev = @import("fullaz").device;
 const assertIsStorageManager = @import("fullaz").bpt.models.interfaces.assertIsStorageManager;
 
+fn Printer(comptime name: []const u8) type {
+    return struct {
+        const Self = @This();
+        scope_name: []const u8 = name,
+        fn init() Self {
+            std.debug.print("{s}\n", .{name});
+            return .{};
+        }
+        fn print(_: *const Self, comptime fmt: []const u8, argv: anytype) void {
+            std.debug.print("\t" ++ fmt, argv);
+        }
+    };
+}
+
 fn keyCmp(ctx: anytype, k1: []const u8, k2: []const u8) algorithm.Order {
     return algorithm.cmpSlices(u8, k1, k2, algorithm.CmpNum(u8).asc, ctx) catch .gt;
 }
@@ -1999,6 +2013,7 @@ test "Bpt Update values" {
 }
 
 test "Bpt Update Random values" {
+    const prn = Printer("Update Random").init();
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
         try std.posix.getrandom(std.mem.asBytes(&seed));
@@ -2032,11 +2047,11 @@ test "Bpt Update Random values" {
         if (try tree.insert(key_out, value)) {
             try inserted_keys.append(allocator, key);
         } else {
-            std.debug.print("NOT Inserted: {}\n", .{key});
+            prn.print("NOT Inserted: {}\n", .{key});
         }
     }
 
-    std.debug.print("UPDATE Random: Inserted {} unique keys\n", .{inserted_keys.items.len});
+    prn.print("Inserted {} unique keys\n", .{inserted_keys.items.len});
 
     // Update values
     const fmt = "very_long_updated_value_but_not_longer_then_120_{}";
@@ -2074,10 +2089,15 @@ test "Bpt Update Random values" {
     // std.debug.print("Tree after updates:\n", .{});
     //_ = try tree.dumpFormatted(formatKey, formatValue);
 
+    prn.print("Blocks allocated: {}\n", .{device.blocksCount()});
+    prn.print("len={} cap={}\n", .{ device.storage.items.len, device.storage.capacity });
+
     inserted_keys.deinit(allocator);
 }
 
 test "Bpt/paged Remove values" {
+    const prn = Printer("Remove").init();
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -2128,13 +2148,15 @@ test "Bpt/paged Remove values" {
             try std.testing.expect(res == .eq);
         }
     }
-    std.debug.print("Blocks allocated: {}\n", .{ctx.device.blocksCount()});
-    std.debug.print("len={} cap={}\n", .{ ctx.device.storage.items.len, ctx.device.storage.capacity });
+    prn.print("Blocks allocated: {}\n", .{ctx.device.blocksCount()});
+    prn.print("len={} cap={}\n", .{ ctx.device.storage.items.len, ctx.device.storage.capacity });
     // std.debug.print("Tree after updates:\n", .{});
     // _ = try tree.dumpFormatted(formatKey, formatValue);
 }
 
 test "Bpt/paged Remove random values" {
+    const prn = Printer("Remove Random").init();
+
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
         try std.posix.getrandom(std.mem.asBytes(&seed));
@@ -2164,7 +2186,7 @@ test "Bpt/paged Remove random values" {
         }
     }
 
-    std.debug.print("REMOVE Random: Inserted {} unique keys\n", .{inserted_keys.items.len});
+    prn.print("Inserted {} unique keys\n", .{inserted_keys.items.len});
 
     //try cache.flushAll();
     // std.debug.print("Tree after insertion:\n", .{});
@@ -2199,8 +2221,8 @@ test "Bpt/paged Remove random values" {
             try std.testing.expect(res == .eq);
         }
     }
-    std.debug.print("Blocks allocated: {}\n", .{ctx.device.blocksCount()});
-    std.debug.print("len={} cap={}\n", .{ ctx.device.storage.items.len, ctx.device.storage.capacity });
+    prn.print("Blocks allocated: {}\n", .{ctx.device.blocksCount()});
+    prn.print("len={} cap={}\n", .{ ctx.device.storage.items.len, ctx.device.storage.capacity });
     // std.debug.print("Tree after updates:\n", .{});
     // _ = try tree.dumpFormatted(formatKey, formatValue);
 
