@@ -1944,7 +1944,7 @@ test "Bpt Update values" {
 
     var device = try Device.init(allocator, 1024);
     defer device.deinit();
-    var cache = try PageCache.init(&device, allocator, 8);
+    var cache = try PageCache.init(&device, allocator, 12);
     defer cache.deinit();
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
@@ -1961,17 +1961,15 @@ test "Bpt Update values" {
         _ = try tree.insert(key_out, value);
     }
 
-    //try cache.flushAll();
-    // std.debug.print("Tree after insertion:\n", .{});
-    // _ = try tree.dumpFormatted(formatKey, formatValue);
-
     // Update values
+    const fmt = "very_long_updated_value_but_not_longer_then_120_{}";
     for (0..elements_to_insert) |i| {
         const key = @as(u32, @intCast(i));
         var key_buf: [32]u8 = undefined;
         const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
-        var buf: [32]u8 = undefined;
-        const new_value = try std.fmt.bufPrint(&buf, "updated_{}", .{key});
+        var buf: [128]u8 = undefined;
+
+        const new_value = try std.fmt.bufPrint(&buf, fmt, .{key});
         //std.debug.print("Updating key: {s} to value: {s}\n", .{ key_out, new_value });
         try std.testing.expect(try tree.update(key_out, new_value)); // Insert should update existing key
     }
@@ -1984,7 +1982,7 @@ test "Bpt Update values" {
         if (try tree.find(key_out)) |itr_const| {
             defer itr_const.deinit();
             const value = (try itr_const.get()).?.value;
-            const expected_value = try format(allocator, "updated_{}", .{key});
+            const expected_value = try format(allocator, fmt, .{key});
             defer allocator.free(expected_value);
 
             const res = strCmp(value[0..], expected_value[0..expected_value.len]);
@@ -1997,10 +1995,89 @@ test "Bpt Update values" {
         }
     }
     // std.debug.print("Tree after updates:\n", .{});
-    // _ = try tree.dumpFormatted(formatKey, formatValue);
+    //_ = try tree.dumpFormatted(formatKey, formatValue);
 }
 
-test "Bpt/paged Remove random values" {
+test "Bpt Update Random values" {
+    var prng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    const random = prng.random();
+
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+
+    const elements_to_insert = 50000;
+    var inserted_keys = try std.ArrayList(u32).initCapacity(allocator, elements_to_insert);
+    errdefer inserted_keys.deinit(allocator);
+
+    var device = try Device.init(allocator, 1024);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 12);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
+    var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
+
+    for (0..elements_to_insert) |_| {
+        const key = random.int(u32);
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        var buf: [32]u8 = undefined;
+        const value = try std.fmt.bufPrint(&buf, "{}", .{key});
+        if (try tree.insert(key_out, value)) {
+            try inserted_keys.append(allocator, key);
+        } else {
+            std.debug.print("NOT Inserted: {}\n", .{key});
+        }
+    }
+
+    std.debug.print("UPDATE Random: Inserted {} unique keys\n", .{inserted_keys.items.len});
+
+    // Update values
+    const fmt = "very_long_updated_value_but_not_longer_then_120_{}";
+    for (inserted_keys.items) |item| {
+        const key = item;
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        var buf: [128]u8 = undefined;
+
+        const new_value = try std.fmt.bufPrint(&buf, fmt, .{key});
+        //std.debug.print("Updating key: {s} to value: {s}\n", .{ key_out, new_value });
+        try std.testing.expect(try tree.update(key_out, new_value)); // Insert should update existing key
+    }
+
+    // Verify updates
+    for (inserted_keys.items) |item| {
+        const key = item;
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        if (try tree.find(key_out)) |itr_const| {
+            defer itr_const.deinit();
+            const value = (try itr_const.get()).?.value;
+            const expected_value = try format(allocator, fmt, .{key});
+            defer allocator.free(expected_value);
+
+            const res = strCmp(value[0..], expected_value[0..expected_value.len]);
+            //std.debug.print("Key: {s}, Value: {s}, Expected: {s} res {any}\n", .{ key_out, value, expected_value, res });
+
+            // Include the sentinel in the slice: expected_value has len N but the sentinel is at [N]
+            try std.testing.expect(res == .eq);
+        } else {
+            try std.testing.expect(false); // Key should exist
+        }
+    }
+    // std.debug.print("Tree after updates:\n", .{});
+    //_ = try tree.dumpFormatted(formatKey, formatValue);
+
+    inserted_keys.deinit(allocator);
+}
+
+test "Bpt/paged Remove values" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -2057,7 +2134,7 @@ test "Bpt/paged Remove random values" {
     // _ = try tree.dumpFormatted(formatKey, formatValue);
 }
 
-test "Bpt/paged Remove values" {
+test "Bpt/paged Remove random values" {
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
         try std.posix.getrandom(std.mem.asBytes(&seed));
@@ -2087,7 +2164,7 @@ test "Bpt/paged Remove values" {
         }
     }
 
-    std.debug.print("Inserted {} unique keys\n", .{inserted_keys.items.len});
+    std.debug.print("REMOVE Random: Inserted {} unique keys\n", .{inserted_keys.items.len});
 
     //try cache.flushAll();
     // std.debug.print("Tree after insertion:\n", .{});

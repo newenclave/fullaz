@@ -20,11 +20,14 @@ pub fn assertBlockDevice(comptime T: type) void {
     requiresTypeDeclaration(T, "BlockId");
     requiresErrorDeclaration(T, "Error");
 
+    const Error = T.Error;
+
     requiresFnSignature(T, "isValidId", fn (*const T, T.BlockId) bool);
     requiresFnSignature(T, "isOpen", fn (*const T) bool);
     requiresFnSignature(T, "blockSize", fn (*const T) usize);
     requiresFnSignature(T, "blocksCount", fn (*const T) usize);
-    requiresFnReturnsAnyError(T, "readBlock", &.{ T.BlockId, []u8 }, void);
-    requiresFnReturnsAnyError(T, "writeBlock", &.{ T.BlockId, []u8 }, void);
-    requiresFnReturnsAnyError(T, "appendBlock", &.{}, T.BlockId);
+
+    requiresFnSignature(T, "readBlock", fn (*const T, T.BlockId, []u8) Error!void);
+    requiresFnSignature(T, "writeBlock", fn (*T, T.BlockId, []u8) Error!void);
+    requiresFnSignature(T, "appendBlock", fn (*T) Error!T.BlockId);
 }
