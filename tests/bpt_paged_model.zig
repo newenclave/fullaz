@@ -11,6 +11,7 @@ fn keyCmp(ctx: anytype, k1: []const u8, k2: []const u8) algorithm.Order {
 
 const NoneStorageManager = struct {
     pub const RootType = u32;
+    pub const PageId = u32;
     root_block_id: ?u32 = null,
 
     pub fn getRoot(self: *const @This()) ?u32 {
@@ -26,7 +27,7 @@ const NoneStorageManager = struct {
         return self.root_block_id != null;
     }
 
-    pub fn destroyPage(_: *@This(), id: u32) !void {
+    pub fn destroyPage(_: *@This(), id: PageId) !void {
         _ = id;
         // Implement page destruction logic, e.g., add to free list
     }

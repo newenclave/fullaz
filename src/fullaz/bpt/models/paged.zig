@@ -2,6 +2,7 @@ const std = @import("std");
 const device_interface = @import("../../device/interfaces.zig");
 const page_cache = @import("../../page_cache.zig");
 const bpt_page = @import("../../page/bpt.zig");
+const interfaces = @import("interfaces.zig");
 
 pub const Settings = struct {
     maximum_key_size: usize = 128,
@@ -11,6 +12,8 @@ pub const Settings = struct {
 };
 
 pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, comptime cmp: anytype, comptime Ctx: type) type {
+    interfaces.requireStorageManager(StorageManager);
+
     const BlockDevice = PageCacheType.UnderlyingDevice;
     const PageHandle = PageCacheType.Handle;
     const BlockIdType = BlockDevice.BlockId;
