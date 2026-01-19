@@ -172,7 +172,8 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
             return (try self.slotsDir()).canInsert(total_len);
         }
 
-        pub fn canUpdateValue(self: *const Self, pos: usize, key: []const u8, value: []const u8) ErrorSet!AvailableStatus {
+        pub fn canUpdateValue(self: *const Self, pos: usize, value: []const u8) ErrorSet!AvailableStatus {
+            const key = (try self.get(pos)).key;
             const slot_dir = try self.slotsDir();
             const status = try slot_dir.canUpdate(pos, @sizeOf(SlotHeaderType) + key.len + value.len);
             return status;
@@ -199,7 +200,7 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
 
             const tail_buf = tmp_buf[new_total_size..];
 
-            const update_status = try self.canUpdateValue(pos, old_value.key, value);
+            const update_status = try self.canUpdateValue(pos, value);
             if (update_status == .not_enough) {
                 return error.NotEnoughSpaceForUpdate;
             } else if (update_status == .need_compact) {

@@ -402,7 +402,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     var leaf = leaf_const;
                     defer accessor.deinitLeaf(leaf);
                     if (search.found) {
-                        if (try leaf_const.canUpdateValue(search.position, key, value)) {
+                        if (try leaf_const.canUpdateValue(search.position, value)) {
                             try leaf.updateValue(search.position, value);
                             return true;
                         } else {

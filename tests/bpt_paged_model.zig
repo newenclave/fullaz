@@ -602,7 +602,7 @@ test "LeafImpl: updateValue triggers compaction when needed" {
 
     // Check the status - it should be .need_compact (space available after compaction)
     // or .enough (if there's a free slot that fits)
-    const status = try leaf.canUpdateValueStatus(0, "key_a", large_value[0..150]);
+    const status = try leaf.canUpdateValueStatus(0, large_value[0..150]);
     std.debug.print("Can update status before compact: {}\n", .{status});
 
     // The update should succeed regardless (updateValue handles compaction internally)

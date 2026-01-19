@@ -215,17 +215,17 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             try view_mut.insert(pos, key, value);
         }
 
-        pub fn canUpdateValue(self: *const Self, pos: usize, key: KeyType, value: ValueType) Error!bool {
-            try self.checkKeyValue(key, value);
+        pub fn canUpdateValue(self: *const Self, pos: usize, value: ValueType) Error!bool {
+            try self.checkKeyValue(null, value);
             const view = PageViewTypeConst.init(try self.handle.getData());
-            return try view.canUpdateValue(pos, key, value) != .not_enough;
+            return try view.canUpdateValue(pos, value) != .not_enough;
         }
 
         pub const UpdateStatus = BptPageConst.SlotsAvailableStatus;
 
-        pub fn canUpdateValueStatus(self: *const Self, pos: usize, key: KeyType, value: ValueType) Error!UpdateStatus {
+        pub fn canUpdateValueStatus(self: *const Self, pos: usize, value: ValueType) Error!UpdateStatus {
             const view = PageViewTypeConst.init(try self.handle.getData());
-            return view.canUpdateValue(pos, key, value);
+            return view.canUpdateValue(pos, value);
         }
 
         pub fn updateValue(self: *Self, pos: usize, value: ValueType) Error!void {

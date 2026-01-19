@@ -131,28 +131,28 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             };
         }
 
-        pub fn take(self: *Self) EmptyError!Self {
+        pub fn take(self: *Self) ErrorSet!Self {
             const res = self.*;
             self.leaf = null;
             self.keep_ptr = null;
             return res;
         }
 
-        pub fn size(self: *const Self) EmptyError!usize {
+        pub fn size(self: *const Self) ErrorSet!usize {
             if (self.leaf) |leaf| {
                 return leaf.keys.len;
             }
             return 0;
         }
 
-        pub fn capacity(self: *const Self) EmptyError!usize {
+        pub fn capacity(self: *const Self) ErrorSet!usize {
             if (self.leaf) |leaf| {
                 return leaf.keys.capacity();
             }
             return 0;
         }
 
-        pub fn isUnderflowed(self: *const Self) EmptyError!bool {
+        pub fn isUnderflowed(self: *const Self) ErrorSet!bool {
             if (self.leaf) |leaf| {
                 return leaf.keys.len < (leaf.keys.capacity() + 1) / 2;
             }
@@ -221,19 +221,19 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             return null;
         }
 
-        pub fn setNext(self: *Self, next_id: ?MemoryPidType) EmptyError!void {
+        pub fn setNext(self: *Self, next_id: ?MemoryPidType) ErrorSet!void {
             if (self.leaf) |leaf| {
                 leaf.next = next_id;
             }
         }
 
-        pub fn setPrev(self: *Self, prev_id: ?MemoryPidType) EmptyError!void {
+        pub fn setPrev(self: *Self, prev_id: ?MemoryPidType) ErrorSet!void {
             if (self.leaf) |leaf| {
                 leaf.prev = prev_id;
             }
         }
 
-        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) EmptyError!void {
+        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) ErrorSet!void {
             if (self.leaf) |leaf| {
                 leaf.parent_id = parent_id;
             }
@@ -251,7 +251,7 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
         }
 
         // should habve this interface for B+ tree operations
-        pub fn canInsertValue(self: *const Self, _: usize, _: KeyLikeType, _: ValueInType) EmptyError!bool {
+        pub fn canInsertValue(self: *const Self, _: usize, _: KeyLikeType, _: ValueInType) ErrorSet!bool {
             if (self.leaf) |leaf| {
                 return !leaf.keys.full();
             }
@@ -269,7 +269,7 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             }
         }
 
-        pub fn canUpdateValue(self: *const Self, pos: usize, _: KeyLikeType, _: ValueInType) ErrorSet!bool {
+        pub fn canUpdateValue(self: *const Self, pos: usize, _: ValueInType) ErrorSet!bool {
             if (self.leaf) |leaf| {
                 return pos < leaf.keys.len;
             }
@@ -319,28 +319,28 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
             };
         }
 
-        pub fn take(self: *Self) !Self {
+        pub fn take(self: *Self) ErrorSet!Self {
             const res = self.*;
             self.inode = null;
             self.keep_ptr = null;
             return res;
         }
 
-        pub fn size(self: *const Self) !usize {
+        pub fn size(self: *const Self) ErrorSet!usize {
             if (self.inode) |inode| {
                 return inode.keys.len;
             }
             return 0;
         }
 
-        pub fn capacity(self: *const Self) !usize {
+        pub fn capacity(self: *const Self) ErrorSet!usize {
             if (self.inode) |inode| {
                 return inode.keys.capacity();
             }
             return 0;
         }
 
-        pub fn isUnderflowed(self: *const Self) !bool {
+        pub fn isUnderflowed(self: *const Self) ErrorSet!bool {
             if (self.inode) |inode| {
                 return inode.keys.len < (inode.keys.capacity() + 1) / 2;
             }
@@ -386,14 +386,14 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
             return ErrorSet.InvalidId;
         }
 
-        pub fn canUpdateKey(self: *const Self, pos: usize, _: KeyLikeType) EmptyError!bool {
+        pub fn canUpdateKey(self: *const Self, pos: usize, _: KeyLikeType) ErrorSet!bool {
             if (self.inode) |inode| {
                 return pos < inode.keys.len;
             }
             return false;
         }
 
-        pub fn canInsertChild(self: *const Self, _: usize, _: KeyLikeType, _: MemoryPidType) EmptyError!bool {
+        pub fn canInsertChild(self: *const Self, _: usize, _: KeyLikeType, _: MemoryPidType) ErrorSet!bool {
             if (self.inode) |inode| {
                 return !inode.keys.full();
             }
@@ -441,7 +441,7 @@ fn MemInodeType(comptime KeyT: type, comptime maximum_elements: usize, comptime 
             return ErrorSet.InvalidId;
         }
 
-        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) EmptyError!void {
+        pub fn setParent(self: *Self, parent_id: ?MemoryPidType) ErrorSet!void {
             if (self.inode) |inode| {
                 inode.parent_id = parent_id;
             }

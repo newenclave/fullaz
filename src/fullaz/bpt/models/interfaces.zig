@@ -46,12 +46,66 @@ pub fn assertModelAccessor(comptime Model: type) void {
     requiresFnSignature(A, "canMergeInodes", fn (*A, *const InodeType, *const InodeType) Error!bool);
 }
 
+fn assertNodeCommon(comptime Model: type, comptime Node: type) void {
+    const Error = Model.Error;
+    const KeyLikeType = Model.KeyLikeType;
+    const KeyOutType = Model.KeyOutType;
+    const NodeIdType = Model.NodeIdType;
+
+    requiresFnSignature(Node, "id", fn (*const Node) NodeIdType);
+    requiresFnSignature(Node, "take", fn (*Node) Error!Node);
+    requiresFnSignature(Node, "size", fn (*const Node) Error!usize);
+    requiresFnSignature(Node, "capacity", fn (*const Node) Error!usize);
+    requiresFnSignature(Node, "isUnderflowed", fn (*const Node) Error!bool);
+    requiresFnSignature(Node, "keysEqual", fn (*const Node, KeyLikeType, KeyLikeType) bool);
+    requiresFnSignature(Node, "keyPosition", fn (*const Node, KeyLikeType) Error!usize);
+    requiresFnSignature(Node, "getKey", fn (*const Node, usize) Error!KeyOutType);
+    requiresFnSignature(Node, "erase", fn (*Node, usize) Error!void);
+    requiresFnSignature(Node, "setParent", fn (*Node, ?NodeIdType) Error!void);
+    requiresFnSignature(Node, "getParent", fn (*const Node) ?NodeIdType);
+}
+
 pub fn assertInode(comptime Model: type) void {
-    _ = Model;
+    const I = Model.InodeType;
+
+    const Error = Model.Error;
+    const KeyLikeType = Model.KeyLikeType;
+    const NodeIdType = Model.NodeIdType;
+
+    assertNodeCommon(Model, I);
+
+    requiresFnSignature(I, "getChild", fn (*const I, usize) Error!NodeIdType);
+    requiresFnSignature(I, "canUpdateKey", fn (*const I, usize, KeyLikeType) Error!bool);
+    requiresFnSignature(I, "updateKey", fn (*I, usize, KeyLikeType) Error!void);
+
+    requiresFnSignature(I, "canInsertChild", fn (*const I, usize, KeyLikeType, NodeIdType) Error!bool);
+    requiresFnSignature(I, "insertChild", fn (*I, usize, KeyLikeType, NodeIdType) Error!void);
+    requiresFnSignature(I, "updateChild", fn (*I, usize, NodeIdType) Error!void);
 }
 
 pub fn assertLeaf(comptime Model: type) void {
-    _ = Model;
+    const L = Model.LeafType;
+
+    const Error = Model.Error;
+    const KeyLikeType = Model.KeyLikeType;
+    const NodeIdType = Model.NodeIdType;
+
+    const ValueInType = Model.ValueInType;
+    const ValueOutType = Model.ValueOutType;
+
+    assertNodeCommon(Model, L);
+
+    requiresFnSignature(L, "getValue", fn (*const L, usize) Error!ValueOutType);
+    requiresFnSignature(L, "setPrev", fn (*L, ?NodeIdType) Error!void);
+    requiresFnSignature(L, "getPrev", fn (*const L) ?NodeIdType);
+    requiresFnSignature(L, "setNext", fn (*L, ?NodeIdType) Error!void);
+    requiresFnSignature(L, "getNext", fn (*const L) ?NodeIdType);
+
+    requiresFnSignature(L, "canInsertValue", fn (*const L, usize, KeyLikeType, ValueInType) Error!bool);
+    requiresFnSignature(L, "insertValue", fn (*L, usize, KeyLikeType, ValueInType) Error!void);
+
+    requiresFnSignature(L, "canUpdateValue", fn (*const L, usize, ValueInType) Error!bool);
+    requiresFnSignature(L, "updateValue", fn (*L, usize, ValueInType) Error!void);
 }
 
 pub fn assertModel(comptime T: type) void {
