@@ -1,6 +1,6 @@
 const std = @import("std");
 const MemoryDevice = @import("fullaz").device.MemoryBlock;
-const PageCache = @import("fullaz").PageCache;
+const PageCache = @import("fullaz").storage.page_cache.PageCache;
 const assertBlockDevice = @import("fullaz").device.interfaces.assertBlockDevice;
 const isBlockDevice = @import("fullaz").device.interfaces.isBlockDevice;
 

@@ -1,7 +1,7 @@
-const StaticVector = @import("fullaz").StaticVector;
+const StaticVector = @import("fullaz").core.static_vector.StaticVector;
 const std = @import("std");
 const expect = std.testing.expect;
-const errors = @import("fullaz").errors;
+const errors = @import("fullaz").core.errors;
 
 test "StaticVector basic operations" {
     var sv = StaticVector(u8, 64, void, null).init(undefined);

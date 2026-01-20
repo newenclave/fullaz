@@ -1,4 +1,4 @@
-const interfaces = @import("../interfaces.zig");
+const interfaces = @import("../contracts/interfaces.zig");
 
 const isErrorType = interfaces.isErrorType;
 const isErrorUnion = interfaces.isErrorUnion;

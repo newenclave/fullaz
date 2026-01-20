@@ -5,7 +5,7 @@ const testing = std.testing;
 const TestVariadic = Variadic(u16, .little, false);
 const TestVariadicConst = Variadic(u16, .little, true);
 
-const errors = @import("fullaz").errors;
+const errors = @import("fullaz").core.errors;
 
 // Helper to create test sequences
 fn makeSeq(comptime N: usize) [N]u8 {

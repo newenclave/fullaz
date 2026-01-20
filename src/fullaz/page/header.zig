@@ -1,5 +1,5 @@
 const std = @import("std");
-const PackedInt = @import("../packed_int.zig").PackedInt;
+const PackedInt = @import("../core/packed_int.zig").PackedInt;
 
 fn Header(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian) type {
     const PageIdType = PackedInt(PageIdT, Endian);

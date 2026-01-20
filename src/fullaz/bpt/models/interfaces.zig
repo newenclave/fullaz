@@ -1,5 +1,5 @@
 const std = @import("std");
-const interfaces = @import("../../interfaces.zig");
+const interfaces = @import("../../contracts/interfaces.zig");
 
 const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresFnReturnsError = interfaces.requiresFnReturnsAnyError;

@@ -1,8 +1,9 @@
 const std = @import("std");
-const errors = @import("../../errors.zig");
+const core = @import("../../core/core.zig");
+const errors = core.errors;
 
-const StaticVector = @import("../../static_vector.zig").StaticVector;
-const algos = @import("../../algorithm.zig");
+const StaticVector = core.static_vector.StaticVector;
+const algos = core.algorithm;
 
 const MemoryPidType = usize;
 const EmptyError = error{};

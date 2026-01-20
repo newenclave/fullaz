@@ -3,9 +3,9 @@ const std = @import("std");
 const errors = @import("fullaz").errors;
 
 const fullaz = @import("fullaz");
-const PackedInt = fullaz.PackedInt;
-const PackedIntLe = fullaz.PackedIntLe;
-const PackedIntBe = fullaz.PackedIntBe;
+const PackedInt = fullaz.core.packed_int.PackedInt;
+const PackedIntLe = fullaz.core.packed_int.PackedIntLe;
+const PackedIntBe = fullaz.core.packed_int.PackedIntBe;
 
 // ---------------------------------------------
 // A "view" wrapper for mapping onto a buffer.

@@ -2,9 +2,10 @@ const std = @import("std");
 const testing = std.testing;
 
 const page = @import("fullaz").page;
+const bpt_view = @import("fullaz").bpt.models.paged;
 const header = page.header;
 
-const algorithm = @import("fullaz").algorithm;
+const algorithm = @import("fullaz").core.algorithm;
 
 // =============================================================================
 // Header View Tests
@@ -232,13 +233,10 @@ test "Subheader.View: typed subheader access" {
 }
 
 test "Page/bpt module: contains expected types" {
-    const Bpt = page.bpt.Bpt(u32, u16, .little, false);
+    const Bpt = page.bpt.Bpt(u32, u16, .little);
 
-    _ = Bpt.PageViewType;
     _ = Bpt.LeafSubheader;
     _ = Bpt.InodeSubheader;
-    _ = Bpt.LeafSubheaderView;
-    _ = Bpt.InodeSubheaderView;
     _ = Bpt.InodeSlotHeader;
     _ = Bpt.LeafSlotHeader;
 }
@@ -248,7 +246,7 @@ test "page/bpt create pages with differernt sunbeaders" {
     var inode_buffer: [1024]u8 = undefined;
     @memset(&leaf_buffer, 0);
     @memset(&inode_buffer, 0);
-    const Bpt = page.bpt.Bpt(u32, u16, .little, false);
+    const Bpt = bpt_view.View(u32, u16, .little, false);
 
     var leaf_view = Bpt.LeafSubheaderView.init(&leaf_buffer);
     try leaf_view.formatPage(1, 2, 0);
@@ -300,7 +298,7 @@ const MyCmp = struct {
 test "page/bpt slots compare and proj" {
     var leaf_buffer: [1024]u8 = undefined;
     @memset(&leaf_buffer, 0);
-    const Bpt = page.bpt.Bpt(u32, u16, .little, false);
+    const Bpt = bpt_view.View(u32, u16, .little, false);
     var leaf_view = Bpt.LeafSubheaderView.init(&leaf_buffer);
     try leaf_view.formatPage(1, 2, 0);
     leaf_view.subheaderMut().formatHeader();
@@ -335,7 +333,7 @@ test "page/bpt slots compare and proj" {
 test "page/bpt slots compare and proj inodes" {
     var leaf_buffer: [1024]u8 = undefined;
     @memset(&leaf_buffer, 0);
-    const Bpt = page.bpt.Bpt(u32, u16, .little, false);
+    const Bpt = bpt_view.View(u32, u16, .little, false);
     var inode_view = Bpt.InodeSubheaderView.init(&leaf_buffer);
     try inode_view.formatPage(1, 2, 0);
 

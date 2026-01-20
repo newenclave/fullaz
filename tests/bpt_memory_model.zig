@@ -1,5 +1,5 @@
 const bpt = @import("fullaz").bpt;
-const algos = @import("fullaz").algorithm;
+const algos = @import("fullaz").core.algorithm;
 
 const MemoryModel = bpt.models.MemoryModel;
 

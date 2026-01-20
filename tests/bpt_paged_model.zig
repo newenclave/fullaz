@@ -1,7 +1,7 @@
 const std = @import("std");
-const algorithm = @import("fullaz").algorithm;
+const algorithm = @import("fullaz").core.algorithm;
 const bpt = @import("fullaz").bpt;
-const PageCacheT = @import("fullaz").PageCache;
+const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
 const dev = @import("fullaz").device;
 const assertIsStorageManager = @import("fullaz").bpt.models.interfaces.assertIsStorageManager;
 

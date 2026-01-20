@@ -1,5 +1,5 @@
 const std = @import("std");
-const PackedInt = @import("../packed_int.zig").PackedInt;
+const PackedInt = @import("../core/packed_int.zig").PackedInt;
 
 pub fn Freed(comptime PageIdT: type, comptime Endian: std.builtin.Endian) type {
     const PageIdType = PackedInt(PageIdT, Endian);

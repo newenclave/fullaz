@@ -1,9 +1,10 @@
 const std = @import("std");
-const device_interface = @import("../../device/interfaces.zig");
-const page_cache = @import("../../page_cache.zig");
-const bpt_page = @import("../../page/bpt.zig");
-const interfaces = @import("interfaces.zig");
-const errors = @import("../../errors.zig");
+const device_interface = @import("../../../device/interfaces.zig");
+const page_cache = @import("../../../storage/page_cache.zig");
+const bpt_page = @import("view.zig");
+const interfaces = @import("../interfaces.zig");
+const core = @import("../../../core/core.zig");
+const errors = core.errors;
 
 pub const Settings = struct {
     maximum_key_size: usize = 128,
@@ -19,8 +20,8 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
     const PageHandle = PageCacheType.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
-    const BptPage = bpt_page.Bpt(BlockIdType, u16, .little, false);
-    const BptPageConst = bpt_page.Bpt(BlockIdType, u16, .little, true);
+    const BptPage = bpt_page.View(BlockIdType, u16, .little, false);
+    const BptPageConst = bpt_page.View(BlockIdType, u16, .little, true);
 
     const KeyType = []const u8;
     const ValueType = []const u8;

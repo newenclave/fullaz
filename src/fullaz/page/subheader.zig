@@ -1,5 +1,5 @@
 const std = @import("std");
-const PackedInt = @import("../packed_int.zig").PackedInt;
+const PackedInt = @import("../core/packed_int.zig").PackedInt;
 const PageViewType = @import("header.zig").View;
 
 pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Subheader: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {

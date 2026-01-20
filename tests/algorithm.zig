@@ -1,4 +1,4 @@
-const algorithm = @import("fullaz").algorithm;
+const algorithm = @import("fullaz").core.algorithm;
 const std = @import("std");
 const expect = std.testing.expect;
 

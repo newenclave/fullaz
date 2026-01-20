@@ -1,7 +1,8 @@
 const std = @import("std");
-const errors = @import("../errors.zig");
+const core = @import("../core/core.zig");
+const errors = core.errors;
 
-const PackedInt = @import("../packed_int.zig").PackedInt;
+const PackedInt = core.packed_int.PackedInt;
 
 pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
     const IndexType = PackedInt(T, Endian);

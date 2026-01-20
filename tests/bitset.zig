@@ -1,4 +1,4 @@
-const BitSet = @import("fullaz").BitSet;
+const BitSet = @import("fullaz").core.bitset.BitSet;
 const std = @import("std");
 const expect = std.testing.expect;
 
@@ -266,7 +266,7 @@ test "bitset: invariants after mixed operations and reset" {
     }
 }
 
-const maxObjectsByWords = @import("fullaz").maxObjectsByWords;
+const maxObjectsByWords = @import("fullaz").core.bitset.maxObjectsByWords;
 
 const expectEqual = std.testing.expectEqual;
 

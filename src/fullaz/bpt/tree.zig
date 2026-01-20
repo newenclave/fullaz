@@ -1,5 +1,6 @@
 const std = @import("std");
-const errors = @import("../errors.zig");
+const core = @import("../core/core.zig");
+const errors = core.errors;
 
 const interfaces = @import("models/interfaces.zig");
 
