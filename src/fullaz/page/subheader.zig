@@ -6,7 +6,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Subheader: t
     return struct {
         const Self = @This();
         const DataType = if (read_only) []const u8 else []u8;
-        const PageView = PageViewType(PageIdT, IndexT, Endian, read_only);
+
+        pub const PageView = PageViewType(PageIdT, IndexT, Endian, read_only);
 
         page_view: PageView,
 
@@ -16,8 +17,15 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Subheader: t
             };
         }
 
-        pub fn page(self: *const Self) DataType {
-            return self.page_view.page;
+        pub fn page(self: *const Self) PageView {
+            return self.page_view;
+        }
+
+        pub fn pageMut(self: *Self) PageView {
+            if (read_only) {
+                @compileError("Cannot get mutable page from a read-only view");
+            }
+            return self.page_view;
         }
 
         pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) void {

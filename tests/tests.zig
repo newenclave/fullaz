@@ -11,4 +11,5 @@ test {
     _ = @import("device_memory_block.zig");
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
+    _ = @import("long_store.zig");
 }

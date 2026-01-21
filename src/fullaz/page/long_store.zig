@@ -7,6 +7,11 @@ pub fn LongStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: 
     const IndexType = PackedInt(IndexT, Endian);
     const SizeType = PackedInt(SizeT, Endian);
 
+    const ChunkFlagsValues = enum(IndexT) {
+        first = 1 << 0,
+        last = 1 << 1,
+    };
+
     const DataHeaderType = extern struct {
         size: IndexType,
         reserved: IndexType,
@@ -20,13 +25,15 @@ pub fn LongStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: 
     };
 
     const ChunkType = extern struct {
+        flags: IndexType,
         prev: PageIdType,
         next: PageIdType,
         data: DataHeaderType,
     };
 
     return struct {
-        pub const PageHeader = HeaderType;
-        pub const Chunk = ChunkType;
+        pub const HeaderSubheader = HeaderType;
+        pub const ChunkSubheader = ChunkType;
+        pub const ChunkFlags = ChunkFlagsValues;
     };
 }
