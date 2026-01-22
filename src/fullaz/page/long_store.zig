@@ -17,18 +17,21 @@ pub fn LongStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: 
         reserved: IndexType,
     };
 
+    const CommonHeaderType = extern struct {
+        next: PageIdType,
+        data: DataHeaderType,
+    };
+
     const HeaderType = extern struct {
         total_size: SizeType,
         last: PageIdType,
-        next: PageIdType,
-        data: DataHeaderType,
+        common: CommonHeaderType,
     };
 
     const ChunkType = extern struct {
         flags: IndexType,
         prev: PageIdType,
-        next: PageIdType,
-        data: DataHeaderType,
+        common: CommonHeaderType,
     };
 
     return struct {

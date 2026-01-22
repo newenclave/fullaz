@@ -14,7 +14,10 @@ pub const Settings = struct {
 };
 
 pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, comptime cmp: anytype, comptime Ctx: type) type {
-    interfaces.requireStorageManager(StorageManager);
+    comptime {
+        interfaces.requiresStorageManager(StorageManager);
+        interfaces.requiresPageCache(PageCacheType);
+    }
 
     const BlockDevice = PageCacheType.UnderlyingDevice;
     const PageHandle = PageCacheType.Handle;

@@ -16,6 +16,11 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
 
     const CommonErrorSet = errors.SpaceError;
 
+    // const Common = struct {
+    //     const Self = @This();
+    //     pub const Error = error{} || CommonErrorSet;
+    // };
+
     const HeaderViewImpl = struct {
         const Self = @This();
         pub const SubheaderType = SubheadersType.HeaderSubheader;
@@ -41,9 +46,9 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
             var sh = self.subheaderMut();
             sh.total_size.set(0);
             sh.last.set(@TypeOf(sh.last).max());
-            sh.next.set(@TypeOf(sh.next).max());
-            sh.data.size.set(0);
-            sh.data.reserved.set(0);
+            sh.common.next.set(@TypeOf(sh.common.next).max());
+            sh.common.data.size.set(0);
+            sh.common.data.reserved.set(0);
         }
 
         pub fn subheader(self: *const Self) *const SubheaderType {
@@ -77,8 +82,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
 
         pub fn getNext(self: *const Self) ?PageIdT {
             const sh = self.subheader();
-            const val = sh.next.get();
-            return if (val == @TypeOf(sh.next).max()) null else val;
+            const val = sh.common.next.get();
+            return if (val == @TypeOf(sh.common.next).max()) null else val;
         }
 
         pub fn setNext(self: *Self, next: ?PageIdT) void {
@@ -87,9 +92,9 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
             }
             var sh = self.subheaderMut();
             if (next) |n| {
-                sh.next.set(n);
+                sh.common.next.set(n);
             } else {
-                sh.next.set(@TypeOf(sh.next).max());
+                sh.common.next.set(@TypeOf(sh.common.next).max());
             }
         }
 
@@ -144,7 +149,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
 
         pub fn getDataSize(self: *const Self) IndexT {
             const sh = self.subheader();
-            return sh.data.size.get();
+            return sh.common.data.size.get();
         }
 
         pub fn setDataSize(self: *Self, size: IndexT) void {
@@ -152,7 +157,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
                 @compileError("Cannot set data size on a read-only view");
             }
             var sh = self.subheaderMut();
-            sh.data.size.set(size);
+            sh.common.data.size.set(size);
         }
 
         pub fn incrementDataSize(self: *Self, increment: IndexT) void {
@@ -160,8 +165,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
                 @compileError("Cannot increment data size on a read-only view");
             }
             var sh = self.subheaderMut();
-            const current = sh.data.size.get();
-            sh.data.size.set(current + increment);
+            const current = sh.common.data.size.get();
+            sh.common.data.size.set(current + increment);
         }
 
         pub fn decrementDataSize(self: *Self, decrement: IndexT) void {
@@ -169,8 +174,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
                 @compileError("Cannot decrement data size on a read-only view");
             }
             var sh = self.subheaderMut();
-            const current = sh.data.size.get();
-            sh.data.size.set(current - decrement);
+            const current = sh.common.data.size.get();
+            sh.common.data.size.set(current - decrement);
         }
     };
 
@@ -200,10 +205,10 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
             self.page_view.formatPage(kind, page_id, metadata_len);
             var sh = self.subheaderMut();
             sh.prev.set(@TypeOf(sh.prev).max());
-            sh.next.set(@TypeOf(sh.next).max());
-            sh.data.size.set(0);
+            sh.common.next.set(@TypeOf(sh.common.next).max());
+            sh.common.data.size.set(0);
             sh.flags.set(0);
-            sh.data.reserved.set(0);
+            sh.common.data.reserved.set(0);
         }
 
         pub fn subheader(self: *const Self) *const SubheaderType {
@@ -238,7 +243,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
 
         pub fn getNext(self: *const Self) ?PageIdT {
             const sh = self.subheader();
-            const val = sh.next.get();
+            const val = sh.common.next.get();
             return if (val == std.math.maxInt(PageIdT)) null else val;
         }
 
@@ -248,9 +253,9 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
             }
             var sh = self.subheaderMut();
             if (next) |n| {
-                sh.next.set(n);
+                sh.common.next.set(n);
             } else {
-                sh.next.set(std.math.maxInt(PageIdT));
+                sh.common.next.set(std.math.maxInt(PageIdT));
             }
         }
 
@@ -274,7 +279,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
 
         pub fn getDataSize(self: *const Self) IndexT {
             const sh = self.subheader();
-            return sh.data.size.get();
+            return sh.common.data.size.get();
         }
 
         pub fn setDataSize(self: *Self, size: IndexT) void {
@@ -282,7 +287,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
                 @compileError("Cannot set data size on a read-only view");
             }
             var sh = self.subheaderMut();
-            sh.data.size.set(size);
+            sh.common.data.size.set(size);
         }
 
         pub fn incrementDataSize(self: *Self, increment: IndexT) void {
@@ -290,8 +295,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
                 @compileError("Cannot increment data size on a read-only view");
             }
             var sh = self.subheaderMut();
-            const current = sh.data.size.get();
-            sh.data.size.set(current + increment);
+            const current = sh.common.data.size.get();
+            sh.common.data.size.set(current + increment);
         }
 
         pub fn decrementDataSize(self: *Self, decrement: IndexT) void {
@@ -299,8 +304,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
                 @compileError("Cannot decrement data size on a read-only view");
             }
             var sh = self.subheaderMut();
-            const current = sh.data.size.get();
-            sh.data.size.set(current - decrement);
+            const current = sh.common.data.size.get();
+            sh.common.data.size.set(current - decrement);
         }
 
         pub fn hasFlag(self: *const Self, flag: Flags) bool {

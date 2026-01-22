@@ -39,7 +39,8 @@ pub fn PageCache(comptime DeviceT: type) type {
         const Self = @This();
         frame: ?*Frame,
 
-        const Error = errors.PageError;
+        pub const Error = errors.PageError;
+        pub const Pid = DeviceT.BlockId;
 
         fn init(frame: *Frame) Self {
             const res = Self{
@@ -47,6 +48,17 @@ pub fn PageCache(comptime DeviceT: type) type {
             };
             res.frame.?.ref_count += 1;
             return res;
+        }
+
+        pub fn deinit(self: *Self) void {
+            if (self.frame) |frame_const| {
+                var frame = frame_const;
+                if (frame.ref_count <= 0) {
+                    @panic("Deinit called on PageHandle with ref_count 0");
+                }
+                frame.ref_count -= 1;
+                self.frame = null;
+            }
         }
 
         pub fn markDirty(self: *Self) Error!void {
@@ -58,19 +70,11 @@ pub fn PageCache(comptime DeviceT: type) type {
             }
         }
 
-        pub fn pid(self: *const Self) Error!DeviceT.BlockId {
+        pub fn pid(self: *const Self) Error!Pid {
             if (self.frame == null) {
                 return Error.InvalidHandle;
             }
             return self.frame.?.pid;
-        }
-
-        pub fn deinit(self: *Self) void {
-            if (self.frame) |frame_const| {
-                var frame = frame_const;
-                frame.ref_count -= 1;
-                self.frame = null;
-            }
         }
 
         pub fn getData(self: *const Self) Error![]const u8 {
@@ -109,9 +113,9 @@ pub fn PageCache(comptime DeviceT: type) type {
         const Self = @This();
 
         pub const UnderlyingDevice = DeviceT;
-        pub const PageId = UnderlyingDevice.BlockId;
+        pub const Pid = UnderlyingDevice.BlockId;
 
-        const FrameHashMap = std.AutoHashMap(PageId, *Frame);
+        const FrameHashMap = std.AutoHashMap(Pid, *Frame);
 
         pub const Handle = PageHandle;
 
@@ -185,7 +189,7 @@ pub fn PageCache(comptime DeviceT: type) type {
             return Error.NoFreeFrames;
         }
 
-        pub fn fetch(self: *Self, page_id: PageId) Error!Handle {
+        pub fn fetch(self: *Self, page_id: Pid) Error!Handle {
             if (self.frames_cache.get(page_id)) |frame| {
                 self.moveToHead(frame);
                 return PageHandle.init(frame);
@@ -251,7 +255,7 @@ pub fn PageCache(comptime DeviceT: type) type {
             return count;
         }
 
-        pub fn flush(self: *Self, pid: PageId) Error!void {
+        pub fn flush(self: *Self, pid: Pid) Error!void {
             if (self.frames_cache.get(pid)) |frame| {
                 if (frame.frame_type == .dirty) {
                     try self.device.writeBlock(frame.pid, frame.data);

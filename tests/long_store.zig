@@ -1,5 +1,32 @@
 const std = @import("std");
 const long_store = @import("fullaz").storage.long_store;
+const page_cache = @import("fullaz").storage.page_cache;
+const devices = @import("fullaz").device;
+
+const NoneStorageManager = struct {
+    pub const Self = @This();
+    pub const PageId = u32;
+    pub const Error = error{};
+    root_block_id: ?u32 = null,
+
+    pub fn getRoot(self: *const @This()) ?u32 {
+        return self.root_block_id;
+    }
+
+    pub fn setRoot(self: *@This(), root: ?u32) Error!void {
+        self.root_block_id = root;
+        // Persist to disk header, etc.
+    }
+
+    pub fn hasRoot(self: *const @This()) bool {
+        return self.root_block_id != null;
+    }
+
+    pub fn destroyPage(_: *@This(), id: PageId) Error!void {
+        _ = id;
+        // Implement page destruction logic, e.g., add to free list
+    }
+};
 
 test "LongStore Create a header view" {
     const HeaderViewType = long_store.View(u32, u32, u32, std.builtin.Endian.little, false).HeaderView;
@@ -11,9 +38,9 @@ test "LongStore Create a header view" {
     const sh = view.subheader();
     try std.testing.expect(sh.total_size.get() == 0);
     try std.testing.expect(sh.last.get() == @TypeOf(sh.last).max());
-    try std.testing.expect(sh.next.get() == @TypeOf(sh.next).max());
-    try std.testing.expect(sh.data.size.get() == 0);
-    try std.testing.expect(sh.data.reserved.get() == 0);
+    try std.testing.expect(sh.common.next.get() == @TypeOf(sh.common.next).max());
+    try std.testing.expect(sh.common.data.size.get() == 0);
+    try std.testing.expect(sh.common.data.reserved.get() == 0);
     const data = view.data();
     try std.testing.expect(data.len == (1024 - view.pageView().allHeadersSize()));
     const dataMut = view.dataMut();
@@ -29,9 +56,9 @@ test "LongStore Create a Chunk view" {
 
     const sh = view.subheader();
     try std.testing.expect(sh.prev.get() == @TypeOf(sh.prev).max());
-    try std.testing.expect(sh.next.get() == @TypeOf(sh.next).max());
-    try std.testing.expect(sh.data.size.get() == 0);
-    try std.testing.expect(sh.data.reserved.get() == 0);
+    try std.testing.expect(sh.common.next.get() == @TypeOf(sh.common.next).max());
+    try std.testing.expect(sh.common.data.size.get() == 0);
+    try std.testing.expect(sh.common.data.reserved.get() == 0);
 }
 
 test "HeaderView getNext/setNext" {
@@ -206,4 +233,35 @@ test "ChunkView hasFlag/setFlag/clearFlag" {
     // Test clear flag
     view.clearFlag(ChunkViewType.Flags.first);
     try std.testing.expect(!view.hasFlag(.first));
+}
+
+test "LongStore Handle. Create, openm load" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache);
+
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, .{});
+    defer hdl.deinit();
+
+    const header_pid = try hdl.create();
+    try std.testing.expect(header_pid == 0);
+
+    try hdl.open(header_pid);
+    try std.testing.expect(try hdl.totalSize() == 0);
+    const header = try hdl.loadHeader();
+    try std.testing.expect(try header.handle.pid() == header_pid);
+
+    var cursor = try hdl.begin();
+    defer cursor.deinit();
+    try std.testing.expect((try cursor.currentDataSize()) == 0);
+    try std.testing.expect((try cursor.currentData()).len == 0);
+
+    try cursor.setCurrentDataSize(100);
+    try std.testing.expect((try cursor.currentDataSize()) == 100);
+    try std.testing.expect((try cursor.currentData()).len == 100);
 }

@@ -7,7 +7,8 @@ const requiresFnReturnsError = interfaces.requiresFnReturnsAnyError;
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
 
-pub const requireStorageManager = contracts.storage_manager.requireStorageManager;
+pub const requiresStorageManager = contracts.storage_manager.requiresStorageManager;
+pub const requiresPageCache = contracts.page_cache.requiresPageCache;
 
 pub fn assertModelAccessor(comptime Model: type) void {
     const A = Model.AccessorType;
