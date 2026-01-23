@@ -132,6 +132,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
                     chk.deinit();
                 },
             }
+            self.page = null;
         }
 
         pub fn pid(self: *const Self) Error!BlockIdType {
@@ -155,11 +156,11 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
 
         pub fn extendToPos(self: *Self) Error!Index {
             const max_size = try self.getMaximumDataSize();
-            if (self.pos > try self.getMaximumDataSize()) {
+            if (self.pos > max_size) {
                 self.pos = max_size;
             }
             const current_pos = try self.currentDataSize();
-            if (self.pos < current_pos) {
+            if (self.pos <= current_pos) {
                 return 0;
             }
             var link = try self.getLinkMut();
@@ -350,6 +351,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
 
         pub const Pid = BlockIdType;
         pub const Error = PageCacheType.Error ||
+            CommonErrors ||
             errors.PageError;
 
         header_pid: ?Pid = null,
@@ -445,6 +447,8 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
 
         fn get_position(self: *const Self, pos: usize) Error!Position {
             var cursor = try self.begin();
+            defer cursor.deinit();
+
             var left_pos = pos;
             while (left_pos > 0) {
                 const current_len = try cursor.currentDataSize();
@@ -555,9 +559,44 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             } else {
                 var ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
                 defer ph.deinit();
+                const chunk_v = ViewTypesConst.ChunkView.init(try ph.getData());
+                const chunk_size = chunk_v.getLink().getDataSize();
                 return Cursor.init(.{
                     .chunk = ChunkImpl.init(try ph.take()),
-                }, link.payload.size.get(), &self.ctx);
+                }, chunk_size, &self.ctx);
+            }
+        }
+
+        pub fn extend(self: *Self, len: usize) Error!void {
+            var hdr = try self.loadHeader();
+            defer hdr.deinit();
+            var hdr_v = try hdr.viewMut();
+            var cursor = try self.end();
+            defer cursor.deinit();
+            var left = len;
+
+            while (left > 0) {
+                const current_size = try cursor.currentDataSize();
+                const max_size = try cursor.getMaximumDataSize();
+                const can_extend = max_size - current_size;
+                if (can_extend >= left) {
+                    const ileft = @as(Index, @intCast(left));
+                    var link = try cursor.getLinkMut();
+                    link.setDataSize(current_size + ileft);
+                    hdr_v.incrementTotalSize(ileft);
+                    break;
+                } else {
+                    var link = try cursor.getLinkMut();
+                    link.setDataSize(max_size);
+                    hdr_v.incrementTotalSize(@intCast(can_extend));
+                    left -= @intCast(can_extend);
+                    if (try cursor.hasNext()) {
+                        try cursor.moveNext();
+                    } else {
+                        try self.appendChunk();
+                        try cursor.moveNext();
+                    }
+                }
             }
         }
 
@@ -577,12 +616,12 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
                     hdr_v.setTotalSize(@as(PosType, @intCast(new_total)));
                     const new_current = current_size - @as(Index, @intCast(left));
                     try cursor.setCurrentDataSize(new_current);
-                    if (self.get_total_pos > new_total) {
+                    if (self.get_total_pos >= new_total) {
                         self.get_total_pos = new_total;
                         self.get_page_pid = try cursor.pid();
                         self.get_pos = new_current;
                     }
-                    if (self.put_total_pos > new_total) {
+                    if (self.put_total_pos >= new_total) {
                         self.put_total_pos = new_total;
                         self.put_page_pid = try cursor.pid();
                         self.put_pos = new_current;
@@ -606,6 +645,15 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
                     try cursor.movePrev();
                     try self.popChunk();
                 }
+            }
+        }
+
+        pub fn resize(self: *Self, len: usize) Error!void {
+            const total = try self.totalSize();
+            if (len > total) {
+                try self.extend(len - total);
+            } else if (len < total) {
+                try self.truncate(total - len);
             }
         }
 
@@ -680,7 +728,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             var last_chunk = ChunkImpl.init(last_chunk_ph);
             var last_chunk_v = try last_chunk.viewMut();
             var last_chunk_l = last_chunk_v.getLinkMut();
-            const prev = last_chunk_v.subheaderMut().link.back.get();
+            const prev = last_chunk_l.link.back.get();
 
             if (prev == try hdr_ph.handle.pid()) {
                 // Removing the last chunk
@@ -688,7 +736,6 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
                 var hdr_link = hdr_v.getLinkMut();
                 hdr_link.setFwd(null);
             } else {
-                last_chunk_l.setFwd(null);
                 link.back.set(prev);
                 try self.popImpl(prev);
             }

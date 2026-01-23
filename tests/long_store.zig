@@ -973,3 +973,860 @@ test "LongStore Handle. truncate more than have" {
     try std.testing.expect(hdl.put_total_pos == 0);
     try std.testing.expect(try hdl.totalSize() == 0);
 }
+
+test "LongStore Handle. extend basic" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write initial data
+    const data = "Hello";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 5);
+
+    // Extend by 5 bytes
+    try hdl.extend(5);
+    try std.testing.expect(try hdl.totalSize() == 10);
+
+    // Verify original data is intact and extension is zeroed
+    try hdl.setg(0);
+    var buf: [10]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 10);
+    try std.testing.expectEqualStrings("Hello", buf[0..5]);
+    // Extended bytes should be zero
+    for (buf[5..10]) |byte| {
+        try std.testing.expect(byte == 0);
+    }
+}
+
+test "LongStore Handle. extend empty file" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Extend empty file
+    try hdl.extend(10);
+    try std.testing.expect(try hdl.totalSize() == 10);
+
+    // All bytes should be zero
+    try hdl.setg(0);
+    var buf: [10]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 10);
+    for (buf) |byte| {
+        try std.testing.expect(byte == 0);
+    }
+}
+
+test "LongStore Handle. extend with large size" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write some data
+    const data = "Start";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 5);
+
+    // Extend by 5000 bytes (spans multiple pages)
+    try hdl.extend(5000);
+    try std.testing.expect(try hdl.totalSize() == 5005);
+
+    // Verify original data
+    try hdl.setg(0);
+    var buf_start: [5]u8 = undefined;
+    _ = try hdl.read(&buf_start);
+    try std.testing.expectEqualStrings("Start", &buf_start);
+
+    // Verify extended region is zeroed (sample check)
+    try hdl.setg(100);
+    var buf_middle: [100]u8 = undefined;
+    const read_middle = try hdl.read(&buf_middle);
+    try std.testing.expect(read_middle == 100);
+    for (buf_middle) |byte| {
+        try std.testing.expect(byte == 0);
+    }
+
+    // Verify end of file
+    try hdl.setg(5000);
+    var buf_end: [5]u8 = undefined;
+    const read_end = try hdl.read(&buf_end);
+    try std.testing.expect(read_end == 5);
+    for (buf_end) |byte| {
+        try std.testing.expect(byte == 0);
+    }
+}
+
+test "LongStore Handle. extend and write to extended region" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write initial data
+    const data1 = "ABC";
+    _ = try hdl.write(data1);
+    try std.testing.expect(try hdl.totalSize() == 3);
+
+    // Extend by 10 bytes
+    try hdl.extend(10);
+    try std.testing.expect(try hdl.totalSize() == 13);
+
+    // Write to the extended region
+    try hdl.setp(5);
+    const data2 = "XYZ";
+    _ = try hdl.write(data2);
+
+    // Verify complete data
+    try hdl.setg(0);
+    var buf: [13]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 13);
+
+    // "ABC" + 2 zeros + "XYZ" + 5 zeros
+    try std.testing.expectEqualStrings("ABC", buf[0..3]);
+    try std.testing.expect(buf[3] == 0);
+    try std.testing.expect(buf[4] == 0);
+    try std.testing.expectEqualStrings("XYZ", buf[5..8]);
+    for (buf[8..13]) |byte| {
+        try std.testing.expect(byte == 0);
+    }
+}
+
+test "LongStore Handle. extend multiple times" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write initial data
+    const data = "A";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 1);
+
+    // Extend multiple times
+    try hdl.extend(5);
+    try std.testing.expect(try hdl.totalSize() == 6);
+
+    try hdl.extend(4);
+    try std.testing.expect(try hdl.totalSize() == 10);
+
+    try hdl.extend(10);
+    try std.testing.expect(try hdl.totalSize() == 20);
+
+    // Verify
+    try hdl.setg(0);
+    var buf: [20]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 20);
+    try std.testing.expect(buf[0] == 'A');
+    for (buf[1..20]) |byte| {
+        try std.testing.expect(byte == 0);
+    }
+}
+
+test "LongStore Handle. extend preserves positions" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write data
+    const data = "0123456789";
+    _ = try hdl.write(data);
+
+    // Set positions
+    try hdl.setg(3);
+    try hdl.setp(7);
+
+    // Extend
+    try hdl.extend(5);
+
+    // Positions should remain unchanged
+    try std.testing.expect(hdl.get_total_pos == 3);
+    try std.testing.expect(hdl.put_total_pos == 7);
+    try std.testing.expect(try hdl.totalSize() == 15);
+
+    // Can still read from get position
+    var buf: [7]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 7);
+    try std.testing.expectEqualStrings("3456789", &buf);
+}
+
+test "LongStore Handle. extend zero length" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    const data = "Test";
+    _ = try hdl.write(data);
+    const size_before = try hdl.totalSize();
+
+    // Extend by 0 should have no effect
+    try hdl.extend(0);
+    try std.testing.expect(try hdl.totalSize() == size_before);
+}
+
+test "LongStore Handle. extend then truncate" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write, extend, then truncate
+    const data = "Hello";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 5);
+
+    try hdl.extend(10);
+    try std.testing.expect(try hdl.totalSize() == 15);
+
+    try hdl.truncate(7);
+    try std.testing.expect(try hdl.totalSize() == 8);
+
+    // Verify data
+    try hdl.setg(0);
+    var buf: [8]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 8);
+    try std.testing.expectEqualStrings("Hello", buf[0..5]);
+    for (buf[5..8]) |byte| {
+        try std.testing.expect(byte == 0);
+    }
+}
+
+test "LongStore Handle. extend spanning multiple chunks" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write small initial data
+    const data = "X";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 1);
+
+    // Extend by a large amount to span multiple chunks
+    try hdl.extend(10000);
+    try std.testing.expect(try hdl.totalSize() == 10001);
+
+    // Verify original byte
+    try hdl.setg(0);
+    var first: [1]u8 = undefined;
+    _ = try hdl.read(&first);
+    try std.testing.expect(first[0] == 'X');
+
+    // Sample check extended region for zeros
+    try hdl.setg(5000);
+    var sample: [100]u8 = undefined;
+    const read_sample = try hdl.read(&sample);
+    try std.testing.expect(read_sample == 100);
+    for (sample) |byte| {
+        try std.testing.expect(byte == 0);
+    }
+}
+
+test "LongStore Handle. resize to larger size" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write initial data
+    const data = "Hello";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 5);
+
+    // Resize to 15 (should extend by 10)
+    try hdl.resize(15);
+    try std.testing.expect(try hdl.totalSize() == 15);
+
+    // Verify original data and zero padding
+    try hdl.setg(0);
+    var buf: [15]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 15);
+    try std.testing.expectEqualStrings("Hello", buf[0..5]);
+    for (buf[5..15]) |byte| {
+        try std.testing.expect(byte == 0);
+    }
+}
+
+test "LongStore Handle. resize to smaller size" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write data
+    const data = "Hello, World!";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 13);
+
+    // Resize to 5 (should truncate by 8)
+    try hdl.resize(5);
+    try std.testing.expect(try hdl.totalSize() == 5);
+
+    // Verify truncated data
+    try hdl.setg(0);
+    var buf: [5]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 5);
+    try std.testing.expectEqualStrings("Hello", &buf);
+}
+
+test "LongStore Handle. resize to same size" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write data
+    const data = "Test";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 4);
+
+    // Resize to same size (should be no-op)
+    try hdl.resize(4);
+    try std.testing.expect(try hdl.totalSize() == 4);
+
+    // Verify data unchanged
+    try hdl.setg(0);
+    var buf: [4]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 4);
+    try std.testing.expectEqualStrings("Test", &buf);
+}
+
+test "LongStore Handle. resize to zero" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write data
+    const data = "Some content";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 12);
+
+    // Resize to 0
+    try hdl.resize(0);
+    try std.testing.expect(try hdl.totalSize() == 0);
+}
+
+test "LongStore Handle. resize from zero to non-zero" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Initially empty
+    try std.testing.expect(try hdl.totalSize() == 0);
+
+    // Resize to 10
+    try hdl.resize(10);
+    try std.testing.expect(try hdl.totalSize() == 10);
+
+    // All bytes should be zero
+    try hdl.setg(0);
+    var buf: [10]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 10);
+    for (buf) |byte| {
+        try std.testing.expect(byte == 0);
+    }
+}
+
+test "LongStore Handle. resize multiple times" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write initial data
+    const data = "ABC";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 3);
+
+    // Resize up
+    try hdl.resize(10);
+    try std.testing.expect(try hdl.totalSize() == 10);
+
+    // Resize down
+    try hdl.resize(5);
+    try std.testing.expect(try hdl.totalSize() == 5);
+
+    // Resize up again
+    try hdl.resize(8);
+    try std.testing.expect(try hdl.totalSize() == 8);
+
+    // Verify data
+    try hdl.setg(0);
+    var buf: [8]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 8);
+    try std.testing.expectEqualStrings("ABC", buf[0..3]);
+}
+
+test "LongStore Handle. resize adjusts positions when shrinking" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write data
+    const data = "0123456789ABCDEF";
+    _ = try hdl.write(data);
+
+    // Set positions
+    try hdl.setg(12);
+    try hdl.setp(14);
+
+    // Resize to 8 (should adjust positions)
+    try hdl.resize(8);
+
+    try std.testing.expect(try hdl.totalSize() == 8);
+    try std.testing.expect(hdl.get_total_pos == 8);
+    try std.testing.expect(hdl.put_total_pos == 8);
+}
+
+test "LongStore Handle. resize preserves positions when growing" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write data
+    const data = "0123456789";
+    _ = try hdl.write(data);
+
+    // Set positions
+    try hdl.setg(3);
+    try hdl.setp(7);
+
+    // Resize to larger (should preserve positions)
+    try hdl.resize(20);
+
+    try std.testing.expect(try hdl.totalSize() == 20);
+    try std.testing.expect(hdl.get_total_pos == 3);
+    try std.testing.expect(hdl.put_total_pos == 7);
+}
+
+test "LongStore Handle. resize with large data across pages" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write small data
+    const data = "Start";
+    _ = try hdl.write(data);
+    try std.testing.expect(try hdl.totalSize() == 5);
+
+    // Resize to large size
+    try hdl.resize(8000);
+    try std.testing.expect(try hdl.totalSize() == 8000);
+
+    // Verify original data
+    try hdl.setg(0);
+    var buf_start: [5]u8 = undefined;
+    _ = try hdl.read(&buf_start);
+    try std.testing.expectEqualStrings("Start", &buf_start);
+
+    // Now resize down
+    try hdl.resize(100);
+    try std.testing.expect(try hdl.totalSize() == 100);
+
+    // Verify data still intact
+    try hdl.setg(0);
+    var buf_after: [5]u8 = undefined;
+    _ = try hdl.read(&buf_after);
+    try std.testing.expectEqualStrings("Start", &buf_after);
+}
+
+test "LongStore Handle. resize alternating grow and shrink" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write initial
+    _ = try hdl.write("DATA");
+    try std.testing.expect(try hdl.totalSize() == 4);
+
+    // Grow
+    try hdl.resize(100);
+    try std.testing.expect(try hdl.totalSize() == 100);
+
+    // Shrink
+    try hdl.resize(50);
+    try std.testing.expect(try hdl.totalSize() == 50);
+
+    // Grow again
+    try hdl.resize(200);
+    try std.testing.expect(try hdl.totalSize() == 200);
+
+    // Shrink to original
+    try hdl.resize(4);
+    try std.testing.expect(try hdl.totalSize() == 4);
+
+    // Verify original data preserved
+    try hdl.setg(0);
+    var buf: [4]u8 = undefined;
+    _ = try hdl.read(&buf);
+    try std.testing.expectEqualStrings("DATA", &buf);
+}
+
+test "LongStore Handle. end() returns correct cursor position for chunk" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write data to fill the header page completely
+    var cursor = try hdl.begin();
+    const header_max_size = try cursor.getMaximumDataSize();
+    cursor.deinit();
+
+    // Fill header with specific data size (less than max)
+    const header_data_size: usize = 100;
+    var header_data: [100]u8 = undefined;
+    @memset(&header_data, 'H');
+    _ = try hdl.write(&header_data);
+
+    // Now extend to fill header and create a chunk
+    // Write enough to fill header and go into chunk
+    const overflow_size = header_max_size - header_data_size + 200;
+    const overflow_data = try std.testing.allocator.alloc(u8, overflow_size);
+    defer std.testing.allocator.free(overflow_data);
+    @memset(overflow_data, 'C');
+    _ = try hdl.write(overflow_data);
+
+    // Now we have: header (full) + chunk (200 bytes)
+    // The chunk should have 200 bytes of data
+
+    // Get cursor via end() - should point to the chunk with correct position
+    var end_cursor = try hdl.end();
+    defer end_cursor.deinit();
+
+    // Verify it's a chunk, not a header
+    try std.testing.expect(try end_cursor.isChunk());
+
+    // The end cursor's position should be the chunk's data size (200)
+    // NOT the header's data size
+    const chunk_data_size = try end_cursor.currentDataSize();
+    try std.testing.expect(chunk_data_size == 200);
+
+    // The cursor.pos should equal the chunk's data size
+    try std.testing.expect(end_cursor.pos == chunk_data_size);
+
+    // currentData() should return empty slice (we're at the end)
+    const remaining = try end_cursor.currentData();
+    try std.testing.expect(remaining.len == 0);
+}
+
+test "LongStore Handle. end() returns correct cursor for header only" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write only to header (no chunks)
+    const data = "Header only data";
+    _ = try hdl.write(data);
+
+    // Get cursor via end() - should point to the header
+    var end_cursor = try hdl.end();
+    defer end_cursor.deinit();
+
+    // Verify it's a header
+    try std.testing.expect(try end_cursor.isHeader());
+
+    // The cursor's position should be the header's data size
+    const header_data_size = try end_cursor.currentDataSize();
+    try std.testing.expect(header_data_size == data.len);
+    try std.testing.expect(end_cursor.pos == header_data_size);
+
+    // currentData() should return empty slice (we're at the end)
+    const remaining = try end_cursor.currentData();
+    try std.testing.expect(remaining.len == 0);
+}
+
+test "LongStore Handle. end() with multiple chunks returns last chunk position" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = long_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    // Write large data spanning multiple pages
+    // 10000 bytes should create header + multiple chunks
+    var large_data: [10000]u8 = undefined;
+    @memset(&large_data, 'X');
+    _ = try hdl.write(&large_data);
+
+    // Get cursor via end()
+    var end_cursor = try hdl.end();
+    defer end_cursor.deinit();
+
+    // Should be on a chunk (not header)
+    try std.testing.expect(try end_cursor.isChunk());
+
+    // The position should match the last chunk's data size
+    const last_chunk_data_size = try end_cursor.currentDataSize();
+    try std.testing.expect(end_cursor.pos == last_chunk_data_size);
+
+    // Should be at end (no remaining data)
+    const remaining = try end_cursor.currentData();
+    try std.testing.expect(remaining.len == 0);
+
+    // Verify we can move backwards from end
+    try std.testing.expect(try end_cursor.hasPrev());
+}
