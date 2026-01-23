@@ -8,6 +8,81 @@ const conracts = @import("../../contracts/contracts.zig");
 
 // Shared logic is currently duplicated per view for clarity and stability.
 
+fn LinkImpl(comptime PageId: type, comptime Index: type, comptime LinkHeader: type, comptime read_only: bool) type {
+    const FldType = if (read_only) *const LinkHeader else *LinkHeader;
+    return struct {
+        const Self = @This();
+        pub const Error = error{} || errors.SpaceError;
+
+        link: FldType = undefined,
+
+        pub fn init(link: FldType) Self {
+            return Self{
+                .link = link,
+            };
+        }
+
+        pub fn getFwd(self: *const Self) ?PageId {
+            const val = self.link.fwd.get();
+            return if (val == @TypeOf(self.link.fwd).max()) null else val;
+        }
+
+        pub fn setFwd(self: *Self, next: ?PageId) void {
+            if (read_only) {
+                @compileError("Cannot set next on a read-only view");
+            }
+            if (next) |n| {
+                self.link.fwd.set(n);
+            } else {
+                self.link.fwd.set(@TypeOf(self.link.fwd).max());
+            }
+        }
+
+        pub fn getBack(self: *const Self) ?PageId {
+            const val = self.link.back.get();
+            return if (val == @TypeOf(self.link.back).max()) null else val;
+        }
+
+        pub fn setBack(self: *Self, last: ?PageId) void {
+            if (read_only) {
+                @compileError("Cannot set last on a read-only view");
+            }
+            if (last) |l| {
+                self.link.back.set(l);
+            } else {
+                self.link.back.set(@TypeOf(self.link.back).max());
+            }
+        }
+
+        pub fn getDataSize(self: *const Self) Index {
+            return self.link.payload.size.get();
+        }
+
+        pub fn setDataSize(self: *Self, size: Index) void {
+            if (read_only) {
+                @compileError("Cannot set data size on a read-only view");
+            }
+            self.link.payload.size.set(size);
+        }
+
+        pub fn incrementDataSize(self: *Self, increment: Index) void {
+            if (read_only) {
+                @compileError("Cannot increment data size on a read-only view");
+            }
+            const current = self.link.payload.size.get();
+            self.link.payload.size.set(current + increment);
+        }
+
+        pub fn decrementDataSize(self: *Self, decrement: Index) void {
+            if (read_only) {
+                @compileError("Cannot decrement data size on a read-only view");
+            }
+            const current = self.link.payload.size.get();
+            self.link.payload.size.set(current - decrement);
+        }
+    };
+}
+
 pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
     const SubheadersType = headers.LongStore(PageIdT, IndexT, SizeT, Endian);
     const DataType = if (read_only) []const u8 else []u8;
@@ -15,11 +90,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
     const HeaderPageView = PageView(PageIdT, IndexT, Endian, read_only);
 
     const CommonErrorSet = errors.SpaceError;
-
-    // const Common = struct {
-    //     const Self = @This();
-    //     pub const Error = error{} || CommonErrorSet;
-    // };
+    const LinkType = LinkImpl(PageIdT, IndexT, SubheadersType.LinkHeader, false);
+    const LinkTypeConst = LinkImpl(PageIdT, IndexT, SubheadersType.LinkHeader, true);
 
     const HeaderViewImpl = struct {
         const Self = @This();
@@ -45,10 +117,10 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
             self.page_view.formatPage(kind, page_id, metadata_len);
             var sh = self.subheaderMut();
             sh.total_size.set(0);
-            sh.last.set(@TypeOf(sh.last).max());
-            sh.common.next.set(@TypeOf(sh.common.next).max());
-            sh.common.data.size.set(0);
-            sh.common.data.reserved.set(0);
+            sh.link.back.set(@TypeOf(sh.link.back).max());
+            sh.link.fwd.set(@TypeOf(sh.link.fwd).max());
+            sh.link.payload.size.set(0);
+            sh.link.payload.reserved.set(0);
         }
 
         pub fn subheader(self: *const Self) *const SubheaderType {
@@ -80,40 +152,15 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
             return self.pageViewMut().dataMut();
         }
 
-        pub fn getNext(self: *const Self) ?PageIdT {
-            const sh = self.subheader();
-            const val = sh.common.next.get();
-            return if (val == @TypeOf(sh.common.next).max()) null else val;
+        pub fn getLink(self: *const Self) LinkTypeConst {
+            return LinkTypeConst.init(&self.subheader().link);
         }
 
-        pub fn setNext(self: *Self, next: ?PageIdT) void {
+        pub fn getLinkMut(self: *Self) LinkType {
             if (read_only) {
-                @compileError("Cannot set next on a read-only view");
+                @compileError("Cannot get mutable link from a read-only view");
             }
-            var sh = self.subheaderMut();
-            if (next) |n| {
-                sh.common.next.set(n);
-            } else {
-                sh.common.next.set(@TypeOf(sh.common.next).max());
-            }
-        }
-
-        pub fn getLast(self: *const Self) ?PageIdT {
-            const sh = self.subheader();
-            const val = sh.last.get();
-            return if (val == std.math.maxInt(PageIdT)) null else val;
-        }
-
-        pub fn setLast(self: *Self, last: ?PageIdT) void {
-            if (read_only) {
-                @compileError("Cannot set last on a read-only view");
-            }
-            var sh = self.subheaderMut();
-            if (last) |l| {
-                sh.last.set(l);
-            } else {
-                sh.last.set(std.math.maxInt(PageIdT));
-            }
+            return LinkType.init(&self.subheaderMut().link);
         }
 
         pub fn getTotalSize(self: *const Self) SizeT {
@@ -146,37 +193,6 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
             const current = sh.total_size.get();
             sh.total_size.set(current - decrement);
         }
-
-        pub fn getDataSize(self: *const Self) IndexT {
-            const sh = self.subheader();
-            return sh.common.data.size.get();
-        }
-
-        pub fn setDataSize(self: *Self, size: IndexT) void {
-            if (read_only) {
-                @compileError("Cannot set data size on a read-only view");
-            }
-            var sh = self.subheaderMut();
-            sh.common.data.size.set(size);
-        }
-
-        pub fn incrementDataSize(self: *Self, increment: IndexT) void {
-            if (read_only) {
-                @compileError("Cannot increment data size on a read-only view");
-            }
-            var sh = self.subheaderMut();
-            const current = sh.common.data.size.get();
-            sh.common.data.size.set(current + increment);
-        }
-
-        pub fn decrementDataSize(self: *Self, decrement: IndexT) void {
-            if (read_only) {
-                @compileError("Cannot decrement data size on a read-only view");
-            }
-            var sh = self.subheaderMut();
-            const current = sh.common.data.size.get();
-            sh.common.data.size.set(current - decrement);
-        }
     };
 
     const ChunkViewImpl = struct {
@@ -204,11 +220,11 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
             }
             self.page_view.formatPage(kind, page_id, metadata_len);
             var sh = self.subheaderMut();
-            sh.prev.set(@TypeOf(sh.prev).max());
-            sh.common.next.set(@TypeOf(sh.common.next).max());
-            sh.common.data.size.set(0);
+            sh.link.back.setMax();
+            sh.link.fwd.setMax();
+            sh.link.payload.size.set(0);
             sh.flags.set(0);
-            sh.common.data.reserved.set(0);
+            sh.link.payload.reserved.set(0);
         }
 
         pub fn subheader(self: *const Self) *const SubheaderType {
@@ -241,71 +257,15 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
             return self.pageViewMut().dataMut();
         }
 
-        pub fn getNext(self: *const Self) ?PageIdT {
-            const sh = self.subheader();
-            const val = sh.common.next.get();
-            return if (val == std.math.maxInt(PageIdT)) null else val;
+        pub fn getLink(self: *const Self) LinkTypeConst {
+            return LinkTypeConst.init(&self.subheader().link);
         }
 
-        pub fn setNext(self: *Self, next: ?PageIdT) void {
+        pub fn getLinkMut(self: *Self) LinkType {
             if (read_only) {
-                @compileError("Cannot set next on a read-only view");
+                @compileError("Cannot get mutable link from a read-only view");
             }
-            var sh = self.subheaderMut();
-            if (next) |n| {
-                sh.common.next.set(n);
-            } else {
-                sh.common.next.set(std.math.maxInt(PageIdT));
-            }
-        }
-
-        pub fn getPrev(self: *const Self) ?PageIdT {
-            const sh = self.subheader();
-            const val = sh.prev.get();
-            return if (val == std.math.maxInt(PageIdT)) null else val;
-        }
-
-        pub fn setPrev(self: *Self, prev: ?PageIdT) void {
-            if (read_only) {
-                @compileError("Cannot set prev on a read-only view");
-            }
-            var sh = self.subheaderMut();
-            if (prev) |p| {
-                sh.prev.set(p);
-            } else {
-                sh.prev.set(std.math.maxInt(PageIdT));
-            }
-        }
-
-        pub fn getDataSize(self: *const Self) IndexT {
-            const sh = self.subheader();
-            return sh.common.data.size.get();
-        }
-
-        pub fn setDataSize(self: *Self, size: IndexT) void {
-            if (read_only) {
-                @compileError("Cannot set data size on a read-only view");
-            }
-            var sh = self.subheaderMut();
-            sh.common.data.size.set(size);
-        }
-
-        pub fn incrementDataSize(self: *Self, increment: IndexT) void {
-            if (read_only) {
-                @compileError("Cannot increment data size on a read-only view");
-            }
-            var sh = self.subheaderMut();
-            const current = sh.common.data.size.get();
-            sh.common.data.size.set(current + increment);
-        }
-
-        pub fn decrementDataSize(self: *Self, decrement: IndexT) void {
-            if (read_only) {
-                @compileError("Cannot decrement data size on a read-only view");
-            }
-            var sh = self.subheaderMut();
-            const current = sh.common.data.size.get();
-            sh.common.data.size.set(current - decrement);
+            return LinkType.init(&self.subheaderMut().link);
         }
 
         pub fn hasFlag(self: *const Self, flag: Flags) bool {
@@ -333,5 +293,6 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
     return struct {
         pub const HeaderView = HeaderViewImpl;
         pub const ChunkView = ChunkViewImpl;
+        pub const Link = LinkImpl(PageIdT, IndexT, SubheadersType.LinkHeader, read_only);
     };
 }

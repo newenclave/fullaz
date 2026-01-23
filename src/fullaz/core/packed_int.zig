@@ -36,6 +36,10 @@ pub fn PackedInt(comptime T: type, comptime Endian: std.builtin.Endian) type {
             self.fromNative(value);
         }
 
+        pub fn setMax(self: *Self) void {
+            self.fromNative(std.math.maxInt(T));
+        }
+
         pub fn max() T {
             return std.math.maxInt(T);
         }

@@ -12,31 +12,31 @@ pub fn LongStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: 
         last = 1 << 1,
     };
 
-    const DataHeaderType = extern struct {
+    const PayloadHeaderType = extern struct {
         size: IndexType,
         reserved: IndexType,
     };
 
-    const CommonHeaderType = extern struct {
-        next: PageIdType,
-        data: DataHeaderType,
+    const LinkHeaderType = extern struct {
+        back: PageIdType,
+        fwd: PageIdType,
+        payload: PayloadHeaderType,
     };
 
     const HeaderType = extern struct {
         total_size: SizeType,
-        last: PageIdType,
-        common: CommonHeaderType,
+        link: LinkHeaderType,
     };
 
     const ChunkType = extern struct {
         flags: IndexType,
-        prev: PageIdType,
-        common: CommonHeaderType,
+        link: LinkHeaderType,
     };
 
     return struct {
         pub const HeaderSubheader = HeaderType;
         pub const ChunkSubheader = ChunkType;
         pub const ChunkFlags = ChunkFlagsValues;
+        pub const LinkHeader = LinkHeaderType;
     };
 }
