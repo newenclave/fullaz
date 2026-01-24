@@ -24,7 +24,7 @@ fn LinkImpl(comptime PageId: type, comptime Index: type, comptime LinkHeader: ty
 
         pub fn getFwd(self: *const Self) ?PageId {
             const val = self.link.fwd.get();
-            return if (val == @TypeOf(self.link.fwd).max()) null else val;
+            return if (self.link.fwd.isMaxVal(val)) null else val;
         }
 
         pub fn setFwd(self: *Self, next: ?PageId) void {
@@ -34,13 +34,13 @@ fn LinkImpl(comptime PageId: type, comptime Index: type, comptime LinkHeader: ty
             if (next) |n| {
                 self.link.fwd.set(n);
             } else {
-                self.link.fwd.set(@TypeOf(self.link.fwd).max());
+                self.link.fwd.setMax();
             }
         }
 
         pub fn getBack(self: *const Self) ?PageId {
             const val = self.link.back.get();
-            return if (val == @TypeOf(self.link.back).max()) null else val;
+            return if (self.link.back.isMaxVal(val)) null else val;
         }
 
         pub fn setBack(self: *Self, last: ?PageId) void {
@@ -50,7 +50,7 @@ fn LinkImpl(comptime PageId: type, comptime Index: type, comptime LinkHeader: ty
             if (last) |l| {
                 self.link.back.set(l);
             } else {
-                self.link.back.set(@TypeOf(self.link.back).max());
+                self.link.back.setMax();
             }
         }
 
@@ -117,8 +117,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type,
             self.page_view.formatPage(kind, page_id, metadata_len);
             var sh = self.subheaderMut();
             sh.total_size.set(0);
-            sh.link.back.set(@TypeOf(sh.link.back).max());
-            sh.link.fwd.set(@TypeOf(sh.link.fwd).max());
+            sh.link.back.setMax();
+            sh.link.fwd.setMax();
             sh.link.payload.size.set(0);
             sh.link.payload.reserved.set(0);
         }

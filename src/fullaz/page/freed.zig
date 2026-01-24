@@ -37,7 +37,7 @@ pub fn View(comptime PageIdT: type, comptime Endian: std.builtin.Endian, comptim
 
             var hdr = self.headerMut();
 
-            hdr.kind.set(@TypeOf(hdr.kind).max());
+            hdr.kind.setMax();
             hdr.next.set(next_page_id);
             hdr.crc.set(0);
         }

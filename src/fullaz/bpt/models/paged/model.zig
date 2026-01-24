@@ -142,7 +142,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             if (next_id) |nid| {
                 view.subheaderMut().next.set(nid);
             } else {
-                view.subheaderMut().next.set(std.math.maxInt(BlockIdType));
+                view.subheaderMut().next.setMax();
             }
         }
 
@@ -151,7 +151,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             if (prev_id) |pid| {
                 view.subheaderMut().prev.set(pid);
             } else {
-                view.subheaderMut().prev.set(std.math.maxInt(BlockIdType));
+                view.subheaderMut().prev.setMax();
             }
         }
 
@@ -160,7 +160,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             if (parent_id) |pid| {
                 view.subheaderMut().parent.set(pid);
             } else {
-                view.subheaderMut().parent.set(std.math.maxInt(BlockIdType));
+                view.subheaderMut().parent.setMax();
             }
         }
 
@@ -400,7 +400,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
                 view.subheaderMut().parent.set(pid);
             } else {
                 var view = PageViewType.init(try self.handle.getDataMut());
-                view.subheaderMut().parent.set(std.math.maxInt(BlockIdType));
+                view.subheaderMut().parent.setMax();
             }
         }
 

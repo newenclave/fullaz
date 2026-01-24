@@ -41,7 +41,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
                 @panic("Page size is smaller than subheader + metadata size");
             }
 
-            if (@as(usize, @intCast(IndexType.max())) < self.page.len) {
+            if (@as(usize, @intCast(IndexType.max)) < self.page.len) {
                 @panic("Page size exceeds maximum representable size in IndexT");
             }
 

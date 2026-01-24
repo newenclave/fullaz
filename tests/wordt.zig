@@ -143,12 +143,31 @@ test "WordT: writeTo success and error" {
     try std.testing.expectError(error.BufferTooSmall, w.writeTo(dst_bad[0..]));
 }
 
-test "WordT: min/max sanity for signed and unsigned" {
-    try std.testing.expectEqual(std.math.maxInt(u16), PackedIntLe(u16).max());
-    try std.testing.expectEqual(std.math.minInt(u16), PackedIntLe(u16).min());
+test "PackedInt: u128 check" {
+    const W = PackedIntLe(u128);
 
-    try std.testing.expectEqual(std.math.maxInt(i32), PackedIntBe(i32).max());
-    try std.testing.expectEqual(std.math.minInt(i32), PackedIntBe(i32).min());
+    const w = W.init(0x1122334455667788_1122334455667788);
+
+    var dst_ok: [16]u8 = undefined;
+    try w.writeTo(dst_ok[0..]);
+    // LE: 88 77 66 55 44 33 22 11
+    // zig fmt: off
+    try expectBytesEqual(&[_]u8{ 
+        0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 
+        0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+    }, dst_ok[0..]);
+    // zig fmt: on
+
+    var dst_bad: [7]u8 = undefined;
+    try std.testing.expectError(error.BufferTooSmall, w.writeTo(dst_bad[0..]));
+}
+
+test "WordT: min/max sanity for signed and unsigned" {
+    try std.testing.expectEqual(std.math.maxInt(u16), PackedIntLe(u16).max);
+    try std.testing.expectEqual(std.math.minInt(u16), PackedIntLe(u16).min);
+
+    try std.testing.expectEqual(std.math.maxInt(i32), PackedIntBe(i32).max);
+    try std.testing.expectEqual(std.math.minInt(i32), PackedIntBe(i32).min);
 }
 
 test "WordT: randomized roundtrip for multiple types/endians" {

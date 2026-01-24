@@ -17,9 +17,9 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
         prev: PageIdType,
         next: PageIdType,
         pub fn formatHeader(self: *Self) void {
-            self.parent.set(@TypeOf(self.parent).max());
-            self.prev.set(@TypeOf(self.prev).max());
-            self.next.set(@TypeOf(self.next).max());
+            self.parent.setMax();
+            self.prev.setMax();
+            self.next.setMax();
         }
     };
 

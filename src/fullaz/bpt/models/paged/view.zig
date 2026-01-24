@@ -9,7 +9,7 @@ const algorithm = @import("../../../core/algorithm.zig");
 pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
     const BptPage = bpt_page.Bpt(PageIdT, IndexT, Endian);
 
-    const PageIdType = PackedInt(PageIdT, Endian);
+    //const PageIdType = PackedInt(PageIdT, Endian);
 
     const HeaderPageView = header.View(PageIdT, IndexT, Endian, read_only);
     const SlotsDirType = slots.Variadic(IndexT, Endian, read_only);
@@ -261,8 +261,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             sl.formatHeader();
 
             var sh = self.subheaderMut();
-            sh.parent.set(PageIdType.max());
-            sh.rightmost_child.set(PageIdType.max());
+            sh.parent.setMax();
+            sh.rightmost_child.setMax();
         }
 
         pub fn subheader(self: *const Self) *const SubheaderType {

@@ -37,8 +37,9 @@ test "LongStore Create a header view" {
 
     const sh = view.subheader();
     try std.testing.expect(sh.total_size.get() == 0);
-    try std.testing.expect(sh.link.back.get() == @TypeOf(sh.link.back).max());
-    try std.testing.expect(sh.link.fwd.get() == @TypeOf(sh.link.fwd).max());
+    try std.testing.expect(sh.link.back.get() == @TypeOf(sh.link.back).max);
+    try std.testing.expect(sh.link.fwd.get() == @TypeOf(sh.link.fwd).max);
+    try std.testing.expect(sh.link.fwd.isMax());
     try std.testing.expect(sh.link.payload.size.get() == 0);
     try std.testing.expect(sh.link.payload.reserved.get() == 0);
     const data = view.data();
@@ -55,8 +56,10 @@ test "LongStore Create a Chunk view" {
     view.formatPage(1, 42, 0);
 
     const sh = view.subheader();
-    try std.testing.expect(sh.link.back.get() == @TypeOf(sh.link.back).max());
-    try std.testing.expect(sh.link.fwd.get() == @TypeOf(sh.link.fwd).max());
+    try std.testing.expect(sh.link.back.get() == @TypeOf(sh.link.back).max);
+    try std.testing.expect(sh.link.fwd.get() == @TypeOf(sh.link.fwd).max);
+    try std.testing.expect(sh.link.back.isMax());
+    try std.testing.expect(sh.link.fwd.isMax());
     try std.testing.expect(sh.link.payload.size.get() == 0);
     try std.testing.expect(sh.link.payload.reserved.get() == 0);
 }
