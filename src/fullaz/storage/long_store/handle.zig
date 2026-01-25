@@ -511,7 +511,11 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             var data_tail = data;
             var written: usize = 0;
             while (data_tail.len > 0) {
-                var current_data = try cursor.currentTailMut();
+                const has_next = try cursor.hasNext();
+                var current_data = if (!has_next)
+                    try cursor.currentTailMut()
+                else
+                    try cursor.currentDataMut();
                 const to_write = @min(current_data.len, data_tail.len);
                 const data_to_write = data_tail[0..to_write];
                 @memcpy(current_data[0..to_write], data_to_write);

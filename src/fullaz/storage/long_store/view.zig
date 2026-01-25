@@ -9,14 +9,14 @@ const conracts = @import("../../contracts/contracts.zig");
 // Shared logic is currently duplicated per view for clarity and stability.
 
 fn LinkImpl(comptime PageId: type, comptime Index: type, comptime LinkHeader: type, comptime read_only: bool) type {
-    const FldType = if (read_only) *const LinkHeader else *LinkHeader;
+    const FldPtr = if (read_only) *const LinkHeader else *LinkHeader;
     return struct {
         const Self = @This();
         pub const Error = error{} || errors.SpaceError;
 
-        link: FldType = undefined,
+        link: FldPtr = undefined,
 
-        pub fn init(link: FldType) Self {
+        pub fn init(link: FldPtr) Self {
             return Self{
                 .link = link,
             };
