@@ -964,6 +964,7 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         // In this case, we delete the current node and transfer data from the left sibling into it.
+        // TODO do not delete this for a while...
         // In theory, this should slightly optimize deletion,
         // but it makes the current iterator invalid and we won't be able to return the next element.
         // fn leafMergeWithLeft(self: *Self, leaf: *LeafType) Error!bool {
@@ -1229,20 +1230,6 @@ pub fn Bpt(comptime ModelT: type) type {
             }
             return try right_leaf.take();
         }
-
-        const ErrorSet = error{
-            Full,
-            OutOfMemory,
-            InvalidNode,
-            ChildNotFoundInParent,
-            NoParent,
-            OutOfBounds,
-            BufferTooSmall,
-            InvalidPageHandle,
-            InconsistentLayout,
-            NoFreeFrames,
-            InvalidBlockId,
-        };
 
         // TODO: refactor to avoid code duplication with handleInodeOverflow and error list is too long
         fn handleInodeOverflowDefault(self: *Self, inode: *InodeType, key: KeyLikeType, child_opt: ?NodeIdType, pos: usize) Error!void {
