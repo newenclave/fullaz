@@ -2095,6 +2095,97 @@ test "Bpt Update Random values" {
     inserted_keys.deinit(allocator);
 }
 
+test "Bpt Update Random values Keys as strings" {
+    const prn = Printer("Update Random").init();
+    var prng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    const random = prng.random();
+
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+
+    const elements_to_insert = 20000;
+    var inserted_keys = try std.ArrayList(u32).initCapacity(allocator, elements_to_insert);
+    errdefer inserted_keys.deinit(allocator);
+
+    var device = try Device.init(allocator, 1024);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = BptModel.init(&cache, &store_mgr, .{}, {});
+    var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
+
+    for (0..elements_to_insert) |_| {
+        const key = random.int(u32);
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        var buf: [32]u8 = undefined;
+        const value = try std.fmt.bufPrint(&buf, "{}", .{key});
+        if (try tree.insert(key_out, value)) {
+            try inserted_keys.append(allocator, key);
+        } else {
+            prn.print("NOT Inserted: {}\n", .{key});
+        }
+    }
+
+    //try tree.dumpFormatted(formatKey, formatValue);
+
+    prn.print("Inserted {} unique keys\n", .{inserted_keys.items.len});
+
+    // Update values
+    var inserted: usize = 0;
+    const fmtk = "very_long_updated_key_but_not_longer_then_120_{}";
+    const fmtv = "very_long_updated_value_but_not_longer_then_120_{}";
+    for (inserted_keys.items) |item| {
+        const key = item;
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        var bufk: [128]u8 = undefined;
+        var bufv: [128]u8 = undefined;
+
+        const new_key = try std.fmt.bufPrint(&bufk, fmtk, .{key});
+        const new_value = try std.fmt.bufPrint(&bufv, fmtv, .{key});
+        _ = try tree.remove(key_out);
+        inserted += 1;
+        //std.debug.print("Updating key {}: {s} to value: {s}\n", .{ inserted, new_key, new_value });
+        try std.testing.expect(try tree.insert(new_key, new_value));
+    }
+
+    // Verify updates
+    for (inserted_keys.items) |item| {
+        const key = item;
+        var key_buf: [128]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, fmtk, .{key});
+        if (try tree.find(key_out)) |itr_const| {
+            defer itr_const.deinit();
+            const value = (try itr_const.get()).?.value;
+            const expected_value = try format(allocator, fmtv, .{key});
+            defer allocator.free(expected_value);
+
+            const res = strCmp(value[0..], expected_value[0..expected_value.len]);
+            //std.debug.print("Key: {s}, Value: {s}, Expected: {s} res {any}\n", .{ key_out, value, expected_value, res });
+
+            // Include the sentinel in the slice: expected_value has len N but the sentinel is at [N]
+            try std.testing.expect(res == .eq);
+        } else {
+            try std.testing.expect(false); // Key should exist
+        }
+    }
+    // std.debug.print("Tree after updates:\n", .{});
+    //_ = try tree.dumpFormatted(formatKey, formatValue);
+
+    prn.print("Blocks allocated: {}\n", .{device.blocksCount()});
+    prn.print("len={} cap={}\n", .{ device.storage.items.len, device.storage.capacity });
+
+    inserted_keys.deinit(allocator);
+}
+
 test "Bpt/paged Remove values" {
     const prn = Printer("Remove").init();
 

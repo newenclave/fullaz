@@ -371,7 +371,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     var leaf = search.leaf.?;
                     if (try leaf.canInsertValue(search.position, key, value)) {
                         try leaf.insertValue(search.position, key, value);
-                        //std.debug.print("Key {} inserted into leaf id: {}\n", .{ key, leaf.id() });
+                        //std.debug.print("Key {any} inserted into leaf id: {}\n", .{ key, leaf.id() });
                     } else {
                         if (self.rebalance_policy == .neighbor_share) {
                             if (try self.tryLeafNeighborShare(&leaf, key, value, search.position)) {
@@ -382,7 +382,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     }
                     return true;
                 } else {
-                    //std.debug.print("Key {} already exists in leaf id: {}\n", .{ key, search.leaf.?.id() });
+                    //std.debug.print("Key {any} already exists in leaf id: {}\n", .{ key, search.leaf.?.id() });
                 }
             } else {
                 var leaf = try accessor.createLeaf();
@@ -963,16 +963,62 @@ pub fn Bpt(comptime ModelT: type) type {
             return false;
         }
 
+        // In this case, we delete the current node and transfer data from the left sibling into it.
+        // In theory, this should slightly optimize deletion,
+        // but it makes the current iterator invalid and we won't be able to return the next element.
+        // fn leafMergeWithLeft(self: *Self, leaf: *LeafType) Error!bool {
+        //     const accessor = self.model.getAccessor();
+        //     if (try self.findLeftSibling(leaf.getParent(), leaf.id())) |left_id| {
+        //         if (try accessor.loadLeaf(left_id)) |left_sibling_const| {
+        //             var left_sibling = left_sibling_const;
+        //             defer accessor.deinitLeaf(left_sibling);
+        //             if (try self.leafMergeWithRight(&left_sibling)) {
+        //                 accessor.deinitLeaf(leaf.*);
+        //                 leaf.* = try left_sibling.take();
+        //                 return true;
+        //             }
+        //         }
+        //     }
+        //     return false;
+        // }
+
+        // So, we are deleting the left node here, and keeping the current one valid.
+        // This will not break the iterator, if we want to delete via iterator.
+        /// TODO it needs to be tested well...
         fn leafMergeWithLeft(self: *Self, leaf: *LeafType) Error!bool {
             const accessor = self.model.getAccessor();
-            if (try self.findLeftSibling(leaf.getParent(), leaf.id())) |left_id| {
-                if (try accessor.loadLeaf(left_id)) |left_sibling_const| {
-                    var left_sibling = left_sibling_const;
-                    defer accessor.deinitLeaf(left_sibling);
-                    if (try self.leafMergeWithRight(&left_sibling)) {
-                        accessor.deinitLeaf(leaf.*);
-                        leaf.* = try left_sibling.take();
-                        return true;
+            if (try accessor.loadInode(leaf.getParent())) |parent_const| {
+                defer accessor.deinitInode(parent_const);
+
+                if (try self.findLeftSibling(parent_const.id(), leaf.id())) |left_id| {
+                    if (try accessor.loadLeaf(left_id)) |left_sibling_const| {
+                        defer accessor.deinitLeaf(left_sibling_const);
+
+                        var left_sibling = left_sibling_const;
+                        if (try accessor.canMergeLeafs(leaf, &left_sibling)) {
+                            for (0..try left_sibling.size()) |i| {
+                                const out_key = try left_sibling.getKey(i);
+                                const out_value = try left_sibling.getValue(i);
+
+                                const key = self.model.keyOutAsLike(out_key);
+                                const value = self.model.valueOutAsIn(out_value);
+
+                                try leaf.insertValue(i, key, value);
+                            }
+                            try leaf.setPrev(left_sibling.getPrev());
+                            if (left_sibling.getPrev()) |prev_id| {
+                                if (try accessor.loadLeaf(prev_id)) |prev_leaf_const| {
+                                    defer accessor.deinitLeaf(prev_leaf_const);
+                                    var prev_leaf = prev_leaf_const;
+                                    try prev_leaf.setNext(leaf.id());
+                                }
+                            }
+                            const left_pos = try self.findChidIndexInParentId(parent_const.id(), left_id);
+                            var parent = parent_const;
+                            try accessor.destroy(left_id);
+                            try parent.erase(left_pos);
+                            return true;
+                        }
                     }
                 }
             }
