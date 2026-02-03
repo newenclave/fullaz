@@ -1,10 +1,13 @@
 pub const EmptySet = error{};
 
-pub const PageError = error{
+pub const HandleError = error{
     InvalidHandle,
+};
+
+pub const PageError = error{
     InvalidId,
     BadType,
-};
+} || HandleError;
 
 pub const NotFoundError = error{
     KeyNotFound,
