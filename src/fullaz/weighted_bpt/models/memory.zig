@@ -8,7 +8,47 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
     //const Slice = []T;
     //const SliceConst = []const T;
 
+    const NodePosition = struct {
+        pos: usize,
+        diff: Weight,
+        accumulated: Weight,
+    };
+
     const Value = std.ArrayList(T);
+
+    const Context = struct {
+        const Self = @This();
+        allocator: std.mem.Allocator,
+
+        pub fn init(allocator: std.mem.Allocator) Self {
+            return .{
+                .allocator = allocator,
+            };
+        }
+    };
+
+    const ValueViewImpl = struct {
+        const Self = @This();
+        value: *Value,
+
+        pub fn init(value: *Value) Self {
+            return .{
+                .value = value,
+            };
+        }
+
+        pub fn deinit(_: *Self) void {
+            // no-op
+        }
+
+        pub fn weight(self: *const Self) Weight {
+            return @as(Weight, @intCast(self.value.len));
+        }
+
+        pub fn asSlice(self: *const Self) []const T {
+            return self.value.items[0..self.value.items.len];
+        }
+    };
 
     const InodeContainer = struct {
         const Self = @This();
@@ -20,12 +60,16 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         const Error = std.mem.Allocator.Error;
 
         values: std.ArrayList(Value),
-        children: std.ArrayList(Pid),
+        parent: ?Pid = null,
+        prev: ?Pid = null,
+        next: ?Pid = null,
 
         fn init(allocator: std.mem.Allocator) Error!Self {
             return .{
                 .values = try std.ArrayList(Value).initCapacity(allocator, 0),
-                .children = try std.ArrayList(Pid).initCapacity(allocator, 0),
+                .parent = null,
+                .prev = null,
+                .next = null,
             };
         }
 
@@ -35,7 +79,6 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             }
 
             self.values.deinit(allocator);
-            self.children.deinit(allocator);
         }
     };
 
@@ -67,15 +110,21 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
     const LeafImpl = struct {
         const Self = @This();
         const PidType = Pid;
-        const Error = errors.HandleError || std.mem.Allocator.Error;
+        const Error = errors.HandleError ||
+            errors.IndexError ||
+            std.mem.Allocator.Error;
+
+        const MaximumCapacity = MaximumElements;
 
         pid: Pid,
         leaf: *LeafContainer = undefined,
+        ctx: *Context = undefined,
 
-        fn init(leaf: *LeafContainer, pid: Pid) Self {
+        fn init(leaf: *LeafContainer, ctx: *Context, pid: Pid) Self {
             return .{
                 .pid = pid,
                 .leaf = leaf,
+                .ctx = ctx,
             };
         }
 
@@ -90,19 +139,98 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         pub fn id(self: *const Self) Pid {
             return self.pid;
         }
-    };
 
-    const ValueViewImpl = struct {
-        const Self = @This();
-        value: *T,
+        pub fn getNext(self: *const Self) Error!?Pid {
+            return self.leaf.next;
+        }
 
-        pub fn init(value: *T) Self {
+        pub fn getPrev(self: *const Self) Error!?Pid {
+            return self.leaf.prev;
+        }
+
+        pub fn getPare(self: *const Self) Error!?Pid {
+            return self.leaf.parent;
+        }
+
+        pub fn setNext(self: *Self, next: ?Pid) Error!void {
+            self.leaf.next = next;
+        }
+
+        pub fn setPrev(self: *Self, prev: ?Pid) Error!void {
+            self.leaf.prev = prev;
+        }
+
+        pub fn setParent(self: *Self, parent: ?Pid) Error!void {
+            self.leaf.parent = parent;
+        }
+
+        pub fn getValue(self: *const Self, pos: usize) Error!ValueViewImpl {
+            try self.checkPos(pos);
+            return ValueViewImpl.init(&self.leaf.values.items[pos]);
+        }
+
+        pub fn canInsertWeight(self: *const Self, weight: Weight) Error!bool {
+            const current_weight = try self.size();
+            const current_available = MaximumCapacity - current_weight;
+            if (current_available == 0) {
+                return false;
+            }
+            const pos = try self.selectPos(weight);
+            if (pos.diff > 0) {
+                return current_available > 1;
+            }
+            return true;
+        }
+
+        pub fn insertAt(self: *Self, pos: usize, val: []const T) Error!void {
+            if (pos > self.leaf.values.items.len) {
+                return Error.OutOfBounds;
+            }
+            var new_val = try std.ArrayList(T).initCapacity(self.ctx.allocator, val.len);
+            errdefer new_val.deinit(self.ctx.allocator);
+            try new_val.appendSlice(self.ctx.allocator, val);
+            try self.leaf.values.insert(self.ctx.allocator, pos, new_val);
+        }
+
+        pub fn removeAt(self: *Self, pos: usize) Error!void {
+            try self.checkPos(pos);
+            var val = self.leaf.values.orderedRemove(pos);
+            val.deinit(self.ctx.allocator);
+        }
+
+        pub fn selectPos(self: *const Self, weight: Weight) Error!NodePosition {
+            var accumulated: Weight = 0;
+            for (self.leaf.values.items, 0..) |*item, idx| {
+                const current = item.items.len;
+                accumulated += current;
+                if (accumulated > weight) {
+                    const diff = accumulated - weight;
+                    const current_diff = (current - diff);
+                    return .{
+                        .pos = idx,
+                        .diff = current_diff,
+                        .accumulated = accumulated - current,
+                    };
+                }
+                if (accumulated == weight) {
+                    return .{
+                        .pos = idx + 1,
+                        .diff = 0,
+                        .accumulated = accumulated,
+                    };
+                }
+            }
             return .{
-                .value = value,
+                .pos = self.leaf.values.items.len,
+                .diff = 0,
+                .accumulated = accumulated,
             };
         }
-        pub fn deinit(_: *Self) void {
-            // no-op
+
+        fn checkPos(self: *const Self, pos: usize) Error!void {
+            if (pos >= self.leaf.values.items.len) {
+                return error.OutOfBounds;
+            }
         }
     };
 
@@ -114,17 +242,18 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
     const AccessorImpl = struct {
         const Self = @This();
 
-        const Error = errors.HandleError ||
+        const Error =
             errors.IndexError ||
+            errors.PageError ||
             std.mem.Allocator.Error;
 
-        allocator: std.mem.Allocator,
+        ctx: Context = undefined,
         values: std.ArrayList(?NodeVariant),
         root: ?usize = null,
 
         fn init(allocator: std.mem.Allocator) Error!Self {
             return .{
-                .allocator = allocator,
+                .ctx = Context.init(allocator),
                 .values = try std.ArrayList(?NodeVariant).initCapacity(allocator, 0),
             };
         }
@@ -134,15 +263,15 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
                 if (item.*) |*item_val| {
                     switch (item_val.*) {
                         .inode => |*inode| {
-                            inode.deinit(self.allocator);
+                            inode.deinit(self.ctx.allocator);
                         },
                         .leaf => |*leaf| {
-                            leaf.deinit(self.allocator);
+                            leaf.deinit(self.ctx.allocator);
                         },
                     }
                 }
             }
-            self.values.deinit(self.allocator);
+            self.values.deinit(self.ctx.allocator);
         }
 
         pub fn getRoot(self: *const Self) Error!?usize {
@@ -155,10 +284,10 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
         pub fn createLeaf(self: *Self) Error!LeafImpl {
             const size = self.values.items.len;
-            try self.values.append(self.allocator, .{
-                .leaf = try LeafContainer.init(self.allocator),
+            try self.values.append(self.ctx.allocator, .{
+                .leaf = try LeafContainer.init(self.ctx.allocator),
             });
-            return LeafImpl.init(&self.values.items[size].?.leaf, size);
+            return LeafImpl.init(&self.values.items[size].?.leaf, &self.ctx, size);
         }
 
         pub fn loadLeaf(self: *Self, pid: Pid) Error!?LeafImpl {
@@ -167,8 +296,8 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             }
             if (self.values.items[pid]) |*node| {
                 return switch (node.*) {
-                    .leaf => |*leaf| LeafImpl.init(leaf, pid),
-                    else => return Error.OutOfBounds,
+                    .leaf => |*leaf| LeafImpl.init(leaf, &self.ctx, pid),
+                    else => return Error.InvalidId,
                 };
             }
             return null;
@@ -178,7 +307,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
         pub fn createInode(self: *Self) Error!InodeImpl {
             const size = self.values.items.len;
-            try self.values.append(self.allocator, .{
+            try self.values.append(self.ctx.allocator, .{
                 .inode = InodeContainer{},
             });
             return InodeImpl.init(&self.values.items[size].?.inode, size);
@@ -191,7 +320,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             if (self.values.items[pid]) |*node| {
                 return switch (node.*) {
                     .inode => |*inode| InodeImpl.init(inode, pid),
-                    else => return Error.OutOfBounds,
+                    else => return Error.InvalidId,
                 };
             }
             return null;

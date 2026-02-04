@@ -29,9 +29,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             };
         }
 
-        pub fn deinit(_: *Self) void {
-            // nothing to deinit here
-        }
+        pub fn deinit(_: *Self) void {}
 
         pub fn insert(self: *Self, value: Value) Error!bool {
             const accessor = self.getAccessor();
