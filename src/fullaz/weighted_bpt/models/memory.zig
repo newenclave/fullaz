@@ -31,33 +31,39 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         const Self = @This();
         const Error = std.mem.Allocator.Error;
 
-        value: Value,
-        own: bool = false,
+        const ValueUnion = union(enum) {
+            owned: Value,
+            borrowed: *Value,
+        };
+
+        value: ValueUnion,
         ctx: *Context = undefined,
 
-        pub fn init(value: Value, ctx: *Context) Self {
+        pub fn init(value: *Value, ctx: *Context) Self {
             return .{
-                .value = value,
-                .own = false,
+                .value = .{ .borrowed = value },
                 .ctx = ctx,
             };
         }
 
         pub fn initOwned(value: Value, ctx: *Context) Self {
             return .{
-                .value = value,
-                .own = true,
+                .value = .{ .owned = value },
                 .ctx = ctx,
             };
         }
 
         pub fn splitOfRight(self: *Self, pos: Weight) Error!Self {
             const result_weight = self.weight() - pos;
+
             var new_value = try std.ArrayList(T).initCapacity(self.ctx.allocator, result_weight);
             errdefer new_value.deinit(self.ctx.allocator);
 
-            try new_value.appendSlice(self.ctx.allocator, self.value.items[pos..self.value.items.len]);
-            self.value.shrinkRetainingCapacity(pos);
+            const slice = self.asSlice();
+
+            try new_value.appendSlice(self.ctx.allocator, slice[pos..slice.len]);
+
+            self.shrink(pos);
 
             return Self.initOwned(new_value, self.ctx);
         }
@@ -66,28 +72,58 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             const result_weight = pos;
             var new_value = try std.ArrayList(T).initCapacity(self.ctx.allocator, result_weight);
             errdefer new_value.deinit(self.ctx.allocator);
-            try new_value.appendSlice(self.ctx.allocator, self.value.items[0..pos]);
 
-            const tail_values = self.value.items[pos..self.value.items.len];
-            const head_place = self.value.items[0..tail_values.len];
+            var slice = self.asSliceMut();
+
+            try new_value.appendSlice(self.ctx.allocator, slice[0..pos]);
+
+            const tail_values = slice[pos..slice.len];
+            const head_place = slice[0..tail_values.len];
             @memmove(head_place, tail_values);
-            self.value.shrinkAndFree(self.ctx.allocator, tail_values.len);
+            self.shrink(tail_values.len);
 
             return Self.initOwned(new_value, self.ctx);
         }
 
         pub fn deinit(self: *Self) void {
-            if (self.own) {
-                self.value.deinit(self.ctx.allocator);
+            switch (self.value) {
+                .borrowed => {},
+                .owned => |*owned_val| {
+                    owned_val.deinit(self.ctx.allocator);
+                },
             }
         }
 
         pub fn weight(self: *const Self) Weight {
-            return @as(Weight, @intCast(self.value.len));
+            switch (self.value.*) {
+                .owned => |*owned_val| return @as(Weight, @intCast(owned_val.len)),
+                .borrowed => |borrowed_val| return @as(Weight, @intCast(borrowed_val.items.len)),
+            }
         }
 
         pub fn asSlice(self: *const Self) []const T {
-            return self.value.items[0..self.value.items.len];
+            switch (self.value) {
+                .owned => |*owned_val| return owned_val.items[0..owned_val.items.len],
+                .borrowed => |borrowed_val| return borrowed_val.items[0..borrowed_val.items.len],
+            }
+        }
+
+        pub fn asSliceMut(self: *Self) []T {
+            switch (self.value) {
+                .owned => |*owned_val| return owned_val.items[0..owned_val.items.len],
+                .borrowed => |borrowed_val| return borrowed_val.items[0..borrowed_val.items.len],
+            }
+        }
+
+        fn shrink(self: *Self, new_size: usize) void {
+            switch (self.value) {
+                .owned => |*owned_val| {
+                    owned_val.shrinkAndFree(self.ctx.allocator, new_size);
+                },
+                .borrowed => |borrowed_val| {
+                    borrowed_val.shrinkAndFree(self.ctx.allocator, new_size);
+                },
+            }
         }
     };
 
@@ -213,7 +249,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
         pub fn getValue(self: *const Self, pos: usize) Error!ValueViewImpl {
             try self.checkPos(pos);
-            return ValueViewImpl.init(self.leaf.values.items[pos], self.ctx);
+            return ValueViewImpl.init(&self.leaf.values.items[pos], self.ctx);
         }
 
         pub fn canInsertWeight(self: *const Self, weight: Weight) Error!bool {
