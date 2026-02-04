@@ -19,13 +19,22 @@ test "WBpt Leaf Create and insert" {
     try leaf.insertAt(1, "world");
     try leaf.insertAt(1, ", ");
     for (0..try leaf.size()) |i| {
-        const val = try leaf.getValue(i);
+        var val = try leaf.getValue(i);
+        defer val.deinit();
         std.debug.print("Leaf Value {}: {s}\n", .{ i, val.asSlice() });
     }
     std.debug.print("Leaf can insert: {}\n", .{try leaf.canInsertWeight(10)});
 
     const pos = try leaf.selectPos(6);
     std.debug.print("Select Pos for weight 6: pos={}, weight={}, accumulated={}\n", .{ pos.pos, pos.diff, pos.accumulated });
+
+    var first = try leaf.getValue(0);
+    defer first.deinit();
+    var left = try first.splitOfLeft(3);
+    defer left.deinit();
+    std.debug.print("After splitOfLeft(3):\n", .{});
+    std.debug.print("  Left: {s}\n", .{left.asSlice()});
+    std.debug.print("  Original: {s}\n", .{first.asSlice()});
 }
 
 test "WBpt Create with Memory model" {

@@ -18,8 +18,8 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
     const Context = struct {
         const Self = @This();
-        allocator: std.mem.Allocator,
 
+        allocator: std.mem.Allocator,
         pub fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .allocator = allocator,
@@ -29,16 +29,57 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
     const ValueViewImpl = struct {
         const Self = @This();
-        value: *Value,
+        const Error = std.mem.Allocator.Error;
 
-        pub fn init(value: *Value) Self {
+        value: Value,
+        own: bool = false,
+        ctx: *Context = undefined,
+
+        pub fn init(value: Value, ctx: *Context) Self {
             return .{
                 .value = value,
+                .own = false,
+                .ctx = ctx,
             };
         }
 
-        pub fn deinit(_: *Self) void {
-            // no-op
+        pub fn initOwned(value: Value, ctx: *Context) Self {
+            return .{
+                .value = value,
+                .own = true,
+                .ctx = ctx,
+            };
+        }
+
+        pub fn splitOfRight(self: *Self, pos: Weight) Error!Self {
+            const result_weight = self.weight() - pos;
+            var new_value = try std.ArrayList(T).initCapacity(self.ctx.allocator, result_weight);
+            errdefer new_value.deinit(self.ctx.allocator);
+
+            try new_value.appendSlice(self.ctx.allocator, self.value.items[pos..self.value.items.len]);
+            self.value.shrinkRetainingCapacity(pos);
+
+            return Self.initOwned(new_value, self.ctx);
+        }
+
+        pub fn splitOfLeft(self: *Self, pos: Weight) Error!Self {
+            const result_weight = pos;
+            var new_value = try std.ArrayList(T).initCapacity(self.ctx.allocator, result_weight);
+            errdefer new_value.deinit(self.ctx.allocator);
+            try new_value.appendSlice(self.ctx.allocator, self.value.items[0..pos]);
+
+            const tail_values = self.value.items[pos..self.value.items.len];
+            const head_place = self.value.items[0..tail_values.len];
+            @memmove(head_place, tail_values);
+            self.value.shrinkAndFree(self.ctx.allocator, tail_values.len);
+
+            return Self.initOwned(new_value, self.ctx);
+        }
+
+        pub fn deinit(self: *Self) void {
+            if (self.own) {
+                self.value.deinit(self.ctx.allocator);
+            }
         }
 
         pub fn weight(self: *const Self) Weight {
@@ -136,6 +177,12 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             return MaximumElements;
         }
 
+        pub fn isUnderflowed(self: *const Self) Error!bool {
+            const sz = try self.size();
+            const cap = try self.capacity();
+            return sz < (cap / 2);
+        }
+
         pub fn id(self: *const Self) Pid {
             return self.pid;
         }
@@ -166,7 +213,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
         pub fn getValue(self: *const Self, pos: usize) Error!ValueViewImpl {
             try self.checkPos(pos);
-            return ValueViewImpl.init(&self.leaf.values.items[pos]);
+            return ValueViewImpl.init(self.leaf.values.items[pos], self.ctx);
         }
 
         pub fn canInsertWeight(self: *const Self, weight: Weight) Error!bool {
@@ -181,6 +228,10 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             }
             return true;
         }
+
+        // pub fn insertWeight(self: *Self, val: []const T, weight: Weight) Error!void {
+        //     const pos = try self.selectPos(weight);
+        // }
 
         pub fn insertAt(self: *Self, pos: usize, val: []const T) Error!void {
             if (pos > self.leaf.values.items.len) {
