@@ -29,6 +29,29 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
     const ValueViewImpl = struct {
         const Self = @This();
+        const Error = error{};
+
+        value: []const T,
+
+        pub fn init(value: []const T) Error!Self {
+            return .{
+                .value = value,
+            };
+        }
+
+        pub fn deinit(_: *Self) void {}
+
+        pub fn weight(self: *const Self) Error!Weight {
+            return @as(Weight, @intCast(self.value.len));
+        }
+
+        pub fn get(self: *const Self) Error![]const T {
+            return self.value;
+        }
+    };
+
+    const ValuePolicyImpl = struct {
+        const Self = @This();
         const Error = std.mem.Allocator.Error;
 
         const ValueUnion = union(enum) {
@@ -95,8 +118,8 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         }
 
         pub fn weight(self: *const Self) Weight {
-            switch (self.value.*) {
-                .owned => |*owned_val| return @as(Weight, @intCast(owned_val.len)),
+            switch (self.value) {
+                .owned => |*owned_val| return @as(Weight, @intCast(owned_val.items.len)),
                 .borrowed => |borrowed_val| return @as(Weight, @intCast(borrowed_val.items.len)),
             }
         }
@@ -106,6 +129,10 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
                 .owned => |*owned_val| return owned_val.items[0..owned_val.items.len],
                 .borrowed => |borrowed_val| return borrowed_val.items[0..borrowed_val.items.len],
             }
+        }
+
+        pub fn get(self: *const Self) Error![]const T {
+            return self.asSlice();
         }
 
         pub fn asSliceMut(self: *Self) []T {
@@ -129,7 +156,26 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
     const InodeContainer = struct {
         const Self = @This();
-        fn deinit(_: *Self, _: std.mem.Allocator) void {}
+        const Error = std.mem.Allocator.Error;
+
+        const WeightChild = struct {
+            weight: Weight,
+            pid: Pid,
+        };
+
+        values: std.ArrayList(WeightChild),
+        total_weight: Weight = 0,
+        parent: ?Pid = null,
+
+        fn init(allocator: std.mem.Allocator) Error!Self {
+            return .{
+                .values = try std.ArrayList(WeightChild).initCapacity(allocator, 0),
+            };
+        }
+
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.values.deinit(allocator);
+        }
     };
 
     const LeafContainer = struct {
@@ -154,33 +200,152 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             for (self.values.items) |*item| {
                 item.deinit(allocator);
             }
-
             self.values.deinit(allocator);
         }
     };
 
     const InodeImpl = struct {
         const Self = @This();
-        const Error = errors.HandleError || std.mem.Allocator.Error;
+        const Error = errors.HandleError ||
+            errors.IndexError ||
+            std.mem.Allocator.Error;
 
         pid: Pid,
-        inode: ?*InodeContainer = null,
+        inode: *InodeContainer = undefined,
+        ctx: *Context = undefined,
 
-        fn init(inode: *InodeContainer, pid: Pid) Self {
+        fn init(inode: *InodeContainer, ctx: *Context, pid: Pid) Self {
             return .{
                 .pid = pid,
                 .inode = inode,
+                .ctx = ctx,
             };
+        }
+
+        pub fn size(self: *const Self) Error!usize {
+            return self.inode.values.items.len;
+        }
+
+        pub fn capacity(_: *const Self) Error!usize {
+            return MaximumElements;
+        }
+
+        pub fn isUnderflowed(self: *const Self) Error!bool {
+            const sz = try self.size();
+            const cap = try self.capacity();
+            return sz < (cap / 2);
+        }
+
+        pub fn totalWeight(self: *const Self) Error!Weight {
+            return self.inode.total_weight;
+        }
+
+        pub fn canInsertAt(self: *const Self, _: usize, _: Weight) Error!bool {
+            const sz = try self.size();
+            const cap = try self.capacity();
+            const current_available = cap - sz;
+            return current_available > 0;
         }
 
         pub fn id(self: *const Self) Pid {
             return self.pid;
         }
 
-        fn check(self: *const Self) Error!void {
-            if (self.inode == null) {
-                return error.InvalidHandle;
+        pub fn getParent(self: *const Self) Error!?Pid {
+            return self.inode.parent;
+        }
+
+        pub fn setParent(self: *Self, parent: ?Pid) Error!void {
+            self.inode.parent = parent;
+        }
+
+        pub fn insertChild(self: *Self, pos: usize, child: Pid, weight: Weight) Error!void {
+            if (pos > self.inode.values.items.len) {
+                return Error.OutOfBounds;
             }
+            if (self.inode.values.items.len >= MaximumElements) {
+                return Error.NodeFull;
+            }
+
+            try self.inode.values.insert(self.ctx.allocator, pos, .{
+                .weight = weight,
+                .pid = child,
+            });
+            self.inode.total_weight += weight;
+        }
+
+        pub fn removeAt(self: *Self, pos: usize) Error!void {
+            if (pos >= self.inode.values.items.len) {
+                return Error.OutOfBounds;
+            }
+            const removed = self.inode.values.orderedRemove(pos);
+            self.inode.total_weight -= removed.weight;
+        }
+
+        pub fn getChild(self: *const Self, pos: usize) Error!Pid {
+            if (pos >= self.inode.values.items.len) {
+                return Error.OutOfBounds;
+            }
+            return self.inode.values.items[pos].pid;
+        }
+
+        pub fn updateChild(self: *Self, pos: usize, new_child: Pid) Error!void {
+            if (pos >= self.inode.values.items.len) {
+                return Error.OutOfBounds;
+            }
+            self.inode.values.items[pos].pid = new_child;
+        }
+
+        pub fn getWeight(self: *const Self, pos: usize) Error!Weight {
+            if (pos >= self.inode.values.items.len) {
+                return Error.OutOfBounds;
+            }
+            return self.inode.values.items[pos].weight;
+        }
+
+        pub fn updateWeight(self: *Self, pos: usize, new_weight: Weight) Error!void {
+            if (pos >= self.inode.values.items.len) {
+                return Error.OutOfBounds;
+            }
+            const old_weight = self.inode.values.items[pos].weight;
+            self.inode.values.items[pos].weight = new_weight;
+            self.inode.total_weight = self.inode.total_weight - old_weight + new_weight;
+        }
+
+        pub fn selectPos(self: *const Self, weight: Weight) Error!NodePosition {
+            if (self.inode.values.items.len == 0) {
+                return .{
+                    .pos = 0,
+                    .diff = weight,
+                    .accumulated = 0,
+                };
+            }
+            const last_idx = self.inode.values.items.len - 1;
+            var accumulated: Weight = 0;
+            for (0..last_idx) |idx| {
+                const current = self.inode.values.items[idx].weight;
+                accumulated += current;
+                if (accumulated > weight) {
+                    const diff = accumulated - weight;
+                    const current_diff = (current - diff);
+                    return .{
+                        .pos = idx,
+                        .diff = current_diff,
+                        .accumulated = accumulated - current,
+                    };
+                } else if (accumulated == weight) {
+                    return .{
+                        .pos = idx + 1,
+                        .diff = 0,
+                        .accumulated = accumulated,
+                    };
+                }
+            }
+            return .{
+                .pos = last_idx,
+                .diff = weight - accumulated,
+                .accumulated = accumulated,
+            };
         }
     };
 
@@ -188,6 +353,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         const Self = @This();
         const PidType = Pid;
         const Error = errors.HandleError ||
+            errors.BptError ||
             errors.IndexError ||
             std.mem.Allocator.Error;
 
@@ -211,6 +377,14 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
         pub fn capacity(_: *const Self) Error!usize {
             return MaximumElements;
+        }
+
+        pub fn totalWeight(self: *const Self) Error!Weight {
+            var total: Weight = 0;
+            for (self.leaf.values.items) |*item| {
+                total += item.items.len;
+            }
+            return total;
         }
 
         pub fn isUnderflowed(self: *const Self) Error!bool {
@@ -243,36 +417,55 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             self.leaf.prev = prev;
         }
 
+        pub fn getParent(self: *const Self) Error!?Pid {
+            return self.leaf.parent;
+        }
+
         pub fn setParent(self: *Self, parent: ?Pid) Error!void {
             self.leaf.parent = parent;
         }
 
         pub fn getValue(self: *const Self, pos: usize) Error!ValueViewImpl {
             try self.checkPos(pos);
-            return ValueViewImpl.init(&self.leaf.values.items[pos], self.ctx);
+            return ValueViewImpl.init(self.leaf.values.items[pos].items);
         }
 
-        pub fn canInsertWeight(self: *const Self, weight: Weight) Error!bool {
+        pub fn canInsertWeight(self: *const Self, where: Weight) Error!bool {
             const current_weight = try self.size();
             const current_available = MaximumCapacity - current_weight;
             if (current_available == 0) {
                 return false;
             }
-            const pos = try self.selectPos(weight);
+            const pos = try self.selectPos(where);
             if (pos.diff > 0) {
                 return current_available > 1;
             }
             return true;
         }
 
-        // pub fn insertWeight(self: *Self, val: []const T, weight: Weight) Error!void {
-        //     const pos = try self.selectPos(weight);
-        // }
+        pub fn insertWeight(self: *Self, where: Weight, val: []const T) Error!void {
+            const pos = try self.selectPos(where);
+
+            if (pos.diff == 0) {
+                try self.insertAt(pos.pos, val);
+            } else {
+                var policy = ValuePolicyImpl.init(&self.leaf.values.items[pos.pos], self.ctx);
+                defer policy.deinit();
+                var new_policy = try policy.splitOfRight(pos.diff);
+                defer new_policy.deinit();
+                try self.insertAt(pos.pos + 1, new_policy.asSlice());
+                try self.insertAt(pos.pos + 1, val);
+            }
+        }
 
         pub fn insertAt(self: *Self, pos: usize, val: []const T) Error!void {
             if (pos > self.leaf.values.items.len) {
                 return Error.OutOfBounds;
             }
+            if (self.leaf.values.items.len >= MaximumCapacity) {
+                return Error.NodeFull;
+            }
+
             var new_val = try std.ArrayList(T).initCapacity(self.ctx.allocator, val.len);
             errdefer new_val.deinit(self.ctx.allocator);
             try new_val.appendSlice(self.ctx.allocator, val);
@@ -361,11 +554,11 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             self.values.deinit(self.ctx.allocator);
         }
 
-        pub fn getRoot(self: *const Self) Error!?usize {
+        pub fn getRoot(self: *const Self) Error!?Pid {
             return self.root;
         }
 
-        pub fn setRoot(self: *Self, root: ?usize) Error!void {
+        pub fn setRoot(self: *Self, root: ?Pid) Error!void {
             self.root = root;
         }
 
@@ -377,7 +570,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             return LeafImpl.init(&self.values.items[size].?.leaf, &self.ctx, size);
         }
 
-        pub fn loadLeaf(self: *Self, pid: Pid) Error!?LeafImpl {
+        pub fn loadLeaf(self: *Self, pid: Pid) Error!LeafImpl {
             if (pid >= self.values.items.len) {
                 return Error.OutOfBounds;
             }
@@ -387,33 +580,37 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
                     else => return Error.InvalidId,
                 };
             }
-            return null;
+            return error.InvalidId;
         }
 
-        pub fn deinitLeaf(_: *Self, _: LeafImpl) void {}
+        pub fn deinitLeaf(_: *Self, leaf: *LeafImpl) void {
+            leaf.* = undefined;
+        }
 
         pub fn createInode(self: *Self) Error!InodeImpl {
             const size = self.values.items.len;
             try self.values.append(self.ctx.allocator, .{
-                .inode = InodeContainer{},
+                .inode = try InodeContainer.init(self.ctx.allocator),
             });
-            return InodeImpl.init(&self.values.items[size].?.inode, size);
+            return InodeImpl.init(&self.values.items[size].?.inode, &self.ctx, size);
         }
 
-        pub fn loadInode(self: *Self, pid: Pid) Error!?InodeImpl {
+        pub fn loadInode(self: *Self, pid: Pid) Error!InodeImpl {
             if (pid >= self.values.items.len) {
                 return Error.OutOfBounds;
             }
             if (self.values.items[pid]) |*node| {
                 return switch (node.*) {
-                    .inode => |*inode| InodeImpl.init(inode, pid),
+                    .inode => |*inode| InodeImpl.init(inode, &self.ctx, pid),
                     else => return Error.InvalidId,
                 };
             }
-            return null;
+            return error.InvalidId;
         }
 
-        pub fn deinitInode(_: *Self, _: InodeImpl) void {}
+        pub fn deinitInode(_: *Self, inode: *InodeImpl) void {
+            inode.* = undefined;
+        }
 
         pub fn isLeaf(self: *const Self, pid: Pid) Error!bool {
             if (pid >= self.values.items.len) {
@@ -429,15 +626,19 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
     return struct {
         const Self = @This();
         pub const AccessorType = AccessorImpl;
-        pub const ValueType = Value;
+        pub const ValueType = []const T;
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
+        //pub const ValuePolicyType = ValuePolicyImpl;
         pub const ValueViewType = ValueViewImpl;
         pub const WeightType = Weight;
         pub const PidType = Pid;
+        pub const NodePositionType = NodePosition;
 
         pub const Error = error{} ||
             AccessorImpl.Error ||
+            LeafImpl.Error ||
+            InodeImpl.Error ||
             std.mem.Allocator.Error;
 
         accessor: AccessorImpl,
