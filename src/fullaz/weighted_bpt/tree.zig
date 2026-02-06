@@ -175,9 +175,10 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         model: *Model,
         rebalance_policy: RebalancePolicy = .neighbor_share,
 
-        pub fn init(model: *Model) Self {
+        pub fn init(model: *Model, rebalance_policy: RebalancePolicy) Self {
             return .{
                 .model = model,
+                .rebalance_policy = rebalance_policy,
             };
         }
 
@@ -354,9 +355,35 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             return null;
         }
 
-        fn leafFindSelfSibling(self: *Self, leaf: *const Leaf) Error!?ParentInfo {
+        fn leafFindLeftSibling(self: *Self, leaf: *const Leaf) Error!?ParentInfo {
             var acc = self.getAccessor();
             var pinfo = try self.leafParentInfo(leaf);
+            if (pinfo) |*parent_info| {
+                errdefer acc.deinitInode(&parent_info.inode);
+                if (parent_info.pos > 0) {
+                    parent_info.pos -= 1;
+                    return parent_info.*;
+                }
+            }
+            return null;
+        }
+
+        fn inodeFindRightSibling(self: *Self, inode: *const Inode) Error!?ParentInfo {
+            var acc = self.getAccessor();
+            var pinfo = try self.inodeParentInfo(inode);
+            if (pinfo) |*parent_info| {
+                errdefer acc.deinitInode(&parent_info.inode);
+                if (parent_info.pos + 1 < try parent_info.inode.size()) {
+                    parent_info.pos += 1;
+                    return parent_info.*;
+                }
+            }
+            return null;
+        }
+
+        fn inodeFindLeftSibling(self: *Self, inode: *const Inode) Error!?ParentInfo {
+            var acc = self.getAccessor();
+            var pinfo = try self.inodeParentInfo(inode);
             if (pinfo) |*parent_info| {
                 errdefer acc.deinitInode(&parent_info.inode);
                 if (parent_info.pos > 0) {
@@ -392,7 +419,9 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 var ppos = try childIdInParent(&pinode, leaf.id());
 
                 if (!try pinode.canInsertAt(ppos, split_result.right_weight)) {
-                    try self.inodeHandleOverflow(&pinode);
+                    if (!try self.inodeTryShareNeighbor(&pinode, ppos)) {
+                        try self.inodeHandleOverflow(&pinode);
+                    }
                 }
 
                 const new_ppid = (try leaf.getParent()).?;
@@ -467,7 +496,9 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 var ppos = try childIdInParent(&pinode, inode.id());
 
                 if (!try pinode.canInsertAt(ppos, split_result.right_weight)) {
-                    try self.inodeHandleOverflow(&pinode);
+                    if (!try self.inodeTryShareNeighbor(&pinode, ppos)) {
+                        try self.inodeHandleOverflow(&pinode);
+                    }
                 }
 
                 const new_ppid = (try inode.getParent()).?;
@@ -565,7 +596,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
         fn leafTryBorrowFromLeft(self: *Self, leaf: *Leaf) Error!?MovedWeight {
             var acc = self.getAccessor();
-            if (try self.leafFindSelfSibling(leaf)) |*sibling_info| {
+            if (try self.leafFindLeftSibling(leaf)) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
 
                 const lpid = try sibling_info.inode.getChild(sibling_info.pos);
@@ -634,7 +665,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
         fn leafTryGiveToLeft(self: *Self, leaf: *Leaf, additional_entry: usize) Error!?MovedWeight {
             var acc = self.getAccessor();
-            var parent_info = try self.leafFindSelfSibling(leaf);
+            var parent_info = try self.leafFindLeftSibling(leaf);
             if (parent_info) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
 
@@ -716,6 +747,165 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                     try leaf.insertWeight(new_diff, val);
                     try self.leafFixParentWeight(leaf);
                 }
+                return true;
+            }
+
+            return false;
+        }
+
+        fn inodeTryBorrowFromRight(self: *Self, inode: *Inode) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            if (try self.inodeFindRightSibling(inode)) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+
+                const rpid = try sibling_info.inode.getChild(sibling_info.pos);
+                var right = acc.loadInode(rpid);
+                defer acc.deinitInode(&right);
+                return try self.inodeTryBorrowfromRightImpl(inode, &right, sibling_info);
+            }
+            return null;
+        }
+
+        fn inodeTryBorrowFromRightImpl(self: *Self, inode: *Inode, right: *Inode, sibling_info: *ParentInfo) Error!?MovedWeight {
+            const cap = try right.capacity();
+            const rsz = try right.size();
+            if (rsz > (cap / 2)) {
+                const inode_sz = try inode.size();
+                const old_weight = try right.totalWeight();
+                const first_child = try right.getChild(0);
+                const first_weight = try right.getWeight(0);
+
+                try inode.insertChild(inode_sz, first_child, first_weight);
+                try self.setChildParent(first_child, inode.id());
+                try right.removeAt(0);
+
+                const my_pos = sibling_info.pos - 1;
+                const my_weight = try sibling_info.inode.getWeight(my_pos);
+                try sibling_info.inode.updateWeight(my_pos, my_weight + first_weight);
+
+                const right_weight = try sibling_info.inode.getWeight(sibling_info.pos);
+                try sibling_info.inode.updateWeight(sibling_info.pos, right_weight - first_weight);
+                return MovedWeight{
+                    .target_pid = right.id(),
+                    .old = old_weight,
+                    .moved = first_weight,
+                };
+            }
+            return null;
+        }
+
+        fn inodeTryBorrowFromLeft(self: *Self, inode: *Inode) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            if (try self.inodeFindLeftSibling(inode)) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+
+                const lpid = try sibling_info.inode.getChild(sibling_info.pos);
+                var left = acc.loadInode(lpid);
+                defer acc.deinitInode(&left);
+                return try self.inodeTryBorrowFromLeftImpl(inode, &left, sibling_info);
+            }
+            return null;
+        }
+
+        fn inodeTryBorrowFromLeftImpl(self: *Self, inode: *Inode, left: *Inode, sibling_info: *ParentInfo) Error!?MovedWeight {
+            const cap = try left.capacity();
+            const lsz = try left.size();
+            if (lsz > (cap / 2)) {
+                const old_weight = try left.totalWeight();
+                const last_child = try left.getChild(lsz - 1);
+                const last_weight = try left.getWeight(lsz - 1);
+
+                try inode.insertChild(0, last_child, last_weight);
+                try self.setChildParent(last_child, inode.id());
+                try left.removeAt(lsz - 1);
+
+                const my_pos = sibling_info.pos + 1;
+                const my_weight = try sibling_info.inode.getWeight(my_pos);
+                try sibling_info.inode.updateWeight(my_pos, my_weight + last_weight);
+
+                const left_weight = try sibling_info.inode.getWeight(sibling_info.pos);
+                try sibling_info.inode.updateWeight(sibling_info.pos, left_weight - last_weight);
+                return MovedWeight{
+                    .target_pid = left.id(),
+                    .old = old_weight,
+                    .moved = last_weight,
+                };
+            }
+            return null;
+        }
+
+        fn inodeTryGiveToRight(self: *Self, inode: *Inode, additional_entry: usize) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            var parent_info = try self.inodeFindRightSibling(inode);
+            if (parent_info) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+
+                const rpos = sibling_info.pos;
+                const rpid = try sibling_info.inode.getChild(rpos);
+
+                var right = try acc.loadInode(rpid);
+                defer acc.deinitInode(&right);
+
+                sibling_info.pos -= 1; // make it point to self
+                const right_weight = try right.totalWeight();
+
+                const right_sz = try right.size();
+                const right_cap = try right.capacity();
+                if (right_sz < (right_cap - additional_entry)) {
+                    var moved = try self.inodeTryBorrowFromLeftImpl(&right, inode, sibling_info);
+                    if (moved) |*m| {
+                        m.target_pid = right.id();
+                        m.old = right_weight;
+                        return m.*;
+                    }
+                }
+            }
+            return null;
+        }
+
+        fn inodeTryGiveToLeft(self: *Self, inode: *Inode, additional_entry: usize) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            var parent_info = try self.inodeFindLeftSibling(inode);
+            if (parent_info) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+
+                const lpos = sibling_info.pos;
+                const lpid = try sibling_info.inode.getChild(lpos);
+
+                var left = try acc.loadInode(lpid);
+                defer acc.deinitInode(&left);
+
+                sibling_info.pos += 1; // make it point to self
+                const left_weight = try left.totalWeight();
+
+                const left_sz = try left.size();
+                const left_cap = try left.capacity();
+                if (left_sz < (left_cap - additional_entry)) {
+                    var moved = try self.inodeTryBorrowFromRightImpl(&left, inode, sibling_info);
+                    if (moved) |*m| {
+                        m.target_pid = left.id();
+                        m.old = left_weight;
+                        return m.*;
+                    }
+                }
+            }
+            return null;
+        }
+
+        fn inodeTryShareNeighbor(self: *Self, inode: *Inode, target_pos: usize) Error!bool {
+            if (self.rebalance_policy != .neighbor_share) {
+                return false;
+            }
+
+            const is_first = target_pos == 0;
+            const is_last = target_pos == (try inode.size() - 1);
+
+            const additional_for_right: usize = if (is_last) 1 else 0;
+            const additional_for_left: usize = if (is_first) 1 else 0;
+
+            if (try self.inodeTryGiveToRight(inode, additional_for_right)) |_| {
+                return true;
+            } else if (try self.inodeTryGiveToLeft(inode, additional_for_left)) |_| {
                 return true;
             }
 
@@ -827,21 +1017,21 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 }
                 std.debug.print("\n", .{});
 
-                // Print weights
-                printDepth(depth);
-                std.debug.print("  Weights: [", .{});
-                for (0..num_children) |i| {
-                    if (i > 0) std.debug.print(", ", .{});
-                    std.debug.print("{}", .{try inode.getWeight(i)});
-                }
-                std.debug.print("]\n", .{});
+                // // Print weights
+                // printDepth(depth);
+                // std.debug.print("  Weights: [", .{});
+                // for (0..num_children) |i| {
+                //     if (i > 0) std.debug.print(", ", .{});
+                //     std.debug.print("{}", .{try inode.getWeight(i)});
+                // }
+                // std.debug.print("]\n", .{});
 
                 // Print children IDs
                 printDepth(depth);
                 std.debug.print("  Children: [", .{});
                 for (0..num_children) |i| {
                     if (i > 0) std.debug.print(", ", .{});
-                    std.debug.print("{}", .{try inode.getChild(i)});
+                    std.debug.print("(#{} w:{})", .{ try inode.getChild(i), try inode.getWeight(i) });
                 }
                 std.debug.print("]\n", .{});
 
