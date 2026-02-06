@@ -4,6 +4,11 @@ pub const HandleError = error{
     InvalidHandle,
 };
 
+pub const IteratorError = error{
+    InvalidIterator,
+    EndOfIterator,
+};
+
 pub const PageError = error{
     InvalidId,
     BadType,

@@ -18,12 +18,14 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
     const Leaf = Model.LeafType;
     const Inode = Model.InodeType;
-    const Error = Model.Error || errors.BptError;
+    const Error = Model.Error ||
+        errors.IteratorError ||
+        errors.BptError;
 
     const FindResult = struct {
         leaf: Leaf, // leaf to insert into
         leaf_parent_pos: usize, // leaf position in parent
-        diff: Weight, // weight difference to insert at. weight offset within the leaf
+        leaf_weight: Weight, // weight difference to insert at. weight offset within the leaf
         node_pos: NodePosition,
     };
 
@@ -44,8 +46,131 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         left_weight: Weight,
     };
 
+    const MovedWeight = struct {
+        target_pid: Pid,
+        old: Weight,
+        moved: Weight,
+    };
+
+    const IteratorImpl = struct {
+        const Self = @This();
+
+        const Cursor = union(enum) {
+            before_begin,
+            on: usize,
+            after_end,
+        };
+
+        accessor: *Accessor,
+        leaf: ?Leaf = null,
+        cur: Cursor,
+
+        fn init(acc: *Accessor, leaf: Leaf, on: usize) !Self {
+            var res = Self{
+                .accessor = acc,
+                .leaf = leaf,
+                .cur = .{ .on = on },
+            };
+
+            if (try leaf.size() <= on) {
+                res.cur = .after_end;
+            }
+
+            return res;
+        }
+
+        pub fn get(self: *const Self) Error!ValueView {
+            try self.check();
+            const val = try self.leaf.?.getValue(self.cur.on);
+            return ValueView.init(try val.get());
+        }
+
+        pub fn next(self: *Self) Error!bool {
+            try self.check();
+            if (self.cur == .before_begin) {
+                self.cur = .{ .on = 0 };
+                return true;
+            }
+            if (self.cur.on + 1 < try self.leaf.?.size()) {
+                self.cur = .{ .on = self.cur.on + 1 };
+                return true;
+            } else {
+                try self.moveToNext();
+                return self.cur != .after_end;
+            }
+        }
+
+        pub fn prev(self: *Self) Error!bool {
+            try self.check();
+            if (self.cur == .after_end) {
+                const sz = try self.leaf.?.size();
+                if (sz == 0) {
+                    self.cur = .before_begin;
+                } else {
+                    self.cur = .{ .on = sz - 1 };
+                }
+                return true;
+            }
+            if (self.cur.on > 0) {
+                self.cur = .{ .on = self.cur.on - 1 };
+                return true;
+            } else {
+                try self.moveToPrev();
+                return self.cur != .before_begin;
+            }
+        }
+
+        pub fn isEnd(self: *const Self) bool {
+            return self.cur == .after_end;
+        }
+
+        pub fn isBegin(self: *const Self) bool {
+            return self.cur == .before_begin;
+        }
+
+        pub fn deinit(self: *Self) void {
+            if (self.leaf) |*leaf| {
+                self.accessor.deinitLeaf(leaf);
+            }
+            self.leaf = null;
+        }
+
+        fn moveToNext(self: *Self) Error!void {
+            try self.check();
+            if (try self.leaf.?.getNext()) |next_pid| {
+                var next_leaf = try self.accessor.loadLeaf(next_pid);
+                errdefer self.accessor.deinitLeaf(&next_leaf);
+                self.accessor.deinitLeaf(&(self.leaf.?));
+                self.leaf = next_leaf;
+                self.cur = .{ .on = 0 };
+            } else {
+                self.cur = .after_end;
+            }
+        }
+
+        fn moveToPrev(self: *Self) Error!void {
+            try self.check();
+            if (try self.leaf.?.getPrev()) |prev_pid| {
+                var prev_leaf = try self.accessor.loadLeaf(prev_pid);
+                errdefer self.accessor.deinitLeaf(&prev_leaf);
+                self.accessor.deinitLeaf(&(self.leaf.?));
+                self.leaf = prev_leaf;
+                self.cur = .{ .on = try prev_leaf.size() - 1 };
+            } else {
+                self.cur = .before_begin;
+            }
+        }
+
+        fn check(self: *const Self) !void {
+            if (self.leaf == null) {
+                return Error.InvalidIterator;
+            }
+        }
+    };
+
     return struct {
         const Self = @This();
+        const Iterator = IteratorImpl;
 
         model: *Model,
         rebalance_policy: RebalancePolicy = .neighbor_share,
@@ -58,6 +183,39 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
         pub fn deinit(_: *Self) void {}
 
+        pub fn iterator(self: *Self) Error!Iterator {
+            var acc = self.getAccessor();
+            const root = try acc.getRoot();
+            if (root) |root_pid| {
+                const leaf = try self.getLeftmostLeaf(root_pid);
+                return try Iterator.init(acc, leaf, 0);
+            } else {
+                return Iterator{
+                    .accessor = acc,
+                    .leaf = null,
+                    .cur = .after_end,
+                };
+            }
+        }
+
+        pub fn totalWeight(self: *Self) Error!Weight {
+            var acc = self.getAccessor();
+            const root = try acc.getRoot();
+            if (root) |root_pid| {
+                if (try acc.isLeaf(root_pid)) {
+                    var leaf = try acc.loadLeaf(root_pid);
+                    defer acc.deinitLeaf(&leaf);
+                    return try leaf.totalWeight();
+                } else {
+                    var inode = try acc.loadInode(root_pid);
+                    defer acc.deinitInode(&inode);
+                    return try inode.totalWeight();
+                }
+            } else {
+                return 0;
+            }
+        }
+
         pub fn insert(self: *Self, where: Weight, value: Value) Error!bool {
             var accessor = self.getAccessor();
             const root = try accessor.getRoot();
@@ -68,11 +226,13 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 var value_view = try ValueView.init(value);
                 defer value_view.deinit();
 
-                if (try find_result.leaf.canInsertWeight(find_result.diff)) {
-                    try find_result.leaf.insertWeight(find_result.diff, try value_view.get());
+                if (try find_result.leaf.canInsertWeight(find_result.leaf_weight)) {
+                    try find_result.leaf.insertWeight(find_result.leaf_weight, try value_view.get());
                     try self.leafFixParentWeight(&find_result.leaf);
                 } else {
-                    try self.leafHandleOverflowImpl(&find_result.leaf, find_result.diff, try value_view.get());
+                    if (!try self.leafTryShareNeighbor(&find_result, value)) {
+                        try self.leafHandleOverflowImpl(&find_result.leaf, find_result.leaf_weight, try value_view.get());
+                    }
                 }
                 return true;
             } else {
@@ -139,7 +299,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                     return FindResult{
                         .leaf = leaf,
                         .leaf_parent_pos = parent_pos,
-                        .diff = weight - accumulated,
+                        .leaf_weight = weight - accumulated,
                         .node_pos = leaf_pos,
                     };
                 } else {
@@ -181,16 +341,42 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             return null; // no parent, root inode
         }
 
+        fn leafFindRightSibling(self: *Self, leaf: *const Leaf) Error!?ParentInfo {
+            var acc = self.getAccessor();
+            var pinfo = try self.leafParentInfo(leaf);
+            if (pinfo) |*parent_info| {
+                errdefer acc.deinitInode(&parent_info.inode);
+                if (parent_info.pos + 1 < try parent_info.inode.size()) {
+                    parent_info.pos += 1;
+                    return parent_info.*;
+                }
+            }
+            return null;
+        }
+
+        fn leafFindSelfSibling(self: *Self, leaf: *const Leaf) Error!?ParentInfo {
+            var acc = self.getAccessor();
+            var pinfo = try self.leafParentInfo(leaf);
+            if (pinfo) |*parent_info| {
+                errdefer acc.deinitInode(&parent_info.inode);
+                if (parent_info.pos > 0) {
+                    parent_info.pos -= 1;
+                    return parent_info.*;
+                }
+            }
+            return null;
+        }
+
         /// split, handle overflow
-        fn leafHandleOverflowImpl(self: *Self, leaf: *Leaf, weight_diff: Weight, val: Value) Error!void {
+        fn leafHandleOverflowImpl(self: *Self, leaf: *Leaf, leaf_weight: Weight, val: Value) Error!void {
             var acc = self.getAccessor();
             var sres = try self.leafHandleOverflow(leaf);
             defer acc.deinitLeaf(&sres.right);
-            if (weight_diff < sres.left_weight) {
-                try leaf.insertWeight(weight_diff, val);
+            if (leaf_weight < sres.left_weight) {
+                try leaf.insertWeight(leaf_weight, val);
                 try self.leafFixParentWeight(leaf);
             } else {
-                try sres.right.insertWeight(weight_diff - sres.left_weight, val);
+                try sres.right.insertWeight(leaf_weight - sres.left_weight, val);
                 try self.leafFixParentWeight(&sres.right);
             }
         }
@@ -333,7 +519,208 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             };
         }
 
-        // borrowing and giving values between neighbors for rebalancing, TODO
+        // borrowing and giving values between neighbors for rebalancing
+
+        fn leafTryBorrowFromRight(self: *Self, leaf: *Leaf) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            if (try self.leafFindRightSibling(leaf)) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+
+                const rpid = try sibling_info.inode.getChild(sibling_info.pos);
+                var right = acc.loadLeaf(try sibling_info.inode.getChild(rpid));
+                defer acc.deinitLeaf(&right);
+
+                return try self.leafTryBorrowFromRightImpl(leaf, &right, sibling_info);
+            }
+            return null;
+        }
+
+        fn leafTryBorrowFromRightImpl(_: *const Self, leaf: *Leaf, right: *Leaf, sibling_info: *ParentInfo) Error!?MovedWeight {
+            const cap = try right.capacity();
+            const rsz = try right.size();
+            if (rsz > (cap / 2)) {
+                var val = try right.getValue(0);
+                defer val.deinit();
+
+                const moved_weight = try val.weight();
+                const lsz = try leaf.size();
+                try leaf.insertAt(lsz, try val.get());
+
+                try right.removeAt(0);
+
+                const my_pos = sibling_info.pos - 1;
+                const my_weight = try sibling_info.inode.getWeight(my_pos);
+                try sibling_info.inode.updateWeight(my_pos, my_weight + moved_weight);
+
+                const right_weight = try sibling_info.inode.getWeight(sibling_info.pos);
+                try sibling_info.inode.updateWeight(sibling_info.pos, right_weight - moved_weight);
+                return MovedWeight{
+                    .target_pid = right.id(),
+                    .old = right_weight,
+                    .moved = moved_weight,
+                };
+            }
+            return null;
+        }
+
+        fn leafTryBorrowFromLeft(self: *Self, leaf: *Leaf) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            if (try self.leafFindSelfSibling(leaf)) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+
+                const lpid = try sibling_info.inode.getChild(sibling_info.pos);
+                var left = acc.loadLeaf(lpid);
+                defer acc.deinitLeaf(&left);
+
+                return try self.leafTryBorrowFromLeftImpl(leaf, &left, sibling_info);
+            }
+            return null;
+        }
+
+        fn leafTryBorrowFromLeftImpl(_: *const Self, leaf: *Leaf, left: *Leaf, sibling_info: *ParentInfo) Error!?MovedWeight {
+            const cap = try left.capacity();
+            const lsz = try left.size();
+            if (lsz > (cap / 2)) {
+                var val = try left.getValue(lsz - 1);
+                defer val.deinit();
+
+                const moved_weight = try val.weight();
+                try leaf.insertAt(0, try val.get());
+                try left.removeAt(lsz - 1);
+
+                const my_pos = sibling_info.pos + 1;
+                const my_weight = try sibling_info.inode.getWeight(my_pos);
+                try sibling_info.inode.updateWeight(my_pos, my_weight + moved_weight);
+
+                const left_weight = try sibling_info.inode.getWeight(sibling_info.pos);
+                try sibling_info.inode.updateWeight(sibling_info.pos, left_weight - moved_weight);
+                return MovedWeight{
+                    .target_pid = left.id(),
+                    .old = left_weight,
+                    .moved = moved_weight,
+                };
+            }
+            return null;
+        }
+
+        fn leafTryGiveToRight(self: *Self, leaf: *Leaf, additional_entry: usize) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            var parent_info = try self.leafFindRightSibling(leaf);
+            if (parent_info) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+
+                const rpos = sibling_info.pos;
+                const rpid = try sibling_info.inode.getChild(rpos);
+
+                var right = try acc.loadLeaf(rpid);
+                defer acc.deinitLeaf(&right);
+
+                sibling_info.pos -= 1; // make it point to self
+                const right_weight = try right.totalWeight();
+
+                const right_sz = try right.size();
+                const right_cap = try right.capacity();
+                if (right_sz < (right_cap - additional_entry)) {
+                    var moved = try self.leafTryBorrowFromLeftImpl(&right, leaf, sibling_info);
+                    if (moved) |*m| {
+                        m.target_pid = right.id();
+                        m.old = right_weight;
+                        return m.*;
+                    }
+                }
+            }
+            return null;
+        }
+
+        fn leafTryGiveToLeft(self: *Self, leaf: *Leaf, additional_entry: usize) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            var parent_info = try self.leafFindSelfSibling(leaf);
+            if (parent_info) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+
+                const lpos = sibling_info.pos;
+                const lpid = try sibling_info.inode.getChild(lpos);
+
+                var left = try acc.loadLeaf(lpid);
+                defer acc.deinitLeaf(&left);
+
+                sibling_info.pos += 1; // make it point to self
+                const left_weight = try left.totalWeight();
+
+                const left_sz = try left.size();
+                const left_cap = try left.capacity();
+                if (left_sz < (left_cap - additional_entry)) {
+                    var moved = try self.leafTryBorrowFromRightImpl(&left, leaf, sibling_info);
+                    if (moved) |*m| {
+                        m.target_pid = left.id();
+                        m.old = left_weight;
+                        return m.*;
+                    }
+                }
+            }
+            return null;
+        }
+
+        fn leafTryShareNeighbor(self: *Self, fres: *FindResult, val: Value) Error!bool {
+            if (self.rebalance_policy != .neighbor_share) {
+                return false;
+            }
+
+            const leaf = &fres.leaf;
+            const l_sz = try leaf.size();
+            const l_cap = try leaf.capacity();
+
+            // in page model it's possible to have size > capacity with variadic sized entries,
+            if (l_sz > l_cap) { // can not share in this case and have to split
+                return false;
+            }
+
+            var acc = self.getAccessor();
+            const pos_in_leaf = fres.node_pos.pos;
+            const diff_in_leaf = fres.node_pos.diff;
+            const is_first = pos_in_leaf == 0;
+            const is_last = pos_in_leaf == (try leaf.size() - 1);
+            const additional_entry: usize = if (diff_in_leaf == 0) 0 else 1;
+
+            if (l_cap - l_sz < additional_entry) {
+                // not enough space even with sharing
+                // as we need to split an entry in the leaf to insert the new value
+                return false;
+            }
+
+            const additional_for_right = if (is_last) 1 + additional_entry else 0;
+            const additional_for_left = if (is_first) 1 + additional_entry else 0;
+
+            if (try self.leafTryGiveToRight(leaf, additional_for_right)) |m| {
+                if (is_last) {
+                    var right = try acc.loadLeaf(m.target_pid);
+                    defer acc.deinitLeaf(&right);
+                    const current_weight = try leaf.totalWeight();
+                    const new_diff = fres.leaf_weight - current_weight;
+                    try right.insertWeight(new_diff, val);
+                    try self.leafFixParentWeight(&right);
+                } else {
+                    try leaf.insertWeight(fres.leaf_weight, val);
+                    try self.leafFixParentWeight(leaf);
+                }
+                return true;
+            } else if (try self.leafTryGiveToLeft(leaf, additional_for_left)) |m| {
+                if (is_first) {
+                    var left = try acc.loadLeaf(m.target_pid);
+                    defer acc.deinitLeaf(&left);
+                    const new_diff = m.old + fres.node_pos.diff;
+                    try left.insertWeight(new_diff, val);
+                    try self.leafFixParentWeight(&left);
+                } else {
+                    const new_diff = fres.leaf_weight - m.moved;
+                    try leaf.insertWeight(new_diff, val);
+                    try self.leafFixParentWeight(leaf);
+                }
+                return true;
+            }
+
+            return false;
+        }
 
         ////
 
@@ -358,6 +745,20 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 }
             }
             return Error.ChildNotFoundInParent;
+        }
+
+        fn getLeftmostLeaf(self: *Self, from: Pid) Error!Leaf {
+            var acc = self.getAccessor();
+            var current_pid = from;
+            while (true) {
+                if (try acc.isLeaf(current_pid)) {
+                    return try acc.loadLeaf(current_pid);
+                } else {
+                    var inode = try acc.loadInode(current_pid);
+                    defer acc.deinitInode(&inode);
+                    current_pid = try inode.getChild(0);
+                }
+            }
         }
 
         fn printDepth(d: usize) void {
