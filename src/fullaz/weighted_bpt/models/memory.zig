@@ -529,6 +529,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         const Error =
             errors.IndexError ||
             errors.PageError ||
+            LeafImpl.Error ||
             std.mem.Allocator.Error;
 
         ctx: Context = undefined,
@@ -593,6 +594,13 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             return error.InvalidId;
         }
 
+        pub fn canMergeLeafs(_: *const Self, dst: *const LeafImpl, src: *const LeafImpl) Error!bool {
+            const dst_sz = try dst.size();
+            const dst_cap = try dst.capacity();
+            const src_sz = try src.size();
+            return dst_cap >= (dst_sz + src_sz);
+        }
+
         pub fn deinitLeaf(_: *Self, leaf: *LeafImpl) void {
             leaf.* = undefined;
         }
@@ -622,6 +630,13 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             return error.InvalidId;
         }
 
+        pub fn canMergeInodes(_: *const Self, dst: *const InodeImpl, src: *const InodeImpl) Error!bool {
+            const dst_sz = try dst.size();
+            const dst_cap = try dst.capacity();
+            const src_sz = try src.size();
+            return dst_cap >= (dst_sz + src_sz);
+        }
+
         pub fn deinitInode(_: *Self, inode: *InodeImpl) void {
             inode.* = undefined;
         }
@@ -634,6 +649,19 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
                 .leaf => true,
                 .inode => false,
             };
+        }
+
+        pub fn destroy(self: *Self, pid: Pid) Error!void {
+            if (pid >= self.values.items.len) {
+                return Error.OutOfBounds;
+            }
+            if (self.values.items[pid]) |*node| {
+                switch (node.*) {
+                    .inode => |inode| self.ctx.allocator.destroy(inode),
+                    .leaf => |leaf| self.ctx.allocator.destroy(leaf),
+                }
+                self.values.items[pid] = null;
+            }
         }
     };
 

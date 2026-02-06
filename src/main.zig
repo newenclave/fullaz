@@ -15,7 +15,7 @@ pub fn main() !void {
     slots2.formatHeader();
 
     // Fill slots1 almost completely
-    _ = try slots1.insert("abcdefgh");
+    _ = try slots1.insert("abcdefgh01234567890");
 
     // slots2 has too much data
     _ = try slots2.insert("12345678901234567890");

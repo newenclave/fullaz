@@ -6,38 +6,7 @@ const MemoryModel = wbpt.models.memory.Model;
 
 const String = std.ArrayList(u8);
 
-// test "WBpt Leaf Create and insert" {
-//     const Model = MemoryModel(u8, 4);
-
-//     const allocator = std.testing.allocator;
-//     var model = try Model.init(allocator);
-//     defer model.deinit();
-//     var acc = model.getAccessor();
-
-//     var leaf = try acc.createLeaf();
-//     try leaf.insertAt(0, "hello");
-//     try leaf.insertAt(1, "world");
-//     try leaf.insertAt(1, ", ");
-//     for (0..try leaf.size()) |i| {
-//         var val = try leaf.getValue(i);
-//         defer val.deinit();
-//         std.debug.print("Leaf Value {}: {s}\n", .{ i, try val.get() });
-//     }
-//     std.debug.print("Leaf can insert: {}\n", .{try leaf.canInsertWeight(10)});
-
-//     const pos = try leaf.selectPos(6);
-//     std.debug.print("Select Pos for weight 6: pos={}, weight={}, accumulated={}\n", .{ pos.pos, pos.diff, pos.accumulated });
-
-//     var first = try leaf.getValue(0);
-//     defer first.deinit();
-//     var right = try first.splitOfRight(3);
-//     defer right.deinit();
-//     std.debug.print("After splitOfRight(3):\n", .{});
-//     std.debug.print("  Right: {s}\n", .{right.asSlice()});
-//     std.debug.print("  Original: {s}\n", .{first.asSlice()});
-// }
-
-test "WBpt Create with Memory model" {
+test "WBpt: Create with Memory model" {
     const Model = MemoryModel(u8, 16);
     const Tree = wbpt.WeightedBpt(Model);
 
@@ -109,6 +78,8 @@ test "WBpt: insertion" {
     _ = try tree.insert(11, " !!!!!! ");
     _ = try tree.insert(15, " ??? ");
     _ = try tree.insert(0, "Lets begin!");
+    //_ = try tree.insert(1000, "end");
+    //try tree.removeEntry(0);
 
     var acc = model.getAccessor();
     var leaf = try acc.loadLeaf(0);

@@ -245,6 +245,22 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             }
         }
 
+        pub fn removeEntry(self: *Self, where: Weight) Error!void {
+            var acc = self.getAccessor();
+            if (try acc.getRoot()) |root| {
+                var find_result = try self.findLeafForWeight(root, where);
+                defer acc.deinitLeaf(&find_result.leaf);
+                var leaf = &find_result.leaf;
+                const leaf_sz = try leaf.size();
+                const leaf_pos = find_result.node_pos.pos;
+                if (leaf_pos < leaf_sz) {
+                    try leaf.removeAt(leaf_pos);
+                    try self.leafFixParentWeight(leaf);
+                    try self.leafHandleUnderflow(leaf);
+                }
+            }
+        }
+
         pub fn dump(self: *Self) void {
             var acc = self.getAccessor();
             const root = acc.getRoot() catch |err| {
@@ -554,11 +570,12 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
         fn leafTryBorrowFromRight(self: *Self, leaf: *Leaf) Error!?MovedWeight {
             var acc = self.getAccessor();
-            if (try self.leafFindRightSibling(leaf)) |*sibling_info| {
+            var pinfo = try self.leafFindRightSibling(leaf);
+            if (pinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
 
                 const rpid = try sibling_info.inode.getChild(sibling_info.pos);
-                var right = acc.loadLeaf(try sibling_info.inode.getChild(rpid));
+                var right = try acc.loadLeaf(try sibling_info.inode.getChild(rpid));
                 defer acc.deinitLeaf(&right);
 
                 return try self.leafTryBorrowFromRightImpl(leaf, &right, sibling_info);
@@ -596,11 +613,12 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
         fn leafTryBorrowFromLeft(self: *Self, leaf: *Leaf) Error!?MovedWeight {
             var acc = self.getAccessor();
-            if (try self.leafFindLeftSibling(leaf)) |*sibling_info| {
+            var pinof = try self.leafFindLeftSibling(leaf);
+            if (pinof) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
 
                 const lpid = try sibling_info.inode.getChild(sibling_info.pos);
-                var left = acc.loadLeaf(lpid);
+                var left = try acc.loadLeaf(lpid);
                 defer acc.deinitLeaf(&left);
 
                 return try self.leafTryBorrowFromLeftImpl(leaf, &left, sibling_info);
@@ -912,10 +930,276 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             return false;
         }
 
+        // merging and underflow
+
+        fn leafHandleUnderflow(self: *Self, leaf: *Leaf) Error!void {
+            if (!try leaf.isUnderflowed()) {
+                return;
+            }
+
+            var acc = self.getAccessor();
+            if (try acc.getRoot()) |root| {
+                if (root == leaf.id() and try leaf.size() == 0) {
+                    try acc.setRoot(null);
+                    try acc.destroy(root);
+                    return;
+                }
+            }
+
+            if (self.rebalance_policy == .neighbor_share) {
+                if (try self.leafTryBorrowFromRight(leaf) orelse
+                    try self.leafTryBorrowFromLeft(leaf)) |_|
+                {
+                    return;
+                }
+            }
+
+            const moved_weight =
+                try self.leafTryMergeWithRight(leaf) orelse
+                try self.leafTryMergeWithLeft(leaf);
+
+            if (moved_weight) |_| {
+                if (try leaf.getParent()) |ppid| {
+                    var parent = try acc.loadInode(ppid);
+                    defer acc.deinitInode(&parent);
+                    try self.inodeFixParentWeight(&parent);
+                }
+            }
+        }
+
+        fn inodeHandleUnderflow(self: *Self, inode: *Inode) Error!void {
+            if (!inode.isUnderflowed()) {
+                return;
+            }
+            var acc = self.getAccessor();
+            if (try acc.getRoot()) |root| {
+                if (root == inode.id() and inode.size() == 1) {
+                    const c = inode.getChild(0);
+                    try self.setChildParent(c, null);
+                    try acc.setRoot(c);
+                    try acc.destroy(root);
+                    return;
+                }
+            }
+            if (self.rebalance_policy == .neighbor_share) {
+                if (try self.inodeTryBorrowFromRight() orelse
+                    try self.inodeTryBorrowFromleft()) |_|
+                {
+                    return;
+                }
+            }
+
+            const moved_weight =
+                try self.inodeTryMergeWithRight(inode) orelse
+                try self.inodeTryMergeWithLeft(inode);
+
+            if (moved_weight) |_| {
+                if (inode.getParent()) |ppid| {
+                    var parent = acc.loadInode(ppid);
+                    defer acc.deinitInode(&parent);
+                    try self.inodeFixParentWeight(&parent);
+                }
+            }
+        }
+
+        fn leafTryMergeWithRight(self: *Self, leaf: *Leaf) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            var sinfo = try self.leafFindRightSibling(leaf);
+            if (sinfo) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+                var parent = &sibling_info.inode;
+
+                const rpos = sibling_info.pos;
+                const rpid = try parent.getChild(rpos);
+                var right = try acc.loadLeaf(rpid);
+                defer acc.deinitLeaf(&right);
+
+                if (try acc.canMergeLeafs(leaf, &right)) {
+                    var moved_weight: Weight = 0;
+                    const right_sz = try right.size();
+                    const leaf_sz = try leaf.size();
+                    for (0..right_sz) |id| {
+                        var val = try right.getValue(id);
+                        defer val.deinit();
+                        moved_weight += try val.weight();
+                        try leaf.insertAt(leaf_sz + id, try val.get());
+                    }
+
+                    const right_next = try right.getNext();
+                    try leaf.setNext(right_next);
+                    if (right_next) |rn| {
+                        try leaf.setNext(try right.getNext());
+                        var rnext = try acc.loadLeaf(rn);
+                        defer acc.deinitLeaf(&rnext);
+                        try rnext.setPrev(leaf.id());
+                    }
+                    const rweight = try parent.getWeight(rpos);
+                    const leaf_weight = try parent.getWeight(rpos - 1);
+                    try parent.updateWeight(rpos - 1, rweight + leaf_weight);
+                    try parent.removeAt(rpos);
+
+                    try self.leafDestroy(&right);
+
+                    std.debug.assert(moved_weight == rweight);
+
+                    return .{
+                        .target_pid = leaf.id(),
+                        .old = leaf_weight,
+                        .moved = moved_weight,
+                    };
+                }
+            }
+            return null;
+        }
+
+        fn leafTryMergeWithLeft(self: *Self, leaf: *Leaf) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            var sinfo = try self.leafFindRightSibling(leaf);
+            if (sinfo) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+                var parent = &sibling_info.inode;
+
+                const lpos = sibling_info.pos;
+                const lpid = try parent.getChild(lpos);
+                var left = try acc.loadLeaf(lpid);
+                defer acc.deinitLeaf(&left);
+                if (try acc.canMergeLeafs(leaf, &left)) {
+                    var moved_weight: Weight = 0;
+                    const left_sz = try left.size();
+
+                    for (0..left_sz) |id| {
+                        var val = try left.getValue(id);
+                        defer val.deinit();
+                        moved_weight += try val.weight();
+                        try leaf.insertAt(id, try val.get());
+                    }
+
+                    const left_prev = try left.getPrev();
+                    try leaf.setPrev(left_prev);
+                    if (left_prev) |lp| {
+                        var lprev = try acc.loadLeaf(lp);
+                        defer acc.deinitLeaf(&lprev);
+                        try lprev.setNext(leaf.id());
+                    }
+
+                    const lweight = try parent.getWeight(lpos);
+                    const leaf_weight = try parent.getWeight(lpos + 1);
+                    try parent.updateWeight(lpos + 1, leaf_weight + lweight);
+                    try parent.removeAt(lpos);
+
+                    std.debug.assert(lweight == moved_weight);
+                    try self.leafDestroy(&left);
+
+                    return .{
+                        .target_pid = leaf.id(),
+                        .old = leaf_weight,
+                        .moved = moved_weight,
+                    };
+                }
+            }
+            return null;
+        }
+
+        fn leafDestroy(self: *Self, leaf: *Leaf) Error!void {
+            var acc = self.getAccessor();
+            const root = try acc.getRoot();
+            const leaf_id = leaf.id();
+
+            try acc.destroy(leaf_id);
+            if (root.? == leaf.id()) {
+                try acc.setRoot(null);
+            }
+        }
+
+        fn inodeTryMergeWithRight(self: *Self, inode: *Inode) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            var sinfo = try self.inodeFindRightSibling(inode);
+            if (sinfo) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+                var parent = &sibling_info.inode;
+                const rpos = sibling_info.pos;
+                const rpid = parent.getChild(rpos);
+                const right = try acc.loadInode(rpid);
+                const inode_pid = inode.id();
+                defer acc.deinitInode(&right);
+                if (try acc.canMergeInodes(inode, &right)) {
+                    var moved_weight: Weight = 0;
+                    const right_sz = try right.size();
+                    const inode_sz = try inode.size();
+                    for (0..right_sz) |id| {
+                        const c = try right.getChild(id);
+                        const w = try right.getWeight(id);
+                        moved_weight += w;
+                        try self.setChildParent(c, inode_pid);
+                        try inode.insertChild(inode_sz + id, c, w);
+                    }
+
+                    const rweight = try parent.getWeight(rpos);
+                    const inode_weight = try parent.getWeight(rpos - 1);
+                    try parent.updateWeight(rpos - 1, inode_weight + rweight);
+                    try parent.removeAt(rpos);
+                    try acc.destroy(rpid);
+
+                    std.debug.assert(rweight == moved_weight);
+
+                    return .{
+                        .target_pid = inode_pid,
+                        .old = inode_weight,
+                        .moved = moved_weight,
+                    };
+                }
+            }
+            return null;
+        }
+
+        fn inodeTryMergeWithLeft(self: *Self, inode: *Inode) Error!?MovedWeight {
+            var acc = self.getAccessor();
+            var sinfo = try self.inodeFindRightSibling(inode);
+            if (sinfo) |*sibling_info| {
+                defer acc.deinitInode(&sibling_info.inode);
+
+                var parent = &sibling_info.inode;
+                const lpos = parent.pos;
+                const lpid = parent.getChild(lpos);
+
+                var left = acc.loadInode(lpid);
+                defer acc.deinitInode(&left);
+
+                const inode_pid = inode.id();
+
+                if (try acc.canMergeInodes(inode, &left)) {
+                    var moved_weight: Weight = 0;
+                    const left_sz = left.size();
+                    for (0..left_sz) |id| {
+                        const c = try left.getChild(id);
+                        const w = try left.getWeight(id);
+                        moved_weight += w;
+                        try self.setChildParent(c, inode_pid);
+                        try inode.insertChild(id, c, w);
+                    }
+
+                    const lweight = try parent.getWeight(lpos);
+                    const inode_weight = try parent.getWeight(lpos + 1);
+                    try parent.updateWeight(lpos + 1, inode_weight + lweight);
+                    try parent.removeAt(lpos);
+                    try acc.destroy(lpid);
+
+                    std.debug.assert(lweight == moved_weight);
+
+                    return .{
+                        .target_pid = inode_pid,
+                        .old = inode_weight,
+                        .moved = moved_weight,
+                    };
+                }
+            }
+            return null;
+        }
+
         ////
 
         ///
-        fn setChildParent(self: *Self, child_pid: Pid, parent_pid: Pid) Error!void {
+        fn setChildParent(self: *Self, child_pid: Pid, parent_pid: ?Pid) Error!void {
             var acc = self.getAccessor();
             if (try acc.isLeaf(child_pid)) {
                 var leaf = try acc.loadLeaf(child_pid);
