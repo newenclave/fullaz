@@ -118,7 +118,7 @@ test "WBpt: insertion" {
         defer val.deinit();
         std.debug.print("Leaf Value {}: {s}\n", .{ i, try val.get() });
     }
-    //tree.dump();
+    tree.dump();
 
     std.debug.print("total size: {}\n", .{try tree.totalWeight()});
     var iter = try tree.iterator();
@@ -144,7 +144,7 @@ test "WBpt: insertion" {
 }
 
 test "WBpt: stress test - random insertions" {
-    const Model = MemoryModel(u8, 4);
+    const Model = MemoryModel(u8, 16);
     const Tree = wbpt.WeightedBpt(Model);
 
     const allocator = std.testing.allocator;
@@ -156,6 +156,9 @@ test "WBpt: stress test - random insertions" {
 
     // Fixed seed for reproducibility
     var prng = std.Random.DefaultPrng.init(42);
+
+    // Use current time as seed for randomness
+    //var prng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.nanoTimestamp())));
     const random = prng.random();
 
     const num_insertions = 250;
@@ -244,7 +247,7 @@ test "WBpt: stress test - random insertions" {
 
     std.debug.print("SUCCESS: Tree content matches expected content!\n", .{});
 
-    if (num_insertions <= 250) {
+    if (num_insertions <= 100) {
         std.debug.print("\n=== Final Tree Structure ===\n", .{});
         tree.dump();
     } else {

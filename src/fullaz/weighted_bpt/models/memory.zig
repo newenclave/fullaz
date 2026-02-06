@@ -5,8 +5,11 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
     const Pid = usize;
     const Weight = usize;
 
-    //const Slice = []T;
-    //const SliceConst = []const T;
+    comptime {
+        if (MaximumElements < 4) {
+            @compileError("MaximumElements must be at least 4 to ensure proper tree balancing.");
+        }
+    }
 
     const NodePosition = struct {
         pos: usize,
