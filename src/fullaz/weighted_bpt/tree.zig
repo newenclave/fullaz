@@ -38,6 +38,12 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         left_weight: Weight,
     };
 
+    const InodeSplitResult = struct {
+        right: Inode,
+        right_weight: Weight,
+        left_weight: Weight,
+    };
+
     return struct {
         const Self = @This();
 
@@ -66,7 +72,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                     try find_result.leaf.insertWeight(find_result.diff, try value_view.get());
                     try self.leafFixParentWeight(&find_result.leaf);
                 } else {
-                    // TODO: rebalance / split
+                    try self.leafHandleOverflowImpl(&find_result.leaf, find_result.diff, try value_view.get());
                 }
                 return true;
             } else {
@@ -75,6 +81,21 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 try leaf.insertAt(0, value);
                 try accessor.setRoot(leaf.id());
                 return true;
+            }
+        }
+
+        pub fn dump(self: *Self) void {
+            var acc = self.getAccessor();
+            const root = acc.getRoot() catch |err| {
+                std.debug.print("Error getting root: {any}\n", .{err});
+                return;
+            };
+            if (root) |root_pid| {
+                self.dumpNode(root_pid, 0) catch |err| {
+                    std.debug.print("Error dumping node: {any}\n", .{err});
+                };
+            } else {
+                std.debug.print("Empty tree\n", .{});
             }
         }
 
@@ -161,12 +182,43 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         /// split, handle overflow
+        fn leafHandleOverflowImpl(self: *Self, leaf: *Leaf, weight_diff: Weight, val: Value) Error!void {
+            var acc = self.getAccessor();
+            var sres = try self.leafHandleOverflow(leaf);
+            defer acc.deinitLeaf(&sres.right);
+            if (weight_diff < sres.left_weight) {
+                try leaf.insertWeight(weight_diff, val);
+                try self.leafFixParentWeight(leaf);
+            } else {
+                try sres.right.insertWeight(weight_diff - sres.left_weight, val);
+                try self.leafFixParentWeight(&sres.right);
+            }
+        }
+
         fn leafHandleOverflow(self: *Self, leaf: *Leaf) Error!LeafSplitResult {
             var acc = self.getAccessor();
             var split_result = try self.leafSplit(leaf);
             errdefer acc.deinitLeaf(&split_result.right);
 
-            if (leaf.getParent()) |_| {} else { // new root
+            if (try leaf.getParent()) |ppid| {
+                var pinode = try acc.loadInode(ppid);
+                defer acc.deinitInode(&pinode);
+                var ppos = try childIdInParent(&pinode, leaf.id());
+
+                if (!try pinode.canInsertAt(ppos, split_result.right_weight)) {
+                    try self.inodeHandleOverflow(&pinode);
+                }
+
+                const new_ppid = (try leaf.getParent()).?;
+                acc.deinitInode(&pinode);
+                pinode = try acc.loadInode(new_ppid);
+                ppos = try childIdInParent(&pinode, leaf.id());
+
+                try split_result.right.setParent(new_ppid);
+                try pinode.updateWeight(ppos, split_result.left_weight);
+                try pinode.insertChild(ppos + 1, split_result.right.id(), split_result.right_weight);
+                try self.inodeFixParentWeight(&pinode);
+            } else { // new root
                 var new_root = try acc.createInode();
                 defer acc.deinitInode(&new_root);
                 try new_root.insertChild(0, leaf.id(), split_result.left_weight);
@@ -188,15 +240,15 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             var right = try acc.createLeaf();
             errdefer acc.deinitLeaf(&right);
 
-            right.setParent(try leaf.getParent());
-            right.setPrev(leaf.id());
-            right.setNext(try leaf.getNext());
-            if (leaf.getNext()) |n| {
+            try right.setParent(try leaf.getParent());
+            try right.setPrev(leaf.id());
+            try right.setNext(try leaf.getNext());
+            if (try leaf.getNext()) |n| {
                 var next_leaf = try acc.loadLeaf(n);
                 defer acc.deinitLeaf(&next_leaf);
-                next_leaf.setPrev(right.id());
+                try next_leaf.setPrev(right.id());
             }
-            leaf.setNext(right.id());
+            try leaf.setNext(right.id());
 
             var right_weight: Weight = 0;
             for (mid..cur_sz, 0..) |from, to| {
@@ -217,7 +269,88 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             };
         }
 
+        fn inodeHandleOverflow(self: *Self, inode: *Inode) Error!void {
+            var acc = self.getAccessor();
+            const ppid = try inode.getParent();
+            var split_result = try self.inodeSplit(inode);
+            defer acc.deinitInode(&split_result.right);
+
+            if (ppid) |parent_pid| {
+                var pinode = try acc.loadInode(parent_pid);
+                defer acc.deinitInode(&pinode);
+                var ppos = try childIdInParent(&pinode, inode.id());
+
+                if (!try pinode.canInsertAt(ppos, split_result.right_weight)) {
+                    try self.inodeHandleOverflow(&pinode);
+                }
+
+                const new_ppid = (try inode.getParent()).?;
+                acc.deinitInode(&pinode);
+                pinode = try acc.loadInode(new_ppid);
+                ppos = try childIdInParent(&pinode, inode.id());
+
+                try split_result.right.setParent(new_ppid);
+                try pinode.updateWeight(ppos, split_result.left_weight);
+                try pinode.insertChild(ppos + 1, split_result.right.id(), split_result.right_weight);
+                try self.inodeFixParentWeight(&pinode);
+            } else { // new root
+                var new_root = try acc.createInode();
+                defer acc.deinitInode(&new_root);
+                try new_root.insertChild(0, inode.id(), split_result.left_weight);
+                try new_root.insertChild(1, split_result.right.id(), split_result.right_weight);
+                try acc.setRoot(new_root.id());
+
+                try inode.setParent(new_root.id());
+                try split_result.right.setParent(new_root.id());
+            }
+        }
+
+        fn inodeSplit(self: *Self, inode: *Inode) Error!InodeSplitResult {
+            const cur_sz = try inode.size();
+            const mid = cur_sz / 2;
+            const to_reduce = cur_sz - mid;
+            var acc = self.getAccessor();
+            var right = try acc.createInode();
+            errdefer acc.deinitInode(&right);
+            var rweight: Weight = 0;
+
+            try right.setParent(try inode.getParent());
+            for (mid..cur_sz, 0..) |from, to| {
+                const child = try inode.getChild(from);
+                const weight = try inode.getWeight(from);
+                rweight += weight;
+                try right.insertChild(to, child, weight);
+                try self.setChildParent(child, right.id());
+            }
+            for (0..to_reduce) |_| {
+                try inode.removeAt(mid);
+            }
+
+            return .{
+                .right = right,
+                .right_weight = rweight,
+                .left_weight = try inode.totalWeight(),
+            };
+        }
+
+        // borrowing and giving values between neighbors for rebalancing, TODO
+
+        ////
+
         ///
+        fn setChildParent(self: *Self, child_pid: Pid, parent_pid: Pid) Error!void {
+            var acc = self.getAccessor();
+            if (try acc.isLeaf(child_pid)) {
+                var leaf = try acc.loadLeaf(child_pid);
+                defer acc.deinitLeaf(&leaf);
+                try leaf.setParent(parent_pid);
+            } else {
+                var inode = try acc.loadInode(child_pid);
+                defer acc.deinitInode(&inode);
+                try inode.setParent(parent_pid);
+            }
+        }
+
         fn childIdInParent(parent: *const Inode, child_pid: Pid) Error!usize {
             for (0..try parent.size()) |entry| {
                 if (try parent.getChild(entry) == child_pid) {
@@ -225,6 +358,97 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 }
             }
             return Error.ChildNotFoundInParent;
+        }
+
+        fn printDepth(d: usize) void {
+            for (0..d) |_| {
+                std.debug.print("  ", .{});
+            }
+        }
+
+        fn dumpNode(self: *Self, pid: Pid, depth: usize) Error!void {
+            var acc = self.getAccessor();
+            if (try acc.isLeaf(pid)) {
+                var leaf = try acc.loadLeaf(pid);
+                defer acc.deinitLeaf(&leaf);
+
+                // Print leaf header
+                printDepth(depth);
+                std.debug.print("LEAF #{} w:{}\n", .{ leaf.id(), try leaf.totalWeight() });
+
+                // Print navigation info
+                printDepth(depth);
+                std.debug.print("  Parent: ", .{});
+                if (try leaf.getParent()) |p| {
+                    std.debug.print("{}", .{p});
+                } else {
+                    std.debug.print("none", .{});
+                }
+                std.debug.print(", Prev: ", .{});
+                if (try leaf.getPrev()) |p| {
+                    std.debug.print("{}", .{p});
+                } else {
+                    std.debug.print("none", .{});
+                }
+                std.debug.print(", Next: ", .{});
+                if (try leaf.getNext()) |n| {
+                    std.debug.print("{}", .{n});
+                } else {
+                    std.debug.print("none", .{});
+                }
+                std.debug.print("\n", .{});
+
+                // Print values
+                printDepth(depth);
+                std.debug.print("  Values: {}\n", .{try leaf.size()});
+                for (0..try leaf.size()) |i| {
+                    var val = try leaf.getValue(i);
+                    defer val.deinit();
+                    printDepth(depth);
+                    std.debug.print("    [{}] weight={} val='{s}'\n", .{ i, try val.weight(), try val.get() });
+                }
+            } else {
+                var inode = try acc.loadInode(pid);
+                defer acc.deinitInode(&inode);
+
+                // Print inode header
+                printDepth(depth);
+                const num_children = try inode.size();
+                std.debug.print("INODE #{} {} children w:{}\n", .{ inode.id(), num_children, try inode.totalWeight() });
+
+                // print Parent
+                printDepth(depth);
+                std.debug.print("  Parent: ", .{});
+                if (try inode.getParent()) |p| {
+                    std.debug.print("{}", .{p});
+                } else {
+                    std.debug.print("none", .{});
+                }
+                std.debug.print("\n", .{});
+
+                // Print weights
+                printDepth(depth);
+                std.debug.print("  Weights: [", .{});
+                for (0..num_children) |i| {
+                    if (i > 0) std.debug.print(", ", .{});
+                    std.debug.print("{}", .{try inode.getWeight(i)});
+                }
+                std.debug.print("]\n", .{});
+
+                // Print children IDs
+                printDepth(depth);
+                std.debug.print("  Children: [", .{});
+                for (0..num_children) |i| {
+                    if (i > 0) std.debug.print(", ", .{});
+                    std.debug.print("{}", .{try inode.getChild(i)});
+                }
+                std.debug.print("]\n", .{});
+
+                // Recursively dump all children
+                for (0..num_children) |i| {
+                    try self.dumpNode(try inode.getChild(i), depth + 1);
+                }
+            }
         }
     };
 }

@@ -104,6 +104,9 @@ test "WBpt: insertion" {
     _ = try tree.insert(0, "Hello world");
     _ = try tree.insert(5, ",");
     _ = try tree.insert(15, "!");
+    _ = try tree.insert(7, " 42 ");
+    _ = try tree.insert(9, " -- ");
+    _ = try tree.insert(0, "Lets begin!");
 
     var acc = model.getAccessor();
     var leaf = try acc.loadLeaf(0);
@@ -113,4 +116,5 @@ test "WBpt: insertion" {
         defer val.deinit();
         std.debug.print("Leaf Value {}: {s}\n", .{ i, try val.get() });
     }
+    tree.dump();
 }

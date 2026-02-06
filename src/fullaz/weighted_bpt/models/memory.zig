@@ -208,6 +208,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         const Self = @This();
         const Error = errors.HandleError ||
             errors.IndexError ||
+            errors.BptError ||
             std.mem.Allocator.Error;
 
         pid: Pid,
@@ -515,8 +516,8 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
     };
 
     const NodeVariant = union(enum) {
-        inode: InodeContainer,
-        leaf: LeafContainer,
+        inode: *InodeContainer,
+        leaf: *LeafContainer,
     };
 
     const AccessorImpl = struct {
@@ -542,11 +543,13 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             for (self.values.items) |*item| {
                 if (item.*) |*item_val| {
                     switch (item_val.*) {
-                        .inode => |*inode| {
+                        .inode => |inode| {
                             inode.deinit(self.ctx.allocator);
+                            self.ctx.allocator.destroy(inode);
                         },
-                        .leaf => |*leaf| {
+                        .leaf => |leaf| {
                             leaf.deinit(self.ctx.allocator);
+                            self.ctx.allocator.destroy(leaf);
                         },
                     }
                 }
@@ -564,10 +567,14 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
         pub fn createLeaf(self: *Self) Error!LeafImpl {
             const size = self.values.items.len;
+            const new_leaf = try self.ctx.allocator.create(LeafContainer);
+            errdefer self.ctx.allocator.destroy(new_leaf);
+            new_leaf.* = try LeafContainer.init(self.ctx.allocator);
+
             try self.values.append(self.ctx.allocator, .{
-                .leaf = try LeafContainer.init(self.ctx.allocator),
+                .leaf = new_leaf,
             });
-            return LeafImpl.init(&self.values.items[size].?.leaf, &self.ctx, size);
+            return LeafImpl.init(self.values.items[size].?.leaf, &self.ctx, size);
         }
 
         pub fn loadLeaf(self: *Self, pid: Pid) Error!LeafImpl {
@@ -576,7 +583,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             }
             if (self.values.items[pid]) |*node| {
                 return switch (node.*) {
-                    .leaf => |*leaf| LeafImpl.init(leaf, &self.ctx, pid),
+                    .leaf => |leaf| LeafImpl.init(leaf, &self.ctx, pid),
                     else => return Error.InvalidId,
                 };
             }
@@ -589,10 +596,14 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
         pub fn createInode(self: *Self) Error!InodeImpl {
             const size = self.values.items.len;
+            const new_inode = try self.ctx.allocator.create(InodeContainer);
+            errdefer self.ctx.allocator.destroy(new_inode);
+            new_inode.* = try InodeContainer.init(self.ctx.allocator);
+
             try self.values.append(self.ctx.allocator, .{
-                .inode = try InodeContainer.init(self.ctx.allocator),
+                .inode = new_inode,
             });
-            return InodeImpl.init(&self.values.items[size].?.inode, &self.ctx, size);
+            return InodeImpl.init(self.values.items[size].?.inode, &self.ctx, size);
         }
 
         pub fn loadInode(self: *Self, pid: Pid) Error!InodeImpl {
@@ -601,7 +612,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             }
             if (self.values.items[pid]) |*node| {
                 return switch (node.*) {
-                    .inode => |*inode| InodeImpl.init(inode, &self.ctx, pid),
+                    .inode => |inode| InodeImpl.init(inode, &self.ctx, pid),
                     else => return Error.InvalidId,
                 };
             }
