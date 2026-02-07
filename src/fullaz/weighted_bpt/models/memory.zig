@@ -651,14 +651,24 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             };
         }
 
+        fn destroyLeaf(self: *Self, leaf: *LeafContainer) void {
+            leaf.deinit(self.ctx.allocator);
+            self.ctx.allocator.destroy(leaf);
+        }
+
+        fn destroyInode(self: *Self, inode: *InodeContainer) void {
+            inode.deinit(self.ctx.allocator);
+            self.ctx.allocator.destroy(inode);
+        }
+
         pub fn destroy(self: *Self, pid: Pid) Error!void {
             if (pid >= self.values.items.len) {
                 return Error.OutOfBounds;
             }
             if (self.values.items[pid]) |*node| {
                 switch (node.*) {
-                    .inode => |inode| self.ctx.allocator.destroy(inode),
-                    .leaf => |leaf| self.ctx.allocator.destroy(leaf),
+                    .inode => |inode| self.destroyInode(inode),
+                    .leaf => |leaf| self.destroyLeaf(leaf),
                 }
                 self.values.items[pid] = null;
             }

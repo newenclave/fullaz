@@ -575,7 +575,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 defer acc.deinitInode(&sibling_info.inode);
 
                 const rpid = try sibling_info.inode.getChild(sibling_info.pos);
-                var right = try acc.loadLeaf(try sibling_info.inode.getChild(rpid));
+                var right = try acc.loadLeaf(rpid);
                 defer acc.deinitLeaf(&right);
 
                 return try self.leafTryBorrowFromRightImpl(leaf, &right, sibling_info);
@@ -773,13 +773,14 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
         fn inodeTryBorrowFromRight(self: *Self, inode: *Inode) Error!?MovedWeight {
             var acc = self.getAccessor();
-            if (try self.inodeFindRightSibling(inode)) |*sibling_info| {
+            var pinfo = try self.inodeFindRightSibling(inode);
+            if (pinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
 
                 const rpid = try sibling_info.inode.getChild(sibling_info.pos);
-                var right = acc.loadInode(rpid);
+                var right = try acc.loadInode(rpid);
                 defer acc.deinitInode(&right);
-                return try self.inodeTryBorrowfromRightImpl(inode, &right, sibling_info);
+                return try self.inodeTryBorrowFromRightImpl(inode, &right, sibling_info);
             }
             return null;
         }
@@ -814,11 +815,12 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
         fn inodeTryBorrowFromLeft(self: *Self, inode: *Inode) Error!?MovedWeight {
             var acc = self.getAccessor();
-            if (try self.inodeFindLeftSibling(inode)) |*sibling_info| {
+            var pinfo = try self.inodeFindLeftSibling(inode);
+            if (pinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
 
                 const lpid = try sibling_info.inode.getChild(sibling_info.pos);
-                var left = acc.loadInode(lpid);
+                var left = try acc.loadInode(lpid);
                 defer acc.deinitInode(&left);
                 return try self.inodeTryBorrowFromLeftImpl(inode, &left, sibling_info);
             }
@@ -962,19 +964,19 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 if (try leaf.getParent()) |ppid| {
                     var parent = try acc.loadInode(ppid);
                     defer acc.deinitInode(&parent);
-                    try self.inodeFixParentWeight(&parent);
+                    try self.inodeHandleUnderflow(&parent);
                 }
             }
         }
 
         fn inodeHandleUnderflow(self: *Self, inode: *Inode) Error!void {
-            if (!inode.isUnderflowed()) {
+            if (!try inode.isUnderflowed()) {
                 return;
             }
             var acc = self.getAccessor();
             if (try acc.getRoot()) |root| {
-                if (root == inode.id() and inode.size() == 1) {
-                    const c = inode.getChild(0);
+                if (root == inode.id() and try inode.size() == 1) {
+                    const c = try inode.getChild(0);
                     try self.setChildParent(c, null);
                     try acc.setRoot(c);
                     try acc.destroy(root);
@@ -982,8 +984,8 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 }
             }
             if (self.rebalance_policy == .neighbor_share) {
-                if (try self.inodeTryBorrowFromRight() orelse
-                    try self.inodeTryBorrowFromleft()) |_|
+                if (try self.inodeTryBorrowFromRight(inode) orelse
+                    try self.inodeTryBorrowFromLeft(inode)) |_|
                 {
                     return;
                 }
@@ -994,10 +996,10 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 try self.inodeTryMergeWithLeft(inode);
 
             if (moved_weight) |_| {
-                if (inode.getParent()) |ppid| {
-                    var parent = acc.loadInode(ppid);
+                if (try inode.getParent()) |ppid| {
+                    var parent = try acc.loadInode(ppid);
                     defer acc.deinitInode(&parent);
-                    try self.inodeFixParentWeight(&parent);
+                    try self.inodeHandleUnderflow(&parent);
                 }
             }
         }
@@ -1054,7 +1056,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
         fn leafTryMergeWithLeft(self: *Self, leaf: *Leaf) Error!?MovedWeight {
             var acc = self.getAccessor();
-            var sinfo = try self.leafFindRightSibling(leaf);
+            var sinfo = try self.leafFindLeftSibling(leaf);
             if (sinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
                 var parent = &sibling_info.inode;
@@ -1116,12 +1118,15 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             var sinfo = try self.inodeFindRightSibling(inode);
             if (sinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
+
                 var parent = &sibling_info.inode;
                 const rpos = sibling_info.pos;
-                const rpid = parent.getChild(rpos);
-                const right = try acc.loadInode(rpid);
-                const inode_pid = inode.id();
+                const rpid = try parent.getChild(rpos);
+                var right = try acc.loadInode(rpid);
                 defer acc.deinitInode(&right);
+
+                const inode_pid = inode.id();
+
                 if (try acc.canMergeInodes(inode, &right)) {
                     var moved_weight: Weight = 0;
                     const right_sz = try right.size();
@@ -1159,17 +1164,17 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 defer acc.deinitInode(&sibling_info.inode);
 
                 var parent = &sibling_info.inode;
-                const lpos = parent.pos;
-                const lpid = parent.getChild(lpos);
+                const lpos = sibling_info.pos;
+                const lpid = try parent.getChild(lpos);
 
-                var left = acc.loadInode(lpid);
+                var left = try acc.loadInode(lpid);
                 defer acc.deinitInode(&left);
 
                 const inode_pid = inode.id();
 
                 if (try acc.canMergeInodes(inode, &left)) {
                     var moved_weight: Weight = 0;
-                    const left_sz = left.size();
+                    const left_sz = try left.size();
                     for (0..left_sz) |id| {
                         const c = try left.getChild(id);
                         const w = try left.getWeight(id);
