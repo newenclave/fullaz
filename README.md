@@ -72,6 +72,24 @@ If something can be made simpler for learning purposes, it probably will be.
 
 ---
 
+## Planned Features/Structures
+
+### Roadmap Snapshot
+
+#### Page layout & primitives
+- [x] **Variadic slots** implemented  
+- [ ] **Fixed-size slots** planned  
+
+#### Index structures
+- [x] **B+ tree (in-memory / paged)** implemented  
+- [ ] **Weighted B+ tree (in-memory / paged)** in development  
+- [ ] **Radix tables** planned  
+
+#### Storage backends
+- [ ] **Long-value store** partially implemented  
+- [ ] **Chained store** in development  
+
+
 ## Status
 
 🚧 Work in progress  
@@ -91,3 +109,5 @@ If you are looking for production-ready software, this is not it.
 If you want to learn how things work internally -- welcome 🙂
 
 ---
+
+
