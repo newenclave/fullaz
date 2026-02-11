@@ -108,7 +108,7 @@ fn TestContext(comptime page_size: usize, comptime cache_frames: usize) type {
     };
 }
 
-test "Create a bpt" {
+test "Bpt paged: Create a tree" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);

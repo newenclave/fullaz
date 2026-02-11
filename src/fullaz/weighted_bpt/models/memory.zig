@@ -684,7 +684,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         //pub const ValuePolicyType = ValuePolicyImpl;
         pub const ValueViewType = ValueViewImpl;
         pub const WeightType = Weight;
-        pub const PidType = Pid;
+        pub const NodeIdType = Pid;
         pub const NodePositionType = NodePosition;
 
         pub const Error = error{} ||

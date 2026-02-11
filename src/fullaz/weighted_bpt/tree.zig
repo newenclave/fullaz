@@ -14,7 +14,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
     const ValueView = Model.ValueViewType;
     const Value = Model.ValueType;
     const NodePosition = Model.NodePositionType;
-    const Pid = Model.PidType;
+    const Pid = Model.NodeIdType;
 
     const Leaf = Model.LeafType;
     const Inode = Model.InodeType;

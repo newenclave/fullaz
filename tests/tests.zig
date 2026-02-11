@@ -13,4 +13,5 @@ test {
     _ = @import("pages.zig");
     _ = @import("long_store.zig");
     _ = @import("wbpt_memory_model.zig");
+    _ = @import("wbpt_paged_model.zig");
 }
