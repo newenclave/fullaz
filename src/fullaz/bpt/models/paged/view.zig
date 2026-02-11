@@ -53,7 +53,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return self.page_view.page;
         }
 
-        pub fn total_slot_size(_: *const Self, key_len: usize, value_len: usize) usize {
+        pub fn totalSlotSize(_: *const Self, key_len: usize, value_len: usize) usize {
             return key_len + value_len + @sizeOf(SlotHeaderType);
         }
 
@@ -239,7 +239,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return self.page_view.page;
         }
 
-        pub fn total_slot_size(_: *const Self, key_len: usize) usize {
+        pub fn totalSlotSize(_: *const Self, key_len: usize) usize {
             return key_len + @sizeOf(SlotHeaderType);
         }
 

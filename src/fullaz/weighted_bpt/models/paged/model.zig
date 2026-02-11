@@ -56,6 +56,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         const Self = @This();
         const PageViewType = WBptPage.LeafSubheaderView;
         const PageViewTypeConst = WBptPageConst.LeafSubheaderView;
+
         handle: PageHandle = undefined,
         self_id: BlockIdType = undefined,
         ctx: *Context = undefined,
@@ -72,6 +73,10 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
         pub fn deinit(self: *Self) void {
             self.handle.deinit();
+        }
+
+        pub fn id(self: *const Self) BlockIdType {
+            return self.self_id;
         }
     };
 
@@ -97,6 +102,10 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         pub fn deinit(self: *Self) void {
             self.handle.deinit();
         }
+
+        pub fn id(self: *const Self) BlockIdType {
+            return self.self_id;
+        }
     };
 
     const AccessorImpl = struct {
@@ -114,6 +123,30 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
         pub fn deinit(_: Self) void {
             // nothing to do yet
+        }
+
+        pub fn createLeaf(self: *Self) ErrorSet!LeafImpl {
+            var ph = try self.ctx.cache.create();
+            defer ph.deinit();
+            const pid = try ph.pid();
+            var page_view = LeafImpl.PageViewType.init(try ph.getDataMut());
+            try page_view.formatPage(self.ctx.settings.leaf_page_kind, pid, 0);
+            return LeafImpl.init(try ph.take(), pid, &self.ctx);
+        }
+
+        pub fn loadLeaf(self: *Self, id: BlockIdType) ErrorSet!LeafImpl {
+            var ph = try self.ctx.cache.fetch(id);
+            defer ph.deinit();
+            const pid = try ph.pid();
+            var view = LeafImpl.PageViewTypeConst.init(try ph.getData());
+            if (view.page_view.header().kind.get() != self.ctx.settings.leaf_page_kind) {
+                return Error.BadType;
+            }
+            return LeafImpl.init(try ph.take(), pid, &self.ctx);
+        }
+
+        pub fn deinitLeaf(_: *Self, leaf: *LeafImpl) void {
+            leaf.deinit();
         }
     };
 
@@ -147,6 +180,10 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
         pub fn deinit(self: *Self) void {
             self.accessor.deinit();
+        }
+
+        pub fn getAccessor(self: *Self) *AccessorType {
+            return &self.accessor;
         }
     };
 }

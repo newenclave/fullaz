@@ -580,7 +580,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             const view_b = InodeImpl.PageViewTypeConst.init(try right.handle.getData());
             const slots_dir_a = try view_a.slotsDir();
             const slots_dir_b = try view_b.slotsDir();
-            const additional_key_len = view_a.total_slot_size(self.ctx.settings.maximum_key_size);
+            const additional_key_len = view_a.totalSlotSize(self.ctx.settings.maximum_key_size);
             return try slots_dir_a.canMergeWithAdditional(&slots_dir_b, additional_key_len) != .not_enough;
         }
     };
