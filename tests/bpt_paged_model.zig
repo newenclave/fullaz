@@ -1900,9 +1900,14 @@ test "Bpt Random insertion" {
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
     var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
 
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
+    const io = threaded.io();
+
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
+        io.random(std.mem.asBytes(&seed));
         break :blk seed;
     });
     const random = prng.random();
@@ -2013,10 +2018,14 @@ test "Bpt Update values" {
 }
 
 test "Bpt Update Random values" {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    const io = threaded.io();
+
     const prn = Printer("Update Random").init();
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
+        io.random(std.mem.asBytes(&seed));
         break :blk seed;
     });
     const random = prng.random();
@@ -2096,10 +2105,14 @@ test "Bpt Update Random values" {
 }
 
 test "Bpt Update Random values Keys as strings" {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    const io = threaded.io();
+
     const prn = Printer("Update Random").init();
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
+        io.random(std.mem.asBytes(&seed));
         break :blk seed;
     });
     const random = prng.random();
@@ -2247,10 +2260,13 @@ test "Bpt/paged Remove values" {
 
 test "Bpt/paged Remove random values" {
     const prn = Printer("Remove Random").init();
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    const io = threaded.io();
 
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
+        io.random(std.mem.asBytes(&seed));
         break :blk seed;
     });
     const random = prng.random();

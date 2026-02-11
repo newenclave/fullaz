@@ -280,8 +280,8 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         fn isHeaderPage(self: *const Self) Error!bool {
             try self.testPage();
             switch (self.page.?) {
-                .header => |_| return true,
-                .chunk => |_| return false,
+                .header => return true,
+                .chunk => return false,
             }
         }
 

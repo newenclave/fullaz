@@ -297,13 +297,16 @@ const MyCmp = struct {
 
 test "page/bpt slots compare and proj" {
     var leaf_buffer: [1024]u8 = undefined;
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
     @memset(&leaf_buffer, 0);
     const Bpt = bpt_view.View(u32, u16, .little, false);
     var leaf_view = Bpt.LeafSubheaderView.init(&leaf_buffer);
     try leaf_view.formatPage(1, 2, 0);
     leaf_view.subheaderMut().formatHeader();
 
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(std.Io.Clock.now(.awake, threaded.io()).toMilliseconds()));
     const rnd = prng.random();
 
     for (0..10) |_| {
@@ -333,11 +336,14 @@ test "page/bpt slots compare and proj" {
 test "page/bpt slots compare and proj inodes" {
     var leaf_buffer: [1024]u8 = undefined;
     @memset(&leaf_buffer, 0);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
     const Bpt = bpt_view.View(u32, u16, .little, false);
     var inode_view = Bpt.InodeSubheaderView.init(&leaf_buffer);
     try inode_view.formatPage(1, 2, 0);
 
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(std.Io.Clock.now(.awake, threaded.io()).toMilliseconds()));
     const rnd = prng.random();
 
     for (0..10) |i| {

@@ -4,6 +4,7 @@ const algos = @import("fullaz").core.algorithm;
 const MemoryModel = bpt.models.MemoryModel;
 
 const std = @import("std");
+const Io = std.Io;
 const expect = std.testing.expect;
 
 pub fn BptTest(comptime KeyType: type, maximum_elements: usize, comptime OrderCmp: anytype) type {
@@ -183,35 +184,36 @@ test "Bpt remove values" {
 }
 
 test "Bpt Random insertion" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        _ = gpa.deinit();
-    }
+    const gpa = std.testing.allocator;
 
     const TreeTest = BptTest(u32, 5, algos.CmpNum(u32).asc);
-    var tree_test = try TreeTest.init(gpa.allocator());
+    var tree_test = try TreeTest.init(gpa);
     defer tree_test.deinit();
 
     var bptree = try tree_test.createTree();
     defer bptree.deinit();
 
+    var threaded: Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+    var io = threaded.io();
+
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
+        io.random(@ptrCast(&seed));
         break :blk seed;
     });
     const random = prng.random();
 
     const total_inserts = 1000;
-    var inserted_keys = try std.ArrayList(u32).initCapacity(gpa.allocator(), total_inserts);
-    errdefer inserted_keys.deinit(gpa.allocator());
+    var inserted_keys = try std.ArrayList(u32).initCapacity(gpa, total_inserts);
+    errdefer inserted_keys.deinit(gpa);
 
     for (0..total_inserts) |_| {
         const key = random.int(u32);
         var buf: [32]u8 = undefined;
         const value = try std.fmt.bufPrint(&buf, "{}", .{key});
         if (try bptree.insert(key, value)) {
-            try inserted_keys.append(gpa.allocator(), key);
+            try inserted_keys.append(gpa, key);
         }
     }
 
@@ -230,7 +232,7 @@ test "Bpt Random insertion" {
         }
     }
 
-    inserted_keys.deinit(gpa.allocator());
+    inserted_keys.deinit(gpa);
 }
 
 test "Bpt Update values" {
@@ -293,9 +295,14 @@ test "Some stress test" {
     var bptree = try tree_test.createTree();
     defer bptree.deinit();
 
+    var threaded: Io.Threaded = .init_single_threaded;
+    defer threaded.deinit();
+
+    const io = threaded.io();
+
     var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
+        io.random(std.mem.asBytes(&seed));
         break :blk seed;
     });
     const random = prng.random();
