@@ -52,10 +52,20 @@ test "WBpt paged: Create with Memory model" {
     var tree = Tree.init(&model, .neighbor_share);
     defer tree.deinit();
 
-    var leaf = try model.accessor.createLeaf();
-    defer model.getAccessor().deinitLeaf(&leaf);
-    var leaf_load = try model.accessor.loadLeaf(leaf.id());
-    defer model.getAccessor().deinitLeaf(&leaf_load);
+    {
+        var leaf = try model.accessor.createLeaf();
+        defer model.getAccessor().deinitLeaf(&leaf);
+        var leaf_load = try model.accessor.loadLeaf(leaf.id());
+        defer model.getAccessor().deinitLeaf(&leaf_load);
 
-    try std.testing.expect(leaf.id() == leaf_load.id());
+        try std.testing.expect(leaf.id() == leaf_load.id());
+    }
+    {
+        var inode = try model.accessor.createInode();
+        defer model.getAccessor().deinitInode(&inode);
+        var inode_load = try model.accessor.loadInode(inode.id());
+        defer model.getAccessor().deinitInode(&inode_load);
+
+        try std.testing.expect(inode.id() == inode_load.id());
+    }
 }

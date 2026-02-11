@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("../core/core.zig");
 const errors = core.errors;
 const assertBlockDevice = @import("../device/device.zig").interfaces.assertBlockDevice;
@@ -161,7 +162,9 @@ pub fn PageCache(comptime DeviceT: type) type {
         pub fn deinit(self: *Self) void {
             for (self.frames.items) |*frame| {
                 if (frame.ref_count != 0) {
-                    //std.debug.panic("Deinit called on PageCache with pinned pages. pid: {} fid: {} ref_count: {}\n", .{ frame.pid, frame.frame_id, frame.ref_count });
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Deinit called on PageCache with pinned pages. pid: {} fid: {} ref_count: {}\n", .{ frame.pid, frame.frame_id, frame.ref_count });
+                    }
                 }
                 if (frame.frame_type == .dirty) {
                     // Write back dirty page

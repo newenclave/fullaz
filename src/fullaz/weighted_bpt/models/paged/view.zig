@@ -105,6 +105,36 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
 
         const SubheaderType = InodeSubheaderType;
         const SlotHeaderType = InodeSlotType;
+
+        page_view: PageViewType,
+
+        pub fn init(data: DataType) Self {
+            return .{
+                .page_view = PageViewType.init(data),
+            };
+        }
+
+        pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) ErrorSet!void {
+            const subheader_size = @as(IndexT, @intCast(@sizeOf(SubheaderType)));
+            self.page_view.formatPage(kind, page_id, subheader_size, metadata_len);
+            const data = self.page_view.dataMut();
+            var sl = try SlotsDirType.init(data);
+            self.subheaderMut().formatHeader();
+            sl.formatHeader();
+        }
+
+        pub fn subheader(self: *const Self) *const SubheaderType {
+            const subhdr = self.page_view.subheader();
+            return @ptrCast(@alignCast(&subhdr[0]));
+        }
+
+        pub fn subheaderMut(self: *Self) *SubheaderType {
+            if (read_only) {
+                @compileError("Cannot get mutable subheader from a read-only page");
+            }
+            const subhdr = self.page_view.subheaderMut();
+            return @ptrCast(@alignCast(&subhdr[0]));
+        }
     };
 
     return struct {

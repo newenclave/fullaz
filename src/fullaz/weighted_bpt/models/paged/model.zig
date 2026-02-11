@@ -148,6 +148,30 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         pub fn deinitLeaf(_: *Self, leaf: *LeafImpl) void {
             leaf.deinit();
         }
+
+        pub fn createInode(self: *Self) ErrorSet!InodeImpl {
+            var ph = try self.ctx.cache.create();
+            defer ph.deinit();
+            const pid = try ph.pid();
+            var page_view = InodeImpl.PageViewType.init(try ph.getDataMut());
+            try page_view.formatPage(self.ctx.settings.inode_page_kind, pid, 0);
+            return InodeImpl.init(try ph.take(), pid, &self.ctx);
+        }
+
+        pub fn loadInode(self: *Self, id: BlockIdType) ErrorSet!InodeImpl {
+            var ph = try self.ctx.cache.fetch(id);
+            defer ph.deinit();
+            const pid = try ph.pid();
+            var view = InodeImpl.PageViewTypeConst.init(try ph.getData());
+            if (view.page_view.header().kind.get() != self.ctx.settings.inode_page_kind) {
+                return Error.BadType;
+            }
+            return InodeImpl.init(try ph.take(), pid, &self.ctx);
+        }
+
+        pub fn deinitInode(_: *Self, inode: *InodeImpl) void {
+            inode.deinit();
+        }
     };
 
     return struct {

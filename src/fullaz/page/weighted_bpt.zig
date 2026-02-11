@@ -28,8 +28,13 @@ pub fn WeightedBpt(comptime PageIdT: type, comptime IndexT: type, comptime Weigh
     };
 
     const InodeSubheaderType = extern struct {
+        const Self = @This();
         parent: PageIdType,
         total_weight: WeightType,
+        pub fn formatHeader(self: *Self) void {
+            self.parent.setMax();
+            self.total_weight.set(0);
+        }
     };
 
     const InodeSlotType = extern struct {
