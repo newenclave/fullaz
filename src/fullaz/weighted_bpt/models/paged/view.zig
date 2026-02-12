@@ -20,6 +20,11 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
         errors.PageError ||
         errors.SlotsError;
 
+    const WeightValue = struct {
+        weight: Weight,
+        value: []const u8,
+    };
+
     const LeafSubheaderType = WBptPage.LeafSubheader;
     const LeafSlotHeaderType = WBptPage.LeafSlotHeader;
     const LeafSubheaderViewType = struct {
@@ -92,6 +97,28 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
         pub fn canInsert(self: *const Self, value: []const u8) ErrorSet!AvailableStatus {
             const total_len = @sizeOf(SlotHeaderType) + value.len;
             return (try self.slotsDir()).canInsert(total_len);
+        }
+
+        pub fn insert(self: *Self, index: usize, weight: Weight, value: []const u8) ErrorSet!void {
+            const hdr_size = @sizeOf(SlotHeaderType);
+            const total_size: usize = hdr_size + value.len;
+            var slot_dir = try self.slotsDirMut();
+            var buffer = try slot_dir.reserveGet(index, total_size);
+            var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
+            slot.weight.set(weight);
+
+            const value_dst = buffer[hdr_size..][0..value.len];
+            @memcpy(value_dst, value);
+        }
+
+        pub fn get(self: *const Self, pos: usize) ErrorSet!WeightValue {
+            const slots_dir = try self.slotsDir();
+            const buffer = try slots_dir.get(pos);
+            const slot: *const SlotHeaderType = @ptrCast(&buffer[0]);
+            return .{
+                .weight = slot.weight.get(),
+                .value = buffer[@sizeOf(SlotHeaderType)..],
+            };
         }
     };
 

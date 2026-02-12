@@ -9,6 +9,8 @@ pub fn WeightedBpt(comptime PageIdT: type, comptime IndexT: type, comptime Weigh
     const IndexType = PackedInt(IndexT, Endian);
     const WeightType = PackedInt(WeightT, Endian);
 
+    _ = IndexType;
+
     const LeafSubheaderType = extern struct {
         const Self = @This();
         parent: PageIdType,
@@ -24,7 +26,7 @@ pub fn WeightedBpt(comptime PageIdT: type, comptime IndexT: type, comptime Weigh
     };
 
     const LeafSlotHeaderType = extern struct {
-        weight: IndexType,
+        weight: WeightType,
     };
 
     const InodeSubheaderType = extern struct {

@@ -24,9 +24,6 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
     const Weight = u32;
     const Index = u16;
 
-    const ValuePolicyType = ValuePolicy;
-    _ = ValuePolicyType;
-
     const Value = []const u8;
 
     const WBptPage = wbpt_page.View(BlockIdType, Index, Weight, .little, false);
@@ -38,13 +35,73 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         settings: Settings = undefined,
     };
 
-    const ValueViewImpl = struct {
+    const ValuePolicyImplDefault = struct {
         const Self = @This();
-        pub fn init(_: Value) Self {
-            return Self{};
+
+        const Error = errors.HandleError ||
+            errors.IndexError ||
+            PageCacheType.Error ||
+            errors.PageError;
+
+        ctx: *Context = undefined,
+        ph: ?PageHandle = null,
+        val: Value,
+        pub fn init(ctx: *Context, val: Value) Self {
+            return Self{
+                .ctx = ctx,
+                .val = val,
+            };
         }
-        pub fn deinit() void {}
+        pub fn deinit(self: *Self) void {
+            if (self.ph) |*hdl| {
+                hdl.deinit();
+            }
+        }
+
+        pub fn weight(self: *const Self) Weight {
+            return @as(Weight, @intCast(self.val.len));
+        }
+
+        pub fn get(self: *const Self) Value {
+            return self.val;
+        }
+
+        pub fn splitOfRight(self: *Self, pos: Weight) Error!Self {
+            if (pos > self.weight()) {
+                return Error.OutOfBounds;
+            }
+            const result_weight = self.weight() - pos;
+            var tmp_page = try self.ctx.cache.getTemporaryPage();
+            errdefer tmp_page.deinit();
+            const page_data = try tmp_page.getDataMut();
+            const new_data = page_data[0..result_weight];
+            @memcpy(new_data, self.val[self.val.len - result_weight ..]);
+            self.val = self.val[0 .. self.val.len - result_weight];
+            var result = Self.init(self.ctx, new_data);
+            result.ph = tmp_page;
+            return result;
+        }
+
+        pub fn splitOfLeft(self: *Self, pos: Weight) Error!Self {
+            if (pos > self.weight()) {
+                return Error.OutOfBounds;
+            }
+            var tmp_page = try self.ctx.cache.getTemporaryPage();
+            errdefer tmp_page.deinit();
+            const page_data = try tmp_page.getDataMut();
+            const new_data = page_data[0..pos];
+            @memcpy(new_data, self.val[0..pos]);
+            self.val = self.val[pos..];
+            var result = Self.init(self.ctx, new_data);
+            result.ph = tmp_page;
+            return result;
+        }
     };
+
+    const ValuePolicyType = comptime if (@typeInfo(ValuePolicy) == .void)
+        ValuePolicyImplDefault
+    else
+        ValuePolicy;
 
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
@@ -75,8 +132,34 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             self.handle.deinit();
         }
 
+        pub fn size(self: *const Self) Error!usize {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.entries();
+        }
+
         pub fn id(self: *const Self) BlockIdType {
             return self.self_id;
+        }
+
+        pub fn getValue(self: *const Self, pos: usize) Error!ValuePolicyType {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            const wv = try view.get(pos);
+            return ValuePolicyType.init(self.ctx, wv.value);
+        }
+
+        pub fn insertAt(self: *Self, pos: usize, val: Value) Error!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+
+            var vp = ValuePolicyType.init(self.ctx, val);
+            defer vp.deinit();
+
+            try view.insert(pos, vp.weight(), vp.get());
+        }
+
+        pub fn removeAt(self: *Self, pos: usize) Error!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            var slots_dir = try view.slotsDirMut();
+            return slots_dir.remove(pos);
         }
     };
 
@@ -147,6 +230,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
         pub fn deinitLeaf(_: *Self, leaf: *LeafImpl) void {
             leaf.deinit();
+            leaf.* = undefined;
         }
 
         pub fn createInode(self: *Self) ErrorSet!InodeImpl {
@@ -171,6 +255,23 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
         pub fn deinitInode(_: *Self, inode: *InodeImpl) void {
             inode.deinit();
+            inode.* = undefined;
+        }
+
+        pub fn canMergeLeafs(_: *const Self, dst: *const LeafImpl, src: *const LeafImpl) Error!bool {
+            const view_a = LeafImpl.PageViewTypeConst.init(try dst.handle.getData());
+            const view_b = LeafImpl.PageViewTypeConst.init(try src.handle.getData());
+            const slots_dir_a = try view_a.slotsDir();
+            const slots_dir_b = try view_b.slotsDir();
+            return try slots_dir_a.canMergeWith(&slots_dir_b) != .not_enough;
+        }
+
+        pub fn canMergeInodes(_: *Self, left: *const InodeImpl, right: *const InodeImpl) ErrorSet!bool {
+            const view_a = InodeImpl.PageViewTypeConst.init(try left.handle.getData());
+            const view_b = InodeImpl.PageViewTypeConst.init(try right.handle.getData());
+            const slots_dir_a = try view_a.slotsDir();
+            const slots_dir_b = try view_b.slotsDir();
+            return try slots_dir_a.canMergeWith(&slots_dir_b) != .not_enough;
         }
     };
 
@@ -182,7 +283,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         pub const NodePositionType = Index;
         pub const Error = ErrorSet;
 
-        pub const ValueViewType = ValueViewImpl;
+        pub const ValueViewType = ValuePolicyType;
         pub const ValueType = Value;
 
         pub const LeafType = LeafImpl;

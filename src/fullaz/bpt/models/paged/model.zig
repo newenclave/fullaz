@@ -209,7 +209,6 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
                 return Error.NodeFull;
             } else if (res == .need_compact) {
                 var view_mut = PageViewType.init(try self.handle.getDataMut());
-                // TODO: check if possible to pass a buffer here to compact with the buffer
                 var slots_dir = try view_mut.slotsDirMut();
                 slots_dir.compactWithBuffer(try tmp_page.getDataMut()) catch {
                     try slots_dir.compactInPlace();

@@ -39,7 +39,7 @@ test "WBpt paged: Create with Memory model" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = PagedModel(PageCache, NoneStorageManager, NoneValuePolicy);
+    const Model = PagedModel(PageCache, NoneStorageManager, void);
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};
@@ -68,4 +68,41 @@ test "WBpt paged: Create with Memory model" {
 
         try std.testing.expect(inode.id() == inode_load.id());
     }
+}
+
+test "WBpt paged: Insert, get" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Tree = wbpt.WeightedBpt(Model);
+
+    var store_mgr = NoneStorageManager{};
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+    var model = Model.init(&cache, &store_mgr, .{});
+
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+
+    var leaf = try model.accessor.createLeaf();
+    defer model.getAccessor().deinitLeaf(&leaf);
+
+    try leaf.insertAt(0, "Test!");
+
+    var val = try leaf.getValue(0);
+    defer val.deinit();
+
+    try std.testing.expect(std.mem.eql(u8, val.get(), "Test!"));
+
+    var val2 = try val.splitOfLeft(2);
+    defer val2.deinit();
+
+    std.debug.print("Val: {s}\n", .{val.get()});
+    std.debug.print("Val2: {s}\n", .{val2.get()});
+
+    try leaf.removeAt(0);
+    try std.testing.expect(try leaf.size() == 0);
 }
