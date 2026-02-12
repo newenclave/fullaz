@@ -50,7 +50,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             };
         }
 
-        fn deinit(self: *Self) void {
+        pub fn deinit(self: *Self) void {
             self.handle.deinit();
         }
 

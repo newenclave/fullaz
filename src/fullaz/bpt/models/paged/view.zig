@@ -172,7 +172,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             const new_total_size = @sizeOf(SlotHeaderType) + old_value.key.len + value.len;
 
             if (tmp_buf.len < new_total_size) {
-                return ErrorSet.NotEnoughTemporaryBuffer;
+                return ErrorSet.BufferTooSmall;
             }
 
             var new_buffer = tmp_buf[0..new_total_size];
@@ -190,7 +190,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
 
             const update_status = try self.canUpdateValue(pos, value);
             if (update_status == .not_enough) {
-                return error.NotEnoughSpaceForUpdate;
+                return ErrorSet.NotEnoughSpace;
             } else if (update_status == .need_compact) {
                 var slot_dir = try self.slotsDirMut();
                 try slot_dir.free(pos);
@@ -326,7 +326,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             const old_value = try self.get(pos);
             const new_total_size = @sizeOf(SlotHeaderType) + key.len;
             if (tmp_buf.len < new_total_size) {
-                return error.NotEnoughTemporaryBuffer;
+                return ErrorSet.BufferTooSmall;
             }
             var new_buffer = tmp_buf[0..new_total_size];
 
@@ -340,7 +340,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
 
             const update_status = try self.canUpdate(pos, key);
             if (update_status == .not_enough) {
-                return error.NotEnoughSpaceForUpdate;
+                return ErrorSet.NotEnoughSpace;
             } else if (update_status == .need_compact) {
                 var slot_dir = try self.slotsDirMut();
                 try slot_dir.free(pos);

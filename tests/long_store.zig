@@ -248,7 +248,7 @@ test "ChunkView hasFlag/setFlag/clearFlag" {
     try std.testing.expect(!view.hasFlag(.first));
 }
 
-test "LongStore Handle. Create, openm load" {
+test "LongStore Handle. Create, open, load" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
     const Handle = long_store.Handle(Cache, NoneStorageManager);
@@ -268,7 +268,9 @@ test "LongStore Handle. Create, openm load" {
 
     try hdl.open();
     try std.testing.expect(try hdl.totalSize() == 0);
-    const header = try hdl.loadHeader();
+    var header = try hdl.loadHeader();
+    defer header.deinit();
+
     try std.testing.expect(try header.handle.pid() == header_pid);
 
     var cursor = try hdl.begin();
@@ -317,10 +319,13 @@ test "LongStore Handle. Check create next" {
 
     try hdl.open();
     try std.testing.expect(try hdl.totalSize() == 0);
-    const header = try hdl.loadHeader();
+    var header = try hdl.loadHeader();
+    defer header.deinit();
+
     try std.testing.expect(try header.handle.pid() == header_pid);
 
     var cursor = try hdl.begin();
+    defer cursor.deinit();
 
     try std.testing.expect(try cursor.hasNext() == false);
     try hdl.appendChunk();
