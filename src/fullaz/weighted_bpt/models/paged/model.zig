@@ -29,6 +29,12 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
     const WBptPage = wbpt_page.View(BlockIdType, Index, Weight, .little, false);
     const WBptPageConst = wbpt_page.View(BlockIdType, Index, Weight, .little, true);
 
+    const NodePosition = struct {
+        pos: usize,
+        diff: Weight,
+        accumulated: Weight,
+    };
+
     const Context = struct {
         cache: *PageCacheType = undefined,
         storage_mgr: *StorageManager = undefined,
@@ -156,10 +162,70 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             try view.insert(pos, vp.weight(), vp.get());
         }
 
+        pub fn insertWeight(self: *Self, where: Weight, val: Value) Error!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+
+            var vp = ValuePolicyType.init(self.ctx, val);
+            defer vp.deinit();
+
+            const pos = try self.selectPos(where);
+            if (pos.diff == 0) {
+                try view.insert(pos.pos, vp.weight(), vp.get());
+            } else {
+                var val_at_pos = try self.getValue(pos.pos);
+                defer val_at_pos.deinit();
+
+                var policy = ValuePolicyType.init(self.ctx, val_at_pos.get());
+                defer policy.deinit();
+
+                var new_policy = try policy.splitOfRight(pos.diff);
+                defer new_policy.deinit();
+
+                var tmp_page = try self.ctx.cache.getTemporaryPage();
+                defer tmp_page.deinit();
+                const page_data = try tmp_page.getDataMut();
+
+                try view.update(pos.pos, policy.weight(), policy.get(), page_data);
+                try self.insertAt(pos.pos + 1, new_policy.get());
+                try self.insertAt(pos.pos + 1, val);
+            }
+        }
+
         pub fn removeAt(self: *Self, pos: usize) Error!void {
             var view = PageViewType.init(try self.handle.getDataMut());
             var slots_dir = try view.slotsDirMut();
             return slots_dir.remove(pos);
+        }
+
+        pub fn selectPos(self: *const Self, weight: Weight) Error!NodePosition {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            var accumulated: Weight = 0;
+            const entries = try view.entries();
+            for (0..entries) |idx| {
+                const current = try view.get(idx);
+                const cweight = current.weight;
+                accumulated += cweight;
+                if (accumulated > weight) {
+                    const diff = accumulated - weight;
+                    const current_diff = (cweight - diff);
+                    return .{
+                        .pos = idx,
+                        .diff = current_diff,
+                        .accumulated = accumulated - cweight,
+                    };
+                } else if (accumulated == weight) {
+                    return .{
+                        .pos = idx + 1,
+                        .diff = 0,
+                        .accumulated = accumulated,
+                    };
+                }
+            }
+            return .{
+                .pos = entries,
+                .diff = 0,
+                .accumulated = accumulated,
+            };
         }
     };
 

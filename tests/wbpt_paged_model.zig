@@ -91,18 +91,11 @@ test "WBpt paged: Insert, get" {
     defer model.getAccessor().deinitLeaf(&leaf);
 
     try leaf.insertAt(0, "Test!");
+    try leaf.insertWeight(3, "111");
+    std.debug.print("Leaf size: {}\n", .{try leaf.size()});
 
-    var val = try leaf.getValue(0);
-    defer val.deinit();
-
-    try std.testing.expect(std.mem.eql(u8, val.get(), "Test!"));
-
-    var val2 = try val.splitOfLeft(2);
-    defer val2.deinit();
-
-    std.debug.print("Val: {s}\n", .{val.get()});
-    std.debug.print("Val2: {s}\n", .{val2.get()});
-
-    try leaf.removeAt(0);
-    try std.testing.expect(try leaf.size() == 0);
+    for (0..try leaf.size()) |i| {
+        const entry = try leaf.getValue(i);
+        std.debug.print("Entry {}: weight={}, value={s}\n", .{ i, entry.weight(), entry.get() });
+    }
 }

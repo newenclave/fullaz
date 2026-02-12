@@ -120,6 +120,44 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
                 .value = buffer[@sizeOf(SlotHeaderType)..],
             };
         }
+
+        pub fn canUpdate(self: *const Self, pos: usize, value: []const u8) ErrorSet!AvailableStatus {
+            const total_size: usize = @sizeOf(SlotHeaderType) + value.len;
+            var slot_dir = try self.slotsDir();
+            return try slot_dir.canUpdate(pos, total_size);
+        }
+
+        pub fn update(self: *Self, pos: usize, weight: Weight, value: []const u8, tmp_buf: []u8) ErrorSet!void {
+            const new_total_size = @sizeOf(SlotHeaderType) + value.len;
+
+            if (tmp_buf.len < new_total_size) {
+                return ErrorSet.BufferTooSmall;
+            }
+
+            var new_buffer = tmp_buf[0..new_total_size];
+
+            var slot: *SlotHeaderType = @ptrCast(&new_buffer[0]);
+            slot.weight.set(weight);
+
+            const value_dst = new_buffer[@sizeOf(SlotHeaderType)..][0..value.len];
+            @memcpy(value_dst, value);
+
+            const tail_buf = tmp_buf[new_total_size..];
+
+            const update_status = try self.canUpdate(pos, value);
+            if (update_status == .not_enough) {
+                return ErrorSet.NotEnoughSpace;
+            } else if (update_status == .need_compact) {
+                var slot_dir = try self.slotsDirMut();
+                try slot_dir.free(pos);
+                slot_dir.compactWithBuffer(tail_buf) catch {
+                    try slot_dir.compactInPlace();
+                };
+            }
+            var slot_dir = try self.slotsDirMut();
+            const buffer = try slot_dir.resizeGet(pos, new_total_size);
+            @memcpy(buffer, new_buffer);
+        }
     };
 
     const InodeSubheaderType = WBptPage.InodeSubheader;
