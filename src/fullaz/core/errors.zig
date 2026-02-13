@@ -28,6 +28,10 @@ pub const IndexError = error{
     OutOfBounds,
 };
 
+pub const BufferError = error{
+    BadLength,
+};
+
 pub const SpaceError = error{
     BufferTooSmall,
     NotEnoughSpace,

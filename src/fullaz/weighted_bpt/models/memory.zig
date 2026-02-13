@@ -434,7 +434,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             return ValueViewImpl.init(self.leaf.values.items[pos].items);
         }
 
-        pub fn canInsertWeight(self: *const Self, where: Weight) Error!bool {
+        pub fn canInsertWeight(self: *const Self, where: Weight, _: []const T) Error!bool {
             const current_weight = try self.size();
             const current_available = MaximumCapacity - current_weight;
             if (current_available == 0) {

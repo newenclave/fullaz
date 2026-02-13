@@ -230,6 +230,21 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return .not_enough;
         }
 
+        pub fn canInsert3(self: *const Self, a: usize, b: usize, c: usize) Error!AvailableStatus {
+            const fix_a: usize = @as(usize, self.fixLength(@as(T, @intCast(a))));
+            const fix_b: usize = @as(usize, self.fixLength(@as(T, @intCast(b))));
+            const fix_c: usize = @as(usize, self.fixLength(@as(T, @intCast(c))));
+            const entry_size = @sizeOf(Entry) * 2;
+            return try self.canInsert(fix_a + fix_b + fix_c + entry_size);
+        }
+
+        pub fn canInsert2(self: *const Self, a: usize, b: usize) Error!AvailableStatus {
+            const fix_a: usize = @as(usize, self.fixLength(@as(T, @intCast(a))));
+            const fix_b: usize = @as(usize, self.fixLength(@as(T, @intCast(b))));
+            const entry_size = @sizeOf(Entry);
+            return try self.canInsert(fix_a + fix_b + entry_size);
+        }
+
         pub fn canInsert(self: *const Self, len: usize) Error!AvailableStatus {
             const fix_len: usize = @as(usize, self.fixLength(@as(T, @intCast(len))));
 

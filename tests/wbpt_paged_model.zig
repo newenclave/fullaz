@@ -78,7 +78,7 @@ test "WBpt paged: Insert, get" {
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};
-    var device = try Device.init(allocator, 4096);
+    var device = try Device.init(allocator, 110);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();
@@ -92,6 +92,11 @@ test "WBpt paged: Insert, get" {
 
     try leaf.insertAt(0, "Test!");
     try leaf.insertWeight(3, "111");
+
+    const ci = try leaf.canInsertWeight(2, "XXXXXXXXXXXXXX");
+    std.debug.print("Can insert at weight 3: {}\n", .{ci});
+    try leaf.insertWeight(2, "XXXXXXXXXXXXXXXX");
+
     std.debug.print("Leaf size: {}\n", .{try leaf.size()});
 
     for (0..try leaf.size()) |i| {

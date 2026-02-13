@@ -102,6 +102,18 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             result.ph = tmp_page;
             return result;
         }
+
+        const SplitFormat = struct {
+            left: usize,
+            right: usize,
+        };
+
+        pub fn expectedSplitDataFormat(_: *const Self, val: Value, pos: usize) SplitFormat {
+            return .{
+                .left = pos,
+                .right = val.len - pos,
+            };
+        }
     };
 
     const ValuePolicyType = comptime if (@typeInfo(ValuePolicy) == .void)
@@ -159,7 +171,46 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             var vp = ValuePolicyType.init(self.ctx, val);
             defer vp.deinit();
 
-            try view.insert(pos, vp.weight(), vp.get());
+            const res = try view.canInsert(vp.get());
+            if (res == .not_enough) {
+                return Error.NodeFull;
+            } else if (res == .need_compact) {
+                var tmp_page = try self.ctx.cache.getTemporaryPage();
+                defer tmp_page.deinit();
+                const page_data = try tmp_page.getDataMut();
+                var view_mut = PageViewType.init(try self.handle.getDataMut());
+                var slots_dir = try view_mut.slotsDirMut();
+                slots_dir.compactWithBuffer(page_data) catch {
+                    try slots_dir.compactInPlace();
+                };
+            }
+
+            var view_mut = PageViewType.init(try self.handle.getDataMut());
+            try view_mut.insert(pos, vp.weight(), vp.get());
+        }
+
+        pub fn canInsertWeight(self: *const Self, where: Weight, val: Value) Error!bool {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+
+            const pos = try self.selectPos(where);
+            const entry = try view.get(pos.pos);
+
+            if (pos.diff == 0) {
+                var vp = ValuePolicyType.init(self.ctx, val);
+                defer vp.deinit();
+                return try view.canInsert(vp.get()) != .not_enough;
+            } else {
+                var target_val = ValuePolicyImplDefault.init(self.ctx, entry.value);
+                defer target_val.deinit();
+
+                var new_val = ValuePolicyImplDefault.init(self.ctx, val);
+                defer new_val.deinit();
+
+                const expected_split_format = target_val.expectedSplitDataFormat(target_val.get(), pos.diff);
+                const new_val_size = new_val.get().len + expected_split_format.right;
+
+                return try view.canInsert3(expected_split_format.left, expected_split_format.right, new_val_size) != .not_enough;
+            }
         }
 
         pub fn insertWeight(self: *Self, where: Weight, val: Value) Error!void {
@@ -260,6 +311,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
     const AccessorImpl = struct {
         const Self = @This();
 
+        pub const Pid = BlockIdType;
         pub const Error = ErrorSet;
 
         ctx: Context = undefined,
@@ -272,6 +324,14 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
         pub fn deinit(_: Self) void {
             // nothing to do yet
+        }
+
+        pub fn getRoot(self: *const Self) Error!?Pid {
+            return try self.ctx.storage_mgr.getRoot();
+        }
+
+        pub fn setRoot(self: *Self, root: ?Pid) Error!void {
+            try self.ctx.storage_mgr.setRoot(root);
         }
 
         pub fn createLeaf(self: *Self) ErrorSet!LeafImpl {

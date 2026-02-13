@@ -95,8 +95,15 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
         }
 
         pub fn canInsert(self: *const Self, value: []const u8) ErrorSet!AvailableStatus {
-            const total_len = @sizeOf(SlotHeaderType) + value.len;
-            return (try self.slotsDir()).canInsert(total_len);
+            return self.canInsertSize(value.len);
+        }
+
+        pub fn canInsertSize(self: *const Self, value_len: usize) ErrorSet!AvailableStatus {
+            return (try self.slotsDir()).canInsert(value_len);
+        }
+
+        pub fn canInsert3(self: *const Self, a: usize, b: usize, c: usize) ErrorSet!AvailableStatus {
+            return (try self.slotsDir()).canInsert3(a, b, c);
         }
 
         pub fn insert(self: *Self, index: usize, weight: Weight, value: []const u8) ErrorSet!void {

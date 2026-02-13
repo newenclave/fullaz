@@ -200,14 +200,14 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         pub fn insertValue(self: *Self, pos: usize, key: KeyType, value: ValueType) Error!void {
             try self.checkKeyValue(key, value);
 
-            var tmp_page = try self.ctx.cache.getTemporaryPage();
-            defer tmp_page.deinit();
-
             const view = PageViewTypeConst.init(try self.handle.getData());
             const res = try view.canInsert(pos, key, value);
             if (res == .not_enough) {
                 return Error.NodeFull;
             } else if (res == .need_compact) {
+                var tmp_page = try self.ctx.cache.getTemporaryPage();
+                defer tmp_page.deinit();
+
                 var view_mut = PageViewType.init(try self.handle.getDataMut());
                 var slots_dir = try view_mut.slotsDirMut();
                 slots_dir.compactWithBuffer(try tmp_page.getDataMut()) catch {

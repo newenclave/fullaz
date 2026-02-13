@@ -77,7 +77,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
         pub fn initMutable(bytes: []u8, maximum: usize) !Self {
             if (bytes.len % @sizeOf(W) != 0) {
-                return error.BadLength;
+                return errors.BufferError.BadLength;
             }
             const words = std.mem.bytesAsSlice(W, bytes);
             const cap_bits = words.len * BitsPerWord;

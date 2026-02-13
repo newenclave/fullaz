@@ -227,12 +227,14 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 var value_view = try ValueView.init(value);
                 defer value_view.deinit();
 
-                if (try find_result.leaf.canInsertWeight(find_result.leaf_weight)) {
-                    try find_result.leaf.insertWeight(find_result.leaf_weight, try value_view.get());
+                const value_data = try value_view.get();
+
+                if (try find_result.leaf.canInsertWeight(find_result.leaf_weight, value_data)) {
+                    try find_result.leaf.insertWeight(find_result.leaf_weight, value_data);
                     try self.leafFixParentWeight(&find_result.leaf);
                 } else {
-                    if (!try self.leafTryShareNeighbor(&find_result, value)) {
-                        try self.leafHandleOverflowImpl(&find_result.leaf, find_result.leaf_weight, try value_view.get());
+                    if (!try self.leafTryShareNeighbor(&find_result, value_data)) {
+                        try self.leafHandleOverflowImpl(&find_result.leaf, find_result.leaf_weight, value_data);
                     }
                 }
                 return true;
