@@ -112,6 +112,7 @@ test "WBpt paged: Insert, get" {
     try leaf.insertWeight(2, "XXXXXXXXXXXXXXXXXXXXXX");
 
     std.debug.print("Leaf size: {}\n", .{try leaf.size()});
+    std.debug.print("Leaf total weight: {}\n", .{try leaf.totalWeight()});
 
     for (0..try leaf.size()) |i| {
         const entry = try leaf.getValue(i);

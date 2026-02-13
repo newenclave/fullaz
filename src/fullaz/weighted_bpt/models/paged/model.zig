@@ -159,6 +159,16 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return self.self_id;
         }
 
+        pub fn totalWeight(self: *const Self) Error!Weight {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            var total: Weight = 0;
+            for (0..try view.entries()) |idx| {
+                const entry = try view.get(idx);
+                total += entry.weight;
+            }
+            return total;
+        }
+
         pub fn getParent(self: *const Self) Error!?BlockIdType {
             const view = PageViewTypeConst.init(try self.handle.getData());
             return try view.getParent();
