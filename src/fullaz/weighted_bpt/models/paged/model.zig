@@ -159,6 +159,36 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return self.self_id;
         }
 
+        pub fn getParent(self: *const Self) Error!?BlockIdType {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.getParent();
+        }
+
+        pub fn setParent(self: *Self, parent: ?BlockIdType) Error!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.setParent(parent);
+        }
+
+        pub fn getPrev(self: *const Self) Error!?BlockIdType {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.getPrev();
+        }
+
+        pub fn setPrev(self: *Self, prev: ?BlockIdType) Error!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.setPrev(prev);
+        }
+
+        pub fn getNext(self: *const Self) Error!?BlockIdType {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.getNext();
+        }
+
+        pub fn setNext(self: *Self, next: ?BlockIdType) Error!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.setNext(next);
+        }
+
         pub fn getValue(self: *const Self, pos: usize) Error!ValuePolicyType {
             const view = PageViewTypeConst.init(try self.handle.getData());
             const wv = try view.get(pos);
@@ -177,6 +207,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             } else if (res == .need_compact) {
                 var tmp_page = try self.ctx.cache.getTemporaryPage();
                 defer tmp_page.deinit();
+
                 const page_data = try tmp_page.getDataMut();
                 var view_mut = PageViewType.init(try self.handle.getDataMut());
                 var slots_dir = try view_mut.slotsDirMut();
@@ -207,9 +238,11 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
                 defer new_val.deinit();
 
                 const expected_split_format = target_val.expectedSplitDataFormat(target_val.get(), pos.diff);
-                const new_val_size = new_val.get().len + expected_split_format.right;
+                const new_val_size = new_val.get().len;
 
-                return try view.canInsert3(expected_split_format.left, expected_split_format.right, new_val_size) != .not_enough;
+                const res = try view.canInsert3(expected_split_format.left, expected_split_format.right, new_val_size);
+
+                return res != .not_enough;
             }
         }
 

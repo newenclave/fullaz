@@ -89,6 +89,53 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             return try ConstSlotsDirType.init(data);
         }
 
+        // parent, prev, next
+        pub fn getParent(self: *const Self) ErrorSet!?PageIdT {
+            const val = self.subheader().parent.get();
+            if (self.subheader().parent.isMax()) {
+                return null;
+            }
+            return val;
+        }
+        pub fn getPrev(self: *const Self) ErrorSet!?PageIdT {
+            const val = self.subheader().prev.get();
+            if (self.subheader().prev.isMax()) {
+                return null;
+            }
+            return val;
+        }
+        pub fn getNext(self: *const Self) ErrorSet!?PageIdT {
+            const val = self.subheader().next.get();
+            if (self.subheader().next.isMax()) {
+                return null;
+            }
+            return val;
+        }
+
+        pub fn setParent(self: *Self, parent: ?PageIdT) ErrorSet!void {
+            if (parent) |val| {
+                self.subheaderMut().parent.set(val);
+            } else {
+                self.subheaderMut().parent.setMax();
+            }
+        }
+
+        pub fn setPrev(self: *Self, prev: ?PageIdT) ErrorSet!void {
+            if (prev) |val| {
+                self.subheaderMut().prev.set(val);
+            } else {
+                self.subheaderMut().prev.setMax();
+            }
+        }
+
+        pub fn setNext(self: *Self, next: ?PageIdT) ErrorSet!void {
+            if (next) |val| {
+                self.subheaderMut().next.set(val);
+            } else {
+                self.subheaderMut().next.setMax();
+            }
+        }
+
         pub fn capacityFor(self: *const Self, data_len: usize) ErrorSet!usize {
             const maximum_slot_size = data_len + @sizeOf(SlotHeaderType);
             return (try self.slotsDir()).capacityFor(maximum_slot_size);

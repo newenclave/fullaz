@@ -55,8 +55,21 @@ test "WBpt paged: Create with Memory model" {
     {
         var leaf = try model.accessor.createLeaf();
         defer model.getAccessor().deinitLeaf(&leaf);
+
+        try leaf.setParent(123);
+        try leaf.setPrev(456);
+        try leaf.setNext(789);
+
         var leaf_load = try model.accessor.loadLeaf(leaf.id());
         defer model.getAccessor().deinitLeaf(&leaf_load);
+
+        try std.testing.expect(try leaf.getParent() == 123);
+        try std.testing.expect(try leaf.getPrev() == 456);
+        try std.testing.expect(try leaf.getNext() == 789);
+
+        try std.testing.expect(try leaf.getParent() == try leaf_load.getParent());
+        try std.testing.expect(try leaf.getPrev() == try leaf_load.getPrev());
+        try std.testing.expect(try leaf.getNext() == try leaf_load.getNext());
 
         try std.testing.expect(leaf.id() == leaf_load.id());
     }
@@ -91,11 +104,12 @@ test "WBpt paged: Insert, get" {
     defer model.getAccessor().deinitLeaf(&leaf);
 
     try leaf.insertAt(0, "Test!");
-    try leaf.insertWeight(3, "111");
+    try leaf.insertWeight(3, "111111111111");
+    try leaf.removeAt(0);
 
     const ci = try leaf.canInsertWeight(2, "XXXXXXXXXXXXXX");
     std.debug.print("Can insert at weight 3: {}\n", .{ci});
-    try leaf.insertWeight(2, "XXXXXXXXXXXXXXXX");
+    try leaf.insertWeight(2, "XXXXXXXXXXXXXXXXXXXXXX");
 
     std.debug.print("Leaf size: {}\n", .{try leaf.size()});
 
