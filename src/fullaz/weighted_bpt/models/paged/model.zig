@@ -7,7 +7,7 @@ const core = @import("../../../core/core.zig");
 const errors = core.errors;
 
 pub const Settings = struct {
-    maximum_value_size: usize = 128,
+    maximum_value_size: usize = 256,
     leaf_page_kind: u16 = 0,
     inode_page_kind: u16 = 1,
 };
@@ -153,6 +153,11 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         pub fn size(self: *const Self) Error!usize {
             const view = PageViewTypeConst.init(try self.handle.getData());
             return try view.entries();
+        }
+
+        pub fn capacity(self: *const Self) Error!usize {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.capacityFor(self.ctx.settings.maximum_value_size);
         }
 
         pub fn id(self: *const Self) BlockIdType {
