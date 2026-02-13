@@ -107,7 +107,7 @@ test "WBpt paged: Insert, get" {
     try leaf.insertWeight(3, "111111111111");
     try leaf.removeAt(0);
 
-    const ci = try leaf.canInsertWeight(2, "XXXXXXXXXXXXXX");
+    const ci = try leaf.canInsertWeight(2, "XXXXXXXXXXXXXXXXXXXXXX");
     std.debug.print("Can insert at weight 3: {}\n", .{ci});
     try leaf.insertWeight(2, "XXXXXXXXXXXXXXXXXXXXXX");
 

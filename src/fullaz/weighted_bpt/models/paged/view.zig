@@ -149,6 +149,10 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             return (try self.slotsDir()).canInsert(value_len);
         }
 
+        pub fn canInsert2(self: *const Self, a: usize, b: usize) ErrorSet!AvailableStatus {
+            return (try self.slotsDir()).canInsert2(a, b);
+        }
+
         pub fn canInsert3(self: *const Self, a: usize, b: usize, c: usize) ErrorSet!AvailableStatus {
             return (try self.slotsDir()).canInsert3(a, b, c);
         }

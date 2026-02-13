@@ -240,7 +240,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
                 const expected_split_format = target_val.expectedSplitDataFormat(target_val.get(), pos.diff);
                 const new_val_size = new_val.get().len;
 
-                const res = try view.canInsert3(expected_split_format.left, expected_split_format.right, new_val_size);
+                const res = try view.canInsert2(expected_split_format.right, new_val_size);
 
                 return res != .not_enough;
             }
