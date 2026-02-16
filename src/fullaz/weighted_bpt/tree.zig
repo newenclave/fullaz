@@ -369,6 +369,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                     parent_info.pos += 1;
                     return parent_info.*;
                 }
+                acc.deinitInode(&parent_info.inode);
             }
             return null;
         }
@@ -382,6 +383,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                     parent_info.pos -= 1;
                     return parent_info.*;
                 }
+                acc.deinitInode(&parent_info.inode);
             }
             return null;
         }
@@ -395,6 +397,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                     parent_info.pos += 1;
                     return parent_info.*;
                 }
+                acc.deinitInode(&parent_info.inode);
             }
             return null;
         }
@@ -408,6 +411,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                     parent_info.pos -= 1;
                     return parent_info.*;
                 }
+                acc.deinitInode(&parent_info.inode);
             }
             return null;
         }
