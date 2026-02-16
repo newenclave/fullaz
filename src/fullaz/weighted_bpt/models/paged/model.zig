@@ -257,6 +257,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
                 slots_dir.compactWithBuffer(page_data) catch {
                     try slots_dir.compactInPlace();
                 };
+                try self.dumpLeaf();
             }
 
             var view_mut = PageViewType.init(try self.handle.getDataMut());
@@ -314,8 +315,26 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
                 const page_data = try tmp_page.getDataMut();
 
                 try view.update(pos.pos, try policy.weight(), try policy.get(), page_data);
+                try self.dumpLeaf();
                 try self.insertAt(pos.pos + 1, try new_policy.get());
+                try self.dumpLeaf();
                 try self.insertAt(pos.pos + 1, try vp.get());
+                try self.dumpLeaf();
+            }
+        }
+
+        fn dumpLeaf(self: *const Self) !void {
+            if (self.id() != 550) {
+                return;
+            }
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            var slots_dir = try view.slotsDir();
+            const entries = slots_dir.size();
+            std.debug.print("\n=====\n", .{});
+            for (0..entries) |idx| {
+                var val = try self.getValue(idx);
+                defer val.deinit();
+                std.debug.print("{s} ", .{try val.get()});
             }
         }
 

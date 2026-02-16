@@ -227,7 +227,7 @@ test "WBpt paged remove: simple smoke" {
 
 test "WBpt paged: stress test - random insertions" {
     const maximum_insertion_to_dump = 100;
-    const num_insertions = 24546;
+    const num_insertions = 24547;
     const log_interval = num_insertions / 10;
     const rebalance_policy = .neighbor_share;
 
@@ -288,10 +288,10 @@ test "WBpt paged: stress test - random insertions" {
             .value = value,
         });
 
-        // if (i == 2193) {
-        //     @breakpoint();
-        //     std.debug.print("Tree total weight: {}\n", .{try tree.totalWeight()});
-        // }
+        if (i == num_insertions - 1) {
+            @breakpoint();
+            std.debug.print("Tree total weight: {}\n", .{try tree.totalWeight()});
+        }
 
         _ = tree.insert(@as(u32, @intCast(pos)), value) catch |err| {
             std.debug.print("Insertion {} failed at pos {}: {}\n", .{ i, pos, err });
