@@ -117,6 +117,50 @@ test "WBpt paged: Insert, get" {
 
     for (0..try leaf.size()) |i| {
         const entry = try leaf.getValue(i);
-        std.debug.print("Entry {}: weight={}, value={s}\n", .{ i, entry.weight(), entry.get() });
+        std.debug.print("Entry {}: weight={}, value={s}\n", .{ i, try entry.weight(), try entry.get() });
     }
+}
+
+test "WBpt paged: tree create, insert" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Tree = wbpt.WeightedBpt(Model);
+
+    var store_mgr = NoneStorageManager{};
+    var device = try Device.init(allocator, 256);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+    var model = Model.init(&cache, &store_mgr, .{});
+
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+
+    _ = try tree.insert(0, "Root!");
+    _ = try tree.insert(3, "111111111111");
+    _ = try tree.insert(2, "XXXXXXXXXXXXXXXXXXXXXX");
+    _ = try tree.insert(20, "YYYYYYYYYYYYYYYYYYYY");
+    _ = try tree.insert(30, "ZZZZZZZZZZZZZZZZZZZ");
+    _ = try tree.insert(40, "00000000000000000000");
+    _ = try tree.insert(50, "111111111111111111111");
+    _ = try tree.insert(60, "2222222222222222222222");
+    _ = try tree.insert(70, "3333333333333333333333");
+    _ = try tree.insert(80, "44444444444444444444444");
+    _ = try tree.insert(90, "555555555555555555555555");
+    _ = try tree.insert(100, "666666666666666666666666");
+    _ = try tree.insert(110, "77777777777777777777777777");
+
+    var cursor = try tree.iterator();
+    defer cursor.deinit();
+
+    std.debug.print("Real tree iteration! total weight: {}\n", .{try tree.totalWeight()});
+
+    while (!cursor.isEnd()) {
+        const entry = try cursor.get();
+        std.debug.print("    Entry: weight={}, value={s}\n", .{ try entry.weight(), try entry.get() });
+        _ = try cursor.next();
+    }
+    tree.dump();
 }

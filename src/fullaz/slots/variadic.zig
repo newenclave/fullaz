@@ -503,8 +503,9 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             const fix_len: usize = @intCast(self.fixLength(@intCast(len)));
 
             const entry_len: usize = if (need_slot) @sizeOf(Entry) else 0;
+            const available = self.availableSpace();
 
-            if (fix_len + entry_len > self.availableSpace()) {
+            if ((fix_len + entry_len) > available) {
                 if (self.findFreeSlot(@intCast(fix_len))) |fs_info| {
                     const fs = fs_info.ptr;
                     const slot_len = fs.length.get();

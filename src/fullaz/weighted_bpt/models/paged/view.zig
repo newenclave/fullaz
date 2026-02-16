@@ -25,6 +25,11 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
         value: []const u8,
     };
 
+    const ChildWeightValue = struct {
+        child: PageIdT,
+        weight: Weight,
+    };
+
     const LeafSubheaderType = WBptPage.LeafSubheader;
     const LeafSlotHeaderType = WBptPage.LeafSlotHeader;
     const LeafSubheaderViewType = struct {
@@ -142,7 +147,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
         }
 
         pub fn canInsert(self: *const Self, value: []const u8) ErrorSet!AvailableStatus {
-            return self.canInsertSize(value.len);
+            return self.canInsertSize(@sizeOf(SlotHeaderType) + value.len);
         }
 
         pub fn canInsertSize(self: *const Self, value_len: usize) ErrorSet!AvailableStatus {
@@ -257,6 +262,88 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             }
             const subhdr = self.page_view.subheaderMut();
             return @ptrCast(@alignCast(&subhdr[0]));
+        }
+
+        pub fn capacityFor(self: *const Self) ErrorSet!usize {
+            const maximum_slot_size = @sizeOf(SlotHeaderType);
+            return (try self.slotsDir()).capacityFor(maximum_slot_size);
+        }
+
+        pub fn entries(self: *const Self) !usize {
+            return (try self.slotsDir()).size();
+        }
+
+        pub fn slotsDirMut(self: *Self) ErrorSet!SlotsDirType {
+            const data = self.page_view.dataMut();
+            return try SlotsDirType.init(data);
+        }
+
+        pub fn slotsDir(self: *const Self) ErrorSet!ConstSlotsDirType {
+            const data = self.page_view.data();
+            return try ConstSlotsDirType.init(data);
+        }
+
+        pub fn getParent(self: *const Self) ErrorSet!?PageIdT {
+            const val = self.subheader().parent.get();
+            if (self.subheader().parent.isMax()) {
+                return null;
+            }
+            return val;
+        }
+
+        pub fn setParent(self: *Self, parent: ?PageIdT) ErrorSet!void {
+            if (parent) |val| {
+                self.subheaderMut().parent.set(val);
+            } else {
+                self.subheaderMut().parent.setMax();
+            }
+        }
+
+        pub fn insert(self: *Self, index: usize, child_page_id: PageIdT, weight: Weight) ErrorSet!void {
+            const slot_size = @sizeOf(SlotHeaderType);
+            var slot_dir = try self.slotsDirMut();
+            var buffer = try slot_dir.reserveGet(index, slot_size);
+            var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
+            slot.child.set(child_page_id);
+            slot.weight.set(weight);
+            var hdr = self.subheaderMut();
+            const old_total = hdr.total_weight.get();
+            hdr.total_weight.set(old_total + weight);
+        }
+
+        pub fn get(self: *const Self, pos: usize) ErrorSet!ChildWeightValue {
+            const slots_dir = try self.slotsDir();
+            const buffer = try slots_dir.get(pos);
+            const slot: *const SlotHeaderType = @ptrCast(&buffer[0]);
+            return .{
+                .child = slot.child.get(),
+                .weight = slot.weight.get(),
+            };
+        }
+
+        pub fn updateWeight(self: *Self, pos: usize, new_weight: Weight) ErrorSet!void {
+            var slot_dir = try self.slotsDirMut();
+            const buffer = try slot_dir.getMut(pos);
+            var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
+            const old_weight = slot.weight.get();
+            slot.weight.set(new_weight);
+
+            var hdr = self.subheaderMut();
+            const total_weight = hdr.total_weight.get();
+            hdr.total_weight.set(total_weight - old_weight + new_weight);
+        }
+
+        pub fn updateChild(self: *Self, pos: usize, new_child: PageIdT) ErrorSet!void {
+            var slot_dir = try self.slotsDirMut();
+            const buffer = try slot_dir.getMut(pos);
+            var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
+            slot.child.set(new_child);
+        }
+
+        pub fn canInsert(self: *const Self, _: usize, _: Weight) ErrorSet!AvailableStatus {
+            const slot_size = @sizeOf(SlotHeaderType);
+            const slot_dir = try self.slotsDir();
+            return try slot_dir.canInsert(slot_size);
         }
     };
 
