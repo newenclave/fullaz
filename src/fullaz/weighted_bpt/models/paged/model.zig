@@ -268,13 +268,13 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             const view = PageViewTypeConst.init(try self.handle.getData());
 
             const pos = try self.selectPos(where);
-            const entry = try view.get(pos.pos);
 
             if (pos.diff == 0) {
                 var vp = ValuePolicyType.init(self.ctx, val);
                 defer vp.deinit();
                 return try view.canInsert(try vp.get()) != .not_enough;
             } else {
+                const entry = try view.get(pos.pos);
                 var target_val = ValuePolicyImplDefault.init(self.ctx, entry.value);
                 defer target_val.deinit();
 
@@ -516,6 +516,10 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
         pub fn setRoot(self: *Self, root: ?Pid) Error!void {
             try self.ctx.storage_mgr.setRoot(root);
+        }
+
+        pub fn destroy(self: *Self, id: Pid) Error!void {
+            try self.ctx.storage_mgr.destroyPage(id);
         }
 
         pub fn createLeaf(self: *Self) ErrorSet!LeafImpl {

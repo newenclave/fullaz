@@ -12,6 +12,7 @@ const NoneStorageManager = struct {
     pub const Self = @This();
     pub const PageId = u32;
     pub const Error = error{};
+
     root_block_id: ?u32 = null,
 
     pub fn getRoot(self: *const @This()) ?u32 {
@@ -34,6 +35,34 @@ const NoneStorageManager = struct {
 };
 
 const NoneValuePolicy = struct {};
+
+fn collectTreeContent(allocator: std.mem.Allocator, tree: anytype) !std.ArrayList(u8) {
+    var content = try std.ArrayList(u8).initCapacity(allocator, 0);
+    var iter = try tree.iterator();
+    defer iter.deinit();
+
+    while (!iter.isEnd()) {
+        var val = try iter.get();
+        defer val.deinit();
+        try content.appendSlice(allocator, try val.get());
+        _ = try iter.next();
+    }
+
+    return content;
+}
+
+fn expectTreeContent(allocator: std.mem.Allocator, tree: anytype, expected: []const u8) !void {
+    var content = try collectTreeContent(allocator, tree);
+    defer content.deinit(allocator);
+    try std.testing.expectEqualStrings(expected, content.items);
+}
+
+fn insertAlphabet(tree: anytype, count: usize) !void {
+    for (0..count) |i| {
+        const one = [_]u8{'A' + @as(u8, @intCast(i % 26))};
+        _ = try tree.insert(i, one[0..]);
+    }
+}
 
 test "WBpt paged: Create with Memory model" {
     const allocator = std.testing.allocator;
@@ -159,8 +188,169 @@ test "WBpt paged: tree create, insert" {
 
     while (!cursor.isEnd()) {
         const entry = try cursor.get();
-        std.debug.print("    Entry: weight={}, value={s}\n", .{ try entry.weight(), try entry.get() });
+        std.debug.print("{s}", .{try entry.get()});
         _ = try cursor.next();
     }
-    tree.dump();
+    std.debug.print("\n", .{});
+    //tree.dump();
+}
+
+test "WBpt paged remove: simple smoke" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Tree = wbpt.WeightedBpt(Model);
+
+    var store_mgr = NoneStorageManager{};
+    var device = try Device.init(allocator, 256);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+    var model = Model.init(&cache, &store_mgr, .{});
+
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+
+    for (0..10) |i| {
+        var buf: [16]u8 = undefined;
+        const s = try std.fmt.bufPrint(&buf, "v{}", .{i});
+        _ = try tree.insert(0, s);
+    }
+
+    try tree.removeEntry(0);
+    for (0..9) |_| {
+        try tree.removeEntry(0);
+    }
+    try expectTreeContent(std.testing.allocator, &tree, "");
+}
+
+test "WBpt paged: stress test - random insertions" {
+    const maximum_insertion_to_dump = 10000;
+    const num_insertions = 21000;
+    const log_interval = num_insertions / 10;
+    const rebalance_policy = .neighbor_share;
+
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Tree = wbpt.WeightedBpt(Model);
+
+    var store_mgr = NoneStorageManager{};
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+    var model = Model.init(&cache, &store_mgr, .{});
+
+    var tree = Tree.init(&model, rebalance_policy);
+    defer tree.deinit();
+
+    // Fixed seed for reproducibility
+    var prng = std.Random.DefaultPrng.init(42);
+
+    // Use current time as seed for randomness
+    //var prng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.nanoTimestamp())));
+    const random = prng.random();
+
+    std.debug.print("\n=== Stress Test: {} Random Insertions ===\n", .{num_insertions});
+
+    // Track all insertions for verification
+    const Insertion = struct {
+        pos: usize,
+        value: []const u8,
+    };
+    var insertions = try std.ArrayList(Insertion).initCapacity(allocator, 0);
+    defer {
+        for (insertions.items) |ins| {
+            allocator.free(ins.value);
+        }
+        insertions.deinit(allocator);
+    }
+
+    var total_weight: usize = 0;
+
+    // Perform random insertions
+    for (0..num_insertions) |i| {
+        // Generate random position (0 to current total_weight)
+        const pos = if (total_weight == 0) 0 else random.uintLessThan(usize, total_weight + 1);
+
+        // Generate random string of varying lengths (1 to 20)
+        const len = random.intRangeAtMost(usize, 1, 20);
+        var value = try allocator.alloc(u8, len);
+        for (0..len) |j| {
+            value[j] = 'a' + @as(u8, @intCast(random.uintLessThan(usize, 26)));
+        }
+
+        try insertions.append(allocator, .{
+            .pos = pos,
+            .value = value,
+        });
+
+        // if (i == 3928) {
+        //     @breakpoint();
+        // }
+
+        _ = tree.insert(@as(u32, @intCast(pos)), value) catch |err| {
+            std.debug.print("Insertion {} failed at pos {}: {}\n", .{ i, pos, err });
+            return err;
+        };
+        total_weight += value.len;
+
+        if ((i + 1) % log_interval == 0) {
+            std.debug.print("Completed {} insertions, total_weight={}\n", .{ i + 1, total_weight });
+        }
+    }
+
+    std.debug.print("\n=== Verification ===\n", .{});
+
+    // Reconstruct the string from the tree
+    var tree_content = try std.ArrayList(u8).initCapacity(allocator, 0);
+    defer tree_content.deinit(allocator);
+
+    var iter = try tree.iterator();
+    defer iter.deinit();
+
+    var reconstructed_weight: usize = 0;
+    while (!iter.isEnd()) {
+        var val = try iter.get();
+        defer val.deinit();
+        const part = try val.get();
+        try tree_content.appendSlice(allocator, part);
+        reconstructed_weight += part.len;
+        _ = try iter.next();
+    }
+
+    std.debug.print("Total insertions: {}\n", .{num_insertions});
+    std.debug.print("Expected total weight: {}\n", .{total_weight});
+    std.debug.print("Reconstructed weight: {}\n", .{reconstructed_weight});
+    std.debug.print("Tree string length: {}\n", .{tree_content.items.len});
+    //std.debug.print("Total nodes allocated: {}\n", .{acc.values.items.len});
+
+    // Verify weights match
+    try std.testing.expectEqual(total_weight, reconstructed_weight);
+    try std.testing.expectEqual(total_weight, tree_content.items.len);
+
+    // Now verify the content by simulating insertions on a simple string
+    var expected = try std.ArrayList(u8).initCapacity(allocator, 0);
+    defer expected.deinit(allocator);
+
+    for (insertions.items) |ins| {
+        try expected.insertSlice(allocator, ins.pos, ins.value);
+    }
+
+    std.debug.print("Expected string length: {}\n", .{expected.items.len});
+
+    // Verify content matches
+    try std.testing.expectEqualSlices(u8, expected.items, tree_content.items);
+
+    std.debug.print("SUCCESS: Tree content matches expected content!\n", .{});
+
+    if (num_insertions <= maximum_insertion_to_dump) {
+        std.debug.print("\n=== Final Tree Structure ===\n", .{});
+        tree.dump();
+    } else {
+        std.debug.print("\n(Tree dump skipped for large test)\n", .{});
+    }
 }
