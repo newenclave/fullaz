@@ -618,6 +618,10 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             const new_free_begin: usize = @sizeOf(Entry) + @as(usize, @intCast(header.free_begin.get()));
             header.entry_count.set(entry_count + 1);
             header.free_begin.set(@as(T, @intCast(new_free_begin)));
+            const old_free_end = header.free_end.get();
+            if (old_free_end < new_free_begin) {
+                @breakpoint();
+            }
         }
 
         // Free slots management

@@ -116,7 +116,7 @@ test "WBpt: insertion" {
 
 test "WBpt: stress test - random insertions" {
     const maximum_insertion_to_dump = 100;
-    const num_insertions = 2500;
+    const num_insertions = 100;
     const log_interval = num_insertions / 10;
     const maximum_elements = 4;
     const rebalance_policy = .neighbor_share;

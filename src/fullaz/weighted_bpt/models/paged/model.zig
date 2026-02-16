@@ -361,6 +361,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         const Self = @This();
         const PageViewType = WBptPage.InodeSubheaderView;
         const PageViewTypeConst = WBptPageConst.InodeSubheaderView;
+        const AvailableStatus = WBptPageConst.SlotsAvailableStatus;
         const SlotType = WBptPageConst.InodeSlotType;
 
         pub const Error = ErrorSet;
@@ -418,13 +419,22 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
         pub fn insertChild(self: *Self, pos: usize, child: BlockIdType, weight: Weight) Error!void {
             var view = PageViewType.init(try self.handle.getDataMut());
-            try view.insert(pos, child, weight);
+
+            // TODO: Move compacting here
+            const available = try self.canInsertImpl(pos, weight);
+            if (available == .not_enough) {
+                return Error.NotEnoughSpace;
+            }
+            var tmp_page = try self.ctx.cache.getTemporaryPage();
+            defer tmp_page.deinit();
+            const page_data = try tmp_page.getDataMut();
+
+            try view.insert(pos, child, weight, page_data);
         }
 
         pub fn removeAt(self: *Self, pos: usize) Error!void {
             var view = PageViewType.init(try self.handle.getDataMut());
-            var slots_dir = try view.slotsDirMut();
-            return try slots_dir.remove(pos);
+            try view.remove(pos);
         }
 
         pub fn getChild(self: *const Self, pos: usize) Error!BlockIdType {
@@ -486,9 +496,13 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             };
         }
 
-        pub fn canInsertAt(self: *const Self, pos: usize, weight: Weight) Error!bool {
+        fn canInsertImpl(self: *const Self, pos: usize, weight: Weight) Error!AvailableStatus {
             const view = PageViewTypeConst.init(try self.handle.getData());
-            return try view.canInsert(pos, weight) != .not_enough;
+            return try view.canInsert(pos, weight);
+        }
+
+        pub fn canInsertAt(self: *const Self, pos: usize, weight: Weight) Error!bool {
+            return try self.canInsertImpl(pos, weight) != .not_enough;
         }
     };
 

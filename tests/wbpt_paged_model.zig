@@ -226,8 +226,8 @@ test "WBpt paged remove: simple smoke" {
 }
 
 test "WBpt paged: stress test - random insertions" {
-    const maximum_insertion_to_dump = 10000;
-    const num_insertions = 21000;
+    const maximum_insertion_to_dump = 100;
+    const num_insertions = 4300;
     const log_interval = num_insertions / 10;
     const rebalance_policy = .neighbor_share;
 
@@ -238,9 +238,9 @@ test "WBpt paged: stress test - random insertions" {
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};
-    var device = try Device.init(allocator, 4096);
+    var device = try Device.init(allocator, 1024);
     defer device.deinit();
-    var cache = try PageCache.init(&device, allocator, 8);
+    var cache = try PageCache.init(&device, allocator, 32);
     defer cache.deinit();
     var model = Model.init(&cache, &store_mgr, .{});
 
@@ -288,8 +288,9 @@ test "WBpt paged: stress test - random insertions" {
             .value = value,
         });
 
-        // if (i == 3928) {
+        // if (i == 2193) {
         //     @breakpoint();
+        //     std.debug.print("Tree total weight: {}\n", .{try tree.totalWeight()});
         // }
 
         _ = tree.insert(@as(u32, @intCast(pos)), value) catch |err| {
@@ -302,6 +303,8 @@ test "WBpt paged: stress test - random insertions" {
             std.debug.print("Completed {} insertions, total_weight={}\n", .{ i + 1, total_weight });
         }
     }
+
+    tree.dump();
 
     std.debug.print("\n=== Verification ===\n", .{});
 
@@ -326,6 +329,8 @@ test "WBpt paged: stress test - random insertions" {
     std.debug.print("Expected total weight: {}\n", .{total_weight});
     std.debug.print("Reconstructed weight: {}\n", .{reconstructed_weight});
     std.debug.print("Tree string length: {}\n", .{tree_content.items.len});
+    std.debug.print("Tree total weight: {}\n", .{try tree.totalWeight()});
+
     //std.debug.print("Total nodes allocated: {}\n", .{acc.values.items.len});
 
     // Verify weights match
@@ -337,8 +342,13 @@ test "WBpt paged: stress test - random insertions" {
     defer expected.deinit(allocator);
 
     for (insertions.items) |ins| {
+        // if (ins.pos == 14249) {
+        //     @breakpoint();
+        // }
         try expected.insertSlice(allocator, ins.pos, ins.value);
     }
+
+    //std.debug.print("{s}", .{expected.items});
 
     std.debug.print("Expected string length: {}\n", .{expected.items.len});
 

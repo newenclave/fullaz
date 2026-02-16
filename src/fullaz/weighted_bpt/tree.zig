@@ -505,6 +505,8 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         fn inodeHandleOverflow(self: *Self, inode: *Inode) Error!void {
             var acc = self.getAccessor();
             const ppid = try inode.getParent();
+            const old_weight = try inode.totalWeight();
+            _ = old_weight;
             var split_result = try self.inodeSplit(inode);
             defer acc.deinitInode(&split_result.right);
 

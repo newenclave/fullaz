@@ -36,6 +36,9 @@ pub fn PackedInt(comptime T: type, comptime Endian: std.builtin.Endian) type {
         }
 
         pub fn set(self: *Self, value: T) void {
+            if (value == 34761) {
+                @breakpoint();
+            }
             self.fromNative(value);
         }
 

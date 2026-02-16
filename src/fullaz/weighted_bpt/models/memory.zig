@@ -217,12 +217,14 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         pid: Pid,
         inode: *InodeContainer = undefined,
         ctx: *Context = undefined,
+        san: *u32 = undefined,
 
-        fn init(inode: *InodeContainer, ctx: *Context, pid: Pid) Self {
+        fn init(inode: *InodeContainer, ctx: *Context, pid: Pid) !Self {
             return .{
                 .pid = pid,
                 .inode = inode,
                 .ctx = ctx,
+                .san = try ctx.allocator.create(u32),
             };
         }
 
@@ -637,7 +639,8 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             return dst_cap >= (dst_sz + src_sz);
         }
 
-        pub fn deinitInode(_: *Self, inode: *InodeImpl) void {
+        pub fn deinitInode(self: *Self, inode: *InodeImpl) void {
+            self.ctx.allocator.destroy(inode.san);
             inode.* = undefined;
         }
 

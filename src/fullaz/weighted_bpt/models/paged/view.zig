@@ -301,9 +301,19 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             }
         }
 
-        pub fn insert(self: *Self, index: usize, child_page_id: PageIdT, weight: Weight) ErrorSet!void {
+        pub fn insert(self: *Self, index: usize, child_page_id: PageIdT, weight: Weight, tmp_buf: []u8) ErrorSet!void {
             const slot_size = @sizeOf(SlotHeaderType);
             var slot_dir = try self.slotsDirMut();
+
+            const insert_status = try self.canInsert(index, weight);
+            if (insert_status == .not_enough) {
+                return ErrorSet.NotEnoughSpace;
+            } else if (insert_status == .need_compact) {
+                slot_dir.compactWithBuffer(tmp_buf) catch {
+                    try slot_dir.compactInPlace();
+                };
+            }
+
             var buffer = try slot_dir.reserveGet(index, slot_size);
             var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
             slot.child.set(child_page_id);
@@ -311,6 +321,19 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             var hdr = self.subheaderMut();
             const old_total = hdr.total_weight.get();
             hdr.total_weight.set(old_total + weight);
+        }
+
+        pub fn remove(self: *Self, pos: usize) ErrorSet!void {
+            var slot_dir = try self.slotsDirMut();
+            const buffer = try slot_dir.get(pos);
+            const slot: *const SlotHeaderType = @ptrCast(&buffer[0]);
+            const old_weight = slot.weight.get();
+
+            try slot_dir.remove(pos);
+
+            var hdr = self.subheaderMut();
+            const old_total = hdr.total_weight.get();
+            hdr.total_weight.set(old_total - old_weight);
         }
 
         pub fn get(self: *const Self, pos: usize) ErrorSet!ChildWeightValue {
