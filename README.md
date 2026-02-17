@@ -2,7 +2,7 @@
 
 **fullaz** is a low-level storage and indexing library written in Zig.
 
-This project is an **educational Zig-native reimplementation** of the ideas and architecture behind the C++ project **fulla**.  
+This project is an **educational Zig-native reimplementation** of the ideas and architecture behind the C++ project **fulla**.
 Its primary goal is learning and experimentation with page-based storage and indexing structures, not production use.
 
 The code favors explicitness, clarity, and correctness over completeness or performance tuning.
@@ -45,6 +45,7 @@ There are no implicit allocations or hidden memory ownership rules.
 ### Explicit ownership and borrowing
 
 APIs distinguish between:
+
 - input types
 - output types
 - borrowed views
@@ -77,22 +78,31 @@ If something can be made simpler for learning purposes, it probably will be.
 ### Roadmap Snapshot
 
 #### Page layout & primitives
-- [x] **Variadic slots** implemented  
-- [ ] **Fixed-size slots** planned  
+
+- [X] **Variadic slots** implemented
+- [ ] **Fixed-size slots** planned
 
 #### Index structures
-- [x] **B+ tree (in-memory / paged)** implemented  
-- [ ] **Weighted B+ tree (in-memory / paged)** in development  
-- [ ] **Radix tables** planned  
+
+- [X] **B+ tree (in-memory / paged)** implemented
+- [ ] **Weighted B+ tree (in-memory / paged)** in development
+- [ ] **Radix tables** planned
 
 #### Storage backends
-- [ ] **Long-value store** partially implemented  
-- [ ] **Chained store** in development  
+
+- [ ] **Long-value store** partially implemented
+- [ ] **Chained store** in development
+
+#### Durability & Recovery
+
+* [ ] **Write-Ahead Log (WAL)** planned
+* [ ] **Page diffs / delta logging** planned
+
 
 
 ## Status
 
-🚧 Work in progress  
+🚧 Work in progress
 The project is developed incrementally, step by step.
 
 ---
@@ -100,6 +110,7 @@ The project is developed incrementally, step by step.
 ## Motivation
 
 This project exists to better understand:
+
 - Zig as a systems programming language
 - Database storage internals
 - Page-based data structures
@@ -109,5 +120,3 @@ If you are looking for production-ready software, this is not it.
 If you want to learn how things work internally -- welcome 🙂
 
 ---
-
-
