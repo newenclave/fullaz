@@ -8,7 +8,8 @@
             "args": [
                 "build",
                 "install-tests",
-                "-Doptimize=Debug"
+                "-Doptimize=Debug",
+                "-Dtest-filter=WBpt paged: stress test - random insertions"
             ],
             "problemMatcher": [],
             "group": {

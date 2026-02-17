@@ -323,19 +323,19 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             }
         }
 
-        fn dumpLeaf(self: *const Self) !void {
-            if (self.id() != 550) {
-                return;
-            }
-            var view = PageViewTypeConst.init(try self.handle.getData());
-            var slots_dir = try view.slotsDir();
-            const entries = slots_dir.size();
-            std.debug.print("\n=====\n", .{});
-            for (0..entries) |idx| {
-                var val = try self.getValue(idx);
-                defer val.deinit();
-                std.debug.print("{s} ", .{try val.get()});
-            }
+        fn dumpLeaf(_: *const Self) !void {
+            // if (self.id() != 550) {
+            //     return;
+            // }
+            // var view = PageViewTypeConst.init(try self.handle.getData());
+            // var slots_dir = try view.slotsDir();
+            // const entries = slots_dir.size();
+            // std.debug.print("\n=====\n", .{});
+            // for (0..entries) |idx| {
+            //     var val = try self.getValue(idx);
+            //     defer val.deinit();
+            //     std.debug.print("{s} ", .{try val.get()});
+            // }
         }
 
         pub fn removeAt(self: *Self, pos: usize) Error!void {

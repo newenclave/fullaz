@@ -207,7 +207,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             const value_dst = new_buffer[@sizeOf(SlotHeaderType)..][0..value.len];
             @memcpy(value_dst, value);
 
-            const tail_buf = tmp_buf[new_total_size..];
+            //const tail_buf = tmp_buf[new_total_size..];
 
             const update_status = try self.canUpdate(pos, value);
             if (update_status == .not_enough) {
@@ -215,9 +215,10 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             } else if (update_status == .need_compact) {
                 var slot_dir = try self.slotsDirMut();
                 try slot_dir.free(pos);
-                slot_dir.compactWithBuffer(tail_buf) catch {
+                //slot_dir.compactWithBuffer(tail_buf) catch
+                {
                     try slot_dir.compactInPlace();
-                };
+                }
             }
             var slot_dir = try self.slotsDirMut();
             const buffer = try slot_dir.resizeGet(pos, new_total_size);
@@ -301,7 +302,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             }
         }
 
-        pub fn insert(self: *Self, index: usize, child_page_id: PageIdT, weight: Weight, tmp_buf: []u8) ErrorSet!void {
+        pub fn insert(self: *Self, index: usize, child_page_id: PageIdT, weight: Weight, _: []u8) ErrorSet!void {
             const slot_size = @sizeOf(SlotHeaderType);
             var slot_dir = try self.slotsDirMut();
 
@@ -309,9 +310,10 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             if (insert_status == .not_enough) {
                 return ErrorSet.NotEnoughSpace;
             } else if (insert_status == .need_compact) {
-                slot_dir.compactWithBuffer(tmp_buf) catch {
+                //slot_dir.compactWithBuffer(tmp_buf) catch
+                {
                     try slot_dir.compactInPlace();
-                };
+                }
             }
 
             var buffer = try slot_dir.reserveGet(index, slot_size);

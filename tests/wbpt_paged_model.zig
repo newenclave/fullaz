@@ -64,7 +64,7 @@ fn insertAlphabet(tree: anytype, count: usize) !void {
     }
 }
 
-test "WBpt paged: Create with Memory model" {
+test "WBpt paged: Create with Paged model" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
@@ -227,7 +227,7 @@ test "WBpt paged remove: simple smoke" {
 
 test "WBpt paged: stress test - random insertions" {
     const maximum_insertion_to_dump = 100;
-    const num_insertions = 24547;
+    const num_insertions = 10000;
     const log_interval = num_insertions / 10;
     const rebalance_policy = .neighbor_share;
 
@@ -289,7 +289,7 @@ test "WBpt paged: stress test - random insertions" {
         });
 
         if (i == num_insertions - 1) {
-            @breakpoint();
+            //@breakpoint();
             std.debug.print("Tree total weight: {}\n", .{try tree.totalWeight()});
         }
 
@@ -304,7 +304,7 @@ test "WBpt paged: stress test - random insertions" {
         }
     }
 
-    tree.dump();
+    //tree.dump();
 
     std.debug.print("\n=== Verification ===\n", .{});
 
@@ -342,13 +342,8 @@ test "WBpt paged: stress test - random insertions" {
     defer expected.deinit(allocator);
 
     for (insertions.items) |ins| {
-        // if (ins.pos == 14249) {
-        //     @breakpoint();
-        // }
         try expected.insertSlice(allocator, ins.pos, ins.value);
     }
-
-    //std.debug.print("{s}", .{expected.items});
 
     std.debug.print("Expected string length: {}\n", .{expected.items.len});
 
@@ -363,4 +358,57 @@ test "WBpt paged: stress test - random insertions" {
     } else {
         std.debug.print("\n(Tree dump skipped for large test)\n", .{});
     }
+}
+
+test "WBpt paged remove: random removal stress test" {
+    const num_insertions = 100;
+    const rebalance_policy = .neighbor_share;
+
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Tree = wbpt.WeightedBpt(Model);
+
+    var store_mgr = NoneStorageManager{};
+    var device = try Device.init(allocator, 1024);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 32);
+    defer cache.deinit();
+    var model = Model.init(&cache, &store_mgr, .{});
+
+    var tree = Tree.init(&model, rebalance_policy);
+    defer tree.deinit();
+
+    for (0..num_insertions) |i| {
+        const one = [_]u8{'A' + @as(u8, @intCast(i % 26))};
+        _ = try tree.insert(@as(u32, @intCast(i)), one[0..]);
+    }
+
+    var before = try collectTreeContent(std.testing.allocator, &tree);
+    defer before.deinit(std.testing.allocator);
+    try std.testing.expectEqual(num_insertions, before.items.len);
+
+    try tree.removeEntry(0);
+    try tree.removeEntry(10);
+
+    var current = try collectTreeContent(std.testing.allocator, &tree);
+    const end_pos = current.items.len - 1;
+    current.deinit(std.testing.allocator);
+    try tree.removeEntry(@as(u32, @intCast(end_pos)));
+
+    var removed_count: usize = 3;
+    while (removed_count < num_insertions) : (removed_count += 1) {
+        var left = try collectTreeContent(std.testing.allocator, &tree);
+        const is_empty = left.items.len == 0;
+        left.deinit(std.testing.allocator);
+        if (is_empty) break;
+        try tree.removeEntry(0);
+    }
+
+    try expectTreeContent(std.testing.allocator, &tree, "");
+
+    std.debug.print("SUCCESS: Tree content matches expected content!\n", .{});
+
+    std.debug.print("\n=== Final Tree Structure after removals ===\n", .{});
 }

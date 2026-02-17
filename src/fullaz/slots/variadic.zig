@@ -362,8 +362,10 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
                 var new_end_usize: usize = self.body.len;
                 for (offset_buf) |idx| {
                     const uidx: usize = @intCast(idx);
-                    const target_len = self.fixLength(slots[uidx].length.get());
-                    const old_off = slots[uidx].offset.get();
+                    const slot_offset = slots[uidx].offset.get();
+                    const slot_length = slots[uidx].length.get();
+                    const target_len = self.fixLength(slot_length);
+                    const old_off = slot_offset;
 
                     new_end_usize -= target_len;
 
@@ -461,20 +463,23 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             if (len >= self.body.len) {
                 return Error.NotEnoughSpace;
             }
+            const fixed_len = self.fixLength(@as(T, @intCast(len)));
+
             const slots = self.entriesMut();
-            const old_len = @as(usize, slots[pos].length.get());
-            if (len == old_len) {
+            const old_len = @as(usize, self.fixLength(slots[pos].length.get()));
+            if (fixed_len == old_len) {
                 const offset: usize = @intCast(slots[pos].offset.get());
+                slots[pos].length.set(@as(T, @intCast(len)));
                 return self.body[offset .. offset + len];
             }
 
-            if (len < old_len) {
+            if (fixed_len < old_len) {
                 const offset: usize = @intCast(slots[pos].offset.get());
                 slots[pos].length.set(@as(T, @intCast(len)));
 
-                const remain_slot_len = old_len - len;
+                const remain_slot_len = old_len - fixed_len;
                 if (remain_slot_len >= @as(usize, @sizeOf(FreedEntry))) {
-                    const new_free_offset = @as(T, @intCast(offset + len));
+                    const new_free_offset = @as(T, @intCast(offset + fixed_len));
                     const new_free_length = @as(T, @intCast(remain_slot_len));
                     self.pushFreeSlot(new_free_offset, new_free_length);
                 }
