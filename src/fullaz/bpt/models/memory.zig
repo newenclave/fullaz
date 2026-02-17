@@ -1,9 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
 const core = @import("../../core/core.zig");
 const errors = core.errors;
 
 const StaticVector = core.static_vector.StaticVector;
 const algos = core.algorithm;
+
+const IS_DEBUG = builtin.mode == .Debug;
 
 const MemoryPidType = usize;
 const EmptyError = error{};
@@ -41,7 +45,7 @@ fn KeyBorrowTypeWrapper(comptime KeyType: type) type {
         fn init(key: KeyType, sanitize_ptr: ?*u32) Self {
             return Self{
                 .key = key,
-                .sanitize_ptr = sanitize_ptr,
+                .sanitize_ptr = if (IS_DEBUG) sanitize_ptr else null,
             };
         }
     };
@@ -518,31 +522,39 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
         }
 
         pub fn borrowKeyfromInode(self: *Self, inode: *const InodeType, pos: usize) ErrorSet!KeyBorrowType {
-            return KeyBorrowType.init((try inode.getKey(pos)).*, try self.allocator.create(u32));
+            const san_ptr = if (IS_DEBUG) try self.allocator.create(u32) else null;
+            return KeyBorrowType.init((try inode.getKey(pos)).*, san_ptr);
         }
 
         pub fn borrowKeyfromLeaf(self: *Self, leaf: *const LeafType, pos: usize) ErrorSet!KeyBorrowType {
-            return KeyBorrowType.init((try leaf.getKey(pos)).*, try self.allocator.create(u32));
+            const san_ptr = if (IS_DEBUG) try self.allocator.create(u32) else null;
+            return KeyBorrowType.init((try leaf.getKey(pos)).*, san_ptr);
         }
 
         pub fn deinitBorrowKey(self: *Self, key: KeyBorrowType) void {
-            if (key.sanitize_ptr) |ptr| {
-                self.allocator.destroy(ptr);
+            if (IS_DEBUG) {
+                if (key.sanitize_ptr) |ptr| {
+                    self.allocator.destroy(ptr);
+                }
             }
         }
 
         pub fn deinitLeaf(self: *Self, leaf: ?LeafType) void {
             if (leaf) |l| {
-                if (l.keep_ptr) |ptr| {
-                    self.allocator.destroy(ptr);
+                if (IS_DEBUG) {
+                    if (l.keep_ptr) |ptr| {
+                        self.allocator.destroy(ptr);
+                    }
                 }
             }
         }
 
         pub fn deinitInode(self: *Self, inode: ?InodeType) void {
             if (inode) |i| {
-                if (i.keep_ptr) |ptr| {
-                    self.allocator.destroy(ptr);
+                if (IS_DEBUG) {
+                    if (i.keep_ptr) |ptr| {
+                        self.allocator.destroy(ptr);
+                    }
                 }
             }
         }
@@ -553,7 +565,8 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             // initialize leaf if needed
             const idx = self.nodes.items.len;
             try self.nodes.append(self.allocator, leaf);
-            const leafResult = LeafType.init(&leaf.leaf, idx, try self.allocator.create(u32));
+            const san_ptr = if (IS_DEBUG) try self.allocator.create(u32) else null;
+            const leafResult = LeafType.init(&leaf.leaf, idx, san_ptr);
             return leafResult;
         }
 
@@ -563,7 +576,8 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             // initialize inode if needed
             const idx = self.nodes.items.len;
             try self.nodes.append(self.allocator, inode);
-            const inodeResult = InodeType.init(&inode.inode, idx, try self.allocator.create(u32));
+            const san_ptr = if (IS_DEBUG) try self.allocator.create(u32) else null;
+            const inodeResult = InodeType.init(&inode.inode, idx, san_ptr);
             return inodeResult;
         }
 
@@ -576,7 +590,8 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
                 if (node_ptr) |node| {
                     switch (node.*) {
                         .leaf => {
-                            return LeafType.init(&node.leaf, id, try self.allocator.create(u32));
+                            const san_ptr = if (IS_DEBUG) try self.allocator.create(u32) else null;
+                            return LeafType.init(&node.leaf, id, san_ptr);
                         },
                         else => return null,
                     }
@@ -600,7 +615,8 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
                 if (node_ptr) |node| {
                     switch (node.*) {
                         .inode => {
-                            return InodeType.init(&node.inode, id, try self.allocator.create(u32));
+                            const san_ptr = if (IS_DEBUG) try self.allocator.create(u32) else null;
+                            return InodeType.init(&node.inode, id, san_ptr);
                         },
                         else => return null,
                     }

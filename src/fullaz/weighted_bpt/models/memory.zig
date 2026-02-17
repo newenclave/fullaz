@@ -1,5 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const errors = @import("../../core/errors.zig");
+
+const IS_DEBUG = builtin.mode == .Debug;
 
 pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
     const Pid = usize;
@@ -217,14 +220,15 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         pid: Pid,
         inode: *InodeContainer = undefined,
         ctx: *Context = undefined,
-        san: *u32 = undefined,
+        sanitize_ptr: ?*u32 = null,
 
-        fn init(inode: *InodeContainer, ctx: *Context, pid: Pid) !Self {
+        fn init(inode: *InodeContainer, ctx: *Context, pid: Pid) Error!Self {
+            const san_ptr = if (IS_DEBUG) try ctx.allocator.create(u32) else null;
             return .{
                 .pid = pid,
                 .inode = inode,
                 .ctx = ctx,
-                .san = try ctx.allocator.create(u32),
+                .sanitize_ptr = san_ptr,
             };
         }
 
@@ -368,12 +372,15 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         pid: Pid,
         leaf: *LeafContainer = undefined,
         ctx: *Context = undefined,
+        sanitize_ptr: ?*u32 = null,
 
-        fn init(leaf: *LeafContainer, ctx: *Context, pid: Pid) Self {
+        fn init(leaf: *LeafContainer, ctx: *Context, pid: Pid) Error!Self {
+            const san_ptr = if (IS_DEBUG) try ctx.allocator.create(u32) else null;
             return .{
                 .pid = pid,
                 .leaf = leaf,
                 .ctx = ctx,
+                .sanitize_ptr = san_ptr,
             };
         }
 
@@ -603,7 +610,12 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             return dst_cap >= (dst_sz + src_sz);
         }
 
-        pub fn deinitLeaf(_: *Self, leaf: *LeafImpl) void {
+        pub fn deinitLeaf(self: *Self, leaf: *LeafImpl) void {
+            if (IS_DEBUG) {
+                if (leaf.sanitize_ptr) |ptr| {
+                    self.ctx.allocator.destroy(ptr);
+                }
+            }
             leaf.* = undefined;
         }
 
@@ -640,7 +652,11 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         }
 
         pub fn deinitInode(self: *Self, inode: *InodeImpl) void {
-            self.ctx.allocator.destroy(inode.san);
+            if (IS_DEBUG) {
+                if (inode.sanitize_ptr) |ptr| {
+                    self.ctx.allocator.destroy(ptr);
+                }
+            }
             inode.* = undefined;
         }
 

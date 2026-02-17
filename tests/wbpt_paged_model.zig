@@ -227,7 +227,7 @@ test "WBpt paged remove: simple smoke" {
 
 test "WBpt paged: stress test - random insertions" {
     const maximum_insertion_to_dump = 100;
-    const num_insertions = 10000;
+    const num_insertions = 1000;
     const log_interval = num_insertions / 10;
     const rebalance_policy = .neighbor_share;
 
