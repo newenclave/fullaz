@@ -146,6 +146,11 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             return (try self.slotsDir()).capacityFor(maximum_slot_size);
         }
 
+        pub fn spaceUsed(self: *const Self) ErrorSet!usize {
+            const slots_dir = try self.slotsDir();
+            return slots_dir.spaceUsed();
+        }
+
         pub fn canInsert(self: *const Self, value: []const u8) ErrorSet!AvailableStatus {
             return self.canInsertSize(@sizeOf(SlotHeaderType) + value.len);
         }
@@ -301,18 +306,9 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             }
         }
 
-        pub fn insert(self: *Self, index: usize, child_page_id: PageIdT, weight: Weight, tmp_buf: []u8) ErrorSet!void {
+        pub fn insert(self: *Self, index: usize, child_page_id: PageIdT, weight: Weight) ErrorSet!void {
             const slot_size = @sizeOf(SlotHeaderType);
             var slot_dir = try self.slotsDirMut();
-
-            const insert_status = try self.canInsert(index, weight);
-            if (insert_status == .not_enough) {
-                return ErrorSet.NotEnoughSpace;
-            } else if (insert_status == .need_compact) {
-                slot_dir.compactWithBuffer(tmp_buf) catch {
-                    try slot_dir.compactInPlace();
-                };
-            }
 
             var buffer = try slot_dir.reserveGet(index, slot_size);
             var slot: *SlotHeaderType = @ptrCast(&buffer[0]);

@@ -58,13 +58,16 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
     return struct {
         pub const Self = @This();
 
+        pub const Error = errors.BufferError ||
+            errors.IndexError;
+
         words_ro: []const W,
         words_rw: ?[]W,
         max_bits: usize,
 
-        pub fn initConst(bytes: []const u8, maximum: usize) !Self {
+        pub fn initConst(bytes: []const u8, maximum: usize) Error!Self {
             if (bytes.len % @sizeOf(W) != 0) {
-                return errors.BufferError.BadLength;
+                return Error.BadLength;
             }
             const words = std.mem.bytesAsSlice(W, bytes);
             const cap_bits = words.len * BitsPerWord;
@@ -75,9 +78,9 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
             };
         }
 
-        pub fn initMutable(bytes: []u8, maximum: usize) !Self {
+        pub fn initMutable(bytes: []u8, maximum: usize) Error!Self {
             if (bytes.len % @sizeOf(W) != 0) {
-                return errors.BufferError.BadLength;
+                return Error.BadLength;
             }
             const words = std.mem.bytesAsSlice(W, bytes);
             const cap_bits = words.len * BitsPerWord;
@@ -98,7 +101,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
 
         pub fn set(self: *Self, bit_pos: usize) !void {
             if (bit_pos >= self.max_bits) {
-                return error.IndexOutOfBounds;
+                return Error.OutOfBounds;
             }
             const words = try self.requireWritable();
             const bucket = bit_pos / BitsPerWord;
@@ -108,9 +111,9 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
             words.ptr[bucket].set(v);
         }
 
-        pub fn clear(self: *Self, bit_pos: usize) !void {
+        pub fn clear(self: *Self, bit_pos: usize) Error!void {
             if (bit_pos >= self.max_bits) {
-                return error.IndexOutOfBounds;
+                return Error.OutOfBounds;
             }
             const words = try self.requireWritable();
             const bucket = bit_pos / BitsPerWord;
@@ -120,7 +123,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
             words.ptr[bucket].set(v);
         }
 
-        pub fn reset(self: *Self) !void {
+        pub fn reset(self: *Self) Error!void {
             const words = try self.requireWritable();
             for (words) |*w| {
                 w.set(0);
@@ -186,11 +189,11 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
         }
 
         // --- helpers ---
-        fn requireWritable(self: *Self) ![]W {
+        fn requireWritable(self: *Self) Error![]W {
             if (self.words_rw) |w| {
                 return w;
             }
-            return error.ReadOnly;
+            return Error.ReadOnly;
         }
 
         inline fn scanFirstZero(v: Word) usize {

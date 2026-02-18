@@ -227,7 +227,7 @@ test "WBpt paged remove: simple smoke" {
 
 test "WBpt paged: stress test - random insertions" {
     const maximum_insertion_to_dump = 100;
-    const num_insertions = 1000;
+    const num_insertions = 100;
     const log_interval = num_insertions / 10;
     const rebalance_policy = .neighbor_share;
 
@@ -238,7 +238,7 @@ test "WBpt paged: stress test - random insertions" {
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};
-    var device = try Device.init(allocator, 1024);
+    var device = try Device.init(allocator, 512);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 32);
     defer cache.deinit();

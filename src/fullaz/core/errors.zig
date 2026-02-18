@@ -30,6 +30,7 @@ pub const IndexError = error{
 
 pub const BufferError = error{
     BadLength,
+    ReadOnly,
 };
 
 pub const SpaceError = error{

@@ -84,9 +84,14 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return @intCast(free_end - free_begin);
         }
 
-        pub fn availableAfterCompact(self: *const Self) Error!usize {
+        pub fn capacitySpace(self: *const Self) usize {
+            const total_size = self.body.len - @sizeOf(Header);
+            return total_size;
+        }
+
+        pub fn usedSpace(self: *const Self) Error!usize {
             const slots = self.entriesConst();
-            var used = @sizeOf(Header) + slots.len * @sizeOf(Entry);
+            var used = slots.len * @sizeOf(Entry);
             for (slots) |*s| {
                 if (s.offset.get() == SLOT_INVALID) {
                     continue;
@@ -95,10 +100,14 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
                 const fixed: T = self.fixLength(len);
                 used += @as(usize, fixed);
             }
-            if (used > self.body.len) {
+            if (used > (self.body.len - @sizeOf(Header))) {
                 return Error.InconsistentLayout;
             }
-            return self.body.len - used;
+            return used;
+        }
+
+        pub fn availableAfterCompact(self: *const Self) Error!usize {
+            return self.capacitySpace() - try self.usedSpace();
         }
 
         pub fn getMut(self: *Self, entry: usize) Error![]u8 {

@@ -9,7 +9,7 @@
                 "build",
                 "install-tests",
                 "-Doptimize=Debug",
-                "-Dtest-filter=WBpt paged: stress test - random insertions"
+                "-Dtest-filter=Slots Fixed: set and get slots"
             ],
             "problemMatcher": [],
             "group": {

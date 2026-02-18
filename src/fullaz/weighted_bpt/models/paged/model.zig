@@ -183,9 +183,13 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return try view.capacityFor(self.ctx.settings.maximum_value_size);
         }
 
-        // TODO: should count bytes, not entries, to allow variable sized values
         pub fn isUnderflowed(self: *const Self) Error!bool {
-            return (try self.size()) < (try self.capacity() + 1) / 2;
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            const slots = try view.slotsDir();
+            const page_cap = slots.capacitySpace();
+            const page_used = try slots.usedSpace();
+
+            return page_used < page_cap / 2;
         }
 
         pub fn id(self: *const Self) BlockIdType {
@@ -238,6 +242,31 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return ValuePolicyType.init(self.ctx, wv.value);
         }
 
+        fn compact(self: *Self, tmp_buf: []u8) Error!void {
+            var view_mut = PageViewType.init(try self.handle.getDataMut());
+            var slots_dir = try view_mut.slotsDirMut();
+            slots_dir.compactWithBuffer(tmp_buf) catch {
+                try slots_dir.compactInPlace();
+            };
+        }
+
+        fn insertAtWithBuf(self: *Self, pos: usize, val: Value, tmp_buf: []u8) Error!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+
+            var vp = ValuePolicyType.init(self.ctx, val);
+            defer vp.deinit();
+
+            const res = try view.canInsert(try vp.get());
+            if (res == .not_enough) {
+                return Error.NodeFull;
+            } else if (res == .need_compact) {
+                try self.compact(tmp_buf);
+            }
+
+            var view_mut = PageViewType.init(try self.handle.getDataMut());
+            try view_mut.insert(pos, try vp.weight(), try vp.get());
+        }
+
         pub fn insertAt(self: *Self, pos: usize, val: Value) Error!void {
             var view = PageViewType.init(try self.handle.getDataMut());
 
@@ -250,14 +279,8 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             } else if (res == .need_compact) {
                 var tmp_page = try self.ctx.cache.getTemporaryPage();
                 defer tmp_page.deinit();
-
-                const page_data = try tmp_page.getDataMut();
-                var view_mut = PageViewType.init(try self.handle.getDataMut());
-                var slots_dir = try view_mut.slotsDirMut();
-                slots_dir.compactWithBuffer(page_data) catch {
-                    try slots_dir.compactInPlace();
-                };
-                try self.dumpLeaf();
+                const tmp_buf = try tmp_page.getDataMut();
+                try self.compact(tmp_buf);
             }
 
             var view_mut = PageViewType.init(try self.handle.getDataMut());
@@ -312,30 +335,12 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
                 var tmp_page = try self.ctx.cache.getTemporaryPage();
                 defer tmp_page.deinit();
-                const page_data = try tmp_page.getDataMut();
+                const tmp_buf = try tmp_page.getDataMut();
 
-                try view.update(pos.pos, try policy.weight(), try policy.get(), page_data);
-                try self.dumpLeaf();
-                try self.insertAt(pos.pos + 1, try new_policy.get());
-                try self.dumpLeaf();
-                try self.insertAt(pos.pos + 1, try vp.get());
-                try self.dumpLeaf();
+                try view.update(pos.pos, try policy.weight(), try policy.get(), tmp_buf);
+                try self.insertAtWithBuf(pos.pos + 1, try new_policy.get(), tmp_buf);
+                try self.insertAtWithBuf(pos.pos + 1, try vp.get(), tmp_buf);
             }
-        }
-
-        fn dumpLeaf(_: *const Self) !void {
-            // if (self.id() != 550) {
-            //     return;
-            // }
-            // var view = PageViewTypeConst.init(try self.handle.getData());
-            // var slots_dir = try view.slotsDir();
-            // const entries = slots_dir.size();
-            // std.debug.print("\n=====\n", .{});
-            // for (0..entries) |idx| {
-            //     var val = try self.getValue(idx);
-            //     defer val.deinit();
-            //     std.debug.print("{s} ", .{try val.get()});
-            // }
         }
 
         pub fn removeAt(self: *Self, pos: usize) Error!void {
@@ -436,19 +441,28 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             try view.setParent(parent);
         }
 
+        fn compact(self: *Self, tmp_buf: []u8) Error!void {
+            var view_mut = PageViewType.init(try self.handle.getDataMut());
+            var slots_dir = try view_mut.slotsDirMut();
+            slots_dir.compactWithBuffer(tmp_buf) catch {
+                try slots_dir.compactInPlace();
+            };
+        }
+
         pub fn insertChild(self: *Self, pos: usize, child: BlockIdType, weight: Weight) Error!void {
             var view = PageViewType.init(try self.handle.getDataMut());
 
-            // TODO: Move compacting here
             const available = try self.canInsertImpl(pos, weight);
             if (available == .not_enough) {
                 return Error.NotEnoughSpace;
+            } else if (available == .need_compact) {
+                var tmp_page = try self.ctx.cache.getTemporaryPage();
+                defer tmp_page.deinit();
+                const tmp_buf = try tmp_page.getDataMut();
+                try self.compact(tmp_buf);
             }
-            var tmp_page = try self.ctx.cache.getTemporaryPage();
-            defer tmp_page.deinit();
-            const page_data = try tmp_page.getDataMut();
 
-            try view.insert(pos, child, weight, page_data);
+            try view.insert(pos, child, weight);
         }
 
         pub fn removeAt(self: *Self, pos: usize) Error!void {
