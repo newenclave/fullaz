@@ -79,13 +79,13 @@ If something can be made simpler for learning purposes, it probably will be.
 
 #### Page layout & primitives
 
-- [X] **Variadic slots** implemented
-- [ ] **Fixed-size slots** planned
+- [X] **Variadic slots** 
+- [X] **Fixed-size slots**
 
 #### Index structures
 
 - [X] **B+ tree (in-memory / paged)** implemented
-- [ ] **Weighted B+ tree (in-memory / paged)** in development
+- [X] **Weighted B+ tree (in-memory / paged)** 
 - [ ] **Radix tables** planned
 
 #### Storage backends
@@ -97,8 +97,6 @@ If something can be made simpler for learning purposes, it probably will be.
 
 * [ ] **Write-Ahead Log (WAL)** planned
 * [ ] **Page diffs / delta logging** planned
-
-
 
 ## Status
 
