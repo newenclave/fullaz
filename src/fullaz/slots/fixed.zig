@@ -20,11 +20,12 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
     return struct {
         const Self = @This();
 
-        hdr_buf: BufferType,
-        body: BufferType,
         const Error = errors.SpaceError ||
             errors.IndexError ||
             BitSet.Error;
+
+        hdr_buf: BufferType,
+        body: BufferType,
 
         pub fn init(body: BufferType) Error!Self {
             if (body.len < @sizeOf(Header)) {
@@ -108,7 +109,7 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
 
         pub fn slotSize(self: *const Self) Error!usize {
             const hdr = self.header();
-            return @as(usize, @intCast(hdr.one_slot_size.get()));
+            return @intCast(hdr.one_slot_size.get());
         }
 
         pub fn header(self: *const Self) *const Header {
@@ -121,7 +122,7 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
 
         fn getSlotsBody(self: *const Self) []const u8 {
             const hdr = self.header();
-            const bitmask_words: usize = @as(usize, @intCast(hdr.bitmask_words.get()));
+            const bitmask_words: usize = @intCast(hdr.bitmask_words.get());
             const vs_body_len = bitmask_words * @sizeOf(BitSetDataType);
             return self.body[vs_body_len..];
         }
@@ -129,8 +130,8 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
         fn getSlot(self: *const Self, pos: usize) Error![]const u8 {
             const slots = self.getSlotsBody();
             const hdr = self.header();
-            const slot_size: usize = @as(usize, @intCast(hdr.one_slot_size.get()));
-            const cap: usize = @as(usize, @intCast(hdr.capacity.get()));
+            const slot_size: usize = @intCast(hdr.one_slot_size.get());
+            const cap: usize = @intCast(hdr.capacity.get());
             if (pos >= cap) {
                 return Error.OutOfBounds;
             }
@@ -145,8 +146,8 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
         fn getSlotMut(self: *Self, pos: usize) Error![]u8 {
             const slots = self.getSlotsBodyMut();
             const hdr = self.headerMut();
-            const slot_size: usize = @as(usize, @intCast(hdr.one_slot_size.get()));
-            const cap: usize = @as(usize, @intCast(hdr.capacity.get()));
+            const slot_size: usize = @intCast(hdr.one_slot_size.get());
+            const cap: usize = @intCast(hdr.capacity.get());
             if (pos >= cap) {
                 return Error.OutOfBounds;
             }
