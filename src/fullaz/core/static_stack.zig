@@ -52,17 +52,24 @@ pub fn StaticStack(comptime T: type, comptime maximum_elements: usize, comptime 
             return &self.vector.data[self.vector.len - 1];
         }
 
-        pub fn ptrAt(self: anytype, pos: usize) ?*T {
-            return self.vector.ptrAt(pos);
+        pub fn ptrAt(self: anytype, pos: usize) Error!*T {
+            comptime self.isMySelf(@TypeOf(self));
+            if (pos >= self.vector.len) {
+                return Error.OutOfBounds;
+            }
+            return &self.vector.data[pos];
         }
 
         pub fn pop(self: *Self) Error!void {
-            if (self.empty()) {
-                return Error.EmptySet;
-            }
-            self.vector.len -= 1;
-            if (destructor) |dtor| {
-                dtor(self.vector.deinit_ctx, &self.vector.data[self.vector.len]);
+            try self.vector.popBack();
+        }
+
+        // helpers
+        fn isMySelf(S: type) void {
+            comptime {
+                if (S != *Self and S != *const Self) {
+                    @compileError("self must be *Self or *const Self");
+                }
             }
         }
     };

@@ -1,4 +1,5 @@
 const StaticVector = @import("fullaz").core.static_vector.StaticVector;
+const StaticStack = @import("fullaz").core.static_stack.StaticStack;
 const std = @import("std");
 const expect = std.testing.expect;
 const errors = @import("fullaz").core.errors;
@@ -120,4 +121,24 @@ test "StaticVector custom destructor" {
         try sv.remove(0);
     }
     try expect(destroyed == old_size);
+}
+
+test "StaticStack basic operations" {
+    var ss = StaticStack(u8, 64, void, null).init(undefined);
+    try ss.push(10);
+    try ss.push(20);
+    try ss.push(30);
+    try expect(ss.size() == 3);
+    const top = try ss.top();
+    try expect(top.* == 30);
+    try expect(!ss.empty());
+    try expect(!ss.full());
+
+    try ss.pop();
+    const new_top = try ss.top();
+    try expect(new_top.* == 20);
+    try ss.pop();
+    try expect(ss.size() == 1);
+    try ss.pop();
+    try expect(ss.empty());
 }

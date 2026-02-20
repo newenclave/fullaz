@@ -97,6 +97,16 @@ pub fn StaticVector(comptime T: type, comptime maximum_elements: usize, comptime
             self.len -= 1;
         }
 
+        pub fn popBack(self: *Self) Error!void {
+            if (self.len == 0) {
+                return Error.OutOfBounds;
+            }
+            self.len -= 1;
+            if (destructor) |destruct| {
+                destruct(self.deinit_ctx, &self.data[self.len]);
+            }
+        }
+
         pub fn slice(self: *const Self) []const T {
             return self.data[0..self.len];
         }
