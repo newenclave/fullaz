@@ -33,6 +33,11 @@ pub const BufferError = error{
     ReadOnly,
 };
 
+pub const SetError = error{
+    KeyAlreadyExists,
+    EmptySet,
+};
+
 pub const SpaceError = error{
     BufferTooSmall,
     NotEnoughSpace,
