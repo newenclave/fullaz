@@ -24,6 +24,14 @@ pub fn StaticVector(comptime T: type, comptime maximum_elements: usize, comptime
             };
         }
 
+        pub fn deinit(self: *Self) void {
+            for (self.data[0..self.len]) |*item| {
+                if (destructor) |dtor| {
+                    dtor(self.deinit_ctx, item);
+                }
+            }
+        }
+
         pub fn size(self: *const Self) usize {
             return self.len;
         }

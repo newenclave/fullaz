@@ -22,11 +22,7 @@ pub fn StaticStack(comptime T: type, comptime maximum_elements: usize, comptime 
         }
 
         pub fn deinit(self: *Self) void {
-            for (self.vector.data[0..self.vector.len]) |*item| {
-                if (destructor) |dtor| {
-                    dtor(self.vector.deinit_ctx, item);
-                }
-            }
+            self.vector.deinit();
         }
 
         pub fn size(self: *const Self) usize {
