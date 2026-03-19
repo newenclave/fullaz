@@ -7,7 +7,7 @@ pub fn Splitter(comptime KeyT: type) type {
     return struct {
         const Self = @This();
 
-        const Error = errors.SpaceError;
+        pub const Error = errors.SpaceError;
 
         inode_base: KeyT = undefined,
         leaf_base: KeyT = undefined,

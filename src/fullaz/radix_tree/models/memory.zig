@@ -1,7 +1,7 @@
 const std = @import("std");
 const errors = @import("../../core/errors.zig");
 
-const Splitter = @import("../splitter.zig").Splitter;
+const KeySplitter = @import("../splitter.zig").Splitter;
 
 const Settings = struct {
     leaf_base: u32 = 128,
@@ -11,7 +11,7 @@ const Settings = struct {
 pub fn Model(comptime Key: type, comptime Value: type) type {
     const PidType = usize;
     const LevelType = usize;
-    const SplitterType = Splitter(Key);
+    const SplitterType = KeySplitter(Key);
 
     const ErrorSet = errors.HandleError ||
         errors.IndexError ||
@@ -316,24 +316,24 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
     const AccessorImpl = struct {
         const Self = @This();
         const Container = std.ArrayList(InodeLeafUnion);
-        const Spliter = SplitterType;
+        const Splitter = SplitterType;
 
-        const KeyDigit = Spliter.Result;
+        const KeyDigit = Splitter.Result;
         const SplitKeyResult = SplitKeyImpl;
 
-        const Error = ErrorSet;
+        const Error = ErrorSet || Splitter.Error;
 
         alloc: std.mem.Allocator,
         sett: Settings,
         cont: Container,
-        splitter: Spliter,
+        splitter: Splitter,
         root: ?PidType = null,
 
         fn init(alloc: std.mem.Allocator, sett: Settings) Error!Self {
             return Self{
                 .alloc = alloc,
                 .cont = try Container.initCapacity(alloc, 4),
-                .splitter = Spliter.init(sett.inode_base, sett.leaf_base),
+                .splitter = Splitter.init(sett.inode_base, sett.leaf_base),
                 .sett = sett,
             };
         }
@@ -402,7 +402,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             //inode.deinit(self.alloc);
         }
 
-        pub fn splitKey(self: *const Self, key: Key) !SplitKeyResult {
+        pub fn splitKey(self: *const Self, key: Key) Error!SplitKeyResult {
             const maximum_levels = self.splitter.maximum_levels;
             var stack = try std.ArrayList(KeyDigit).initCapacity(self.alloc, maximum_levels);
             errdefer stack.deinit(self.alloc);
@@ -451,21 +451,22 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
     };
 
     return struct {
-        pub const Self = @This();
+        const Self = @This();
 
-        const Pid = PidType;
-        const Level = LevelType;
+        pub const Pid = PidType;
+        pub const Level = LevelType;
 
-        const KeyIn = Key;
-        const ValueIn = Value;
-        const KeyOut = Key;
-        const ValueOut = Value;
+        pub const KeyIn = Key;
+        pub const ValueIn = Value;
+        pub const KeyOut = Key;
+        pub const ValueOut = Value;
 
-        const Accessor = AccessorImpl;
-        const Inode = InodeImpl;
-        const Leaf = LeafImpl;
+        pub const Accessor = AccessorImpl;
+        pub const Inode = InodeImpl;
+        pub const Leaf = LeafImpl;
+        pub const SplitKeyResult = Accessor.SplitKeyResult;
 
-        const Error = ErrorSet;
+        pub const Error = ErrorSet;
 
         accessor: Accessor,
 
