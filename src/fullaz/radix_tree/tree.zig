@@ -142,7 +142,7 @@ pub fn Tree(comptime ModelT: type) type {
             const acc = self.getAccessor();
             var split_key = try acc.splitKey(key);
             defer acc.deinitSplitKey(&split_key);
-            debugPrintSplitKey(key, &split_key);
+            //debugPrintSplitKey(key, &split_key);
             try self.growUpPath(split_key.size() - 1);
             var leaf = try self.createPath(&split_key);
             defer acc.deinitLeaf(&leaf);
