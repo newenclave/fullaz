@@ -49,7 +49,7 @@ pub fn Tree(comptime ModelT: type) type {
             }
         }
 
-        fn dumpTree(self: *Self, writer: anytype) !void {
+        pub fn dumpTree(self: *Self, writer: anytype) !void {
             const acc = self.getAccessor();
 
             if (try acc.getRoot()) |root_id| {
@@ -74,7 +74,7 @@ pub fn Tree(comptime ModelT: type) type {
                 var leaf = try acc.loadLeaf(pid);
                 defer acc.deinitLeaf(&leaf);
 
-                try writer.print("LEAF[{}] (parent={?}[{}], quot={}) {} values:\n", .{
+                try writer.print("LEAF[{}] (parent={?}[{any}], quot={}) {} values:\n", .{
                     pid,
                     leaf.getParent(),
                     leaf.getParentId(),
@@ -94,7 +94,7 @@ pub fn Tree(comptime ModelT: type) type {
                 defer acc.deinitInode(&inode);
 
                 const level = try inode.getLevel();
-                try writer.print("INODE[{}] Level={} (parent={?}[{}]) {} children:\n", .{
+                try writer.print("INODE[{}] Level={} (parent={?}[{any}]) {} children:\n", .{
                     pid,
                     level,
                     inode.getParent(),
@@ -108,7 +108,7 @@ pub fn Tree(comptime ModelT: type) type {
                         for (0..indent + 1) |_| {
                             try writer.print("  ", .{});
                         }
-                        try writer.print("[{}] -> PID {}, Parent {any}[{}], quot {any} \n", .{
+                        try writer.print("[{}] -> PID {}, Parent {any}[{any}], quot {any} \n", .{
                             i,
                             child_pid,
                             inode.getParent(),
@@ -123,7 +123,7 @@ pub fn Tree(comptime ModelT: type) type {
             }
         }
 
-        fn get(self: *Self, key: KeyInType) !?ValueOutType {
+        pub fn get(self: *Self, key: KeyInType) !?ValueOutType {
             const acc = self.getAccessor();
             var split_key = try acc.splitKey(key);
             defer acc.deinitSplitKey(&split_key);
@@ -138,7 +138,7 @@ pub fn Tree(comptime ModelT: type) type {
             return null;
         }
 
-        fn set(self: *Self, key: KeyInType, value: ValueInType) !void {
+        pub fn set(self: *Self, key: KeyInType, value: ValueInType) !void {
             const acc = self.getAccessor();
             var split_key = try acc.splitKey(key);
             defer acc.deinitSplitKey(&split_key);
@@ -149,7 +149,7 @@ pub fn Tree(comptime ModelT: type) type {
             try leaf.set(split_key.get(0).digit, value);
         }
 
-        fn free(self: *Self, key: KeyInType) !void {
+        pub fn free(self: *Self, key: KeyInType) !void {
             const acc = self.getAccessor();
             var split_key = try acc.splitKey(key);
             defer acc.deinitSplitKey(&split_key);

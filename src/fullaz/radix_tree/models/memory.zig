@@ -14,6 +14,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
     const SplitterType = KeySplitter(Key);
 
     const ErrorSet = errors.HandleError ||
+        errors.PageError ||
         errors.IndexError ||
         std.mem.Allocator.Error;
 
@@ -35,15 +36,15 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             self.* = undefined;
         }
 
-        fn size(self: *const Self) usize {
+        pub fn size(self: *const Self) usize {
             return self.items.len;
         }
 
-        fn empty(self: *const Self) bool {
+        pub fn empty(self: *const Self) bool {
             return self.items.len == 0;
         }
 
-        fn get(self: *const Self, idx: usize) KeyDigit {
+        pub fn get(self: *const Self, idx: usize) KeyDigit {
             if (idx >= self.items.len) {
                 return .{
                     .digit = 0,
@@ -131,39 +132,39 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             };
         }
 
-        fn id(self: *const Self) PidType {
+        pub fn id(self: *const Self) PidType {
             return self.self_id;
         }
 
-        fn size(self: *const Self) usize {
+        pub fn size(self: *const Self) usize {
             return self.container.elements_count;
         }
 
-        fn setParent(self: *Self, parent_id: ?PidType) Error!void {
+        pub fn setParent(self: *Self, parent_id: ?PidType) Error!void {
             self.container.parent_id = parent_id;
         }
 
-        fn getParent(self: *const Self) ?PidType {
+        pub fn getParent(self: *const Self) ?PidType {
             return self.container.parent_id;
         }
 
-        fn setParentQuotient(self: *Self, parent_quotient: Key) Error!void {
+        pub fn setParentQuotient(self: *Self, parent_quotient: Key) Error!void {
             self.container.parent_quotient = parent_quotient;
         }
 
-        fn getParentQuotient(self: *const Self) Key {
+        pub fn getParentQuotient(self: *const Self) Key {
             return self.container.parent_quotient;
         }
 
-        fn setParentId(self: *Self, parent_idx: Key) Error!void {
+        pub fn setParentId(self: *Self, parent_idx: Key) Error!void {
             self.container.parent_idx = parent_idx;
         }
 
-        fn getParentId(self: *const Self) Key {
+        pub fn getParentId(self: *const Self) Key {
             return self.container.parent_idx;
         }
 
-        fn set(self: *Self, key: Key, value: Value) Error!void {
+        pub fn set(self: *Self, key: Key, value: Value) Error!void {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -174,7 +175,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             self.container.cont.items[idx] = value;
         }
 
-        fn free(self: *Self, key: Key) Error!void {
+        pub fn free(self: *Self, key: Key) Error!void {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -185,7 +186,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             }
         }
 
-        fn getPtr(self: *const Self, key: Key) Error!*const Value {
+        pub fn getPtr(self: *const Self, key: Key) Error!*const Value {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -193,24 +194,24 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             if (self.container.cont.items[idx]) |*item| {
                 return item;
             }
-            return Error.InvalidPid;
+            return Error.InvalidId;
         }
 
-        fn get(self: *const Self, key: Key) Error!Value {
+        pub fn get(self: *const Self, key: Key) Error!Value {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
-                return Error.InvalidPid;
+                return Error.OutOfBounds;
             }
             if (self.container.cont.items[idx]) |*item| {
                 return item.*;
             }
-            return Error.InvalidPid;
+            return Error.InvalidId;
         }
 
-        fn isSet(self: *const Self, key: Key) Error!bool {
+        pub fn isSet(self: *const Self, key: Key) Error!bool {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
-                return Error.InvalidPid;
+                return Error.OutOfBounds;
             }
             return self.container.cont.items[idx] != null;
         }
@@ -231,15 +232,15 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             };
         }
 
-        fn id(self: *const Self) PidType {
+        pub fn id(self: *const Self) PidType {
             return self.self_id;
         }
 
-        fn size(self: *const Self) usize {
+        pub fn size(self: *const Self) usize {
             return self.container.elements_count;
         }
 
-        fn set(self: *Self, key: Key, child_id: PidType) Error!void {
+        pub fn set(self: *Self, key: Key, child_id: PidType) Error!void {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -250,7 +251,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             self.container.cont.items[idx] = child_id;
         }
 
-        fn get(self: *const Self, key: Key) Error!PidType {
+        pub fn get(self: *const Self, key: Key) Error!PidType {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -258,10 +259,10 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             if (self.container.cont.items[idx]) |*item| {
                 return item.*;
             }
-            return Error.InvalidPid;
+            return Error.InvalidId;
         }
 
-        fn free(self: *Self, key: Key) Error!void {
+        pub fn free(self: *Self, key: Key) Error!void {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -272,39 +273,39 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             }
         }
 
-        fn setParent(self: *Self, parent_id: ?PidType) Error!void {
+        pub fn setParent(self: *Self, parent_id: ?PidType) Error!void {
             self.container.parent_id = parent_id;
         }
 
-        fn getParent(self: *const Self) ?PidType {
+        pub fn getParent(self: *const Self) ?PidType {
             return self.container.parent_id;
         }
 
-        fn setParentQuotient(self: *Self, parent_quotient: Key) Error!void {
+        pub fn setParentQuotient(self: *Self, parent_quotient: Key) Error!void {
             self.container.parent_quotient = parent_quotient;
         }
 
-        fn getParentQuotient(self: *const Self) Error!Key {
+        pub fn getParentQuotient(self: *const Self) Error!Key {
             return self.container.parent_quotient;
         }
 
-        fn setParentId(self: *Self, parent_idx: Key) Error!void {
+        pub fn setParentId(self: *Self, parent_idx: Key) Error!void {
             self.container.parent_idx = parent_idx;
         }
 
-        fn getParentId(self: *const Self) Error!Key {
+        pub fn getParentId(self: *const Self) Error!Key {
             return self.container.parent_idx;
         }
 
-        fn getLevel(self: *const Self) Error!usize {
+        pub fn getLevel(self: *const Self) Error!usize {
             return self.container.level;
         }
 
-        fn setLevel(self: *Self, level: LevelType) Error!void {
+        pub fn setLevel(self: *Self, level: LevelType) Error!void {
             self.container.level = level;
         }
 
-        fn isSet(self: *const Self, key: Key) Error!bool {
+        pub fn isSet(self: *const Self, key: Key) Error!bool {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -362,12 +363,12 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             return LeafImpl.init(leaf_ptr, old_size);
         }
 
-        fn loadLeaf(self: *Self, pid: PidType) Error!LeafImpl {
+        pub fn loadLeaf(self: *Self, pid: PidType) Error!LeafImpl {
             if (pid >= self.cont.items.len) {
-                return Error.InvalidPid;
+                return Error.OutOfBounds;
             }
             switch (self.cont.items[pid]) {
-                .inode => return Error.InvalidPid,
+                .inode => return Error.InvalidId,
                 .leaf => |lptr| {
                     return LeafImpl.init(lptr, pid);
                 },
@@ -388,13 +389,13 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
 
         pub fn loadInode(self: *Self, pid: PidType) Error!InodeImpl {
             if (pid >= self.cont.items.len) {
-                return Error.InvalidPid;
+                return Error.OutOfBounds;
             }
             switch (self.cont.items[pid]) {
                 .inode => |iptr| {
                     return InodeImpl.init(iptr, pid);
                 },
-                .leaf => return Error.InvalidPid,
+                .leaf => return Error.InvalidId,
             }
         }
 
@@ -418,7 +419,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
 
         pub fn isLeaf(self: *const Self, pid: PidType) Error!bool {
             if (pid >= self.cont.items.len) {
-                return Error.InvalidPid;
+                return Error.InvalidId;
             }
             switch (self.cont.items[pid]) {
                 .inode => return false,
@@ -444,7 +445,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
 
         pub fn setRoot(self: *Self, pid: PidType) Error!void {
             if (pid >= self.cont.items.len) {
-                return Error.InvalidPid;
+                return Error.InvalidId;
             }
             self.root = pid;
         }
