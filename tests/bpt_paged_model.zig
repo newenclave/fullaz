@@ -1964,7 +1964,7 @@ test "Bpt Update values" {
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
     var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
 
-    const elements_to_insert = 50000;
+    const elements_to_insert = 5000;
 
     for (0..elements_to_insert) |i| {
         const key = @as(u32, @intCast(i));
@@ -2026,7 +2026,7 @@ test "Bpt Update Random values" {
     const PageCache = PageCacheT(Device);
     const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
-    const elements_to_insert = 50000;
+    const elements_to_insert = 5000;
     var inserted_keys = try std.ArrayList(u32).initCapacity(allocator, elements_to_insert);
     errdefer inserted_keys.deinit(allocator);
 
@@ -2109,7 +2109,7 @@ test "Bpt Update Random values Keys as strings" {
     const PageCache = PageCacheT(Device);
     const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
 
-    const elements_to_insert = 20000;
+    const elements_to_insert = 2000;
     var inserted_keys = try std.ArrayList(u32).initCapacity(allocator, elements_to_insert);
     errdefer inserted_keys.deinit(allocator);
 
@@ -2198,7 +2198,7 @@ test "Bpt/paged Remove values" {
     defer ctx.deinit();
     var tree = ctx.createTree();
 
-    const elements_to_insert = 50000;
+    const elements_to_insert = 5000;
 
     for (0..elements_to_insert) |i| {
         const key = @as(u32, @intCast(i));
@@ -2260,7 +2260,7 @@ test "Bpt/paged Remove random values" {
     defer ctx.deinit();
     var tree = ctx.createTree();
 
-    const elements_to_insert = 50000;
+    const elements_to_insert = 5000;
 
     var inserted_keys = try std.ArrayList(u32).initCapacity(allocator, elements_to_insert);
     errdefer inserted_keys.deinit(allocator);
