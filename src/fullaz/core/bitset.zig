@@ -1,7 +1,7 @@
 const std = @import("std");
 const PackedInt = @import("packed_int.zig").PackedInt;
 const errors = @import("errors.zig");
-const core = @import("../core/callback_helpers.zig");
+const callback_helpers = @import("callback_helpers.zig");
 
 inline fn ceilWords(value: usize, bits_per_word: usize) usize {
     return (value + bits_per_word - 1) / bits_per_word;
@@ -193,7 +193,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
                 var current: Word = v;
                 while (current != 0) {
                     const first_set: usize = @intCast(@ctz(current));
-                    if (!try core.callCallback2(callback, ctx, first_set + bit_pos)) {
+                    if (!try callback_helpers.callCallback2(callback, ctx, first_set + bit_pos)) {
                         return false;
                     }
                     current &= current - 1;
