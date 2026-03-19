@@ -19,13 +19,24 @@ pub fn CallbackResult(comptime Callback: type) type {
     return ret_ty;
 }
 
-pub fn callCallback(callback: anytype, ctx: anytype, bit: usize) !CallbackResult(@TypeOf(callback)) {
+pub fn callCallback1(callback: anytype, par0: anytype) !CallbackResult(@TypeOf(callback)) {
     const fn_info = comptime getFnInfo(@TypeOf(callback));
     const ret_ty = fn_info.return_type orelse
         @compileError("callback must have a return type");
 
     return switch (@typeInfo(ret_ty)) {
-        .error_union => try callback(ctx, bit),
-        else => callback(ctx, bit),
+        .error_union => try callback(par0),
+        else => callback(par0),
+    };
+}
+
+pub fn callCallback2(callback: anytype, par0: anytype, par1: anytype) !CallbackResult(@TypeOf(callback)) {
+    const fn_info = comptime getFnInfo(@TypeOf(callback));
+    const ret_ty = fn_info.return_type orelse
+        @compileError("callback must have a return type");
+
+    return switch (@typeInfo(ret_ty)) {
+        .error_union => try callback(par0, par1),
+        else => callback(par0, par1),
     };
 }

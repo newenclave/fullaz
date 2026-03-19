@@ -193,7 +193,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
                 var current: Word = v;
                 while (current != 0) {
                     const first_set: usize = @intCast(@ctz(current));
-                    if (!try core.callCallback(callback, ctx, first_set + bit_pos)) {
+                    if (!try core.callCallback2(callback, ctx, first_set + bit_pos)) {
                         return false;
                     }
                     current &= current - 1;
