@@ -1,6 +1,7 @@
 const std = @import("std");
 const PackedInt = @import("packed_int.zig").PackedInt;
 const errors = @import("errors.zig");
+const intarfaces = @import("../contracts/interfaces.zig");
 
 inline fn ceilWords(value: usize, bits_per_word: usize) usize {
     return (value + bits_per_word - 1) / bits_per_word;
@@ -177,6 +178,55 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
                 if (bit_pos < self.max_bits) return bit_pos;
             }
             return null;
+        }
+
+        pub fn forEachSet(self: *const Self, callback: anytype, ctx: anytype) !bool {
+            const CbType = @TypeOf(callback);
+            const cb_info = @typeInfo(CbType);
+
+            const func_info = switch (cb_info) {
+                .@"fn" => cb_info.@"fn",
+                .pointer => |ptr_info| switch (@typeInfo(ptr_info.child)) {
+                    .@"fn" => |fn_info| fn_info,
+                    else => @compileError("callback must be a function or function pointer"),
+                },
+                else => @compileError("callback must be a function or function pointer"),
+            };
+
+            const returns_error_union = comptime blk: {
+                if (func_info.return_type) |ret_info| {
+                    break :blk intarfaces.isErrorUnion(ret_info);
+                }
+                break :blk false;
+            };
+
+            const n_words = self.words_ro.len;
+            var b: usize = 0;
+
+            while (b < n_words) : (b += 1) {
+                const v: Word = self.words_ro.ptr[b].get();
+                if (v == 0) {
+                    continue;
+                }
+                const bit_pos: usize = b * BitsPerWord;
+                var current: Word = v;
+                while (current != 0) {
+                    const first_set: usize = @intCast(@ctz(current));
+
+                    if (comptime returns_error_union) {
+                        if (!(try callback(ctx, first_set + bit_pos))) {
+                            return false;
+                        }
+                    } else {
+                        if (!callback(ctx, first_set + bit_pos)) {
+                            return false;
+                        }
+                    }
+
+                    current &= current - 1;
+                }
+            }
+            return true;
         }
 
         pub fn popcount(self: *const Self) usize {

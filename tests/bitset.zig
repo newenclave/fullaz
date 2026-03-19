@@ -374,3 +374,31 @@ test "max_objects_by_words: large capacity scaling (u32)" {
 
     try expectEqual(ceilWords(best, u32), words);
 }
+
+const SumVisitor = struct {
+    sum: usize = 0,
+    fn visit(self: *@This(), pos: usize) bool {
+        std.debug.print("{},", .{pos});
+        self.sum += pos;
+        return true;
+    }
+};
+
+test "BitSet: foreach bits" {
+    var buffer: [8]u8 = undefined;
+    var bs = try BitSet(u32, .little).initMutable(buffer[0..], 62);
+    try bs.reset();
+
+    try expect(bs.bitsCount() == 62);
+
+    try bs.set(3);
+    try bs.set(17);
+    try bs.set(11);
+    try bs.set(27);
+    try bs.set(61);
+
+    var sv = SumVisitor{};
+
+    _ = try bs.forEachSet(&SumVisitor.visit, &sv);
+    try std.testing.expect(sv.sum == (3 + 17 + 11 + 27 + 61));
+}
