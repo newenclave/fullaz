@@ -1,5 +1,6 @@
 const std = @import("std");
 const KeySplitter = @import("splitter.zig").Splitter;
+const errors = @import("../core/errors.zig");
 
 pub fn Tree(comptime ModelT: type) type {
     const Model = ModelT;
@@ -15,7 +16,8 @@ pub fn Tree(comptime ModelT: type) type {
         const Self = @This();
 
         const Splitter = KeySplitter(KeyInType);
-        const Error = Splitter.Error || Model.Accessor.Error;
+        const Error = Splitter.Error ||
+            Model.Error || errors.LayoutError;
 
         model: *Model,
         splitter: Splitter,
@@ -178,7 +180,7 @@ pub fn Tree(comptime ModelT: type) type {
                         return try acc.loadLeaf(current_id);
                     } else {
                         if (current_lvl == 0) {
-                            return error.InvalidLayout;
+                            return Error.InconsistentLayout;
                         }
                         var inode = try acc.loadInode(current_id);
                         defer acc.deinitInode(&inode);
@@ -198,7 +200,7 @@ pub fn Tree(comptime ModelT: type) type {
             const acc = self.getAccessor();
             if (try acc.getRootLevel()) |root_level| {
                 if (root_level < (skr.size() - 1)) {
-                    return error.InvalidPid;
+                    return Error.InvalidId;
                 }
 
                 if (try acc.getRoot()) |root_id| {
@@ -213,7 +215,7 @@ pub fn Tree(comptime ModelT: type) type {
                                 std.debug.print("ERROR: Tree corruption detected!\n", .{});
                                 std.debug.print("  Expected: Leaf at level 0\n", .{});
                                 std.debug.print("  Got: Inode at PID {}\n", .{current_id});
-                                return error.TreeCorrupted;
+                                return Error.InconsistentLayout;
                             }
                         } else {
                             var inode = try acc.loadInode(current_id);

@@ -35,23 +35,27 @@ test "bitset: boundaries, idempotence, reset" {
 
     // set(0) and set(63)
     try bs.set(0);
+    try bs.set(1);
     try bs.set(63);
+    try expect(bs.findSetBit() == 0);
+
     try expect(bs.isSet(0));
     try expect(bs.isSet(63));
-    try expect(bs.popcount() == 2);
+    try expect(bs.popcount() == 3);
 
     try bs.set(0);
     try bs.set(63);
-    try expect(bs.popcount() == 2);
+    try expect(bs.popcount() == 3);
 
     try bs.clear(0);
     try bs.clear(63);
     try expect(!bs.isSet(0));
     try expect(!bs.isSet(63));
-    try expect(bs.popcount() == 0);
+    try expect(bs.popcount() == 1);
 
     // Repeated clear should not change popcount
     try bs.clear(0);
+    try bs.clear(1);
     try bs.clear(63);
     try expect(bs.popcount() == 0);
 
