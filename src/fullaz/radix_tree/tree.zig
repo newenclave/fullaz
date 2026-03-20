@@ -250,7 +250,7 @@ pub fn Tree(comptime ModelT: type) type {
                     }
                 }
             }
-            return error.LayoutInvalid;
+            return Error.InconsistentLayouts;
         }
 
         fn growUpPath(self: *Self, level: usize) !void {
