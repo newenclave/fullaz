@@ -13,28 +13,65 @@ pub const Settings = struct {
 };
 
 pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, comptime Key: type, comptime Value: type) type {
+    comptime {
+        contracts.storage_manager.requiresStorageManager(StorageManager);
+        contracts.page_cache.requiresPageCache(PageCacheType);
+    }
+
     const Context = struct {
         cache: *PageCacheType = undefined,
         storage_mgr: *StorageManager = undefined,
         settings: Settings = undefined,
     };
 
+    const ErrorSet = errors.PageError ||
+        errors.SlotsError ||
+        PageCacheType.Error ||
+        errors.BufferError ||
+        errors.OrderError;
+
     const BlockDevice = PageCacheType.UnderlyingDevice;
     const PageHandle = PageCacheType.Handle;
     const BlockIdType = BlockDevice.BlockId;
     const Index = u16;
 
-    const ViewType = radix_page.View(BlockIdType, Index, Key, @sizeOf(Value), std.builtin.endian, false);
-    const ConstViewType = radix_page.View(BlockIdType, Index, Key, @sizeOf(Value), std.builtin.endian, true);
+    const ViewType = radix_page.View(BlockIdType, Index, Key, @sizeOf(Value), .little, false);
+    const ConstViewType = radix_page.View(BlockIdType, Index, Key, @sizeOf(Value), .little, true);
 
-    _ = PageHandle;
-    _ = ViewType;
     _ = ConstViewType;
 
-    const LeafImpl = struct {};
+    const LeafImpl = struct {
+        const Self = @This();
+        const PageViewType = ViewType.LeafSubheaderView;
+
+        handle: PageHandle = undefined,
+        self_id: BlockIdType = undefined,
+        ctx: *Context = undefined,
+
+        pub const Error = ErrorSet;
+
+        fn init(ph: PageHandle, self_id: BlockIdType, ctx: *Context) Self {
+            return .{
+                .handle = ph,
+                .self_id = self_id,
+                .ctx = ctx,
+            };
+        }
+
+        fn deinit(self: *Self) void {
+            self.handle.deinit();
+            self.* = undefined;
+        }
+
+        pub fn id(self: *const Self) BlockIdType {
+            return self.self_id;
+        }
+    };
+
     const InodeImpl = struct {};
     const AccessorImpl = struct {
         const Self = @This();
+        const Error = ErrorSet;
 
         ctx: Context = undefined,
 
@@ -46,6 +83,32 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
 
         fn deinit(self: *Self) void {
             self.* = undefined;
+        }
+
+        pub fn createLeaf(self: *Self) ErrorSet!LeafImpl {
+            var ph = try self.ctx.cache.create();
+            defer ph.deinit();
+            const pid = try ph.pid();
+            var page_view = LeafImpl.PageViewType.init(try ph.getDataMut());
+            try page_view.formatPage(self.ctx.settings.leaf_page_kind, pid, 0);
+            return LeafImpl.init(try ph.take(), pid, &self.ctx);
+        }
+
+        pub fn loadLeaf(self: *Self, id: BlockIdType) ErrorSet!LeafImpl {
+            var ph = try self.ctx.cache.fetch(id);
+            defer ph.deinit();
+            const pid = try ph.pid();
+            var view = LeafImpl.PageViewTypeConst.init(try ph.getData());
+            if (view.page_view.header().kind.get() != self.ctx.settings.leaf_page_kind) {
+                return Error.BadType;
+            }
+            try view.page_view.check();
+            return LeafImpl.init(try ph.take(), pid, &self.ctx);
+        }
+
+        pub fn deinitLeaf(_: *Self, leaf: *LeafImpl) void {
+            leaf.deinit();
+            leaf.* = undefined;
         }
     };
 

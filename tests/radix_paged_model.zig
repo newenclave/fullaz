@@ -1,7 +1,9 @@
 const std = @import("std");
 const radix_tree = @import("fullaz").radix_tree;
+const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
+const dev = @import("fullaz").device;
 
-const Model = radix_tree.models.paged.Model;
+const RadixModel = radix_tree.models.paged.Model;
 const View = radix_tree.models.paged.View;
 
 test "RadixTree paged: leaf create/format" {
@@ -30,4 +32,55 @@ test "RadixTree paged: inode create/format" {
 
     std.debug.print("slot size: {}\n", .{try inode_view.slotSize()});
     std.debug.print("slot capacity: {}\n", .{try inode_view.slotsCapacity()});
+}
+
+const NoneStorageManager = struct {
+    pub const Self = @This();
+    pub const PageId = u32;
+    pub const Error = error{};
+    root_block_id: ?u32 = null,
+
+    pub fn getRoot(self: *const @This()) ?u32 {
+        return self.root_block_id;
+    }
+
+    pub fn setRoot(self: *@This(), root: ?u32) Error!void {
+        self.root_block_id = root;
+        // Persist to disk header, etc.
+    }
+
+    pub fn hasRoot(self: *const @This()) bool {
+        return self.root_block_id != null;
+    }
+
+    pub fn destroyPage(_: *@This(), id: PageId) Error!void {
+        _ = id;
+        // Implement page destruction logic, e.g., add to free list
+    }
+};
+
+test "RadixTree paged: model create" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = RadixModel(PageCache, NoneStorageManager, u64, u64);
+
+    var store_mgr = NoneStorageManager{};
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var page_cache = try PageCache.init(&device, allocator, 16);
+    defer page_cache.deinit();
+    var model = Model.init(
+        &page_cache,
+        &store_mgr,
+        .{
+            .leaf_page_kind = 0x5678,
+            .inode_page_kind = 0x9abc,
+        },
+    );
+    defer model.deinit();
+
+    var leaf = try model.accessor.createLeaf();
+    defer model.accessor.deinitLeaf(&leaf);
+    try std.testing.expect(leaf.id() == 0);
 }
