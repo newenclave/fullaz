@@ -12,6 +12,7 @@ pub const IteratorError = error{
 pub const PageError = error{
     InvalidId,
     BadType,
+    BadData,
 } || HandleError;
 
 pub const NotFoundError = error{

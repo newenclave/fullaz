@@ -16,4 +16,5 @@ test {
     _ = @import("wbpt_memory_model.zig");
     _ = @import("wbpt_paged_model.zig");
     _ = @import("radix_memory_model.zig");
+    _ = @import("radix_paged_model.zig");
 }
