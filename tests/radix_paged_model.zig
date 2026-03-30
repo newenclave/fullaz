@@ -59,32 +59,87 @@ const NoneStorageManager = struct {
     }
 };
 
-test "RadixTree paged: model create" {
-    const allocator = std.testing.allocator;
-    const Device = dev.MemoryBlock(u32);
+fn TestSuite(comptime BlockIdT: type, comptime StorageManager: type, comptime KeyT: type, comptime ValueT: type) type {
+    const Device = dev.MemoryBlock(BlockIdT);
     const PageCache = PageCacheT(Device);
-    const Model = RadixModel(PageCache, NoneStorageManager, u64, u64);
+    const Model = RadixModel(PageCache, StorageManager, KeyT, ValueT);
 
-    var store_mgr = NoneStorageManager{};
-    var device = try Device.init(allocator, 4096);
-    defer device.deinit();
-    var page_cache = try PageCache.init(&device, allocator, 16);
-    defer page_cache.deinit();
-    var model = Model.init(
-        &page_cache,
-        &store_mgr,
-        .{
-            .leaf_page_kind = 0x5678,
-            .inode_page_kind = 0x9abc,
-        },
-    );
-    defer model.deinit();
+    return struct {
+        const Self = @This();
 
-    var leaf = try model.accessor.createLeaf();
-    defer model.accessor.deinitLeaf(&leaf);
-    var leaf_load = try model.accessor.loadLeaf(leaf.id());
-    defer model.accessor.deinitLeaf(&leaf_load);
+        allocator: std.mem.Allocator = undefined,
+        store_mgr: StorageManager = undefined,
+        device: Device = undefined,
+        page_cache: PageCache = undefined,
+        model: Model = undefined,
+        fn initInPlace(self: *Self) !void {
+            self.allocator = std.testing.allocator;
+            self.store_mgr = StorageManager{};
+            self.device = try Device.init(self.allocator, 4096);
+            self.page_cache = try PageCache.init(&self.device, self.allocator, 16);
+            self.model = Model.init(
+                &self.page_cache,
+                &self.store_mgr,
+                .{
+                    .leaf_page_kind = 0x5678,
+                    .inode_page_kind = 0x9abc,
+                    .inode_base = 256,
+                    .leaf_base = 256,
+                },
+            );
+        }
+
+        fn deinit(self: *Self) void {
+            self.model.deinit();
+            self.page_cache.deinit();
+            self.device.deinit();
+        }
+    };
+}
+
+test "RadixTree paged: model create" {
+    const TestSuiteType = TestSuite(u32, NoneStorageManager, u64, u64);
+    var suite = TestSuiteType{};
+    try suite.initInPlace();
+    defer suite.deinit();
+
+    var leaf = try suite.model.accessor.createLeaf();
+
+    std.debug.print("leaf slots: {} {}\n", .{ try leaf.size(), leaf.calculateSlotCapacity(4096, 0) });
+
+    defer suite.model.accessor.deinitLeaf(&leaf);
+    var leaf_load = try suite.model.accessor.loadLeaf(leaf.id());
+    defer suite.model.accessor.deinitLeaf(&leaf_load);
 
     try std.testing.expect(leaf.id() == 0);
     try std.testing.expect(leaf_load.id() == 0);
+
+    var inode = try suite.model.accessor.createInode();
+    std.debug.print("inode slots: {} {}\n", .{ try inode.size(), inode.calculateSlotCapacity(4096, 0) });
+
+    defer suite.model.accessor.deinitInode(&inode);
+    var inode_load = try suite.model.accessor.loadInode(inode.id());
+    defer suite.model.accessor.deinitInode(&inode_load);
+
+    try std.testing.expect(inode.id() == 1);
+    try std.testing.expect(inode_load.id() == 1);
+}
+
+test "RadixTree paged: model split key" {
+    const TestSuiteType = TestSuite(u32, NoneStorageManager, u64, u64);
+    var suite = TestSuiteType{};
+    try suite.initInPlace();
+    defer suite.deinit();
+
+    const key: u64 = 0x123456789abcdef0;
+    var split_key_result = try suite.model.accessor.splitKey(key);
+    defer suite.model.accessor.deinitSplitKey(&split_key_result);
+
+    for (0..split_key_result.size()) |i| {
+        std.debug.print("digit {}: {x} {x}\n", .{ i, split_key_result.get(i).digit, split_key_result.get(i).quotient });
+    }
+
+    try std.testing.expect(split_key_result.size() == 8);
+    try std.testing.expect(split_key_result.get(0).digit == 0xf0);
+    try std.testing.expect(split_key_result.get(7).digit == 0x12);
 }

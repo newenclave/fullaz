@@ -25,6 +25,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub const DataType = if (read_only) []const u8 else []u8;
 
         pub const PageHeader = Header(PageIdT, IndexT, Endian);
+        pub const page_header_size = @sizeOf(PageHeader);
 
         page: DataType,
         pub fn init(page: DataType) Self {
@@ -70,8 +71,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub fn subheader(self: *const Self) []const u8 {
             const hdr = self.header();
             const sh_len = @as(usize, hdr.subheader_size.get());
-            const subhdr_end = @sizeOf(PageHeader) + sh_len;
-            return self.page[@sizeOf(PageHeader)..subhdr_end];
+            const subhdr_end = page_header_size + sh_len;
+            return self.page[page_header_size..subhdr_end];
         }
 
         pub fn subheaderMut(self: *Self) []u8 {

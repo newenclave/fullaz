@@ -36,6 +36,12 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
             };
         }
 
+        pub fn calculateSlotCapacity(page_size: usize, metadata_len: usize) usize {
+            const header_size = PageViewType.page_header_size + @sizeOf(SubheaderType);
+            const available_space = page_size - header_size - metadata_len;
+            return SlotsDirType.maxObjectsByWords(available_space, ValueSize).objects;
+        }
+
         pub fn check(self: *const Self) ErrorSet!void {
             const slols = try self.slotsDir();
             if (try slols.slotSize() != ValueSize) {
@@ -105,6 +111,12 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
             return .{
                 .page_view = PageViewType.init(data),
             };
+        }
+
+        pub fn calculateSlotCapacity(page_size: usize, metadata_len: usize) usize {
+            const header_size = PageViewType.page_header_size + @sizeOf(SubheaderType);
+            const available_space = page_size - header_size - metadata_len;
+            return SlotsDirType.maxObjectsByWords(available_space, @sizeOf(SlotType)).objects;
         }
 
         pub fn check(self: *const Self) ErrorSet!void {

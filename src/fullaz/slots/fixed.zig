@@ -41,13 +41,18 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
             if (read_only) {
                 @compileError("Unable format readonly data");
             }
-            const maximum_objects = bit_set.maxObjectsByWords(BitSetDataType, self.body.len, slot_size);
+            const maximum_objects = maxObjectsByWords(self.body.len + self.hdr_buf.len, slot_size);
             var hdr = self.headerMut();
             hdr.one_slot_size.set(@as(SizeT, @intCast(slot_size)));
             hdr.capacity.set(@as(SizeT, @intCast(maximum_objects.objects)));
             hdr.bitmask_words.set(@as(SizeT, @intCast(maximum_objects.bitmap_words)));
             var bm = try self.bitsetMut();
             try bm.reset();
+        }
+
+        pub fn maxObjectsByWords(full_len: usize, slot_size: usize) bit_set.CapacityResult {
+            const body_len = full_len - @sizeOf(Header);
+            return bit_set.maxObjectsByWords(BitSetDataType, body_len, slot_size);
         }
 
         pub fn size(self: *const Self) Error!usize {
