@@ -82,5 +82,9 @@ test "RadixTree paged: model create" {
 
     var leaf = try model.accessor.createLeaf();
     defer model.accessor.deinitLeaf(&leaf);
+    var leaf_load = try model.accessor.loadLeaf(leaf.id());
+    defer model.accessor.deinitLeaf(&leaf_load);
+
     try std.testing.expect(leaf.id() == 0);
+    try std.testing.expect(leaf_load.id() == 0);
 }

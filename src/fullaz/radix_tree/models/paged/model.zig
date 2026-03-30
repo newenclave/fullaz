@@ -38,11 +38,10 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
     const ViewType = radix_page.View(BlockIdType, Index, Key, @sizeOf(Value), .little, false);
     const ConstViewType = radix_page.View(BlockIdType, Index, Key, @sizeOf(Value), .little, true);
 
-    _ = ConstViewType;
-
     const LeafImpl = struct {
         const Self = @This();
         const PageViewType = ViewType.LeafSubheaderView;
+        const PageViewTypeConst = ConstViewType.LeafSubheaderView;
 
         handle: PageHandle = undefined,
         self_id: BlockIdType = undefined,
@@ -102,7 +101,7 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
             if (view.page_view.header().kind.get() != self.ctx.settings.leaf_page_kind) {
                 return Error.BadType;
             }
-            try view.page_view.check();
+            try view.check();
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
         }
 
