@@ -178,6 +178,10 @@ pub fn PageCache(comptime DeviceT: type) type {
             self.frames_cache.deinit();
         }
 
+        pub fn pageSize(self: *const Self) usize {
+            return self.device.blockSize();
+        }
+
         pub fn getTemporaryPage(self: *Self) Error!Handle {
             if (try self.findPopFreeFrame()) |ff| {
                 ff.frame_type = .temporary;

@@ -10,8 +10,8 @@ const KeySplitter = @import("../../splitter.zig").Splitter;
 pub const Settings = struct {
     leaf_page_kind: u16 = 0,
     inode_page_kind: u16 = 1,
-    inode_base: u16 = 4,
-    leaf_base: u16 = 4,
+    inode_base: u16 = 0,
+    leaf_base: u16 = 0,
 };
 
 pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, comptime Key: type, comptime Value: type) type {
@@ -266,10 +266,18 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
         accessor: Accessor = undefined,
 
         pub fn init(device: *PageCacheType, storage_mgr: *StorageManager, settings: Settings) Self {
+            const inode_base = Inode.PageViewTypeConst.calculateSlotCapacity(device.pageSize(), 0);
+            const leaf_base = Leaf.PageViewTypeConst.calculateSlotCapacity(device.pageSize(), 0);
+
             const context = Context{
                 .cache = device,
                 .storage_mgr = storage_mgr,
-                .settings = settings,
+                .settings = .{
+                    .leaf_page_kind = settings.leaf_page_kind,
+                    .inode_page_kind = settings.inode_page_kind,
+                    .inode_base = @as(u16, @intCast(inode_base)),
+                    .leaf_base = @as(u16, @intCast(leaf_base)),
+                },
             };
             return .{
                 .accessor = AccessorImpl.init(context),
@@ -279,6 +287,10 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
         pub fn deinit(self: *Self) void {
             self.accessor.deinit();
             self.* = undefined;
+        }
+
+        pub fn effectiveSettings(self: *const Self) Settings {
+            return self.accessor.ctx.settings;
         }
     };
 }
