@@ -49,7 +49,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
                 return .{
                     .digit = 0,
                     .quotient = 0,
-                    .level = 0,
+                    .level = idx,
                 };
             }
             return self.items[idx];

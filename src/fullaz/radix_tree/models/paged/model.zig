@@ -76,7 +76,7 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
                 return .{
                     .digit = 0,
                     .quotient = 0,
-                    .level = 0,
+                    .level = idx,
                 };
             }
             return self.items[idx];
@@ -275,6 +275,8 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
                 .settings = .{
                     .leaf_page_kind = settings.leaf_page_kind,
                     .inode_page_kind = settings.inode_page_kind,
+                    // .inode_base = settings.inode_base,
+                    // .leaf_base = settings.leaf_base,
                     .inode_base = @as(u16, @intCast(inode_base)),
                     .leaf_base = @as(u16, @intCast(leaf_base)),
                 },
