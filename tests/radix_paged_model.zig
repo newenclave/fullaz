@@ -186,6 +186,11 @@ test "RadixTree paged: model create tree" {
     try suite.initInPlace();
     defer suite.deinit();
 
+    std.debug.print("Effective settings: leaf_base={}, inode_base={}\n", .{
+        suite.model.effectiveSettings().leaf_base,
+        suite.model.effectiveSettings().inode_base,
+    });
+
     try suite.tree.set(0x11223344, "Hello!");
     std.debug.print("get from tree: {s}\n", .{(try suite.tree.get(0x11223344)).?});
 

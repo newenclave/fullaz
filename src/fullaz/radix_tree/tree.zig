@@ -76,7 +76,7 @@ pub fn Tree(comptime ModelT: type) type {
                 var leaf = try acc.loadLeaf(@intCast(pid));
                 defer acc.deinitLeaf(&leaf);
 
-                try writer.print("LEAF[{}] (parent={?}[{any}], quot={}) {} values:\n", .{
+                try writer.print("LEAF[{}] (parent={?}[{any}], parent_quot={}) {} values:\n", .{
                     pid,
                     try leaf.getParent(),
                     try leaf.getParentId(),
@@ -114,7 +114,7 @@ pub fn Tree(comptime ModelT: type) type {
                             try writer.print("  ", .{});
                         }
                         const child_pid = try inode.get(@intCast(i));
-                        try writer.print("[{}] -> PID {}, Parent {any}[{any}], quot {any} \n", .{
+                        try writer.print("[{}] -> PID {}, Parent {any}[{any}], parent_quot {any} \n", .{
                             i,
                             child_pid,
                             try inode.getParent(),
