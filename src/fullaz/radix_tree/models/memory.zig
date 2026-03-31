@@ -113,9 +113,12 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
         }
     };
 
+    const NoneNode = struct {};
+
     const InodeLeafUnion = union(enum) {
         leaf: *LeafContainer,
         inode: *InodeContainer,
+        none: NoneNode,
     };
 
     const LeafImpl = struct {
@@ -358,6 +361,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
                         lptr.deinit(self.alloc);
                         self.alloc.destroy(lptr);
                     },
+                    .none => {},
                 }
             }
             self.cont.deinit(self.alloc);
@@ -377,6 +381,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             }
             switch (self.cont.items[pid]) {
                 .inode => return Error.InvalidId,
+                .none => return Error.InvalidId,
                 .leaf => |lptr| {
                     return LeafImpl.init(lptr, pid);
                 },
@@ -397,6 +402,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
 
         pub fn loadInode(self: *Self, pid: PidType) Error!InodeImpl {
             if (pid >= self.cont.items.len) {
+                @breakpoint();
                 return Error.OutOfBounds;
             }
             switch (self.cont.items[pid]) {
@@ -404,6 +410,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
                     return InodeImpl.init(iptr, pid);
                 },
                 .leaf => return Error.InvalidId,
+                .none => return Error.InvalidId,
             }
         }
 
@@ -432,6 +439,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             switch (self.cont.items[pid]) {
                 .inode => return false,
                 .leaf => return true,
+                .none => return Error.InvalidId,
             }
         }
 
@@ -442,6 +450,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
                         return iptr.level;
                     },
                     .leaf => return 0,
+                    .none => return Error.InvalidId,
                 }
             }
             return null;
@@ -456,6 +465,24 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
                 return Error.InvalidId;
             }
             self.root = pid;
+        }
+
+        pub fn destroy(self: *Self, pid: PidType) Error!void {
+            if (pid >= self.cont.items.len) {
+                return Error.InvalidId;
+            }
+            switch (self.cont.items[pid]) {
+                .inode => |iptr| {
+                    iptr.deinit(self.alloc);
+                    self.alloc.destroy(iptr);
+                },
+                .leaf => |lptr| {
+                    lptr.deinit(self.alloc);
+                    self.alloc.destroy(lptr);
+                },
+                .none => return Error.InvalidId,
+            }
+            self.cont.items[pid] = .{ .none = .{} };
         }
     };
 

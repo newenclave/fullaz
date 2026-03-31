@@ -9,6 +9,7 @@ pub fn Tree(comptime ModelT: type) type {
     const KeyInType = Model.KeyIn;
     const ValueInType = Model.ValueIn;
     const ValueOutType = Model.ValueOut;
+    const Pid = Model.Pid;
 
     const SplitKeyResult = Model.SplitKeyResult;
 
@@ -51,7 +52,7 @@ pub fn Tree(comptime ModelT: type) type {
             }
         }
 
-        pub fn dumpTree(self: *Self, writer: anytype) !void {
+        pub fn dumpTree(self: *Self, writer: anytype) Error!void {
             const acc = self.getAccessor();
 
             if (try acc.getRoot()) |root_id| {
@@ -64,7 +65,7 @@ pub fn Tree(comptime ModelT: type) type {
             }
         }
 
-        fn dumpNode(self: *Self, writer: anytype, pid: usize, indent: usize, path: u64) !void {
+        fn dumpNode(self: *Self, writer: anytype, pid: usize, indent: usize, path: u64) Error!void {
             const acc = self.getAccessor();
 
             // Print indentation
@@ -144,7 +145,7 @@ pub fn Tree(comptime ModelT: type) type {
             return null;
         }
 
-        pub fn set(self: *Self, key: KeyInType, value: ValueInType) !void {
+        pub fn set(self: *Self, key: KeyInType, value: ValueInType) Error!void {
             const acc = self.getAccessor();
             var split_key = try acc.splitKey(key);
             defer acc.deinitSplitKey(&split_key);
@@ -155,7 +156,7 @@ pub fn Tree(comptime ModelT: type) type {
             try leaf.set(split_key.get(0).digit, value);
         }
 
-        pub fn free(self: *Self, key: KeyInType) !void {
+        pub fn free(self: *Self, key: KeyInType) Error!void {
             const acc = self.getAccessor();
             var split_key = try acc.splitKey(key);
             defer acc.deinitSplitKey(&split_key);
@@ -165,11 +166,35 @@ pub fn Tree(comptime ModelT: type) type {
                 const digit = split_key.get(0).digit;
                 if (try leaf.isSet(digit)) {
                     try leaf.free(digit);
+                    const parent = try leaf.getParent();
+                    const parent_id = try leaf.getParentId();
+                    if (try leaf.size() == 0) {
+                        try acc.destroy(leaf.id());
+                        try self.freeChild(parent, parent_id);
+                    }
                 }
             }
         }
 
-        fn findLeaf(self: *Self, skr: *const SplitKeyResult) !?Leaf {
+        fn freeChild(self: *Self, inode_id: ?Pid, id: KeyInType) Error!void {
+            const acc = self.getAccessor();
+            if (inode_id) |pid| {
+                var inode = try acc.loadInode(pid);
+                defer acc.deinitInode(&inode);
+                if (try inode.isSet(id)) {
+                    try inode.free(id);
+                    const parent = try inode.getParent();
+                    const parent_id = try inode.getParentId();
+
+                    if (try inode.size() == 0) {
+                        try acc.destroy(pid);
+                        try self.freeChild(parent, parent_id);
+                    }
+                }
+            }
+        }
+
+        fn findLeaf(self: *Self, skr: *const SplitKeyResult) Error!?Leaf {
             const acc = self.getAccessor();
             const key_level = skr.size() - 1;
 
@@ -200,7 +225,7 @@ pub fn Tree(comptime ModelT: type) type {
             return null;
         }
 
-        fn createPath(self: *Self, skr: *const SplitKeyResult) !Leaf {
+        fn createPath(self: *Self, skr: *const SplitKeyResult) Error!Leaf {
             const acc = self.getAccessor();
             if (try acc.getRootLevel()) |root_level| {
                 if (root_level < (skr.size() - 1)) {
@@ -257,7 +282,7 @@ pub fn Tree(comptime ModelT: type) type {
             return Error.InconsistentLayout;
         }
 
-        fn growUpPath(self: *Self, level: usize) !void {
+        fn growUpPath(self: *Self, level: usize) Error!void {
             const acc = self.getAccessor();
 
             if (try acc.getRoot() == null) {

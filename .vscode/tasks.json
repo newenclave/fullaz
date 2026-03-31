@@ -9,7 +9,7 @@
                 "build",
                 "install-tests",
                 "-Doptimize=Debug",
-                "-Dtest-filter=Slots Fixed: set and get slots"
+                "-Dtest-filter=RadixTree"
             ],
             "problemMatcher": [],
             "group": {

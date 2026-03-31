@@ -400,6 +400,11 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
             sk.deinit();
         }
 
+        pub fn destroy(_: *Self, _: PageId) ErrorSet!void {
+            //try self.ctx.storage_mgr.destroy(pid);
+            // TODO: implement destroy and use it in freeChild
+        }
+
         fn sliceAligned(buf: []u8, n: usize) Error![]KeyDigit {
             if (core.memory.sliceAligned(KeyDigit, buf, n)) |slice| {
                 return slice;
@@ -418,6 +423,7 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
         pub const KeyOut = Key;
         pub const ValueIn = ValueInType;
         pub const ValueOut = ValueOutType;
+        pub const Pid = PageId;
 
         pub const Error = ErrorSet;
 
