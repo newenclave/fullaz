@@ -166,9 +166,9 @@ pub fn Tree(comptime ModelT: type) type {
                 const digit = split_key.get(0).digit;
                 if (try leaf.isSet(digit)) {
                     try leaf.free(digit);
-                    const parent = try leaf.getParent();
-                    const parent_id = try leaf.getParentId();
                     if (try leaf.size() == 0) {
+                        const parent = try leaf.getParent();
+                        const parent_id = try leaf.getParentId();
                         try acc.destroy(leaf.id());
                         try self.freeChild(parent, parent_id);
                     }
@@ -183,10 +183,9 @@ pub fn Tree(comptime ModelT: type) type {
                 defer acc.deinitInode(&inode);
                 if (try inode.isSet(id)) {
                     try inode.free(id);
-                    const parent = try inode.getParent();
-                    const parent_id = try inode.getParentId();
-
                     if (try inode.size() == 0) {
+                        const parent = try inode.getParent();
+                        const parent_id = try inode.getParentId();
                         try acc.destroy(pid);
                         try self.freeChild(parent, parent_id);
                     }
