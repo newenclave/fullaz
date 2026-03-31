@@ -8,19 +8,18 @@ pub fn RadixTree(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: t
     const PageIdType = PackedInt(PageIdT, Endian);
     const KeyType = PackedInt(KeyT, Endian);
     const LevelType = PackedInt(u8, Endian);
-    const IndexType = PackedInt(IndexT, Endian);
+    const ParentIdxType = PackedInt(u16, Endian);
+    _ = IndexT; // Currently not used, but can be used for future extensions (e.g., metadata length in header)
 
     const LeafSubheaderType = extern struct {
         const Self = @This();
         parent: PageIdType,
         parent_quotient: KeyType,
-        parent_idx: KeyType,
-        slot_size: IndexType,
+        parent_idx: ParentIdxType,
         pub fn formatHeader(self: *Self) void {
             self.parent.setMax();
             self.parent_quotient.set(0);
             self.parent_idx.set(0);
-            self.slot_size.set(0);
         }
     };
 
@@ -28,7 +27,7 @@ pub fn RadixTree(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: t
         const Self = @This();
         parent: PageIdType,
         parent_quotient: KeyType,
-        parent_idx: KeyType,
+        parent_idx: ParentIdxType,
         level: LevelType,
         pub fn formatHeader(self: *Self) void {
             self.parent.setMax();

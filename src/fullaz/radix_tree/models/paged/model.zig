@@ -14,7 +14,7 @@ pub const Settings = struct {
     leaf_base: u16 = 0,
 };
 
-pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, comptime Key: type, comptime Value: type) type {
+pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, comptime Key: type, comptime ValueSize: usize) type {
     comptime {
         contracts.storage_manager.requiresStorageManager(StorageManager);
         contracts.page_cache.requiresPageCache(PageCacheType);
@@ -36,10 +36,13 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
     const BlockDevice = PageCacheType.UnderlyingDevice;
     const PageHandle = PageCacheType.Handle;
     const BlockIdType = BlockDevice.BlockId;
+    const PageId = BlockIdType;
     const Index = u16;
+    const ValueInType = []const u8;
+    const ValueOutType = ValueInType;
 
-    const ViewType = radix_page.View(BlockIdType, Index, Key, @sizeOf(Value), .little, false);
-    const ConstViewType = radix_page.View(BlockIdType, Index, Key, @sizeOf(Value), .little, true);
+    const ViewType = radix_page.View(PageId, Index, Key, ValueSize, .little, false);
+    const ConstViewType = radix_page.View(PageId, Index, Key, ValueSize, .little, true);
 
     const SplitterType = KeySplitter(Key);
 
@@ -89,12 +92,12 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
         const PageViewTypeConst = ConstViewType.LeafSubheaderView;
 
         handle: PageHandle = undefined,
-        self_id: BlockIdType = undefined,
+        self_id: PageId = undefined,
         ctx: *Context = undefined,
 
         pub const Error = ErrorSet;
 
-        fn init(ph: PageHandle, self_id: BlockIdType, ctx: *Context) Self {
+        fn init(ph: PageHandle, self_id: PageId, ctx: *Context) Self {
             return .{
                 .handle = ph,
                 .self_id = self_id,
@@ -113,11 +116,66 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
 
         pub fn size(self: *const Self) Error!usize {
             const view = PageViewTypeConst.init(try self.handle.getData());
-            return (try view.slotsCapacity());
+            return (try view.size());
+        }
+
+        pub fn capacity(self: *const Self) Error!usize {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            return (try view.capacity());
         }
 
         pub fn calculateSlotCapacity(_: *const Self, page_size: usize, metadata_len: usize) usize {
             return PageViewTypeConst.calculateSlotCapacity(page_size, metadata_len);
+        }
+
+        pub fn set(self: *Self, key: Key, value: ValueInType) Error!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.set(key, value);
+        }
+
+        pub fn get(self: *const Self, key: Key) Error!ValueOutType {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.get(key);
+        }
+
+        pub fn isSet(self: *const Self, key: Key) Error!bool {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.isSet(key);
+        }
+
+        pub fn free(self: *Self, key: Key) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.free(key);
+        }
+
+        pub fn setParent(self: *Self, parent_id: ?PageId) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.setParent(parent_id);
+        }
+
+        pub fn getParent(self: *const Self) ErrorSet!?PageId {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.getParent();
+        }
+
+        pub fn setParentQuotient(self: *Self, quotient: Key) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.setParentQuotient(quotient);
+        }
+
+        pub fn getParentQuotient(self: *const Self) ErrorSet!Key {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return view.subheader().parent_quotient.get();
+        }
+
+        pub fn setParentId(self: *Self, idx: Key) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.setParentIdx(idx);
+        }
+
+        pub fn getParentId(self: *const Self) ErrorSet!Key {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.getParentIdx();
         }
     };
 
@@ -151,11 +209,76 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
 
         pub fn size(self: *const Self) Error!usize {
             const view = PageViewTypeConst.init(try self.handle.getData());
-            return (try view.slotsCapacity());
+            return (try view.size());
+        }
+
+        pub fn capacity(self: *const Self) Error!usize {
+            const view = PageViewTypeConst.init(try self.handle.getData());
+            return (try view.capacity());
         }
 
         pub fn calculateSlotCapacity(_: *const Self, page_size: usize, metadata_len: usize) usize {
             return PageViewTypeConst.calculateSlotCapacity(page_size, metadata_len);
+        }
+
+        pub fn set(self: *Self, key: Key, child_id: PageId) Error!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.set(key, child_id);
+        }
+
+        pub fn get(self: *const Self, key: Key) Error!PageId {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.get(key);
+        }
+
+        pub fn isSet(self: *const Self, key: Key) Error!bool {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.isSet(key);
+        }
+
+        pub fn free(self: *Self, key: Key) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.free(key);
+        }
+
+        pub fn setParent(self: *Self, parent_id: ?PageId) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.setParent(parent_id);
+        }
+
+        pub fn getParent(self: *const Self) ErrorSet!?PageId {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.getParent();
+        }
+
+        pub fn setParentQuotient(self: *Self, quotient: Key) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.setParentQuotient(quotient);
+        }
+
+        pub fn getParentQuotient(self: *const Self) ErrorSet!Key {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.getParentQuotient();
+        }
+
+        pub fn setParentId(self: *Self, idx: Key) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.setParentIdx(idx);
+        }
+
+        pub fn getParentId(self: *const Self) ErrorSet!Key {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.getParentIdx();
+        }
+
+        pub fn setLevel(self: *Self, level: usize) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.getDataMut());
+            try view.setLevel(level);
+        }
+
+        pub fn getLevel(self: *const Self) ErrorSet!usize {
+            var view = PageViewTypeConst.init(try self.handle.getData());
+            return try view.getLevel();
         }
     };
 
@@ -177,6 +300,30 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
 
         fn deinit(self: *Self) void {
             self.* = undefined;
+        }
+
+        pub fn getRoot(self: *const Self) ErrorSet!?PageId {
+            const root_id = self.ctx.storage_mgr.getRoot();
+            if (root_id) |id| {
+                return id;
+            }
+            return null;
+        }
+
+        pub fn setRoot(self: *const Self, pid: ?PageId) ErrorSet!void {
+            try self.ctx.storage_mgr.setRoot(pid);
+        }
+
+        pub fn getRootLevel(self: *const Self) ErrorSet!?usize {
+            const root_id = try self.getRoot();
+            if (root_id) |id| {
+                var ph = try self.ctx.cache.fetch(id);
+                defer ph.deinit();
+                var view = ConstViewType.InodeSubheaderView.init(try ph.getData());
+                try view.check();
+                return try view.getLevel();
+            }
+            return null;
         }
 
         pub fn createLeaf(self: *Self) ErrorSet!LeafImpl {
@@ -203,6 +350,13 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
         pub fn deinitLeaf(_: *Self, leaf: *LeafImpl) void {
             leaf.deinit();
             leaf.* = undefined;
+        }
+
+        pub fn isLeaf(self: *const Self, id: BlockIdType) ErrorSet!bool {
+            var ph = try self.ctx.cache.fetch(id);
+            defer ph.deinit();
+            var view = LeafImpl.PageViewTypeConst.init(try ph.getData());
+            return view.page_view.header().kind.get() == self.ctx.settings.leaf_page_kind;
         }
 
         pub fn createInode(self: *Self) ErrorSet!InodeImpl {
@@ -260,6 +414,10 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
         pub const Inode = InodeImpl;
         pub const Accessor = AccessorImpl;
         pub const SplitKeyResult = Accessor.SplitKeyResult;
+        pub const KeyIn = Key;
+        pub const KeyOut = Key;
+        pub const ValueIn = ValueInType;
+        pub const ValueOut = ValueOutType;
 
         pub const Error = ErrorSet;
 
@@ -293,6 +451,10 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
 
         pub fn effectiveSettings(self: *const Self) Settings {
             return self.accessor.ctx.settings;
+        }
+
+        pub fn getSettings(self: *const Self) *const Settings {
+            return &self.accessor.ctx.settings;
         }
     };
 }

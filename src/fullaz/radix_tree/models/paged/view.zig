@@ -54,7 +54,13 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
             self.page_view.formatPage(kind, page_id, subheader_size, metadata_len);
             const data = self.page_view.dataMut();
             var sl = try SlotsDirType.init(data);
-            self.subheaderMut().formatHeader();
+            var sub_hdr = self.subheaderMut();
+
+            sub_hdr.formatHeader();
+            sub_hdr.parent.setMax();
+            sub_hdr.parent_quotient.set(0);
+            sub_hdr.parent_idx.set(0);
+
             try sl.format(ValueSize);
         }
 
@@ -90,9 +96,72 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
             return try slols.slotSize();
         }
 
-        pub fn slotsCapacity(self: *const Self) ErrorSet!usize {
+        pub fn size(self: *const Self) ErrorSet!usize {
             const slols = try self.slotsDir();
-            return try slols.capacity();
+            return try slols.size();
+        }
+
+        pub fn capacity(self: *const Self) ErrorSet!usize {
+            const slot_dir = try self.slotsDir();
+            return try slot_dir.capacity();
+        }
+
+        pub fn set(self: *Self, key: KeyT, value: []const u8) ErrorSet!void {
+            var slot_dir = try self.slotsDirMut();
+            try slot_dir.set(key, value);
+        }
+
+        pub fn get(self: *const Self, key: KeyT) ErrorSet![]const u8 {
+            const slot_dir = try self.slotsDir();
+            return try slot_dir.get(key);
+        }
+
+        pub fn isSet(self: *const Self, key: KeyT) ErrorSet!bool {
+            const slot_dir = try self.slotsDir();
+            return try slot_dir.isSet(key);
+        }
+
+        pub fn free(self: *Self, key: KeyT) ErrorSet!void {
+            var slot_dir = try self.slotsDirMut();
+            try slot_dir.free(key);
+        }
+
+        pub fn setParent(self: *Self, parent_id: ?PageIdT) ErrorSet!void {
+            var sub_hdr = self.subheaderMut();
+            if (parent_id) |pid| {
+                sub_hdr.parent.set(pid);
+            } else {
+                sub_hdr.parent.setMax();
+            }
+        }
+
+        pub fn getParent(self: *const Self) ErrorSet!?PageIdT {
+            var sub_hdr = self.subheader();
+            if (sub_hdr.parent.isMax()) {
+                return null;
+            } else {
+                return sub_hdr.parent.get();
+            }
+        }
+
+        pub fn setParentQuotient(self: *Self, quotient: KeyT) ErrorSet!void {
+            var sub_hdr = self.subheaderMut();
+            sub_hdr.parent_quotient.set(quotient);
+        }
+
+        pub fn getParentQuotient(self: *const Self) ErrorSet!KeyT {
+            var sub_hdr = self.subheader();
+            return sub_hdr.parent_quotient.get();
+        }
+
+        pub fn setParentIdx(self: *Self, idx: KeyT) ErrorSet!void {
+            var sub_hdr = self.subheaderMut();
+            sub_hdr.parent_idx.set(@as(u16, @intCast(idx)));
+        }
+
+        pub fn getParentIdx(self: *const Self) ErrorSet!KeyT {
+            var sub_hdr = self.subheader();
+            return @as(KeyT, sub_hdr.parent_idx.get());
         }
     };
 
@@ -131,7 +200,13 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
             self.page_view.formatPage(kind, page_id, subheader_size, metadata_len);
             const data = self.page_view.dataMut();
             var sl = try SlotsDirType.init(data);
-            self.subheaderMut().formatHeader();
+            var sub_hdr = self.subheaderMut();
+
+            sub_hdr.formatHeader();
+            sub_hdr.parent.setMax();
+            sub_hdr.parent_quotient.set(0);
+            sub_hdr.parent_idx.set(0);
+
             try sl.format(@sizeOf(SlotType));
         }
 
@@ -167,9 +242,92 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
             return try slols.slotSize();
         }
 
-        pub fn slotsCapacity(self: *const Self) ErrorSet!usize {
+        pub fn size(self: *const Self) ErrorSet!usize {
+            const slols = try self.slotsDir();
+            return try slols.size();
+        }
+
+        pub fn capacity(self: *const Self) ErrorSet!usize {
             const slols = try self.slotsDir();
             return try slols.capacity();
+        }
+
+        pub fn set(self: *Self, key: KeyT, value: PageIdT) ErrorSet!void {
+            var slot_dir = try self.slotsDirMut();
+            const value_as_bytes = std.mem.asBytes(&value);
+            try slot_dir.set(key, value_as_bytes);
+        }
+
+        pub fn get(self: *const Self, key: KeyT) ErrorSet!PageIdT {
+            const slot_dir = try self.slotsDir();
+            const value_as_bytes = try slot_dir.get(key);
+            if (value_as_bytes.len != @sizeOf(PageIdT)) {
+                return ErrorSet.BadData;
+            }
+            var value: PageIdT = undefined;
+            @memcpy(std.mem.asBytes(&value), value_as_bytes);
+            return value;
+        }
+
+        pub fn isSet(self: *const Self, key: KeyT) ErrorSet!bool {
+            const slot_dir = try self.slotsDir();
+            return try slot_dir.isSet(key);
+        }
+
+        pub fn free(self: *Self, key: KeyT) ErrorSet!void {
+            var slot_dir = try self.slotsDirMut();
+            try slot_dir.free(key);
+        }
+
+        pub fn setParent(self: *Self, parent_id: ?PageIdT) ErrorSet!void {
+            var sub_hdr = self.subheaderMut();
+            if (parent_id) |pid| {
+                sub_hdr.parent.set(pid);
+            } else {
+                sub_hdr.parent.setMax();
+            }
+        }
+
+        pub fn getParent(self: *const Self) ErrorSet!?PageIdT {
+            var sub_hdr = self.subheader();
+            if (sub_hdr.parent.isMax()) {
+                return null;
+            } else {
+                return sub_hdr.parent.get();
+            }
+        }
+
+        pub fn setParentQuotient(self: *Self, quotient: KeyT) ErrorSet!void {
+            var sub_hdr = self.subheaderMut();
+            sub_hdr.parent_quotient.set(quotient);
+        }
+
+        pub fn getParentQuotient(self: *const Self) ErrorSet!KeyT {
+            var sub_hdr = self.subheader();
+            return sub_hdr.parent_quotient.get();
+        }
+
+        pub fn setParentIdx(self: *Self, idx: KeyT) ErrorSet!void {
+            var sub_hdr = self.subheaderMut();
+            sub_hdr.parent_idx.set(@as(u16, @intCast(idx)));
+        }
+
+        pub fn getParentIdx(self: *const Self) ErrorSet!KeyT {
+            var sub_hdr = self.subheader();
+            return @as(KeyT, sub_hdr.parent_idx.get());
+        }
+
+        pub fn setLevel(self: *Self, level: usize) ErrorSet!void {
+            var sub_hdr = self.subheaderMut();
+            if (level > std.math.maxInt(u8)) {
+                return ErrorSet.BadData;
+            }
+            sub_hdr.level.set(@as(u8, @intCast(level)));
+        }
+
+        pub fn getLevel(self: *const Self) ErrorSet!usize {
+            var sub_hdr = self.subheader();
+            return @as(usize, sub_hdr.level.get());
         }
     };
 

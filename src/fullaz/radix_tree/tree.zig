@@ -26,8 +26,8 @@ pub fn Tree(comptime ModelT: type) type {
             return Self{
                 .model = model,
                 .splitter = Splitter.init(
-                    model.accessor.sett.inode_base,
-                    model.accessor.sett.leaf_base,
+                    model.getSettings().inode_base,
+                    model.getSettings().leaf_base,
                 ),
             };
         }
@@ -72,50 +72,54 @@ pub fn Tree(comptime ModelT: type) type {
                 try writer.print("  ", .{});
             }
 
-            if (try acc.isLeaf(pid)) {
-                var leaf = try acc.loadLeaf(pid);
+            if (try acc.isLeaf(@intCast(pid))) {
+                var leaf = try acc.loadLeaf(@intCast(pid));
                 defer acc.deinitLeaf(&leaf);
 
                 try writer.print("LEAF[{}] (parent={?}[{any}], quot={}) {} values:\n", .{
                     pid,
-                    leaf.getParent(),
-                    leaf.getParentId(),
-                    leaf.getParentQuotient(),
-                    leaf.size(),
+                    try leaf.getParent(),
+                    try leaf.getParentId(),
+                    try leaf.getParentQuotient(),
+                    try leaf.size(),
                 });
 
+                // TODO: avaid to use inode.container here.
                 // Only print non-null values
-                for (leaf.container.cont.items, 0..) |maybe_val, i| {
-                    if (maybe_val) |val| {
+                for (0..try leaf.capacity()) |i| {
+                    if (try leaf.isSet(@intCast(i))) {
                         for (0..indent + 1) |_| try writer.print("  ", .{});
-                        try writer.print("[{}] = {}\n", .{ i, val });
+                        try writer.print("[{}] = {any}\n", .{ i, try leaf.get(@intCast(i)) });
                     }
                 }
             } else {
-                var inode = try acc.loadInode(pid);
+                var inode = try acc.loadInode(@intCast(pid));
                 defer acc.deinitInode(&inode);
 
                 const level = try inode.getLevel();
                 try writer.print("INODE[{}] Level={} (parent={?}[{any}]) {} children:\n", .{
                     pid,
                     level,
-                    inode.getParent(),
-                    inode.getParentId(),
-                    inode.size(),
+                    try inode.getParent(),
+                    try inode.getParentId(),
+                    try inode.size(),
                 });
 
+                // TODO: avaid to use inode.container here.
                 // Recursively dump children (only non-null)
-                for (inode.container.cont.items, 0..) |maybe_child, i| {
-                    if (maybe_child) |child_pid| {
+
+                for (0..try inode.capacity()) |i| {
+                    if (try inode.isSet(@intCast(i))) {
                         for (0..indent + 1) |_| {
                             try writer.print("  ", .{});
                         }
+                        const child_pid = try inode.get(@intCast(i));
                         try writer.print("[{}] -> PID {}, Parent {any}[{any}], quot {any} \n", .{
                             i,
                             child_pid,
-                            inode.getParent(),
-                            inode.getParentId(),
-                            inode.getParentQuotient(),
+                            try inode.getParent(),
+                            try inode.getParentId(),
+                            try inode.getParentQuotient(),
                         });
 
                         // Recurse into child

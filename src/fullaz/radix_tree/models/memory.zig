@@ -136,15 +136,19 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             return self.self_id;
         }
 
-        pub fn size(self: *const Self) usize {
+        pub fn size(self: *const Self) Error!usize {
             return self.container.elements_count;
+        }
+
+        pub fn capacity(self: *const Self) Error!usize {
+            return self.container.cont.items.len;
         }
 
         pub fn setParent(self: *Self, parent_id: ?PidType) Error!void {
             self.container.parent_id = parent_id;
         }
 
-        pub fn getParent(self: *const Self) ?PidType {
+        pub fn getParent(self: *const Self) Error!?PidType {
             return self.container.parent_id;
         }
 
@@ -152,7 +156,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             self.container.parent_quotient = parent_quotient;
         }
 
-        pub fn getParentQuotient(self: *const Self) Key {
+        pub fn getParentQuotient(self: *const Self) Error!Key {
             return self.container.parent_quotient;
         }
 
@@ -160,7 +164,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             self.container.parent_idx = parent_idx;
         }
 
-        pub fn getParentId(self: *const Self) Key {
+        pub fn getParentId(self: *const Self) Error!Key {
             return self.container.parent_idx;
         }
 
@@ -236,8 +240,12 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             return self.self_id;
         }
 
-        pub fn size(self: *const Self) usize {
+        pub fn size(self: *const Self) Error!usize {
             return self.container.elements_count;
+        }
+
+        pub fn capacity(self: *const Self) Error!usize {
+            return self.container.cont.items.len;
         }
 
         pub fn set(self: *Self, key: Key, child_id: PidType) Error!void {
@@ -277,7 +285,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             self.container.parent_id = parent_id;
         }
 
-        pub fn getParent(self: *const Self) ?PidType {
+        pub fn getParent(self: *const Self) Error!?PidType {
             return self.container.parent_id;
         }
 
@@ -483,6 +491,10 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
 
         pub fn getAccessor(self: *Self) *Accessor {
             return &self.accessor;
+        }
+
+        pub fn getSettings(self: *const Self) *const Settings {
+            return &self.accessor.sett;
         }
     };
 }
