@@ -311,7 +311,6 @@ pub fn Tree(comptime ModelT: type) type {
                 var current_id = root_id;
 
                 const levels_to_add = level - root_level_init;
-                std.debug.print("Growing up path by {} levels\n", .{levels_to_add});
                 for (0..levels_to_add) |_| {
                     var new_inode = try acc.createInode();
                     defer acc.deinitInode(&new_inode);

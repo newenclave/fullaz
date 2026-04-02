@@ -69,17 +69,17 @@ pub fn Splitter(comptime KeyT: type) type {
                 @panic("bases must be >= 2");
             }
 
-            const Kmax: Key = std.math.maxInt(Key);
+            const k_max: Key = std.math.maxInt(Key);
 
-            if (Kmax < leaf_base) {
+            if (k_max < leaf_base) {
                 return 1;
             }
 
             var n: usize = 1;
             var cap: Key = leaf_base;
 
-            while (cap <= Kmax) : (n += 1) {
-                if (cap > @divTrunc(std.math.maxInt(Key), inode_base)) {
+            while (cap <= k_max) : (n += 1) {
+                if (cap > @divTrunc(k_max, inode_base)) {
                     return n + 1;
                 }
                 cap *= inode_base;
