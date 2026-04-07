@@ -33,6 +33,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             if (read_only) {
                 @compileError("Cannot format a read-only page");
             }
+
+            self.page_view.formatPage(kind, page_id, @sizeOf(SubheaderType), metadata_len);
             var sh = self.subheaderMut();
             sh.flags.set(0);
             sh.total_size.set(0);

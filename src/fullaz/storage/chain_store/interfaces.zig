@@ -7,7 +7,7 @@ const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
 
-pub fn requiresRopeHeaderManager(comptime T: type) void {
+pub fn requiresStorageManager(comptime T: type) void {
     requiresErrorDeclaration(T, "Error");
     const Error = T.Error;
     requiresTypeDeclaration(T, "PageId");

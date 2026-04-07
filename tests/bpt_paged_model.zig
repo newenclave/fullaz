@@ -38,10 +38,6 @@ const NoneStorageManager = struct {
         // Persist to disk header, etc.
     }
 
-    pub fn hasRoot(self: *const @This()) bool {
-        return self.root_block_id != null;
-    }
-
     pub fn destroyPage(_: *@This(), id: PageId) Error!void {
         _ = id;
         // Implement page destruction logic, e.g., add to free list

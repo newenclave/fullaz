@@ -22,7 +22,6 @@ pub fn assertModelAccessor(comptime Model: type) void {
 
     requiresFnSignature(A, "getRoot", fn (*const A) ?NodeIdType);
     requiresFnSignature(A, "setRoot", fn (*A, ?NodeIdType) Error!void);
-    requiresFnSignature(A, "hasRoot", fn (*const A) bool);
     requiresFnSignature(A, "destroy", fn (*A, NodeIdType) Error!void);
 
     requiresFnSignature(A, "createLeaf", fn (*A) Error!LeafType);

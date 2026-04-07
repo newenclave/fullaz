@@ -507,22 +507,20 @@ pub fn Bpt(comptime ModelT: type) type {
 
         fn fixEmptyRoot(self: *Self) Error!void {
             const accessor = self.model.getAccessor();
-            if (!accessor.hasRoot()) {
-                return;
-            }
-            const root_id = accessor.getRoot().?;
-            if (try accessor.loadLeaf(root_id)) |root_leaf| {
-                defer accessor.deinitLeaf(root_leaf);
-                if (try root_leaf.size() == 0) {
-                    try accessor.setRoot(null);
-                    try accessor.destroy(root_id);
-                }
-            } else if (try accessor.loadInode(root_id)) |root_inode| {
-                defer accessor.deinitInode(root_inode);
-                if (try root_inode.size() == 0) {
-                    const child_id = try root_inode.getChild(0);
-                    try accessor.setRoot(child_id);
-                    try accessor.destroy(root_id);
+            if (accessor.getRoot()) |root_id| {
+                if (try accessor.loadLeaf(root_id)) |root_leaf| {
+                    defer accessor.deinitLeaf(root_leaf);
+                    if (try root_leaf.size() == 0) {
+                        try accessor.setRoot(null);
+                        try accessor.destroy(root_id);
+                    }
+                } else if (try accessor.loadInode(root_id)) |root_inode| {
+                    defer accessor.deinitInode(root_inode);
+                    if (try root_inode.size() == 0) {
+                        const child_id = try root_inode.getChild(0);
+                        try accessor.setRoot(child_id);
+                        try accessor.destroy(root_id);
+                    }
                 }
             }
         }

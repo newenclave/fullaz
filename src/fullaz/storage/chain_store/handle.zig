@@ -3,19 +3,19 @@ const view = @import("view.zig");
 const page_header = @import("../../page/header.zig");
 const interfaces = @import("../../contracts/contracts.zig");
 const errors = @import("../../core/errors.zig");
-const requiresRopeHeaderManager = @import("interfaces.zig").requiresRopeHeaderManager;
+const requiresStorageManager = @import("interfaces.zig").requiresStorageManager;
 
 pub const Settings = struct {
     chunk_page_kind: u16 = 0x21,
 };
 
-pub fn Handle(comptime PageCacheType: type, comptime RopeHeaderManager: type) type {
+pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type {
     comptime {
         interfaces.page_cache.requiresPageCache(PageCacheType);
-        requiresRopeHeaderManager(RopeHeaderManager);
+        requiresStorageManager(StorageManager);
     }
 
-    const PosType = RopeHeaderManager.Size;
+    const PosType = StorageManager.Size;
     const Index = u16;
     const BlockDevice = PageCacheType.UnderlyingDevice;
     const PageHandle = PageCacheType.Handle;
@@ -27,51 +27,15 @@ pub fn Handle(comptime PageCacheType: type, comptime RopeHeaderManager: type) ty
     const ViewTypesConst = view.View(BlockIdType, Index, PosType, .little, true);
 
     const CommonErrors = PageCacheType.Error ||
-        RopeHeaderManager.Error;
+        StorageManager.Error;
 
     const Context = struct {
         cache: *PageCacheType,
-        mgr: *RopeHeaderManager,
+        mgr: *StorageManager,
         settings: Settings,
     };
 
-    const Cursor = struct {
-        const Self = @This();
-        const ViewType = ViewTypes.ChunkView;
-        const ViewTypeConst = ViewTypesConst.ChunkView;
-
-        pub const Error = PageCacheType.Error ||
-            CommonErrors ||
-            errors.PageError;
-
-        handle: ?PageHandle = null,
-        ctx: *Context = undefined,
-        pos: Index = 0,
-
-        pub fn init(ph: ?PageHandle, pos: Index, ctx: *Context) Self {
-            return Self{
-                .handle = ph,
-                .ctx = ctx,
-                .pos = pos,
-            };
-        }
-
-        pub fn deinit(self: *Self) void {
-            if (self.handle) |ph_const| {
-                var ph = ph_const;
-                ph.deinit();
-                self.handle = null;
-            }
-        }
-
-        fn view(self: *const Self) Error!ViewTypeConst {
-            return ViewTypeConst.init(try self.handle.getData());
-        }
-
-        fn viewMut(self: *Self) Error!ViewType {
-            return ViewType.init(try self.handle.getDataMut());
-        }
-    };
+    const Iterator = struct {};
 
     return struct {
         const Self = @This();
@@ -92,13 +56,17 @@ pub fn Handle(comptime PageCacheType: type, comptime RopeHeaderManager: type) ty
         ctx: Context,
 
         pub const View = view.View;
-        pub fn init(cache: *PageCacheType, mgr: *RopeHeaderManager, settings: Settings) Self {
+        pub fn init(cache: *PageCacheType, mgr: *requiresStorageManager, settings: Settings) Self {
             var result = Self{};
             result.ctx.cache = cache;
             result.ctx.mgr = mgr;
             result.ctx.settings = settings;
 
             return result;
+        }
+
+        pub fn iterator(_: *const Self) Iterator {
+            return Iterator{};
         }
 
         fn fetch(self: *Self, page_id: Pid) Error!PageHandle {

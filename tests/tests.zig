@@ -12,6 +12,7 @@ test {
     _ = @import("device_memory_block.zig");
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
+    _ = @import("chain_storage.zig");
     _ = @import("long_store.zig");
     _ = @import("wbpt_memory_model.zig");
     _ = @import("wbpt_paged_model.zig");

@@ -462,10 +462,6 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return try self.ctx.storage_mgr.setRoot(new_root);
         }
 
-        pub fn hasRoot(self: *const Self) bool {
-            return self.ctx.storage_mgr.hasRoot();
-        }
-
         pub fn destroy(self: *Self, id: BlockIdType) ErrorSet!void {
             return self.ctx.storage_mgr.destroyPage(id);
         }

@@ -500,9 +500,6 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
         pub fn setRoot(self: *Self, new_root: ?RootType) Error!void {
             self.root = new_root;
         }
-        pub fn hasRoot(self: *const Self) bool {
-            return self.root != null;
-        }
 
         pub fn init(allocator: std.mem.Allocator) !Self {
             return Self{

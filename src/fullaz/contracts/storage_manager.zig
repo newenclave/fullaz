@@ -11,6 +11,5 @@ pub fn requiresStorageManager(comptime T: type) void {
     requiresTypeDeclaration(T, "PageId");
     requiresFnSignature(T, "getRoot", fn (*const T) ?T.PageId);
     requiresFnSignature(T, "setRoot", fn (*T, ?T.PageId) Error!void);
-    requiresFnSignature(T, "hasRoot", fn (*const T) bool);
     requiresFnSignature(T, "destroyPage", fn (*T, T.PageId) Error!void);
 }
