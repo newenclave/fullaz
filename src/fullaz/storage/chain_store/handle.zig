@@ -100,12 +100,22 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
 
         pub const View = view.View;
         pub fn init(cache: *PageCacheType, mgr: *StorageManager, settings: Settings) Self {
-            var result = Self{};
-            result.ctx.cache = cache;
-            result.ctx.mgr = mgr;
-            result.ctx.settings = settings;
+            const ctx = Context{
+                .cache = cache,
+                .mgr = mgr,
+                .settings = settings,
+            };
 
+            const result = Self{
+                .g_pos = null,
+                .p_pos = null,
+                .ctx = ctx,
+            };
             return result;
+        }
+
+        pub fn deinit(_: *Self) void {
+            // Clean up resources if needed
         }
 
         pub fn iterator(_: *const Self) Iterator {

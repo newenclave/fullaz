@@ -18,31 +18,31 @@ const NoneStorageManager = struct {
         // Implement page destruction logic, e.g., add to free list
     }
 
-    fn getTotalSize(self: *const Self) Error!Size {
+    pub fn getTotalSize(self: *const Self) Error!Size {
         return self.total_sze;
     }
-    fn setTotalSize(self: *Self, size: Size) Error!void {
+    pub fn setTotalSize(self: *Self, size: Size) Error!void {
         self.total_sze = size;
     }
 
-    fn getFirst(self: *const Self) Error!?PageId {
+    pub fn getFirst(self: *const Self) Error!?PageId {
         return self.first_block_id;
     }
 
-    fn getLast(self: *const Self) Error!?PageId {
+    pub fn getLast(self: *const Self) Error!?PageId {
         return self.last_block_id;
     }
 
-    fn setFirst(self: *Self, page_id: ?PageId) Error!void {
+    pub fn setFirst(self: *Self, page_id: ?PageId) Error!void {
         self.first_block_id = page_id;
     }
 
-    fn setLast(self: *Self, page_id: ?PageId) Error!void {
+    pub fn setLast(self: *Self, page_id: ?PageId) Error!void {
         self.last_block_id = page_id;
     }
 };
 
-test "ChantStore View Test" {
+test "CheinStore View Test" {
     const Chunk = chain_store.View(u32, u32, u32, std.builtin.Endian.little, false).Chunk;
     var buffer: [1024]u8 = undefined;
     var view = Chunk.init(buffer[0..]);
@@ -55,4 +55,19 @@ test "ChantStore View Test" {
     try std.testing.expect(data.len == (1024 - view.page_view.page().allHeadersSize()));
     const dataMut = view.getDataMut();
     try std.testing.expect(dataMut.len == (1024 - view.page_view.page().allHeadersSize()));
+}
+
+test "CheinStore handle" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
 }

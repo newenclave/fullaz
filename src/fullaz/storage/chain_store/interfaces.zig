@@ -3,9 +3,9 @@ const contracts = @import("../../contracts/contracts.zig");
 const std = @import("std");
 const interfaces = @import("interfaces.zig");
 
-const requiresFnSignature = interfaces.requiresFnSignature;
-const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
-const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
+const requiresFnSignature = contracts.interfaces.requiresFnSignature;
+const requiresErrorDeclaration = contracts.interfaces.requiresErrorDeclaration;
+const requiresTypeDeclaration = contracts.interfaces.requiresTypeDeclaration;
 
 pub fn requiresStorageManager(comptime T: type) void {
     requiresErrorDeclaration(T, "Error");
@@ -19,8 +19,8 @@ pub fn requiresStorageManager(comptime T: type) void {
     requiresFnSignature(T, "getFirst", fn (*const T) Error!?T.PageId);
     requiresFnSignature(T, "getLast", fn (*const T) Error!?T.PageId);
 
-    requiresFnSignature(T, "setFirst", fn (*const T, ?T.PageId) Error!void);
-    requiresFnSignature(T, "setLast", fn (*const T, ?T.PageId) Error!void);
+    requiresFnSignature(T, "setFirst", fn (*T, ?T.PageId) Error!void);
+    requiresFnSignature(T, "setLast", fn (*T, ?T.PageId) Error!void);
 
-    requiresFnSignature(T, "destroyPage", fn (*T, T.PageId) void);
+    requiresFnSignature(T, "destroyPage", fn (*T, T.PageId) Error!void);
 }
