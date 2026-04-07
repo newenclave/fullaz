@@ -7,13 +7,7 @@ pub fn ChainStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT:
     const PageIdType = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const SizeType = PackedInt(SizeT, Endian);
-
-    const HeaderType = extern struct {
-        flags: IndexType,
-        total_size: SizeType,
-        last: PageIdType,
-        first: PageIdType,
-    };
+    _ = SizeType; // Currently unused, but reserved for potential future use.
 
     const ChunkType = extern struct {
         flags: IndexType,
@@ -23,7 +17,6 @@ pub fn ChainStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT:
     };
 
     return struct {
-        pub const HeaderSubheader = HeaderType;
         pub const ChunkSubheader = ChunkType;
     };
 }

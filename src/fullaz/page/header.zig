@@ -101,11 +101,13 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return self.page[subhdr_end..metadata_end];
         }
 
+        // returns the data availeble for use after the (header + subheader + metadata)
         pub fn data(self: *const Self) []const u8 {
             const all_heades_len = self.allHeadersSize();
             return self.page[all_heades_len..];
         }
 
+        // returns the mutable data availeble for use after the (header + subheader + metadata)
         pub fn dataMut(self: *Self) []u8 {
             if (read_only) {
                 @compileError("Cannot get mutable data from a read-only page");

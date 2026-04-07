@@ -8,51 +8,13 @@ const errors = @import("../../core/errors.zig");
 
 const conracts = @import("../../contracts/contracts.zig");
 
-pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
-    const SubheadersType = headers.ChainStore(PageIdT, IndexT, Endian);
+pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+    const SubheadersType = headers.ChainStore(PageIdT, IndexT, SizeT, Endian);
     const PageId = PackedInt(PageIdT, Endian);
     const Index = PackedInt(IndexT, Endian);
     const DataType = if (read_only) []const u8 else []u8;
 
     const CommonErrorSet = errors.PageError;
-
-    const HeaderImpl = struct {
-        const Self = @This();
-        pub const SubheaderType = SubheadersType.HeaderSubheader;
-
-        pub const Error = error{} || CommonErrorSet;
-        body: DataType = undefined,
-
-        pub fn init(data: DataType) Self {
-            return .{
-                .body = data,
-            };
-        }
-
-        pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) void {
-            if (read_only) {
-                @compileError("Cannot format a read-only page");
-            }
-
-            self.page_view.formatPage(kind, page_id, @sizeOf(SubheaderType), metadata_len);
-            var sh = self.subheaderMut();
-            sh.flags.set(0);
-            sh.total_size.set(0);
-            sh.first.setMax();
-            sh.last.setMax();
-        }
-
-        pub fn subheader(self: *const Self) *const SubheaderType {
-            return @ptrCast(@alignCast(&self.body[0]));
-        }
-
-        pub fn subheaderMut(self: *Self) *SubheaderType {
-            if (read_only) {
-                @compileError("Cannot get mutable subheader from a read-only page");
-            }
-            return @ptrCast(@alignCast(&self.body[0]));
-        }
-    };
 
     const ChunkImpl = struct {
         const Self = @This();
@@ -91,12 +53,15 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return self.page_view.subheaderMut();
         }
 
+        // returns the PAGE data; Doesn't include header, subheader, or metadata
         pub fn getData(self: *const Self) []const u8 {
-            return self.page_view.data();
+            return self.page_view.page().data();
         }
 
+        // returns the PAGE mutable data; Doesn't include header, subheader, or metadata
         pub fn getDataMut(self: *Self) []u8 {
-            return self.page_view.dataMut();
+            var page = self.page_view.pageMut();
+            return page.dataMut();
         }
 
         pub fn getNext(self: *const Self) ?PageId {
@@ -145,10 +110,21 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             const sh = self.subheaderMut();
             sh.size.set(size);
         }
+
+        pub fn getChunkData(self: *const Self) []const u8 {
+            const full_data = self.getData();
+            const data_size = self.getSize();
+            return full_data[0..data_size];
+        }
+
+        pub fn getChunkDataMut(self: *Self) []u8 {
+            const full_data = self.getDataMut();
+            const data_size = self.getSize();
+            return full_data[0..data_size];
+        }
     };
 
     return struct {
-        pub const Header = HeaderImpl;
         pub const Chunk = ChunkImpl;
     };
 }

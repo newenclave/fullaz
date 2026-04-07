@@ -9,6 +9,19 @@ pub const Settings = struct {
     chunk_page_kind: u16 = 0x21,
 };
 
+// const StorageManager = struct {
+//     const Error = error{};
+//     const PageId = u64;
+//     const Size = u64;
+//     fn getTotalSize(self: *const StorageManager) Error!Size;
+//     fn setTotalSize(self: *StorageManager, size: Size) Error!void;
+//     fn getFirst(self: *const StorageManager) Error!?PageId;
+//     fn getLast(self: *const StorageManager) Error!?PageId;
+//     fn setFirst(self: *StorageManager, page_id: ?PageId) Error!void;
+//     fn setLast(self: *StorageManager, page_id: ?PageId) Error!void;
+//     fn destroyPage(self: *StorageManager, page_id: PageId) void;
+// };
+
 pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type {
     comptime {
         interfaces.page_cache.requiresPageCache(PageCacheType);
@@ -35,7 +48,36 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         settings: Settings,
     };
 
-    const Iterator = struct {};
+    const Cursor = union(enum) {
+        before_begin,
+        on: Index,
+        after_end,
+    };
+
+    const Iterator = struct {
+        const Self = @This();
+        hanlde: ?PageHandle,
+        pos: Cursor,
+        fn init(hanlde: PageHandle) Self {
+            return Self{
+                .hanlde = hanlde,
+                .pos = .before_begin,
+            };
+        }
+
+        fn initPos(hanlde: PageHandle, pos: Cursor) Self {
+            return Self{
+                .hanlde = hanlde,
+                .pos = pos,
+            };
+        }
+
+        fn deinit(self: *Self) void {
+            if (self.hanlde) |ph| {
+                ph.deinit();
+            }
+        }
+    };
 
     return struct {
         const Self = @This();
@@ -53,10 +95,11 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
 
         g_pos: ?Position = null,
         p_pos: ?Position = null,
+
         ctx: Context,
 
         pub const View = view.View;
-        pub fn init(cache: *PageCacheType, mgr: *requiresStorageManager, settings: Settings) Self {
+        pub fn init(cache: *PageCacheType, mgr: *StorageManager, settings: Settings) Self {
             var result = Self{};
             result.ctx.cache = cache;
             result.ctx.mgr = mgr;
@@ -74,7 +117,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             errdefer ph.deinit();
             const pv = CommonPageViewConst.init(ph.getData());
             if (pv.header().kind.get() != self.ctx.settings.chunk_page_kind) {
-                return errors.PageError.BadType;
+                return errors.BadType;
             }
             return ph;
         }
