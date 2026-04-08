@@ -56,25 +56,69 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
 
     const Iterator = struct {
         const Self = @This();
-        hanlde: ?PageHandle,
+        const Error = CommonErrors;
+
+        ctx: Context,
+        hanlde: PageHandle,
         pos: Cursor,
-        fn init(hanlde: PageHandle) Self {
+
+        fn getView(ph: *PageHandle) Error!ViewTypesConst.Chunk {
+            const page_data = try ph.getData();
+            return ViewTypesConst.Chunk.init(page_data);
+        }
+
+        fn getViewMut(ph: *PageHandle) Error!ViewTypes.Chunk {
+            const page_data = try ph.getDataMut();
+            return ViewTypes.Chunk.init(page_data);
+        }
+
+        fn init(ctx: Context, hanlde: PageHandle) Self {
             return Self{
+                .ctx = ctx,
                 .hanlde = hanlde,
                 .pos = .before_begin,
             };
         }
 
-        fn initPos(hanlde: PageHandle, pos: Cursor) Self {
+        fn initPos(ctx: Context, hanlde: PageHandle, pos: Cursor) Self {
             return Self{
+                .ctx = ctx,
                 .hanlde = hanlde,
                 .pos = pos,
             };
         }
 
         fn deinit(self: *Self) void {
+            self.hanlde.deinit();
+        }
+
+        fn currentSize(self: *const Self) Error!usize {
+            const pv = try self.getView(self.hanlde);
+            return pv.getSize();
+        }
+
+        fn hasNext(self: *Self) Error!bool {
+            const pv = try self.getView(self.hanlde);
+            return pv.getNext() != null;
+        }
+
+        fn nextPage(self: *Self) Error!void {
+            if (self.pos == .after_end) {
+                return;
+            } else if (self.pos == .before_begin) {
+                self.pos = .on(0);
+            }
             if (self.hanlde) |ph| {
-                ph.deinit();
+                var pv = ViewTypesConst.Chunk.init(try ph.getData());
+                if (pv.getNext()) |next_id| {
+                    var next_hdl = try self.ctx.cache.fetch(next_id);
+                    errdefer next_hdl.deinit();
+                    var taken = self.hanlde.take();
+                    defer taken.deinit();
+                    self.hanlde = next_hdl;
+                } else {
+                    self.pos = .after_end;
+                }
             }
         }
     };
