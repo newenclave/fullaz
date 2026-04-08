@@ -21,6 +21,7 @@ const NoneStorageManager = struct {
     pub fn getTotalSize(self: *const Self) Error!Size {
         return self.total_sze;
     }
+
     pub fn setTotalSize(self: *Self, size: Size) Error!void {
         self.total_sze = size;
     }
@@ -42,7 +43,7 @@ const NoneStorageManager = struct {
     }
 };
 
-test "CheinStore View Test" {
+test "ChainStore View Test" {
     const Chunk = chain_store.View(u32, u32, u32, std.builtin.Endian.little, false).Chunk;
     var buffer: [1024]u8 = undefined;
     var view = Chunk.init(buffer[0..]);
@@ -57,7 +58,7 @@ test "CheinStore View Test" {
     try std.testing.expect(dataMut.len == (1024 - view.page_view.page().allHeadersSize()));
 }
 
-test "CheinStore handle" {
+test "ChainStore handle: init deinit" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
     const Handle = chain_store.Handle(Cache, NoneStorageManager);
@@ -70,4 +71,32 @@ test "CheinStore handle" {
 
     var hdl = Handle.init(&cache, &mgr, .{});
     defer hdl.deinit();
+}
+
+test "ChainStore handle: write page" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 1000);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var page = try hdl.create();
+    defer page.deinit();
+
+    const test_data = "Hello, ChainStore!";
+    var buffer_to_read = [_]u8{0} ** 1000;
+    const writ_len_0 = try hdl.writePage(&page, 0, test_data);
+    std.debug.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_0, try hdl.getTotalSize() });
+    const writ_len_1 = try hdl.writePage(&page, 900, test_data);
+    std.debug.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_1, try hdl.getTotalSize() });
+    const read_len_0 = try hdl.readPage(&page, 0, &buffer_to_read);
+
+    std.debug.print("read: {any} size: {d}\n", .{ buffer_to_read[0..read_len_0], read_len_0 });
 }

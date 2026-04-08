@@ -10,8 +10,8 @@ const conracts = @import("../../contracts/contracts.zig");
 
 pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
     const SubheadersType = headers.ChainStore(PageIdT, IndexT, SizeT, Endian);
-    const PageId = PackedInt(PageIdT, Endian);
-    const Index = PackedInt(IndexT, Endian);
+    const PageId = PageIdT;
+    const Index = IndexT;
     const DataType = if (read_only) []const u8 else []u8;
 
     const CommonErrorSet = errors.PageError;

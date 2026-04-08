@@ -9,7 +9,7 @@
                 "build",
                 "install-tests",
                 "-Doptimize=Debug",
-                "-Dtest-filter=RadixTree"
+                "-Dtest-filter=ChainStore handle: write page"
             ],
             "problemMatcher": [],
             "group": {

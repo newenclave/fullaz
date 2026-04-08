@@ -85,7 +85,8 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         pub const Pid = BlockIdType;
         pub const Error = PageCacheType.Error ||
             CommonErrors ||
-            errors.PageError;
+            errors.PageError ||
+            errors.IndexError;
 
         const Position = struct {
             page_id: Pid,
@@ -106,9 +107,19 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
                 .settings = settings,
             };
 
+            var start_pos: ?Position = null;
+
+            if (try ctx.mgr.getFirst()) |first_page| {
+                start_pos = Position{
+                    .page_id = first_page,
+                    .pos = 0,
+                    .total_pos = 0,
+                };
+            }
+
             const result = Self{
-                .g_pos = null,
-                .p_pos = null,
+                .g_pos = start_pos,
+                .p_pos = start_pos,
                 .ctx = ctx,
             };
             return result;
@@ -132,11 +143,16 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             return ph;
         }
 
-        fn create(self: *Self) Error!PageHandle {
-            const ph = try self.ctx.cache.create();
+        pub fn getTotalSize(self: *const Self) Error!StorageManager.Size {
+            const total_size = try self.ctx.mgr.getTotalSize();
+            return total_size;
+        }
+
+        pub fn create(self: *Self) Error!PageHandle {
+            var ph = try self.ctx.cache.create();
             errdefer ph.deinit();
             var pv = ViewTypes.Chunk.init(try ph.getDataMut());
-            pv.formatPage(self.ctx.settings.chunk_page_kind, ph.pid(), 0);
+            pv.formatPage(self.ctx.settings.chunk_page_kind, try ph.pid(), 0);
             return ph;
         }
 
@@ -207,6 +223,54 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
                 try self.ctx.mgr.setLast(prev);
             }
             self.ctx.mgr.destroyPage(try ph.pid());
+        }
+
+        pub fn writePage(self: *Self, ph: *PageHandle, pos: Index, data: []const u8) Error!usize {
+            const page_data = try ph.getDataMut();
+            var pv = ViewTypes.Chunk.init(page_data);
+            const chunk_data = pv.getDataMut();
+            const max_size = chunk_data.len;
+            if (pos > max_size) {
+                return Error.OutOfBounds;
+            }
+            const end_pos = @as(usize, @intCast(pos)) + data.len;
+            const target_pos = if (end_pos > max_size) max_size else end_pos;
+            const target_len = target_pos - @as(usize, @intCast(pos));
+            const target_slice = chunk_data[pos..target_pos];
+            @memcpy(target_slice, data[0..target_len]);
+            const current_size = pv.getSize();
+            if (target_pos > current_size) {
+                pv.setSize(@intCast(target_pos));
+                const size_diff = target_pos - current_size;
+                try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManager.Size, @intCast(size_diff)));
+            }
+            return target_len;
+        }
+
+        pub fn readPage(_: *const Self, ph: *PageHandle, pos: Index, data: []u8) Error!usize {
+            const page_data = try ph.getDataMut();
+            var pv = ViewTypesConst.Chunk.init(page_data);
+            const chunk_data = pv.getChunkData();
+            const max_size = chunk_data.len;
+            if (pos > max_size) {
+                return Error.OutOfBounds;
+            }
+            const end_pos = @as(usize, @intCast(pos)) + data.len;
+            const target_pos = if (end_pos > max_size) max_size else end_pos;
+            const target_len = target_pos - @as(usize, @intCast(pos));
+            const target_slice = data[0..target_len];
+            @memcpy(target_slice, chunk_data[pos..target_pos]);
+            return target_len;
+        }
+
+        pub fn getView(_: *const Self, ph: *PageHandle) Error!ViewTypesConst.Chunk {
+            const page_data = try ph.getData();
+            return ViewTypesConst.Chunk.init(page_data);
+        }
+
+        pub fn getViewMut(_: *const Self, ph: *PageHandle) Error!ViewTypes.Chunk {
+            const page_data = try ph.getDataMut();
+            return ViewTypes.Chunk.init(page_data);
         }
     };
 }
