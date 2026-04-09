@@ -79,19 +79,20 @@ If something can be made simpler for learning purposes, it probably will be.
 
 #### Page layout & primitives
 
-- [X] **Variadic slots** 
+- [X] **Variadic slots**
 - [X] **Fixed-size slots**
 
 #### Index structures
 
 - [X] **B+ tree (in-memory / paged)** implemented
-- [X] **Weighted B+ tree (in-memory / paged)** 
-- [ ] **Radix tables** planned
+- [X] **Weighted B+ tree (in-memory / paged)**
+- [X] **Radix tables** done
+- [ ] **Skip List** planned
 
 #### Storage backends
 
 - [ ] **Long-value store** partially implemented
-- [ ] **Chained store** in development
+- [ ] **Chained store** partially implemented
 
 #### Durability & Recovery
 
