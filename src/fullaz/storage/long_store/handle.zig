@@ -432,20 +432,20 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         }
 
         pub fn setp(self: *Self, pos: usize) Error!void {
-            const position = try self.get_position(pos);
+            const position = try self.getPosition(pos);
             self.put_page_pid = position.page_pid;
             self.put_pos = @intCast(position.pos);
             self.put_total_pos = position.total_pos;
         }
 
         pub fn setg(self: *Self, pos: usize) Error!void {
-            const position = try self.get_position(pos);
+            const position = try self.getPosition(pos);
             self.get_page_pid = position.page_pid;
             self.get_pos = @intCast(position.pos);
             self.get_total_pos = position.total_pos;
         }
 
-        fn get_position(self: *const Self, pos: usize) Error!Position {
+        fn getPosition(self: *const Self, pos: usize) Error!Position {
             var cursor = try self.begin();
             defer cursor.deinit();
 

@@ -9,14 +9,24 @@ pub fn ChainStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT:
     const SizeType = PackedInt(SizeT, Endian);
     _ = SizeType; // Currently unused, but reserved for potential future use.
 
-    const ChunkType = extern struct {
-        flags: IndexType,
+    const PayloadHeaderType = extern struct {
+        size: IndexType,
+        reserved: IndexType,
+    };
+
+    const LinkHeaderType = extern struct {
         back: PageIdType,
         fwd: PageIdType,
-        size: IndexType,
+        payload: PayloadHeaderType,
+    };
+
+    const ChunkType = extern struct {
+        link: LinkHeaderType,
+        flags: IndexType,
     };
 
     return struct {
         pub const ChunkSubheader = ChunkType;
+        pub const LinkHeader = LinkHeaderType;
     };
 }

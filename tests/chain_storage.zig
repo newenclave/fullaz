@@ -87,16 +87,82 @@ test "ChainStore handle: write page" {
     var hdl = Handle.init(&cache, &mgr, .{});
     defer hdl.deinit();
 
-    var page = try hdl.create();
+    var page = try hdl.createPage();
     defer page.deinit();
 
     const test_data = "Hello, ChainStore!";
     var buffer_to_read = [_]u8{0} ** 1000;
     const writ_len_0 = try hdl.writePage(&page, 0, test_data);
-    std.debug.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_0, try hdl.getTotalSize() });
+    std.debug.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_0, try hdl.totalSize() });
     const writ_len_1 = try hdl.writePage(&page, 900, test_data);
-    std.debug.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_1, try hdl.getTotalSize() });
+    std.debug.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_1, try hdl.totalSize() });
     const read_len_0 = try hdl.readPage(&page, 0, &buffer_to_read);
 
     std.debug.print("read: {any} size: {d}\n", .{ buffer_to_read[0..read_len_0], read_len_0 });
+}
+
+test "ChainStore handle: write page handle" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 1000);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    try hdl.create();
+
+    for (0..100) |_| {
+        const w = try hdl.write("Hello, ChainStore!");
+        _ = w;
+    }
+    var buffer_to_read = [_]u8{0} ** 1000;
+    _ = try hdl.read(&buffer_to_read);
+    const r = try hdl.read(&buffer_to_read);
+
+    std.debug.print("Handle size: {d}\n", .{try hdl.totalSize()});
+    std.debug.print("Read Data {d}: \"{s}\"\n", .{ r, buffer_to_read[0..r] });
+}
+
+test "LongStore Handle. read/write across multiple pages" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 1000);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+
+    // Write data that spans multiple pages (8KB > single page)
+    var large_data: [8000]u8 = undefined;
+    for (&large_data, 0..) |*byte, i| {
+        byte.* = @intCast(i % 256);
+    }
+
+    const written = try hdl.write(&large_data);
+    try std.testing.expect(written == large_data.len);
+    try std.testing.expect(try hdl.totalSize() == large_data.len);
+
+    // Read back and verify
+    try hdl.setg(0);
+    var read_buffer: [8000]u8 = undefined;
+    const read_count = try hdl.read(&read_buffer);
+    try std.testing.expect(read_count == large_data.len);
+
+    // Verify data integrity
+    for (large_data, 0..) |expected, i| {
+        try std.testing.expect(read_buffer[i] == expected);
+    }
 }
