@@ -208,7 +208,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             const kind = hdr.kind.get();
             if (kind == self.ctx.settings.chunk_page_kind) {
                 self.deinit();
-                self.page = prev_page;
+                self.page = ChunkImpl.init(prev_page);
             } else {
                 return Error.InvalidId;
             }
@@ -335,6 +335,8 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             // Clean up resources if needed
         }
 
+        pub fn open(_: *Self) Error!void {}
+
         pub fn create(self: *Self) Error!void {
             if (try self.ctx.mgr.getFirst() != null) {
                 return Error.AlreadyExists;
@@ -382,10 +384,10 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         }
 
         pub fn end(self: *const Self) Error!Cursor {
-            if(try self.ctx.mgr.getLast()) |last_page| {
+            if (try self.ctx.mgr.getLast()) |last_page| {
                 var ph = try self.fetch(last_page);
                 errdefer ph.deinit();
-                const chunk_v = ViewTypesConst.ChunkView.init(try ph.getData());
+                const chunk_v = ViewTypesConst.Chunk.init(try ph.getData());
                 const chunk_size = chunk_v.getLink().getDataSize();
                 return Cursor.init(ph, chunk_size, &self.ctx);
             }
@@ -656,6 +658,80 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             return ph;
         }
 
+        pub fn extend(self: *Self, len: usize) Error!void {
+            var cursor = try self.end();
+            defer cursor.deinit();
+            var left = len;
+
+            while (left > 0) {
+                const current_size = try cursor.currentDataSize();
+                const max_size = try cursor.getMaximumDataSize();
+                const can_extend = max_size - current_size;
+                if (can_extend >= left) {
+                    const ileft = @as(Index, @intCast(left));
+                    var link = try cursor.getLinkMut();
+                    link.setDataSize(current_size + ileft);
+                    try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManager.Size, ileft));
+                    break;
+                } else {
+                    var link = try cursor.getLinkMut();
+                    link.setDataSize(max_size);
+                    try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManager.Size, @intCast(can_extend)));
+                    left -= @intCast(can_extend);
+                    if (try cursor.hasNext()) {
+                        try cursor.moveNext();
+                    } else {
+                        try self.appendChunk();
+                        try cursor.moveNext();
+                    }
+                }
+            }
+        }
+
+        pub fn truncate(self: *Self, len: usize) Error!void {
+            var cursor = try self.end();
+            defer cursor.deinit();
+            var left = len;
+            while (left > 0) {
+                const current_size = try cursor.currentDataSize();
+                if (left < current_size) {
+                    const total = try self.ctx.mgr.getTotalSize();
+                    const new_total = total - left;
+                    try self.ctx.mgr.setTotalSize(@as(StorageManager.Size, @intCast(new_total)));
+                    const new_current = current_size - @as(Index, @intCast(left));
+                    try cursor.setCurrentDataSize(new_current);
+                    if (self.g_pos.total_pos >= new_total) {
+                        self.g_pos.total_pos = new_total;
+                        self.g_pos.page_id = try cursor.pid();
+                        self.g_pos.pos = new_current;
+                    }
+                    if (self.p_pos.total_pos >= new_total) {
+                        self.p_pos.total_pos = new_total;
+                        self.p_pos.page_id = try cursor.pid();
+                        self.p_pos.pos = new_current;
+                    }
+                    break;
+                }
+                left -= current_size;
+                try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() - @as(StorageManager.Size, @intCast(current_size)));
+
+                if (!try cursor.hasPrev()) {
+                    try self.ctx.mgr.setTotalSize(0);
+                    try cursor.setCurrentDataSize(0);
+                    self.g_pos = .{
+                        .page_id = try cursor.pid(),
+                        .pos = 0,
+                        .total_pos = 0,
+                    };
+                    self.p_pos = self.g_pos;
+                    break;
+                } else {
+                    try cursor.movePrev();
+                    try self.popChunk();
+                }
+            }
+        }
+
         pub fn writePage(self: *Self, ph: *PageHandle, pos: Index, data: []const u8) Error!usize {
             const page_data = try ph.getDataMut();
             var pv = ViewTypes.Chunk.init(page_data);
@@ -692,6 +768,40 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             const target_slice = data[0..target_len];
             @memcpy(target_slice, chunk_data[pos..target_pos]);
             return target_len;
+        }
+
+        pub fn popChunk(self: *Self) Error!void {
+            if (try self.ctx.mgr.getLast() == null) {
+                return;
+            }
+            const last = (try self.ctx.mgr.getLast()).?;
+            const first = (try self.ctx.mgr.getFirst()).?;
+
+            var last_chunk_ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
+            defer last_chunk_ph.deinit();
+
+            var last_chunk = ChunkImpl.init(last_chunk_ph);
+            var last_chunk_v = try last_chunk.viewMut();
+            var last_chunk_l = last_chunk_v.getLinkMut();
+            const prev = last_chunk_l.link.back.get();
+
+            if (prev == first) {
+                return;
+                // Removing the last chunk
+            } else {
+                try self.ctx.mgr.setLast(prev);
+                try self.popImpl(prev);
+            }
+            try self.ctx.mgr.destroyPage(last);
+        }
+
+        fn popImpl(self: *Self, prev: BlockIdType) Error!void {
+            var prev_h = try self.loadPage(prev, self.ctx.settings.chunk_page_kind);
+            defer prev_h.deinit();
+            var prev_chunk = ChunkImpl.init(prev_h);
+            var prev_v = try prev_chunk.viewMut();
+            var prev_l = prev_v.getLinkMut();
+            prev_l.setFwd(null);
         }
 
         pub fn getView(_: *const Self, ph: *PageHandle) Error!ViewTypesConst.Chunk {
