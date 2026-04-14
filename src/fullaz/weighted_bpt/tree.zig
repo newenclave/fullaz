@@ -739,7 +739,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             const is_last = pos_in_leaf == (try leaf.size() - 1);
             const additional_entry: usize = if (diff_in_leaf == 0) 0 else 1;
 
-            if (l_cap - l_sz < additional_entry) {
+            if ((l_cap - l_sz) < additional_entry) {
                 // not enough space even with sharing
                 // as we need to split an entry in the leaf to insert the new value
                 return false;
