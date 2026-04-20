@@ -5,6 +5,13 @@ const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
 const dev = @import("fullaz").device;
 const assertIsStorageManager = @import("fullaz").bpt.models.interfaces.assertIsStorageManager;
 
+fn getRandomSeed() !u64 {
+    const io = std.testing.io;
+    var seed: u64 = undefined;
+    std.Io.random(io, std.mem.asBytes(&seed));
+    return seed;
+}
+
 fn Printer(comptime name: []const u8) type {
     return struct {
         const Self = @This();
@@ -1896,11 +1903,7 @@ test "Bpt Random insertion" {
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
     var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
 
-    var prng = std.Random.DefaultPrng.init(blk: {
-        var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
-        break :blk seed;
-    });
+    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
     const random = prng.random();
 
     const total_inserts = 1000;
@@ -2010,11 +2013,7 @@ test "Bpt Update values" {
 
 test "Bpt Update Random values" {
     const prn = Printer("Update Random").init();
-    var prng = std.Random.DefaultPrng.init(blk: {
-        var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
-        break :blk seed;
-    });
+    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
     const random = prng.random();
 
     const allocator = std.testing.allocator;
@@ -2093,11 +2092,7 @@ test "Bpt Update Random values" {
 
 test "Bpt Update Random values Keys as strings" {
     const prn = Printer("Update Random").init();
-    var prng = std.Random.DefaultPrng.init(blk: {
-        var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
-        break :blk seed;
-    });
+    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
     const random = prng.random();
 
     const allocator = std.testing.allocator;
@@ -2185,9 +2180,7 @@ test "Bpt Update Random values Keys as strings" {
 test "Bpt/paged Remove values" {
     const prn = Printer("Remove").init();
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     //const allocator = std.testing.allocator;
     var ctx = try TestContext(4096 * 2, 32).init(allocator);
@@ -2244,11 +2237,7 @@ test "Bpt/paged Remove values" {
 test "Bpt/paged Remove random values" {
     const prn = Printer("Remove Random").init();
 
-    var prng = std.Random.DefaultPrng.init(blk: {
-        var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
-        break :blk seed;
-    });
+    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
     const random = prng.random();
 
     const allocator = std.testing.allocator;

@@ -6,6 +6,15 @@ const MemoryModel = bpt.models.MemoryModel;
 const std = @import("std");
 const expect = std.testing.expect;
 
+const Io = std.Io;
+
+fn getRandomSeed() !u64 {
+    const io = std.testing.io;
+    var seed: u64 = undefined;
+    Io.random(io, std.mem.asBytes(&seed));
+    return seed;
+}
+
 pub fn BptTest(comptime KeyType: type, maximum_elements: usize, comptime OrderCmp: anytype) type {
     return struct {
         const Self = @This();
@@ -67,14 +76,9 @@ fn format(allocator: std.mem.Allocator, comptime fmt: []const u8, options: anyty
 }
 
 test "Bpt Create with Memory model" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        _ = gpa.deinit();
-    }
-
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
     const TreeTest = BptTest(u32, 5, algos.CmpNum(u32).asc);
-    var tree_test = try TreeTest.init(gpa.allocator());
+    var tree_test = try TreeTest.init(allocator);
     defer tree_test.deinit();
 
     var bptree = try tree_test.createTree();
@@ -105,13 +109,10 @@ test "Bpt Create with Memory model" {
 }
 
 test "Bpt Find non-existing key" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        _ = gpa.deinit();
-    }
+    const allocator = std.testing.allocator;
 
     const TreeTest = BptTest(u32, 5, algos.CmpNum(u32).asc);
-    var tree_test = try TreeTest.init(gpa.allocator());
+    var tree_test = try TreeTest.init(allocator);
     defer tree_test.deinit();
 
     var bptree = try tree_test.createTree();
@@ -133,13 +134,10 @@ test "Bpt Find non-existing key" {
 }
 
 test "Bpt remove values" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        _ = gpa.deinit();
-    }
+    const allocator = std.testing.allocator;
 
     const TreeTest = BptTest(u32, 5, algos.CmpNum(u32).asc);
-    var tree_test = try TreeTest.init(gpa.allocator());
+    var tree_test = try TreeTest.init(allocator);
     defer tree_test.deinit();
 
     var bptree = try tree_test.createTree();
@@ -183,35 +181,28 @@ test "Bpt remove values" {
 }
 
 test "Bpt Random insertion" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        _ = gpa.deinit();
-    }
+    const allocator = std.testing.allocator;
 
     const TreeTest = BptTest(u32, 5, algos.CmpNum(u32).asc);
-    var tree_test = try TreeTest.init(gpa.allocator());
+    var tree_test = try TreeTest.init(allocator);
     defer tree_test.deinit();
 
     var bptree = try tree_test.createTree();
     defer bptree.deinit();
 
-    var prng = std.Random.DefaultPrng.init(blk: {
-        var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
-        break :blk seed;
-    });
+    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
     const random = prng.random();
 
     const total_inserts = 1000;
-    var inserted_keys = try std.ArrayList(u32).initCapacity(gpa.allocator(), total_inserts);
-    errdefer inserted_keys.deinit(gpa.allocator());
+    var inserted_keys = try std.ArrayList(u32).initCapacity(allocator, total_inserts);
+    errdefer inserted_keys.deinit(allocator);
 
     for (0..total_inserts) |_| {
         const key = random.int(u32);
         var buf: [32]u8 = undefined;
         const value = try std.fmt.bufPrint(&buf, "{}", .{key});
         if (try bptree.insert(key, value)) {
-            try inserted_keys.append(gpa.allocator(), key);
+            try inserted_keys.append(allocator, key);
         }
     }
 
@@ -230,17 +221,14 @@ test "Bpt Random insertion" {
         }
     }
 
-    inserted_keys.deinit(gpa.allocator());
+    inserted_keys.deinit(allocator);
 }
 
 test "Bpt Update values" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        _ = gpa.deinit();
-    }
+    const allocator = std.testing.allocator;
 
     const TreeTest = BptTest(u32, 5, algos.CmpNum(u32).asc);
-    var tree_test = try TreeTest.init(gpa.allocator());
+    var tree_test = try TreeTest.init(allocator);
     defer tree_test.deinit();
 
     var bptree = try tree_test.createTree();
@@ -279,25 +267,18 @@ test "Bpt Update values" {
 }
 
 test "Some stress test" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        _ = gpa.deinit();
-    }
+    const allocator = std.testing.allocator;
 
     const KeyType = f32;
 
     const TreeTest = BptTest(f32, 5, algos.CmpNum(f32).asc);
-    var tree_test = try TreeTest.init(gpa.allocator());
+    var tree_test = try TreeTest.init(allocator);
     defer tree_test.deinit();
 
     var bptree = try tree_test.createTree();
     defer bptree.deinit();
 
-    var prng = std.Random.DefaultPrng.init(blk: {
-        var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
-        break :blk seed;
-    });
+    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
     const random = prng.random();
 
     for (0..500) |_| {

@@ -7,6 +7,13 @@ const header = page.header;
 
 const algorithm = @import("fullaz").core.algorithm;
 
+fn getRandomSeed() !u64 {
+    const io = std.testing.io;
+    var seed: u64 = undefined;
+    std.Io.random(io, std.mem.asBytes(&seed));
+    return seed;
+}
+
 // =============================================================================
 // Header View Tests
 // =============================================================================
@@ -303,7 +310,7 @@ test "page/bpt slots compare and proj" {
     try leaf_view.formatPage(1, 2, 0);
     leaf_view.subheaderMut().formatHeader();
 
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
     const rnd = prng.random();
 
     for (0..10) |_| {
@@ -337,7 +344,7 @@ test "page/bpt slots compare and proj inodes" {
     var inode_view = Bpt.InodeSubheaderView.init(&leaf_buffer);
     try inode_view.formatPage(1, 2, 0);
 
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
     const rnd = prng.random();
 
     for (0..10) |i| {

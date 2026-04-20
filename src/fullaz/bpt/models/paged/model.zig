@@ -41,6 +41,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         PageCacheType.Error ||
         errors.OrderError ||
         errors.BptError ||
+        error{KeyTooLarge} ||
         error{};
 
     const LeafImpl = struct {
@@ -178,7 +179,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return self.self_id;
         }
 
-        fn checkKeyValue(self: *const Self, key: ?KeyType, value: ?ValueType) errors.BptError!void {
+        fn checkKeyValue(self: *const Self, key: ?KeyType, value: ?ValueType) Error!void {
             if (key) |key_data| {
                 if (key_data.len > self.ctx.settings.maximum_key_size) {
                     return Error.KeyTooLarge;
