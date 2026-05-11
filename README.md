@@ -1,3 +1,4 @@
+
 # fullaz
 
 **fullaz** is a low-level storage and indexing library written in Zig.
@@ -13,9 +14,10 @@ The code favors explicitness, clarity, and correctness over completeness or perf
 
 - Learn Zig by building a non-trivial systems-level project
 - Explore page-oriented storage design
-- Implement a B+ tree step by step
+- Implement B+ tree and related indexing structures step by step
+- Experiment with ordered, weighted, spatial, and page-based indexes
 - Make ownership, borrowing, and lifetimes explicit
-- Experiment with model-based design using Zig’s compile-time features
+- Experiment with model-based design using Zig's compile-time features
 
 ---
 
@@ -68,7 +70,11 @@ If something can be made simpler for learning purposes, it probably will be.
 
 - In-memory pager (for testing and learning)
 - Page layout (headers, slots, payload area)
-- B+ tree (leaf and internal nodes)
+- B+ tree and weighted B+ tree indexes
+- Skip list and weighted skip list
+- Radix tables and sparse paged mappings
+- Long-value and chained storage experiments
+- Spatial indexing experiments
 - Minimal tests and examples
 
 ---
@@ -82,22 +88,56 @@ If something can be made simpler for learning purposes, it probably will be.
 - [X] **Variadic slots**
 - [X] **Fixed-size slots**
 
-#### Index structures
+#### Ordered index structures
 
 - [X] **B+ tree (in-memory / paged)** implemented
 - [X] **Weighted B+ tree (in-memory / paged)**
-- [X] **Radix tables** done
-- [ ] **Skip List** planned
+- [ ] **Skip list**
+- [ ] **Weighted skip list**
+- [ ] **B+ tree over spatial keys** (Morton/Z-order or similar)
+
+#### Sparse / virtual addressing structures
+
+- [X] **Radix tables**
+- [ ] **Virtual page table** (`vpid -> pid` mapping)
+- [ ] **Snapshot-aware radix mapping**
+
+#### Sequence / weighted structures
+
+- [X] **Weighted B+ tree**
+- [ ] **Weighted skip list**
+- [ ] **Rope-like chunked sequence**
+- [ ] **Piece-table-like storage experiment**
+
+#### Spatial index structures
+
+- [ ] **R-tree**
+- [ ] **R*-tree split/reinsert experiments**
+- [ ] **KD-tree**
+- [ ] **Quadtree**
+- [ ] **Octree**
+- [ ] **Grid / hash-grid coarse spatial partitioning**
+
+#### Point-cloud / spatial storage experiments
+
+- [ ] **Chunked point storage**
+- [ ] **Bounding-box metadata per chunk**
+- [ ] **LOD-friendly chunk hierarchy**
+- [ ] **Spatial query prototype** (`bbox -> chunk refs`)
 
 #### Storage backends
 
 - [ ] **Long-value store** partially implemented
 - [ ] **Chained store** partially implemented
+- [ ] **Object/chunk store abstraction**
+- [ ] **Page cache / dirty-page tracking**
 
 #### Durability & Recovery
 
-* [ ] **Write-Ahead Log (WAL)** planned
-* [ ] **Page diffs / delta logging** planned
+- [ ] **Write-Ahead Log (WAL)** planned
+- [ ] **Page diffs / delta logging** planned
+- [ ] **Snapshot / copy-on-write experiments**
+- [ ] **Generation-based page tracking**
 
 ## Status
 
