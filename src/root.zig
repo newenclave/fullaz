@@ -11,3 +11,5 @@ pub const device = @import("fullaz/device/device.zig");
 pub const page = @import("fullaz/page/page.zig");
 
 pub const storage = @import("fullaz/storage/storage.zig");
+
+pub const skip_list = @import("fullaz/skip_list/skip_list.zig");
