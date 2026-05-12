@@ -170,7 +170,7 @@ pub fn List(comptime ModelT: type) type {
             return prev;
         }
 
-        pub fn getAccessor(self: *const Self) *Accessor {
+        fn getAccessor(self: *const Self) *Accessor {
             return self.model.getAccessor();
         }
     };

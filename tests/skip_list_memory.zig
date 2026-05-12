@@ -15,7 +15,7 @@ fn keyCmp(_: anytype, k1: anytype, k2: @TypeOf(k1)) std.math.Order {
 }
 
 fn collectLevel0(comptime SL: type, sl: *SL, allocator: std.mem.Allocator) !std.ArrayList(SL.KeyIn) {
-    const acc = sl.getAccessor();
+    const acc = sl.getModel().getAccessor();
     var list = try std.ArrayList(SL.KeyIn).initCapacity(allocator, 0);
     errdefer list.deinit(allocator);
     var curr_pid = try acc.getRoot(0);
