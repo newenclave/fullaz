@@ -74,8 +74,8 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
             return self.element.links.items.len;
         }
 
-        pub fn getKey(self: *const Self) Error!KeyT {
-            return self.element.key;
+        pub fn getKey(self: *const Self) Error!*const KeyT {
+            return &self.element.key;
         }
 
         pub fn getValue(self: *const Self) Error!*const ValueT {
@@ -280,7 +280,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
 
         pub fn setRoot(self: *Self, level: usize, pid: ?PidImpl) Error!void {
             if (self.roots.items.len <= level) {
-                return error.OutOfMemory;
+                return Error.OutOfMemory;
             }
             self.roots.items[level] = pid;
         }
@@ -296,7 +296,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         pub const KeyIn = KeyT;
         pub const ValueIn = ValueT;
 
-        pub const KeyOut = *KeyIn;
+        pub const KeyOut = *const KeyIn;
         pub const ValueOut = *ValueIn;
         pub const Path = PathImpl;
 
@@ -332,6 +332,10 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
                 }
             };
             return order;
+        }
+
+        pub fn keyOutAsIn(_: *const Self, key: KeyOut) KeyIn {
+            return key.*;
         }
     };
 }

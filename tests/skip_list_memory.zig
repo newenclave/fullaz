@@ -22,7 +22,8 @@ fn collectLevel0(comptime SL: type, sl: *SL, allocator: std.mem.Allocator) !std.
     while (curr_pid) |pid| {
         var node = try acc.loadNode(pid);
         defer acc.deinitNode(&node);
-        try list.append(allocator, try node.getKey());
+        const nodeKey = try node.getKey();
+        try list.append(allocator, sl.model.keyOutAsIn(nodeKey));
         curr_pid = try node.getNext(0);
     }
     return list;
@@ -90,4 +91,26 @@ test "SkipList: remove existing keys. simple case" {
     var collected = try collectLevel0(SL, &sl, std.testing.allocator);
     defer collected.deinit(std.testing.allocator);
     try std.testing.expectEqualSlices(u32, &.{ 20, 40 }, collected.items);
+}
+
+test "SkipList: iterator test" {
+    var prng: std.Random.DefaultPrng = .init(42);
+    const rand = prng.random();
+    const Model = MemoryModel(u32, u32, keyCmp, void);
+    var model = try Model.init(std.testing.allocator, 4, rand);
+    defer model.deinit();
+
+    const SL = SkipList(Model);
+    var sl = SL.init(&model);
+
+    const keys = [_]u32{ 10, 20, 30, 40, 50 };
+    for (keys) |k| try sl.insert(k, k);
+
+    var it = try sl.begin();
+    var expected_key: u32 = 10;
+    try std.testing.expectEqual((try it.key()).*, expected_key);
+    while (try it.next()) {
+        expected_key += 10;
+        try std.testing.expectEqual((try it.key()).*, expected_key);
+    }
 }

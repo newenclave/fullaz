@@ -1,4 +1,5 @@
 const std = @import("std");
+const errors = @import("../core/errors.zig");
 
 pub fn List(comptime ModelT: type) type {
     return struct {
@@ -12,12 +13,95 @@ pub fn List(comptime ModelT: type) type {
         pub const ValueIn = Model.ValueIn;
         pub const ValueOut = Model.ValueOut;
 
+        const Node = Model.Node;
+
         pub const Pid = Model.Pid;
         const Path = Model.Path;
 
-        pub const Error = Model.Error;
+        pub const Error = Model.Error || errors.IteratorError;
 
         model: *ModelT = undefined,
+
+        pub const Iterator = struct {
+            const Cursor = union(enum) {
+                before_first,
+                on: Node,
+                after_last,
+            };
+
+            list: *const Self,
+            cursor: Cursor,
+
+            fn init(list: *const Self, cursor: Cursor) Iterator {
+                return .{
+                    .list = list,
+                    .cursor = cursor,
+                };
+            }
+
+            fn deinit(self: *Iterator) void {
+                var acc = self.list.getAccessor();
+                switch (self.cursor) {
+                    .before_first, .after_last => {},
+                    .on => |*node| {
+                        acc.deinitNode(node);
+                    },
+                }
+            }
+
+            pub fn key(self: *const Iterator) Error!KeyOut {
+                return switch (self.cursor) {
+                    .before_first, .after_last => return Error.InvalidIterator,
+                    .on => |*node| try node.getKey(),
+                };
+            }
+
+            pub fn value(self: *const Iterator) Error!ValueOut {
+                return switch (self.cursor) {
+                    .before_first, .after_last => return Error.InvalidIterator,
+                    .on => |*node| try node.getValue(),
+                };
+            }
+
+            pub fn next(self: *Iterator) Error!bool {
+                var acc = self.list.getAccessor();
+                switch (self.cursor) {
+                    .before_first => {
+                        if (try acc.getRoot(0)) |root_pid| {
+                            const node = try acc.loadNode(root_pid);
+                            self.cursor = .{ .on = node };
+                            return true;
+                        } else {
+                            self.cursor = .after_last;
+                            return false;
+                        }
+                    },
+                    .on => |*node| {
+                        if (try node.getNext(0)) |next_pid| {
+                            const next_node = try acc.loadNode(next_pid);
+                            errdefer acc.deinitNode(&next_node);
+                            acc.deinitNode(node);
+                            self.cursor = .{ .on = next_node };
+                            return true;
+                        } else {
+                            acc.deinitNode(node);
+                            self.cursor = .after_last;
+                            return false;
+                        }
+                    },
+                    .after_last => return false,
+                }
+            }
+
+            pub fn isEnd(self: *const Iterator) bool {
+                return switch (self.cursor) {
+                    .before_first => false,
+                    .on => false,
+                    .after_last => true,
+                };
+            }
+        };
+
         pub fn init(model: *ModelT) Self {
             return .{
                 .model = model,
@@ -25,6 +109,16 @@ pub fn List(comptime ModelT: type) type {
         }
 
         pub fn deinit(_: *Self) void {}
+
+        pub fn begin(self: *const Self) Error!Iterator {
+            var acc = self.getAccessor();
+            if (try acc.getRoot(0)) |root_pid| {
+                const node = try acc.loadNode(root_pid);
+                return Iterator.init(self, .{ .on = node });
+            } else {
+                return Iterator.init(self, .before_first);
+            }
+        }
 
         pub fn getModel(self: *const Self) *ModelT {
             return self.model;
@@ -89,7 +183,8 @@ pub fn List(comptime ModelT: type) type {
             if (try path.get(0)) |pid| {
                 var node = try acc.loadNode(pid);
                 defer acc.deinitNode(&node);
-                const cmp_res = self.model.keysCompare(key, try node.getKey());
+                const nodeKey = try node.getKey();
+                const cmp_res = self.model.keysCompare(key, self.model.keyOutAsIn(nodeKey));
                 if (cmp_res == .eq) {
                     target = pid;
                 }
@@ -160,7 +255,9 @@ pub fn List(comptime ModelT: type) type {
                 var node = try acc.loadNode(pid);
                 defer acc.deinitNode(&node);
 
-                const cmp_res = self.model.keysCompare(key, try node.getKey());
+                const nodeKey = try node.getKey();
+
+                const cmp_res = self.model.keysCompare(key, self.model.keyOutAsIn(nodeKey));
                 if (cmp_res == .lt) {
                     return prev;
                 }
