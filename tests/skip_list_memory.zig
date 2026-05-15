@@ -150,6 +150,7 @@ test "SkipList: iterator test" {
     var expected_key: u32 = 0;
 
     var it = try sl.begin();
+    defer it.deinit();
     while (!it.isEnd()) {
         expected_key += 10;
         count += 1;
@@ -193,6 +194,8 @@ test "SkipList: iterator remove test" {
     for (0..half) |id| {
         const next = @as(u32, (@as(u32, @intCast(id * 2)) + 1) * 10);
         var it = try sl.find(next);
+        defer it.deinit();
+
         try std.testing.expectEqual((try it.key()).*, next);
         it = try sl.removeItr(it);
         expected_key += 20;

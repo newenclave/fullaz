@@ -39,7 +39,7 @@ pub fn List(comptime ModelT: type) type {
                 };
             }
 
-            fn deinit(self: *Iterator) void {
+            pub fn deinit(self: *Iterator) void {
                 var acc = self.list.getAccessor();
                 switch (self.cursor) {
                     .before_first, .after_last => {},
@@ -205,6 +205,7 @@ pub fn List(comptime ModelT: type) type {
             var acc = self.getAccessor();
 
             var next = it;
+            errdefer next.deinit();
             _ = next.next() catch return Iterator.init(self, .after_last);
 
             switch (it.cursor) {
