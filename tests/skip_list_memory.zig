@@ -4,6 +4,33 @@ const skip_list = @import("fullaz").skip_list;
 const MemoryModel = skip_list.models.Memory;
 const SkipList = skip_list.List;
 
+var globalTestStart: u64 = 0;
+var globalTag: []const u8 = "";
+
+fn getNowTimestamp() u64 {
+    const io = std.testing.io;
+    const timestamp = std.Io.Clock.real.now(io);
+    const millis = @abs(timestamp.toMilliseconds());
+    return millis;
+}
+
+fn beforeTest(tag: []const u8) void {
+    globalTestStart = getNowTimestamp();
+    globalTag = tag;
+}
+
+fn timestampPrint(comptime name: []const u8, params: anytype) void {
+    const io = std.testing.io;
+    const timestamp = std.Io.Clock.real.now(io);
+    const millis = @abs(timestamp.toMilliseconds()) - globalTestStart;
+    const hours = millis / (1000 * 60 * 60);
+    const mins = (millis / (1000 * 60)) % 60;
+    const seconds = (millis / 1000) % 60;
+
+    std.debug.print("{d:0>2}:{:0>2}:{:0>2}.{d:0>4} [{s}]: ", .{ hours, mins, seconds, @mod(millis, 1000), globalTag });
+    std.debug.print(name, params);
+}
+
 fn keyCmp(_: anytype, k1: anytype, k2: @TypeOf(k1)) std.math.Order {
     if (k1 < k2) {
         return .lt;
@@ -30,6 +57,8 @@ fn collectLevel0(comptime SL: type, sl: *SL, allocator: std.mem.Allocator) !std.
 }
 
 test "SkipList: create an instance" {
+    beforeTest(@src().fn_name);
+
     const MModel = MemoryModel(u32, u32, keyCmp, void);
     const SLIst = SkipList(MModel);
 
@@ -72,6 +101,8 @@ test "SkipList: random levels generation" {
 }
 
 test "SkipList: remove existing keys. simple case" {
+    beforeTest(@src().fn_name);
+
     var prng: std.Random.DefaultPrng = .init(42);
     const rand = prng.random();
     const Model = MemoryModel(u32, u32, keyCmp, void);
@@ -94,23 +125,83 @@ test "SkipList: remove existing keys. simple case" {
 }
 
 test "SkipList: iterator test" {
+    beforeTest(@src().fn_name);
     var prng: std.Random.DefaultPrng = .init(42);
     const rand = prng.random();
     const Model = MemoryModel(u32, u32, keyCmp, void);
-    var model = try Model.init(std.testing.allocator, 4, rand);
+    var model = try Model.init(std.testing.allocator, 8, rand);
     defer model.deinit();
 
     const SL = SkipList(Model);
     var sl = SL.init(&model);
 
-    const keys = [_]u32{ 10, 20, 30, 40, 50 };
-    for (keys) |k| try sl.insert(k, k);
+    var desiderKeys = try std.ArrayList(u32).initCapacity(std.testing.allocator, 100);
+    defer desiderKeys.deinit(std.testing.allocator);
+
+    timestampPrint("Inserting keys...\n", .{});
+    for (0..100_000) |k| {
+        const next = @as(u32, (@as(u32, @intCast(k)) + 1) * 10);
+        try desiderKeys.append(std.testing.allocator, next);
+        try sl.insert(next, next);
+    }
+
+    timestampPrint("Iterating keys...\n", .{});
+    var count: usize = 0;
+    var expected_key: u32 = 0;
 
     var it = try sl.begin();
-    var expected_key: u32 = 10;
-    try std.testing.expectEqual((try it.key()).*, expected_key);
-    while (try it.next()) {
+    while (!it.isEnd()) {
         expected_key += 10;
+        count += 1;
         try std.testing.expectEqual((try it.key()).*, expected_key);
+        _ = try it.next();
     }
+
+    timestampPrint("Done iterating keys.\n", .{});
+    try std.testing.expectEqual(count, desiderKeys.items.len);
+}
+
+test "SkipList: iterator remove test" {
+    beforeTest(@src().fn_name);
+    var prng: std.Random.DefaultPrng = .init(42);
+    const rand = prng.random();
+    const Model = MemoryModel(u32, u32, keyCmp, void);
+    var model = try Model.init(std.testing.allocator, 8, rand);
+    defer model.deinit();
+
+    const SL = SkipList(Model);
+    var sl = SL.init(&model);
+
+    var desiderKeys = try std.ArrayList(u32).initCapacity(std.testing.allocator, 100);
+    defer desiderKeys.deinit(std.testing.allocator);
+
+    timestampPrint("Inserting keys...\n", .{});
+    for (0..10_000) |k| {
+        const next = @as(u32, (@as(u32, @intCast(k)) + 1) * 10);
+        try desiderKeys.append(std.testing.allocator, next);
+        try sl.insert(next, next);
+    }
+
+    timestampPrint("Iterating keys...\n", .{});
+    var count: usize = 0;
+    var expected_key: u32 = 0;
+
+    const half = desiderKeys.items.len / 2;
+
+    timestampPrint("start removing the keys...\n", .{});
+
+    for (0..half) |id| {
+        const next = @as(u32, (@as(u32, @intCast(id * 2)) + 1) * 10);
+        var it = try sl.find(next);
+        try std.testing.expectEqual((try it.key()).*, next);
+        it = try sl.removeItr(it);
+        expected_key += 20;
+        count += 1;
+        if (!it.isEnd()) {
+            try std.testing.expectEqual((try it.key()).*, expected_key);
+        }
+    }
+
+    timestampPrint("Done removing the keys...\n", .{});
+    try std.testing.expectEqual(count, half);
 }

@@ -232,8 +232,8 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
             node.deinit();
         }
 
-        pub fn destroyNode(self: *Self, node: *NodeImpl) void {
-            const idx = node.id().id;
+        pub fn destroy(self: *Self, pid: PidImpl) void {
+            const idx = pid.id;
             if (idx < self.cont.items.len) {
                 if (self.cont.items[idx]) |*n| {
                     n.deinit();

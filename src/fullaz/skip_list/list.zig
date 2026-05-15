@@ -192,30 +192,72 @@ pub fn List(comptime ModelT: type) type {
 
             if (target) |pid| {
                 var node = try acc.loadNode(pid);
-                defer acc.deinitNode(&node);
-                const level = try node.getLevel();
-                for (0..level) |i| {
-                    if (try node.getPrev(i)) |prev_pid| {
-                        var prev_node = try acc.loadNode(prev_pid);
-                        defer acc.deinitNode(&prev_node);
-                        const next_pid = try node.getNext(i);
-                        try prev_node.setNext(i, next_pid);
-                        if (next_pid) |nxt_pid| {
-                            var nxt_node = try acc.loadNode(nxt_pid);
-                            defer acc.deinitNode(&nxt_node);
-                            try nxt_node.setPrev(i, prev_pid);
-                        }
-                    } else {
-                        const next_pid = try node.getNext(i);
-                        try acc.setRoot(i, next_pid);
-                        if (next_pid) |nxt_pid| {
-                            var nxt_node = try acc.loadNode(nxt_pid);
-                            defer acc.deinitNode(&nxt_node);
-                            try nxt_node.setPrev(i, null);
-                        }
+                defer {
+                    const id = node.id();
+                    acc.deinitNode(&node);
+                    acc.destroy(id);
+                }
+                try self.removeImpl(&node);
+            }
+        }
+
+        pub fn removeItr(self: *Self, it: Iterator) Error!Iterator {
+            var acc = self.getAccessor();
+
+            var next = it;
+            _ = next.next() catch return Iterator.init(self, .after_last);
+
+            switch (it.cursor) {
+                .before_first, .after_last => return Error.InvalidIterator,
+                .on => |node| {
+                    var mutNode = node;
+                    defer {
+                        const pid = node.id();
+                        acc.deinitNode(&mutNode);
+                        acc.destroy(pid);
+                    }
+                    try self.removeImpl(&mutNode);
+                    return next;
+                },
+            }
+        }
+
+        fn removeImpl(self: *Self, node: *Node) Error!void {
+            const acc = self.getAccessor();
+
+            const level = try node.getLevel();
+            for (0..level) |i| {
+                if (try node.getPrev(i)) |prev_pid| {
+                    var prev_node = try acc.loadNode(prev_pid);
+                    defer acc.deinitNode(&prev_node);
+                    const next_pid = try node.getNext(i);
+                    try prev_node.setNext(i, next_pid);
+                    if (next_pid) |nxt_pid| {
+                        var nxt_node = try acc.loadNode(nxt_pid);
+                        defer acc.deinitNode(&nxt_node);
+                        try nxt_node.setPrev(i, prev_pid);
+                    }
+                } else {
+                    const next_pid = try node.getNext(i);
+                    try acc.setRoot(i, next_pid);
+                    if (next_pid) |nxt_pid| {
+                        var nxt_node = try acc.loadNode(nxt_pid);
+                        defer acc.deinitNode(&nxt_node);
+                        try nxt_node.setPrev(i, null);
                     }
                 }
-                acc.destroyNode(&node);
+            }
+        }
+
+        pub fn find(self: *const Self, key: KeyIn) Error!Iterator {
+            const default_iterator = Iterator.init(self, .after_last);
+            const pid = try self.findElement(null, key, 0) orelse return default_iterator;
+            var node = try self.getAccessor().loadNode(pid);
+            defer self.getAccessor().deinitNode(&node);
+            if (self.model.keysCompare(key, self.model.keyOutAsIn(try node.getKey())) == .eq) {
+                return Iterator.init(self, .{ .on = node });
+            } else {
+                return default_iterator;
             }
         }
 
@@ -239,7 +281,7 @@ pub fn List(comptime ModelT: type) type {
             return path;
         }
 
-        fn findElement(self: *Self, from: ?Pid, key: KeyIn, level: usize) Error!?Pid {
+        fn findElement(self: *const Self, from: ?Pid, key: KeyIn, level: usize) Error!?Pid {
             const acc = self.getAccessor();
             var prev: ?Pid = from;
             var curr: ?Pid = null;
