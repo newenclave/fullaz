@@ -41,6 +41,14 @@ fn keyCmp(_: anytype, k1: anytype, k2: @TypeOf(k1)) std.math.Order {
     }
 }
 
+fn keyDumper(value: *const u32) void {
+    std.debug.print("{d}; ", .{value.*});
+}
+
+fn valueDumper(_: *const u32) void {
+    //std.debug.print("={d}; ", .{value.*});
+}
+
 fn collectLevel0(comptime SL: type, sl: *SL, allocator: std.mem.Allocator) !std.ArrayList(SL.KeyIn) {
     const acc = sl.getModel().getAccessor();
     var list = try std.ArrayList(SL.KeyIn).initCapacity(allocator, 0);
@@ -204,6 +212,8 @@ test "SkipList: iterator remove test" {
             try std.testing.expectEqual((try it.key()).*, expected_key);
         }
     }
+
+    _ = try sl.dump(keyDumper, valueDumper);
 
     timestampPrint("Done removing the keys...\n", .{});
     try std.testing.expectEqual(count, half);

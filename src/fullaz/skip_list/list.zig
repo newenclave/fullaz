@@ -124,7 +124,11 @@ pub fn List(comptime ModelT: type) type {
             return self.model;
         }
 
-        fn dump(self: *const Self) !void {
+        pub fn dump(
+            self: *const Self,
+            comptime keyDumper: ?fn (KeyOut) void,
+            comptime valueDumper: ?fn (ValueOut) void,
+        ) !void {
             const max_level = try self.model.getMaxLevel();
             for (0..max_level) |i| {
                 std.debug.print("lvl {d}: ", .{i});
@@ -132,7 +136,16 @@ pub fn List(comptime ModelT: type) type {
                     var curr_pid: ?Pid = root_pid;
                     while (curr_pid) |pid| {
                         const node = try self.getAccessor().loadNode(pid);
-                        std.debug.print("{d} ", .{try node.getKey()});
+                        if (keyDumper) |kf| {
+                            kf(try node.getKey());
+                        } else {
+                            std.debug.print("{any}:", .{try node.getKey()});
+                        }
+                        if (valueDumper) |vf| {
+                            vf(try node.getValue());
+                        } else {
+                            std.debug.print("({any}) ", .{try node.getValue()});
+                        }
                         curr_pid = try node.getNext(i);
                     }
                 } else {

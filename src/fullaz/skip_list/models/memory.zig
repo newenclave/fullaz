@@ -266,7 +266,6 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
             if (self.roots.items.len <= level) {
                 return null;
             }
-
             return self.roots.items[level];
         }
 
@@ -297,7 +296,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         pub const ValueIn = ValueT;
 
         pub const KeyOut = *const KeyIn;
-        pub const ValueOut = *ValueIn;
+        pub const ValueOut = *const ValueIn;
         pub const Path = PathImpl;
 
         accessor: Accessor,
@@ -336,6 +335,10 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
 
         pub fn keyOutAsIn(_: *const Self, key: KeyOut) KeyIn {
             return key.*;
+        }
+
+        pub fn valueOutAsIn(_: *const Self, value: ValueOut) ValueIn {
+            return value.*;
         }
     };
 }
