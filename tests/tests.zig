@@ -19,4 +19,5 @@ test {
     _ = @import("radix_memory_model.zig");
     _ = @import("radix_paged_model.zig");
     _ = @import("skip_list_memory.zig");
+    _ = @import("skip_list_paged.zig");
 }

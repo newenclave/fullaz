@@ -111,7 +111,7 @@ test "SkipList: random levels generation" {
 test "SkipList: remove existing keys. simple case" {
     beforeTest(@src().fn_name);
 
-    var prng: std.Random.DefaultPrng = .init(42);
+    var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
     const rand = prng.random();
     const Model = MemoryModel(u32, u32, keyCmp, void);
     var model = try Model.init(std.testing.allocator, 4, rand);
@@ -134,7 +134,7 @@ test "SkipList: remove existing keys. simple case" {
 
 test "SkipList: iterator test" {
     beforeTest(@src().fn_name);
-    var prng: std.Random.DefaultPrng = .init(42);
+    var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
     const rand = prng.random();
     const Model = MemoryModel(u32, u32, keyCmp, void);
     var model = try Model.init(std.testing.allocator, 8, rand);
@@ -172,7 +172,7 @@ test "SkipList: iterator test" {
 
 test "SkipList: iterator remove test" {
     beforeTest(@src().fn_name);
-    var prng: std.Random.DefaultPrng = .init(42);
+    var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
     const rand = prng.random();
     const Model = MemoryModel(u32, u32, keyCmp, void);
     var model = try Model.init(std.testing.allocator, 8, rand);
