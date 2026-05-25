@@ -59,6 +59,9 @@ test "SkipList paged: page and view" {
 
     const hdr = view.page_view.header();
     std.debug.print("Subheader kind: {d}\n", .{hdr.kind.get()});
+    const slots = try view.slotsDir();
+
+    std.debug.print("Number of slots: {d}\n", .{slots.capacityFor(16)});
 }
 
 test "SkipList paged: create and load nodes" {
