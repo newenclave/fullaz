@@ -4,7 +4,9 @@ const errors = core.errors;
 const SubheaderView = @import("view.zig").View;
 
 pub const Settings = struct {
-    max_level: usize,
+    max_level: usize = undefined,
+    key_len: usize = undefined,
+    value_len: usize = undefined,
 };
 
 pub fn Paged(comptime PageCacheType: type, comptime StorageManager: type, comptime cmp: anytype, comptime Ctx: type) type {
@@ -31,8 +33,10 @@ pub fn Paged(comptime PageCacheType: type, comptime StorageManager: type, compti
 
     const NodeImpl = struct {
         const Self = @This();
+
         pid: PidImpl,
         ph: PageHandle,
+
         fn init(ph: PageHandle, pid: PidImpl) Self {
             return Self{
                 .pid = pid,
@@ -44,11 +48,19 @@ pub fn Paged(comptime PageCacheType: type, comptime StorageManager: type, compti
     const AccessorImpl = struct {
         const Self = @This();
         const Pid = PidImpl;
+
+        const Error = PageCacheType.Error || StorageManager.Error;
+
         context: ContextImpl,
         fn init(ctx: ContextImpl) Self {
             return Self{
                 .context = ctx,
             };
+        }
+
+        pub fn loadNode(self: *Self, pid: Pid) Error!NodeImpl {
+            var ph = try self.ctx.cache.fetch(pid.page_id);
+            errdefer ph.deinit();
         }
     };
 
@@ -80,6 +92,7 @@ pub fn Paged(comptime PageCacheType: type, comptime StorageManager: type, compti
                 }),
             };
         }
+
         pub fn deinit(self: *Self) void {
             self.accessor = undefined; // Clear the accessor to release references to resources.
         }

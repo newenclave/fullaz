@@ -7,37 +7,66 @@ const device = @import("fullaz").device;
 
 const ModelType = skip_list.models.Paged;
 const SkipList = skip_list.List;
+const View = skip_list.models.paged.View;
+
+fn getNowTimestamp() u64 {
+    const io = std.testing.io;
+    const timestamp = std.Io.Clock.real.now(io);
+    const millis = @abs(timestamp.toMilliseconds());
+    return millis;
+}
 
 fn keyCmp(ctx: anytype, k1: []const u8, k2: []const u8) algorithm.Order {
     return algorithm.cmpSlices(u8, k1, k2, algorithm.CmpNum(u8).asc, ctx) catch .gt;
 }
 
+const PidType = struct {
+    page_id: u32 = 0,
+    slot_id: usize = 0,
+};
+
 const NoneStorageManager = struct {
     pub const Self = @This();
-    pub const PageId = u32;
+
+    pub const PageId = PidType;
     pub const Error = error{};
-    root_block_id: ?u32 = null,
+    roots: [32]?PidType = .{null} ** 32,
 
-    pub fn getRoot(self: *const @This()) ?u32 {
-        return self.root_block_id;
+    pub fn getRoot(self: *const Self, level: usize) ?PidType {
+        if (level >= self.roots.len) {
+            @panic("Level exceeds maximum supported levels");
+        }
+        return self.roots[level];
     }
 
-    pub fn setRoot(self: *@This(), root: ?u32) Error!void {
-        self.root_block_id = root;
-        // Persist to disk header, etc.
+    pub fn setRoot(self: *Self, level: usize, root: ?PidType) Error!void {
+        if (level >= self.roots.len) {
+            @panic("Level exceeds maximum supported levels");
+        }
+        self.roots[level] = root;
     }
 
-    pub fn destroyPage(_: *@This(), id: PageId) Error!void {
+    pub fn destroyPage(_: *Self, id: PageId) Error!void {
         _ = id;
         // Implement page destruction logic, e.g., add to free list
     }
 };
+
+test "SkipList paged: page and view" {
+    var buf: [4096]u8 = .{0} ** 4096;
+    var view = View(u32, u16, std.builtin.Endian.little, false).init(buf[0..]);
+    try view.formatPage(42, 1234, 64);
+
+    const hdr = view.page_view.header();
+    std.debug.print("Subheader kind: {d}\n", .{hdr.kind.get()});
+}
 
 test "SkipList paged: create and load nodes" {
     const allocator = std.testing.allocator;
 
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
+
     const Model = ModelType(PageCache, NoneStorageManager, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
@@ -51,6 +80,10 @@ test "SkipList paged: create and load nodes" {
     var prng: std.Random.DefaultPrng = .init(2341);
     const rand = prng.random();
 
-    var model = Model.init(&cache, &mgr, .{ .max_level = 16 }, {}, rand);
+    var model = Model.init(&cache, &mgr, .{
+        .max_level = 1,
+        .key_len = 4,
+        .value_len = 4,
+    }, {}, rand);
     defer model.deinit();
 }

@@ -488,6 +488,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         pub fn loadLeaf(self: *Self, id_opt: ?BlockIdType) ErrorSet!?LeafImpl {
             if (id_opt) |id| {
                 var ph = try self.ctx.cache.fetch(id);
+                errdefer ph.deinit();
                 const view = LeafImpl.PageViewTypeConst.init(try ph.getData());
                 if (view.page_view.header().kind.get() != self.ctx.settings.leaf_page_kind) {
                     ph.deinit();
