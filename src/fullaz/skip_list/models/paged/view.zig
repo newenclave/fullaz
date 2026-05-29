@@ -11,7 +11,7 @@ fn SlotWrapperView(comptime PageIdT: type, comptime IndexT: type, comptime Endia
     return struct {
         const Self = @This();
 
-        const DataType = if (read_only) []const u8 else []u8;
+        const ByteSlice = if (read_only) []const u8 else []u8;
         const LevelRefBuf = if (read_only) []const LevelRef else []LevelRef;
 
         const SkipListPageType = SkipListPage(PageIdT, IndexT, Endian);
@@ -21,17 +21,25 @@ fn SlotWrapperView(comptime PageIdT: type, comptime IndexT: type, comptime Endia
 
         const ErrorSet = SlotsDirType.Error;
 
-        slotBody: DataType,
+        slotBody: ByteSlice,
         levels: LevelRefBuf,
-        key: DataType,
-        value: DataType,
+        key: ByteSlice,
+        value: ByteSlice,
 
-        pub fn init(slotBody: DataType) ErrorSet!Self {
+        pub fn init(slotBody: ByteSlice) ErrorSet!Self {
             return checkGet(slotBody);
         }
 
-        pub fn header(self: *Self) *const SlotHeader {
+        pub fn header(self: *const Self) *const SlotHeader {
             return @ptrCast(self.slotBody.ptr);
+        }
+
+        pub fn headerMut(self: *Self) *SlotHeader {
+            return @ptrCast(self.slotBody.ptr);
+        }
+
+        pub fn body(self: *const Self) ByteSlice {
+            return self.slotBody;
         }
 
         fn totalSlotSize(key_len: usize, value_len: usize, level: usize) usize {
@@ -64,14 +72,14 @@ fn SlotWrapperView(comptime PageIdT: type, comptime IndexT: type, comptime Endia
             return keyOff + @as(usize, @intCast(hdr.key_len.get()));
         }
 
-        fn checkGet(slot: DataType) ErrorSet!Self {
+        fn checkGet(slot: ByteSlice) ErrorSet!Self {
             if (slot.len < @sizeOf(SlotHeader)) {
                 return ErrorSet.BufferTooSmall;
             }
             const hdr: *const SlotHeader = @ptrCast(slot.ptr);
 
-            const keySz = @as(usize, @intCast(hdr.key_len.get()));
-            const valSz = @as(usize, @intCast(hdr.value_len.get()));
+            const keySz: usize = @intCast(hdr.key_len.get());
+            const valSz: usize = @intCast(hdr.value_len.get());
 
             const total = totalSlotSize(keySz, valSz, @intCast(hdr.level));
             if (total > slot.len) {
@@ -94,28 +102,34 @@ fn SlotWrapperView(comptime PageIdT: type, comptime IndexT: type, comptime Endia
 pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
     const HeaderPageView = header.View(PageIdT, IndexT, Endian, read_only);
     const SlotsDirType = slots.Variadic(IndexT, Endian, read_only);
+
     const ConstSlotsDirType = slots.Variadic(IndexT, Endian, true);
+    const AvailableStatus = ConstSlotsDirType.AvailableStatus;
 
     return struct {
         const Self = @This();
 
-        const DataType = if (read_only) []const u8 else []u8;
+        const ByteSlice = if (read_only) []const u8 else []u8;
+        const ByteSliceConst = []const u8;
+        const ByteSliceMut = []u8;
+
         const PageViewType = HeaderPageView;
         const ErrorSet = SlotsDirType.Error;
 
         const SubheaderType = SkipListPage(PageIdT, IndexT, Endian).SkipListSubheader;
         const SlotHeaderType = SkipListPage(PageIdT, IndexT, Endian).SkipListNode;
 
-        pub const KeyType = DataType;
-        pub const ValueType = DataType;
+        pub const KeyType = ByteSlice;
+        pub const ValueType = ByteSlice;
         pub const Error = ErrorSet;
+
         pub const SlotWrapper = SlotWrapperView(PageIdT, IndexT, Endian, read_only);
         pub const SlotWrapperConst = SlotWrapperView(PageIdT, IndexT, Endian, true);
         pub const SlotWrapperMut = SlotWrapperView(PageIdT, IndexT, Endian, false);
 
         page_view: PageViewType,
 
-        pub fn init(data: DataType) Self {
+        pub fn init(data: ByteSlice) Self {
             return .{
                 .page_view = PageViewType.init(data),
             };
@@ -130,11 +144,11 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             sl.formatHeader();
         }
 
-        pub fn page(self: *const Self) DataType {
+        pub fn page(self: *const Self) ByteSlice {
             return self.page_view.page;
         }
 
-        pub fn entries(self: *const Self) !usize {
+        pub fn entries(self: *const Self) Error!usize {
             return (try self.slotsDir()).size();
         }
 
@@ -164,8 +178,43 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return try ConstSlotsDirType.init(data);
         }
 
-        pub fn slotWrapper(_: *const Self, slot: DataType) ErrorSet!SlotWrapper {
+        pub fn slotWrapper(_: *const Self, slot: ByteSlice) ErrorSet!SlotWrapper {
             return try SlotWrapper.init(slot);
+        }
+
+        pub fn get(self: *const Self, pos: usize) Error!SlotWrapperConst {
+            const sdir = try self.slotsDir();
+            const slot = try sdir.get(pos);
+            return try SlotWrapperConst.init(slot);
+        }
+
+        pub fn getMut(self: *const Self, pos: usize) Error!SlotWrapperMut {
+            const sdir = try self.slotsDirMut();
+            const slot = try sdir.getMut(pos);
+            return try SlotWrapperMut.init(slot);
+        }
+
+        pub fn canInsertSize(self: *const Self, pos: usize, value: usize) ErrorSet!AvailableStatus {
+            _ = pos;
+            return (try self.slotsDir()).canInsert(value);
+        }
+
+        pub fn canInsert(self: *const Self, pos: usize, key: []const u8, value: []const u8, level: usize) ErrorSet!AvailableStatus {
+            _ = pos;
+            const total_len = SlotWrapperConst.totalSlotSize(key.len, value.len, level);
+            return (try self.slotsDir()).canInsert(total_len);
+        }
+
+        pub fn insert(self: *Self, pos: usize, value: ByteSliceConst) ErrorSet!void {
+            var sdir = try self.slotsDirMut();
+            try sdir.insertAt(pos, value);
+        }
+
+        pub fn canUpdate(self: *const Self, pos: usize, key: []const u8, value: []const u8) Error!AvailableStatus {
+            var slot_dir = try self.slotsDir();
+            const sw = try self.get(pos);
+            const total_size: usize = sw.body().len - sw.key.len - sw.value.len + key.len + value.len;
+            return try slot_dir.canUpdate(pos, total_size);
         }
 
         pub fn createSlot(_: *const Self, buf: []u8, key_size: usize, value_size: usize, levels: usize) ErrorSet!SlotWrapperMut {

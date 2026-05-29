@@ -80,7 +80,7 @@ test "SkipList paged: create and load nodes" {
 
     var mgr = NoneStorageManager{};
 
-    var prng: std.Random.DefaultPrng = .init(2341);
+    var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
     const rand = prng.random();
 
     var model = Model.init(&cache, &mgr, .{
@@ -107,4 +107,17 @@ test "SkipList paged: create slot, work with the slot" {
     try std.testing.expectEqual(4, slot.header().key_len.get());
     try std.testing.expectEqual(4, slot.header().value_len.get());
     try std.testing.expectEqual(7, slot.header().level);
+
+    try view.insert(0, slot.body());
+    const ss = try view.get(0);
+
+    try std.testing.expectEqual(4, ss.header().key_len.get());
+    try std.testing.expectEqual(4, ss.header().value_len.get());
+    try std.testing.expectEqual(7, ss.header().level);
+
+    try std.testing.expectEqual(slot.body().len, ss.body().len);
+    try std.testing.expect(keyCmp({}, slot.key, ss.key) == .eq);
+
+    std.debug.print("Can insert: {any}\n", .{try view.canInsert(0, slot.key, slot.value, slot.header().level)});
+    std.debug.print("Can insert: {any}\n", .{try view.canInsertSize(0, 4096)});
 }

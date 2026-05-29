@@ -125,7 +125,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return (try self.slotsDir()).capacityFor(maximum_slot_size);
         }
 
-        pub fn canUpdate(self: *const Self, pos: usize, key: []const u8, value: []const u8) !AvailableStatus {
+        pub fn canUpdate(self: *const Self, pos: usize, key: []const u8, value: []const u8) ErrorSet!AvailableStatus {
             const total_size: usize = @sizeOf(SlotHeaderType) + key.len + value.len;
             var slot_dir = try self.slotsDir();
             return try slot_dir.canUpdate(pos, total_size);

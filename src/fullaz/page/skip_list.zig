@@ -31,12 +31,14 @@ pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: 
     const SkipListNodeType = extern struct {
         const Self = @This();
 
-        key_len: IndexPackedType,
-        value_len: IndexPackedType,
         level: u8,
-        reserver: [3]u8,
+        reserved: [3]u8,
+
+        key_len: IndexPackedType,
+        value_len: IndexPackedType, // todo: do we need this value?
 
         pub fn formatHeader(self: *Self) void {
+            self.reserved = [3]u8{0} ** 3;
             self.next.format();
             self.prev.format();
         }
