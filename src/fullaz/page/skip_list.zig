@@ -4,10 +4,8 @@ const header = @import("header.zig");
 const PageSlotRef = @import("page_slot_ref.zig").PageSlotRef;
 
 pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian) type {
-    const PageIdType = PackedInt(PageIdT, Endian);
-    const IndexType = PackedInt(IndexT, Endian);
-
-    _ = PageIdType;
+    const PageIdPackedType = PackedInt(PageIdT, Endian);
+    const IndexPackedType = PackedInt(IndexT, Endian);
 
     const SkipListNodeIdType = PageSlotRef(PageIdT, IndexT, Endian);
 
@@ -20,15 +18,23 @@ pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: 
         }
     };
 
+    const LevelRefType = extern struct {
+        const Self = @This();
+        next: SkipListNodeIdType,
+        prev: SkipListNodeIdType,
+        pub fn format(self: *Self) void {
+            self.next.format();
+            self.prev.format();
+        }
+    };
+
     const SkipListNodeType = extern struct {
         const Self = @This();
 
-        next: SkipListNodeIdType,
-        prev: SkipListNodeIdType,
-
-        key_len: IndexType,
-        value_len: IndexType,
+        key_len: IndexPackedType,
+        value_len: IndexPackedType,
         level: u8,
+        reserver: [3]u8,
 
         pub fn formatHeader(self: *Self) void {
             self.next.format();
@@ -37,7 +43,10 @@ pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: 
     };
 
     return struct {
+        pub const PageIdType = PageIdPackedType;
+        pub const IndexType = IndexPackedType;
         pub const SkipListSubheader = SkipListNodeSubheaderType;
         pub const SkipListNode = SkipListNodeType;
+        pub const LevelRef = LevelRefType;
     };
 }

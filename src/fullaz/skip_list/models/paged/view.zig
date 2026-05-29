@@ -5,6 +5,92 @@ const errors = @import("../../../core/errors.zig");
 
 const SkipListPage = @import("../../../page/skip_list.zig").SkipList;
 
+fn SlotWrapperView(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+    const SlotsDirType = slots.Variadic(IndexT, Endian, read_only);
+
+    return struct {
+        const Self = @This();
+
+        const DataType = if (read_only) []const u8 else []u8;
+        const LevelRefBuf = if (read_only) []const LevelRef else []LevelRef;
+
+        const SkipListPageType = SkipListPage(PageIdT, IndexT, Endian);
+
+        const SlotHeader = SkipListPageType.SkipListNode;
+        const LevelRef = SkipListPageType.LevelRef;
+
+        const ErrorSet = SlotsDirType.Error;
+
+        slotBody: DataType,
+        levels: LevelRefBuf,
+        key: DataType,
+        value: DataType,
+
+        pub fn init(slotBody: DataType) ErrorSet!Self {
+            return checkGet(slotBody);
+        }
+
+        pub fn header(self: *Self) *const SlotHeader {
+            return @ptrCast(self.slotBody.ptr);
+        }
+
+        fn totalSlotSize(key_len: usize, value_len: usize, level: usize) usize {
+            const levelsSize = (level + 1) * @sizeOf(LevelRef);
+            return key_len + value_len + @sizeOf(SlotHeader) + levelsSize;
+        }
+
+        pub fn levelOffset() usize {
+            return @sizeOf(SlotHeader);
+        }
+
+        pub fn keyOffset(slot: []const u8) ErrorSet!usize {
+            const slotLen = slot.len;
+
+            if (slotLen < @sizeOf(SlotHeader)) {
+                return ErrorSet.BufferTooSmall;
+            }
+            const hdr: *const SlotHeader = @ptrCast(slot);
+            const total = totalSlotSize(hdr.key_len.get(), hdr.value_len.get(), @intCast(hdr.level));
+            if (slotLen < total) {
+                return ErrorSet.BufferTooSmall;
+            }
+            const levelsSize: usize = (hdr.level + 1) * @sizeOf(LevelRef);
+            return @sizeOf(SlotHeader) + levelsSize;
+        }
+
+        pub fn valueOffset(slot: []const u8) ErrorSet!usize {
+            const keyOff = try keyOffset(slot);
+            const hdr: *const SlotHeader = @ptrCast(slot);
+            return keyOff + @as(usize, @intCast(hdr.key_len.get()));
+        }
+
+        fn checkGet(slot: DataType) ErrorSet!Self {
+            if (slot.len < @sizeOf(SlotHeader)) {
+                return ErrorSet.BufferTooSmall;
+            }
+            const hdr: *const SlotHeader = @ptrCast(slot.ptr);
+
+            const keySz = @as(usize, @intCast(hdr.key_len.get()));
+            const valSz = @as(usize, @intCast(hdr.value_len.get()));
+
+            const total = totalSlotSize(keySz, valSz, @intCast(hdr.level));
+            if (total > slot.len) {
+                return ErrorSet.BufferTooSmall;
+            }
+            const lvlOff = levelOffset();
+            const keyOff = try keyOffset(slot);
+            const valOff = try valueOffset(slot);
+            const levelsBuf = std.mem.bytesAsSlice(LevelRef, slot[lvlOff..keyOff]);
+            return .{
+                .slotBody = slot[0..total],
+                .levels = levelsBuf,
+                .key = slot[keyOff..valOff],
+                .value = slot[valOff .. valOff + valSz],
+            };
+        }
+    };
+}
+
 pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
     const HeaderPageView = header.View(PageIdT, IndexT, Endian, read_only);
     const SlotsDirType = slots.Variadic(IndexT, Endian, read_only);
@@ -18,10 +104,14 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         const ErrorSet = SlotsDirType.Error;
 
         const SubheaderType = SkipListPage(PageIdT, IndexT, Endian).SkipListSubheader;
-        const SlotHeaderType = SkipListPage(PageIdT, IndexT, Endian).SkipListNodeType;
+        const SlotHeaderType = SkipListPage(PageIdT, IndexT, Endian).SkipListNode;
 
-        const KeyType = []const u8;
-        const ValueType = []const u8;
+        pub const KeyType = DataType;
+        pub const ValueType = DataType;
+        pub const Error = ErrorSet;
+        pub const SlotWrapper = SlotWrapperView(PageIdT, IndexT, Endian, read_only);
+        pub const SlotWrapperConst = SlotWrapperView(PageIdT, IndexT, Endian, true);
+        pub const SlotWrapperMut = SlotWrapperView(PageIdT, IndexT, Endian, false);
 
         page_view: PageViewType,
 
@@ -42,10 +132,6 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
 
         pub fn page(self: *const Self) DataType {
             return self.page_view.page;
-        }
-
-        pub fn totalSlotSize(_: *const Self, key_len: usize, value_len: usize) usize {
-            return key_len + value_len + @sizeOf(SlotHeaderType);
         }
 
         pub fn entries(self: *const Self) !usize {
@@ -76,6 +162,22 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub fn slotsDir(self: *const Self) ErrorSet!ConstSlotsDirType {
             const data = self.page_view.data();
             return try ConstSlotsDirType.init(data);
+        }
+
+        pub fn slotWrapper(_: *const Self, slot: DataType) ErrorSet!SlotWrapper {
+            return try SlotWrapper.init(slot);
+        }
+
+        pub fn createSlot(_: *const Self, buf: []u8, key_size: usize, value_size: usize, levels: usize) ErrorSet!SlotWrapperMut {
+            const targetTotal = SlotWrapper.totalSlotSize(key_size, value_size, levels);
+            if (buf.len < targetTotal) {
+                return ErrorSet.BufferTooSmall;
+            }
+            var hdr: *SlotHeaderType = @ptrCast(buf.ptr);
+            hdr.key_len.set(@intCast(key_size));
+            hdr.value_len.set(@intCast(value_size));
+            hdr.level = @intCast(levels);
+            return try SlotWrapperMut.init(buf);
         }
     };
 }

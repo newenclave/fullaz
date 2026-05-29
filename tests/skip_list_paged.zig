@@ -90,3 +90,21 @@ test "SkipList paged: create and load nodes" {
     }, {}, rand);
     defer model.deinit();
 }
+
+test "SkipList paged: create slot, work with the slot" {
+    var buf: [4096]u8 = .{0} ** 4096;
+    const ViewT = View(u32, u16, std.builtin.Endian.little, false);
+    const SlotWrapper = ViewT.SlotWrapper;
+
+    _ = SlotWrapper;
+
+    var view = ViewT.init(buf[0..]);
+    try view.formatPage(42, 1234, 64);
+
+    var slotBody: [256]u8 = .{0} ** 256;
+    var slot = try view.createSlot(slotBody[0..], 4, 4, 7);
+
+    try std.testing.expectEqual(4, slot.header().key_len.get());
+    try std.testing.expectEqual(4, slot.header().value_len.get());
+    try std.testing.expectEqual(7, slot.header().level);
+}

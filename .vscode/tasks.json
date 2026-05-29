@@ -9,7 +9,7 @@
                 "build",
                 "install-tests",
                 "-Doptimize=Debug",
-                "-Dtest-filter=ChainStore handle: write page"
+                "-Dtest-filter=SkipList paged:"
             ],
             "problemMatcher": [],
             "group": {
