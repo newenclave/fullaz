@@ -9,6 +9,8 @@ const ModelType = skip_list.models.Paged;
 const SkipList = skip_list.List;
 const View = skip_list.models.paged.View;
 
+const interfaces = skip_list.models.interfaces;
+
 fn getNowTimestamp() u64 {
     const io = std.testing.io;
     const timestamp = std.Io.Clock.real.now(io);
@@ -120,4 +122,13 @@ test "SkipList paged: create slot, work with the slot" {
 
     std.debug.print("Can insert: {any}\n", .{try view.canInsert(0, slot.key, slot.value, slot.header().level)});
     std.debug.print("Can insert: {any}\n", .{try view.canInsertSize(0, 4096)});
+}
+
+test "SkipList paged: interfaces" {
+    //const allocator = std.testing.allocator;
+    const Device = device.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = ModelType(PageCache, NoneStorageManager, keyCmp, void);
+
+    interfaces.assertPath(Model.Accessor.Path);
 }

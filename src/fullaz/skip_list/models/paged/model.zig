@@ -14,6 +14,9 @@ pub fn Paged(comptime PageCacheType: type, comptime StorageManager: type, compti
     const PageHandle = PageCacheType.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
+    const KeyT = []const u8;
+    const ValueT = []const u8;
+
     _ = cmp;
 
     const ContextImpl = struct {
@@ -29,6 +32,58 @@ pub fn Paged(comptime PageCacheType: type, comptime StorageManager: type, compti
         const Self = @This();
         page_id: BlockIdType,
         slot_id: usize,
+    };
+
+    const PidContainer = std.ArrayList(?PidImpl);
+
+    const PathImpl = struct {
+        const Self = @This();
+
+        pub const Error = error{ OutOfMemory, OutOfBounds };
+        pub const Pid = PidImpl;
+
+        path: PidContainer = undefined,
+
+        fn init(allocator: std.mem.Allocator, max_level: usize) Error!Self {
+            var result = Self{
+                .path = try PidContainer.initCapacity(allocator, max_level),
+            };
+            try result.path.resize(
+                allocator,
+                max_level,
+            );
+            return result;
+        }
+
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.path.deinit(allocator);
+            self.* = undefined;
+        }
+
+        pub fn get(self: *const Self, level: usize) Error!?PidImpl {
+            if (self.path.items.len <= level) {
+                return Error.OutOfBounds;
+            }
+            return self.path.items[level];
+        }
+
+        pub fn set(self: *Self, level: usize, pid: ?PidImpl) Error!void {
+            if (self.path.items.len <= level) {
+                return Error.OutOfBounds;
+            }
+            self.path.items[level] = pid;
+        }
+
+        fn dump(self: *const Self) void {
+            for (self.path.items) |item| {
+                if (item) |pid| {
+                    std.debug.print("{d} ", .{pid.id});
+                } else {
+                    std.debug.print("<null> ", .{});
+                }
+            }
+            std.debug.print("\n", .{});
+        }
     };
 
     const NodeImpl = struct {
@@ -47,11 +102,13 @@ pub fn Paged(comptime PageCacheType: type, comptime StorageManager: type, compti
 
     const AccessorImpl = struct {
         const Self = @This();
-        const Pid = PidImpl;
 
-        const Error = PageCacheType.Error || StorageManager.Error;
+        pub const Pid = PidImpl;
+        pub const Error = PageCacheType.Error || StorageManager.Error;
+        pub const Path = PathImpl;
 
         context: ContextImpl,
+
         fn init(ctx: ContextImpl) Self {
             return Self{
                 .context = ctx,
@@ -72,12 +129,13 @@ pub fn Paged(comptime PageCacheType: type, comptime StorageManager: type, compti
         pub const Accessor = AccessorImpl;
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
-        // pub const KeyIn = KeyT;
-        // pub const ValueIn = ValueT;
 
-        // pub const KeyOut = *const KeyIn;
-        // pub const ValueOut = *const ValueIn;
-        // pub const Path = PathImpl;
+        pub const KeyIn = KeyT;
+        pub const ValueIn = ValueT;
+
+        pub const KeyOut = KeyIn;
+        pub const ValueOut = ValueIn;
+        pub const Path = PathImpl;
 
         accessor: AccessorImpl,
 

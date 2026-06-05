@@ -70,6 +70,7 @@ pub fn assertAccessor(comptime Accessor: type) void {
 
     requiresFnSignature(Accessor, "generateLevel", fn (*const Accessor, usize) Error!usize);
     requiresFnSignature(Accessor, "createPath", fn (*Accessor) Error!Path);
+    requiresFnSignature(Accessor, "deinitPath", fn (*Accessor, *Path) void);
 }
 
 pub fn assertNode(comptime Node: type) void {

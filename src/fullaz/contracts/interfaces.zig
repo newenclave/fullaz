@@ -23,7 +23,7 @@ pub fn requiresTypeDeclaration(comptime T: type, comptime name: []const u8) void
 
 pub fn requiresErrorType(comptime T: type) void {
     if (!isErrorType(T)) {
-        @compileError(@typeName(T) ++ " must be an error set type");
+        @compileError(@typeName(T) ++ " must be an error set type.");
     }
 }
 
