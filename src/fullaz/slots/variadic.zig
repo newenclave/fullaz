@@ -6,6 +6,7 @@ const PackedInt = core.packed_int.PackedInt;
 
 pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
     const IndexType = PackedInt(T, Endian);
+    const Magic = PackedInt(u16, Endian);
 
     const SLOT_INVALID: T = 0;
 
@@ -21,6 +22,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
     };
 
     const Header = extern struct {
+        magic: Magic = undefined,
         entry_count: IndexType,
         free_begin: IndexType,
         free_end: IndexType,
@@ -28,11 +30,11 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
     };
 
     comptime {
-        std.debug.assert(@sizeOf(Header) == @sizeOf(T) * 4);
-        std.debug.assert(@offsetOf(Header, "entry_count") == 0);
-        std.debug.assert(@offsetOf(Header, "free_begin") == @sizeOf(T));
-        std.debug.assert(@offsetOf(Header, "free_end") == @sizeOf(T) * 2);
-        std.debug.assert(@offsetOf(Header, "freed") == @sizeOf(T) * 3);
+        std.debug.assert(@sizeOf(Header) == @sizeOf(T) * 4 + @sizeOf(Magic));
+        std.debug.assert(@offsetOf(Header, "entry_count") == @sizeOf(Magic));
+        std.debug.assert(@offsetOf(Header, "free_begin") == @sizeOf(Magic) + @sizeOf(T));
+        std.debug.assert(@offsetOf(Header, "free_end") == @sizeOf(Magic) + @sizeOf(T) * 2);
+        std.debug.assert(@offsetOf(Header, "freed") == @sizeOf(Magic) + @sizeOf(T) * 3);
     }
 
     const BufferType = if (read_only) []const u8 else []u8;

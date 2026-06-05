@@ -11,7 +11,10 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
     const BitSet = bit_set.BitSet(BitSetDataType, Endian);
     const SizeType = PackedInt(SizeT, Endian);
 
+    const Magic = PackedInt(u16, Endian);
+
     const Header = extern struct {
+        magic: Magic = {},
         one_slot_size: SizeType, // one slot size in bytes
         capacity: SizeType, // bits used
         bitmask_words: SizeType, // number of words used for bitmask
