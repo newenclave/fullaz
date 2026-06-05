@@ -130,5 +130,5 @@ test "SkipList paged: interfaces" {
     const PageCache = PageCacheT(Device);
     const Model = ModelType(PageCache, NoneStorageManager, keyCmp, void);
 
-    interfaces.assertPath(Model.Accessor.Path);
+    comptime interfaces.assertPath(Model.Accessor.Path);
 }

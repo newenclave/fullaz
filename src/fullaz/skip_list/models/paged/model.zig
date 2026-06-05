@@ -115,6 +115,13 @@ pub fn Paged(comptime PageCacheType: type, comptime StorageManager: type, compti
             };
         }
 
+        pub fn createNode(_: *Self, key: KeyT, value: ValueT) Error!NodeImpl {
+            _ = key;
+            _ = value;
+            // Implement node creation logic, e.g., allocate a new page and initialize it.
+            return Error.OutOfMemory; // Placeholder error
+        }
+
         pub fn loadNode(self: *Self, pid: Pid) Error!NodeImpl {
             var ph = try self.ctx.cache.fetch(pid.page_id);
             errdefer ph.deinit();
