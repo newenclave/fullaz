@@ -1,12 +1,17 @@
 const std = @import("std");
 const errors = @import("../core/errors.zig");
+const interfaces = @import("./models/interfaces.zig");
 
 pub fn List(comptime ModelT: type) type {
+    comptime {
+        interfaces.assertModelAccessor(ModelT);
+    }
+
     return struct {
         const Self = @This();
 
         const Model = ModelT;
-        const Accessor = ModelT.Accessor;
+        const Accessor = ModelT.AccessorType;
 
         pub const KeyIn = Model.KeyIn;
         pub const KeyOut = Model.KeyOut;

@@ -54,7 +54,13 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
 
     const NodeImpl = struct {
         const Self = @This();
-        const Error = error{ OutOfMemory, OutOfBounds };
+
+        pub const Error = error{ OutOfMemory, OutOfBounds };
+        pub const KeyIn = KeyT;
+        pub const ValueIn = ValueT;
+        pub const KeyOut = *const KeyIn;
+        pub const ValueOut = *const ValueIn;
+        pub const Pid = PidImpl;
 
         element: *NodeElement = undefined,
         pid: PidImpl = undefined,
@@ -74,58 +80,60 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
             return self.element.links.items.len;
         }
 
-        pub fn getKey(self: *const Self) Error!*const KeyT {
+        pub fn getKey(self: *const Self) Error!KeyOut {
             return &self.element.key;
         }
 
-        pub fn getValue(self: *const Self) Error!*const ValueT {
+        pub fn getValue(self: *const Self) Error!ValueOut {
             return &self.element.value;
         }
 
-        pub fn setKey(self: *Self, key: KeyT) void {
+        pub fn setKey(self: *Self, key: KeyIn) Error!void {
             self.element.key = key;
         }
 
-        pub fn setValue(self: *Self, value: ValueT) void {
+        pub fn setValue(self: *Self, value: ValueIn) Error!void {
             self.element.value = value;
         }
 
-        pub fn setPrev(self: *Self, level: usize, pid: ?PidImpl) Error!void {
+        pub fn setPrev(self: *Self, level: usize, pid: ?Pid) Error!void {
             if (level >= self.element.links.items.len) {
-                return error.OutOfMemory;
+                return Error.OutOfMemory;
             }
             self.element.links.items[level].prev = pid;
         }
 
-        pub fn setNext(self: *Self, level: usize, pid: ?PidImpl) Error!void {
+        pub fn setNext(self: *Self, level: usize, pid: ?Pid) Error!void {
             if (level >= self.element.links.items.len) {
-                return error.OutOfMemory;
+                return Error.OutOfMemory;
             }
             self.element.links.items[level].next = pid;
         }
 
-        pub fn getPrev(self: *const Self, level: usize) Error!?PidImpl {
+        pub fn getPrev(self: *const Self, level: usize) Error!?Pid {
             if (level >= self.element.links.items.len) {
                 return Error.OutOfBounds;
             }
             return self.element.links.items[level].prev;
         }
 
-        pub fn getNext(self: *const Self, level: usize) Error!?PidImpl {
+        pub fn getNext(self: *const Self, level: usize) Error!?Pid {
             if (level >= self.element.links.items.len) {
                 return Error.OutOfBounds;
             }
             return self.element.links.items[level].next;
         }
 
-        pub fn id(self: *const Self) PidImpl {
+        pub fn id(self: *const Self) Pid {
             return self.pid;
         }
     };
 
     const PathImpl = struct {
         const Self = @This();
-        const Error = error{ OutOfMemory, OutOfBounds };
+        pub const Error = error{ OutOfMemory, OutOfBounds };
+        pub const Pid = PidImpl;
+
         path: PidContainer = undefined,
 
         fn init(allocator: std.mem.Allocator, max_level: usize) Error!Self {
@@ -146,14 +154,14 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
 
         pub fn get(self: *const Self, level: usize) Error!?PidImpl {
             if (self.path.items.len <= level) {
-                return error.OutOfBounds;
+                return Error.OutOfBounds;
             }
             return self.path.items[level];
         }
 
         pub fn set(self: *Self, level: usize, pid: ?PidImpl) Error!void {
             if (self.path.items.len <= level) {
-                return error.OutOfBounds;
+                return Error.OutOfBounds;
             }
             self.path.items[level] = pid;
         }
@@ -172,9 +180,15 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
 
     const AccessorImpl = struct {
         const Self = @This();
-        const Path = PathImpl;
 
-        const Error = error{ OutOfMemory, OutOfBounds };
+        pub const Path = PathImpl;
+        pub const Node = NodeImpl;
+
+        pub const KeyIn = KeyT;
+        pub const ValueIn = ValueT;
+        pub const Pid = PidImpl;
+
+        pub const Error = error{ OutOfMemory, OutOfBounds };
 
         ctx: Context,
         cmpCtx: Ctx = undefined,
@@ -218,7 +232,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
             return NodeImpl.init(&self.cont.items[id].?, id);
         }
 
-        pub fn loadNode(self: *const Self, pid: PidImpl) Error!NodeImpl {
+        pub fn loadNode(self: *const Self, pid: Pid) Error!NodeImpl {
             if (pid.id >= self.cont.items.len) {
                 return Error.OutOfBounds;
             }
@@ -289,7 +303,8 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         const Self = @This();
 
         pub const Error = error{ OutOfMemory, OutOfBounds };
-        pub const Accessor = AccessorImpl;
+        pub const AccessorType = AccessorImpl;
+
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
         pub const KeyIn = KeyT;
@@ -299,11 +314,11 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         pub const ValueOut = *const ValueIn;
         pub const Path = PathImpl;
 
-        accessor: Accessor,
+        accessor: AccessorType,
 
         pub fn init(allocator: std.mem.Allocator, max_level: usize, rng: std.Random) Error!Self {
             return .{
-                .accessor = try AccessorImpl.init(allocator, max_level, rng),
+                .accessor = try AccessorType.init(allocator, max_level, rng),
             };
         }
 
@@ -315,7 +330,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
             return self.accessor.ctx.max_level;
         }
 
-        pub fn getAccessor(self: *Self) *AccessorImpl {
+        pub fn getAccessor(self: *Self) *AccessorType {
             return &self.accessor;
         }
 
