@@ -21,4 +21,5 @@ test {
     _ = @import("skip_list_memory.zig");
     _ = @import("skip_list_paged.zig");
     _ = @import("slot_allocator_memory_list.zig");
+    _ = @import("slot_allocator_paged_slab.zig");
 }

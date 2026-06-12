@@ -1,5 +1,5 @@
 const std = @import("std");
-const page = @import("../../page/slab_allocator.zig");
+const page = @import("../../../../page/slab_allocator.zig");
 
 pub fn Model(comptime PageCacheTypeT: type, comptime SlabStorageManagerT: type, comptime SizeClassT: type) type {
     const Context = struct {

@@ -1,2 +1,2 @@
 pub const MemoryList = @import("memory_list.zig").MemoryList;
-pub const PagedSlab = @import("paged_slab/model.zig").Model;
+pub const paged_slab = @import("paged_slab/paged_slab.zig");

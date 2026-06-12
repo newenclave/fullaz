@@ -11,10 +11,10 @@ pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: 
 
     const SkipListNodeSubheaderType = extern struct {
         const Self = @This();
-        reserver: [16]u8, // Reserved for future use, must be zero
+        reserved: [16]u8, // Reserved for future use, must be zero
 
         pub fn formatHeader(self: *Self) void {
-            @memset(&self.reserver, 0);
+            @memset(&self.reserved, 0);
         }
     };
 

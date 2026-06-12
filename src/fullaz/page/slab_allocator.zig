@@ -7,15 +7,31 @@ pub fn SlabAllocator(comptime PageIdT: type, comptime IndexT: type, comptime Siz
     const IndexType = PackedInt(IndexT, Endian);
     const SizeClassType = PackedInt(SizeClassT, Endian);
 
-    const SubHeaderImpl = extern struct {
+    const SubheaderImpl = extern struct {
+        const Self = @This();
         size_class: SizeClassType,
+        prev: PageIdType,
+        next: PageIdType,
+
+        pub fn formatHeader(self: *Self) void {
+            self.prev.setMax();
+            self.next.setMax();
+        }
+    };
+
+    const SlotImpl = extern struct {
+        const Self = @This();
+        pid: PageIdType,
+        free_space: IndexType,
+        pub fn format(self: *Self) void {
+            self.pid.setMax();
+            self.free_space.setMax();
+        }
     };
 
     return struct {
-        pub const PageId = PageIdType;
-        pub const Index = IndexType;
-        pub const SizeClass = SizeClassType;
         pub const PageHeader = header.Header(PageIdT, IndexT, Endian);
-        pub const SubHeader = SubHeaderImpl;
+        pub const Subheader = SubheaderImpl;
+        pub const Slot = SlotImpl;
     };
 }

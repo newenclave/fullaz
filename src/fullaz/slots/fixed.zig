@@ -14,7 +14,7 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
     const Magic = PackedInt(u16, Endian);
 
     const Header = extern struct {
-        magic: Magic = {},
+        magic: Magic = undefined,
         one_slot_size: SizeType, // one slot size in bytes
         capacity: SizeType, // bits used
         bitmask_words: SizeType, // number of words used for bitmask
@@ -23,7 +23,7 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
     return struct {
         const Self = @This();
 
-        const Error = errors.SpaceError ||
+        pub const Error = errors.SpaceError ||
             errors.IndexError ||
             BitSet.Error;
 
@@ -58,6 +58,11 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
             return bit_set.maxObjectsByWords(BitSetDataType, body_len, slot_size);
         }
 
+        pub fn isFull(self: *const Self) Error!bool {
+            const bs = try self.bitset();
+            return bs.popcount() == bs.bitsCount();
+        }
+
         pub fn size(self: *const Self) Error!usize {
             const bs = try self.bitset();
             return bs.popcount();
@@ -71,6 +76,22 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
         pub fn isSet(self: *const Self, pos: usize) Error!bool {
             const bs = try self.bitset();
             return bs.isSet(pos);
+        }
+
+        pub fn clear(self: *Self, pos: usize) Error!void {
+            if (read_only) {
+                @compileError("Unable clear slot on readonly data");
+            }
+            var bs = try self.bitsetMut();
+            try bs.clear(pos);
+        }
+
+        pub fn markUsed(self: *Self, pos: usize) Error!void {
+            if (read_only) {
+                @compileError("Unable mark slot used on readonly data");
+            }
+            var bs = try self.bitsetMut();
+            try bs.set(pos);
         }
 
         pub fn set(self: *Self, pos: usize, value: []const u8) Error!void {
@@ -95,6 +116,14 @@ pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endia
                 return Error.OutOfBounds;
             }
             return try self.getSlot(pos);
+        }
+
+        pub fn getMut(self: *Self, pos: usize) Error![]u8 {
+            const is_set = try self.isSet(pos);
+            if (!is_set) {
+                return Error.OutOfBounds;
+            }
+            return try self.getSlotMut(pos);
         }
 
         pub fn free(self: *Self, pos: usize) Error!void {
