@@ -1,13 +1,16 @@
 const std = @import("std");
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
+const PageSlotRef = @import("page_slot_ref.zig").PageSlotRef;
 
 fn Header(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian) type {
     const PageIdType = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const UInt16 = PackedInt(u16, Endian);
     const UInt32 = PackedInt(u32, Endian);
+    const SlotRefType = PageSlotRef(PageIdT, IndexT, Endian);
 
     return extern struct {
+        const SlotRef = SlotRefType;
         kind: UInt16,
         subheader_size: IndexType,
         metadata_size: IndexType,

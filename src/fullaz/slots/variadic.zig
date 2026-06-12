@@ -66,7 +66,9 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn formatHeader(self: *Self) void {
-            if (read_only) @compileError("Cannot format header on const buffer");
+            if (read_only) {
+                @compileError("Cannot format header on const buffer");
+            }
             var header = self.headerMut();
             header.entry_count.set(0);
             header.free_begin.set(@intCast(@sizeOf(Header)));
