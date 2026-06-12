@@ -1,6 +1,8 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
 const slot_allocator = fullaz.storage.slot_allocator;
+const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
+const dev = @import("fullaz").device;
 
 const paged_slab = slot_allocator.models.paged_slab;
 const SlabModel = paged_slab.Model;
@@ -8,6 +10,27 @@ const SlabModel = paged_slab.Model;
 const SlabStorageManagerImpl = struct {
     const Bucket = std.ArrayList(u32);
     buckets: std.ArrayList(Bucket),
+};
+
+const NoneStorageManager = struct {
+    pub const Self = @This();
+    pub const PageId = u32;
+    pub const Error = error{};
+    root_block_id: ?u32 = null,
+
+    pub fn getRoot(self: *const @This()) ?u32 {
+        return self.root_block_id;
+    }
+
+    pub fn setRoot(self: *@This(), root: ?u32) Error!void {
+        self.root_block_id = root;
+        // Persist to disk header, etc.
+    }
+
+    pub fn destroyPage(_: *@This(), id: PageId) Error!void {
+        _ = id;
+        // Implement page destruction logic, e.g., add to free list
+    }
 };
 
 test "SlotAllocator paged_slab: create the view" {
@@ -41,4 +64,22 @@ test "SlotAllocator paged_slab: create the view" {
 
     const ps2 = try view.findBySize(700);
     try std.testing.expectEqual(ps2, s1);
+}
+
+test "SlotAllocator paged_slab: create the model" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = SlabModel(PageCache, NoneStorageManager, u16);
+
+    var store_mgr = NoneStorageManager{};
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+
+    var model = try Model.init(&cache, &store_mgr, .{});
+
+    var page = try model.createPage(2);
+    defer page.deinit();
 }

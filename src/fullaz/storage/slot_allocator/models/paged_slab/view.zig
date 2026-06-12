@@ -40,6 +40,10 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
             };
         }
 
+        pub fn deinit(self: *Self) void {
+            self.* = undefined;
+        }
+
         pub fn page(self: *const Self) DataType {
             return self.page_view.page;
         }
@@ -199,7 +203,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
     };
 
     return struct {
-        pub const Errror = ErrorSet;
+        pub const Error = ErrorSet;
         pub const SlabPageView = SlabPageViewImpl;
     };
 }
