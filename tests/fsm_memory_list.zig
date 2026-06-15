@@ -1,8 +1,8 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
-const slot_allocator = fullaz.storage.slot_allocator;
+const fsm = fullaz.storage.fsm;
 
-const MemoryList = slot_allocator.models.MemoryList(u32, u16);
+const MemoryList = fsm.models.MemoryList(u32, u16);
 
 test "SlotAllocator memory_list: create the model" {
     var ml = try MemoryList.init(std.heap.page_allocator);

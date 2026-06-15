@@ -22,7 +22,7 @@ fn verifyData(slots: *const TestVariadic, entry: usize, expected: []const u8) !v
     try testing.expectEqualSlices(u8, expected, data);
 }
 
-test "Variadic: initialization" {
+test "Slot Variadic: initialization" {
     var buffer: [256]u8 = undefined;
 
     // Should succeed with adequate buffer
@@ -33,7 +33,7 @@ test "Variadic: initialization" {
     try testing.expect(slots.availableSpace() > 0);
 }
 
-test "Variadic: initialization with small buffer fails" {
+test "Slot Variadic: initialization with small buffer fails" {
     const Error = errors.SlotsError;
     var buffer: [4]u8 = undefined;
 
@@ -60,7 +60,7 @@ test "Variadic: basic insert and retrieve" {
     try verifyData(&slots, idx2, data2);
 }
 
-test "Variadic: insertAt specific position" {
+test "Slot Variadic: insertAt specific position" {
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -74,7 +74,7 @@ test "Variadic: insertAt specific position" {
     try verifyData(&slots, 2, "Second");
 }
 
-test "Variadic: insertAt invalid position" {
+test "Slot Variadic: insertAt invalid position" {
     const Error = errors.SlotsError;
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
@@ -87,7 +87,7 @@ test "Variadic: insertAt invalid position" {
     try testing.expectError(Error.OutOfBounds, result);
 }
 
-test "Variadic: remove entry" {
+test "Slot Variadic: remove entry" {
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -107,7 +107,7 @@ test "Variadic: remove entry" {
     try verifyData(&slots, 2, "Third");
 }
 
-test "Variadic: removeShrink" {
+test "Slot Variadic: removeShrink" {
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -125,7 +125,7 @@ test "Variadic: removeShrink" {
     try verifyData(&slots, 1, "Third"); // Shifted down
 }
 
-test "Variadic: multiple inserts and removes" {
+test "Slot Variadic: multiple inserts and removes" {
     var buffer: [512]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -148,7 +148,7 @@ test "Variadic: multiple inserts and removes" {
     try verifyData(&slots, 2, &seq3);
 }
 
-test "Variadic: space calculations" {
+test "Slot Variadic: space calculations" {
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -161,7 +161,7 @@ test "Variadic: space calculations" {
     try testing.expect(after_insert < initial_space);
 }
 
-test "Variadic: availableAfterCompact" {
+test "Slot Variadic: availableAfterCompact" {
     var buffer: [512]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -178,7 +178,7 @@ test "Variadic: availableAfterCompact" {
     try testing.expect(after_remove > before_compact);
 }
 
-test "Variadic: canInsert status" {
+test "Slot Variadic: canInsert status" {
     var buffer: [128]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -195,7 +195,7 @@ test "Variadic: canInsert status" {
     try testing.expect(status2 == .enough or status2 == .need_compact or status2 == .not_enough);
 }
 
-test "Variadic: canUpdate status" {
+test "Slot Variadic: canUpdate status" {
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -211,7 +211,7 @@ test "Variadic: canUpdate status" {
     try testing.expect(status2 == .enough or status2 == .need_compact or status2 == .not_enough);
 }
 
-test "Variadic: compactInPlace" {
+test "Slot Variadic: compactInPlace" {
     var buffer: [512]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -240,7 +240,7 @@ test "Variadic: compactInPlace" {
     try verifyData(&slots, 2, &seq3);
 }
 
-test "Variadic: compactWithBuffer" {
+test "Slot Variadic: compactWithBuffer" {
     var buffer: [512]u8 = undefined;
     var temp_buffer: [512]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
@@ -263,7 +263,7 @@ test "Variadic: compactWithBuffer" {
     try verifyData(&slots, 2, &seq3);
 }
 
-test "Variadic: resizeGet - shrink" {
+test "Slot Variadic: resizeGet - shrink" {
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -276,7 +276,7 @@ test "Variadic: resizeGet - shrink" {
     try verifyData(&slots, 0, "Hello");
 }
 
-test "Variadic: resizeGet - same size" {
+test "Slot Variadic: resizeGet - same size" {
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -287,7 +287,7 @@ test "Variadic: resizeGet - same size" {
     try testing.expectEqual(@as(usize, 5), resized.len);
 }
 
-test "Variadic: resizeGet - grow" {
+test "Slot Variadic: resizeGet - grow" {
     var buffer: [512]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -299,7 +299,7 @@ test "Variadic: resizeGet - grow" {
     try testing.expectEqual(@as(usize, 10), resized.len);
 }
 
-test "Variadic: free slot reuse" {
+test "Slot Variadic: free slot reuse" {
     var buffer: [512]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -316,7 +316,7 @@ test "Variadic: free slot reuse" {
     try testing.expectEqual(@as(usize, 4), slots.entriesConst().len);
 }
 
-test "Variadic: boundary conditions - empty" {
+test "Slot Variadic: boundary conditions - empty" {
     const Error = errors.SlotsError;
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
@@ -329,7 +329,7 @@ test "Variadic: boundary conditions - empty" {
     try testing.expectError(Error.OutOfBounds, result);
 }
 
-test "Variadic: boundary conditions - full buffer" {
+test "Slot Variadic: boundary conditions - full buffer" {
     var buffer: [128]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -349,7 +349,7 @@ test "Variadic: boundary conditions - full buffer" {
     try testing.expect(filled);
 }
 
-test "Variadic: invalid entry access" {
+test "Slot Variadic: invalid entry access" {
     const Error = errors.SlotsError;
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
@@ -362,7 +362,7 @@ test "Variadic: invalid entry access" {
     try testing.expectError(Error.OutOfBounds, result);
 }
 
-test "Variadic: const buffer restrictions" {
+test "Slot Variadic: const buffer restrictions" {
     var buffer: [256]u8 = undefined;
     var slots_mut = try TestVariadic.init(&buffer);
     slots_mut.formatHeader();
@@ -379,7 +379,7 @@ test "Variadic: const buffer restrictions" {
     // Note: Compile-time checks prevent mutation on const buffers
 }
 
-test "Variadic: stress test - many operations" {
+test "Slot Variadic: stress test - many operations" {
     var buffer: [2048]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -413,7 +413,7 @@ test "Variadic: stress test - many operations" {
     try testing.expect(slots.entriesConst().len > 0);
 }
 
-test "Variadic: sequential operations" {
+test "Slot Variadic: sequential operations" {
     var buffer: [1024]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -444,7 +444,7 @@ test "Variadic: sequential operations" {
     try verifyData(&slots, slots.entriesConst().len - 1, "Final");
 }
 
-test "Variadic: data integrity after operations" {
+test "Slot Variadic: data integrity after operations" {
     var buffer: [512]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
@@ -470,7 +470,7 @@ test "Variadic: data integrity after operations" {
     try verifyData(&slots, 3, "New");
 }
 
-test "Variadic: remove, compact, and update to use exact available space" {
+test "Slot Variadic: remove, compact, and update to use exact available space" {
     // Setup: Create a buffer and fill it strategically
     var buffer: [256]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);
@@ -525,7 +525,7 @@ test "Variadic: remove, compact, and update to use exact available space" {
     try testing.expect(remaining_space_ac == 0);
 }
 
-test "canMergeWith - enough space" {
+test "Slot Variadic: canMergeWith - enough space" {
     var buf1: [256]u8 = undefined;
     var buf2: [256]u8 = undefined;
 
@@ -542,9 +542,9 @@ test "canMergeWith - enough space" {
     try std.testing.expectEqual(.enough, status);
 }
 
-test "canMergeWith - need compact" {
-    var buf1: [64]u8 = undefined;
-    var buf2: [64]u8 = undefined;
+test "Slot Variadic: canMergeWith - need compact" {
+    var buf1: [68]u8 = undefined;
+    var buf2: [68]u8 = undefined;
 
     var slots1 = try Variadic(u16, .little, false).init(&buf1);
     var slots2 = try Variadic(u16, .little, false).init(&buf2);
@@ -565,8 +565,8 @@ test "canMergeWith - need compact" {
     try std.testing.expectEqual(.need_compact, status);
 }
 
-test "canMergeWith - not enough space" {
-    var buf1: [32]u8 = undefined; // Small buffer
+test "Slot Variadic: canMergeWith - not enough space" {
+    var buf1: [36]u8 = undefined; // Small buffer
     var buf2: [256]u8 = undefined;
 
     var slots1 = try Variadic(u16, .little, false).init(&buf1);
@@ -584,7 +584,7 @@ test "canMergeWith - not enough space" {
     try std.testing.expectEqual(.not_enough, status);
 }
 
-test "canMergeWith - accounts for data size not just entries" {
+test "Slot Variadic: canMergeWith - accounts for data size not just entries" {
     var buf1: [64]u8 = undefined;
     var buf2: [64]u8 = undefined;
 

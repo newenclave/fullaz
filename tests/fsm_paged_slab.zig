@@ -1,10 +1,10 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
-const slot_allocator = fullaz.storage.slot_allocator;
+const fsm = fullaz.storage.fsm;
 const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
 const dev = @import("fullaz").device;
 
-const paged_slab = slot_allocator.models.paged_slab;
+const paged_slab = fsm.models.paged_slab;
 const SlabModel = paged_slab.Model;
 
 const SlabStorageManagerImpl = struct {

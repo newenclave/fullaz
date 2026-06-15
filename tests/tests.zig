@@ -20,6 +20,6 @@ test {
     _ = @import("radix_paged_model.zig");
     _ = @import("skip_list_memory.zig");
     _ = @import("skip_list_paged.zig");
-    _ = @import("slot_allocator_memory_list.zig");
-    _ = @import("slot_allocator_paged_slab.zig");
+    _ = @import("fsm_memory_list.zig");
+    _ = @import("fsm_paged_slab.zig");
 }
