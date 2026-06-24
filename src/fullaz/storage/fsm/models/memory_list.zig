@@ -73,10 +73,6 @@ pub fn MemoryList(comptime PidT: type, comptime SizeT: type) type {
             try self.ctx.pages.remove(self.ctx.allocator, idx);
         }
 
-        fn pageInfoCmp(_: void, lhs: PageInfo, rhs: usize) algorithm.Order {
-            return sizeCmp(lhs.size, rhs);
-        }
-
         pub fn lowerBoundElement(self: *const Self, size: Size) usize {
             const idx = lowerBound(
                 PageInfo,
@@ -86,6 +82,10 @@ pub fn MemoryList(comptime PidT: type, comptime SizeT: type) type {
                 {},
             ) catch self.ctx.pages.items.len;
             return idx;
+        }
+
+        fn pageInfoCmp(_: void, lhs: PageInfo, rhs: usize) algorithm.Order {
+            return sizeCmp(lhs.size, rhs);
         }
 
         fn findPid(self: *const Self, pid: PidT) ?usize {

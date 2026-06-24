@@ -2,7 +2,7 @@ const std = @import("std");
 const PackedInt = @import("../core/core.zig").packed_int.PackedInt;
 const header = @import("header.zig");
 
-pub fn SlabAllocator(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: type, comptime Endian: std.builtin.Endian) type {
+pub fn Fsm(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: type, comptime Endian: std.builtin.Endian) type {
     const PageIdType = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const SizeClassType = PackedInt(SizeClassT, Endian);

@@ -2,7 +2,7 @@ const std = @import("std");
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
 const PageSlotRef = @import("page_slot_ref.zig").PageSlotRef;
 
-fn Header(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian) type {
+pub fn Header(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian) type {
     const PageIdType = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const UInt16 = PackedInt(u16, Endian);
@@ -16,6 +16,7 @@ fn Header(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.bu
         metadata_size: IndexType,
         page_end: IndexType,
         self_pid: PageIdType,
+        fsm_index: SlotRef,
         crc: UInt32,
     };
 }
@@ -58,6 +59,9 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             hdr.page_end.set(@as(IndexT, @intCast(self.page.len)));
             hdr.self_pid.set(page_id);
             hdr.crc.set(0);
+
+            hdr.fsm_index.page_id.setMax();
+            hdr.fsm_index.slot_id.setMax();
         }
 
         pub fn header(self: *const Self) *const PageHeader {

@@ -1,16 +1,18 @@
 const std = @import("std");
-const page = @import("../../../../page/slab_allocator.zig");
+const page = @import("../../../../page/fsm.zig");
 const header = @import("../../../../page/header.zig");
 const slots = @import("../../../../slots/fixed.zig");
 const errors = @import("../../../../core/errors.zig");
 
+const SlotInfoImpl = @import("../../slot_info.zig").SlotInfo;
+
 pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
-    const HeaderPageView = header.View(PageIdT, IndexT, Endian, read_only);
+    const HeaderPageViewT = header.View(PageIdT, IndexT, Endian, read_only);
     const SlotsDirType = slots.Fixed(u16, IndexT, Endian, read_only);
     const ConstSlotsDirType = slots.Fixed(u16, IndexT, Endian, true);
 
-    const SlabAllocator = page.SlabAllocator(PageIdT, IndexT, SizeClassT, Endian);
-    const Slot = SlabAllocator.Slot;
+    const Fsm = page.Fsm(PageIdT, IndexT, SizeClassT, Endian);
+    const Slot = Fsm.Slot;
 
     const ErrorSet = ConstSlotsDirType.Error ||
         errors.OrderError ||
@@ -21,16 +23,18 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
         const Self = @This();
         const DataType = if (read_only) []const u8 else []u8;
 
-        pub const PageHeader = SlabAllocator.PageHeader;
-        pub const SubHeader = SlabAllocator.SubHeader;
+        pub const PageHeader = Fsm.PageHeader;
+        pub const PageView = HeaderPageViewT;
+        pub const SubHeader = Fsm.Subheader;
         pub const Error = ErrorSet;
         pub const Pid = PageIdT;
         pub const SizeClass = SizeClassT;
         pub const Index = IndexT;
-        pub const SubheaderType = SlabAllocator.Subheader;
+        pub const SubheaderType = Fsm.Subheader;
+        pub const SlotInfo = SlotInfoImpl(PageIdT, IndexT);
 
-        const PageViewType = HeaderPageView;
-        const SlotHeaderType = SlabAllocator.SubHeader;
+        const PageViewType = PageView;
+        const SlotHeaderType = Fsm.Subheader;
 
         page_view: PageViewType,
 
@@ -46,6 +50,17 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
 
         pub fn page(self: *const Self) DataType {
             return self.page_view.page;
+        }
+
+        pub fn pageHeaderMut(self: *Self) *PageViewType.PageHeader {
+            if (read_only) {
+                @compileError("Cannot get mutable page from a read-only view");
+            }
+            return self.page_view.headerMut();
+        }
+
+        pub fn pageHeader(self: *const Self) *const PageViewType.PageHeader {
+            return self.page_view.header();
         }
 
         pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT, size_class: SizeClassT) ErrorSet!void {
@@ -87,7 +102,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
             return try SlotsDirType.init(data);
         }
 
-        pub fn insert(self: *Self, pid: Pid, size: Index) Error!usize {
+        pub fn insert(self: *Self, pid: Pid, size: Index) Error!SlotInfo {
             var slots_dir = try self.slotsDirMut();
             const all = try slots_dir.capacity();
             const used = try slots_dir.size();
@@ -102,9 +117,21 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
                 var slot_data: *Slot = @ptrCast((try slots_dir.getMut(slot_index)).ptr);
                 slot_data.pid.set(pid);
                 slot_data.free_space.set(size);
-                return slot_index;
+                return .{
+                    .pid = undefined, // will be set below
+                    .free_space = size,
+                    .slot_id = slot_index,
+                };
             }
             return Error.OutOfBounds;
+        }
+
+        pub fn remove(self: *Self, slot: usize) ErrorSet!void {
+            var slots_dir = try self.slotsDirMut();
+            if (slot >= try slots_dir.capacity()) {
+                return Error.OutOfBounds;
+            }
+            try slots_dir.clear(slot);
         }
 
         pub fn setNext(self: *Self, next_page_id: ?PageIdT) ErrorSet!void {
@@ -159,6 +186,10 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
             return slots_dir.isFull();
         }
 
+        pub fn isEmpty(self: *const Self) Error!bool {
+            return try self.usedSlots() == 0;
+        }
+
         pub fn usedSlots(self: *const Self) Error!usize {
             const slots_dir = try self.slotsDir();
             return slots_dir.size();
@@ -169,7 +200,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
             return slots_dir.capacity();
         }
 
-        pub fn findBySize(self: *const Self, needed_size: IndexT) Error!?usize {
+        pub fn findBySize(self: *const Self, needed_size: IndexT) Error!?SlotInfo {
             const slots_dir = try self.slotsDir();
             const all = try slots_dir.capacity();
             for (0..all) |i| {
@@ -179,13 +210,17 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
                 const slot = try slots_dir.get(i);
                 const slot_data: *const Slot = @ptrCast(slot.ptr);
                 if (slot_data.free_space.get() >= needed_size) {
-                    return i;
+                    return .{
+                        .pid = slot_data.pid.get(),
+                        .free_space = slot_data.free_space.get(),
+                        .slot_id = i,
+                    };
                 }
             }
             return null;
         }
 
-        pub fn findByPid(self: *const Self, pid: Pid) Error!?usize {
+        pub fn findByPid(self: *const Self, pid: Pid) Error!?SlotInfo {
             const slots_dir = try self.slotsDir();
             const all = try slots_dir.capacity();
             for (0..all) |i| {
@@ -195,7 +230,11 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
                 const slot = try slots_dir.get(i);
                 const slot_data: *const Slot = @ptrCast(slot.ptr);
                 if (slot_data.pid.get() == pid) {
-                    return i;
+                    return .{
+                        .pid = undefined, // will be set below
+                        .free_space = slot_data.free_space.get(),
+                        .slot_id = i,
+                    };
                 }
             }
             return null;
@@ -205,5 +244,6 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
     return struct {
         pub const Error = ErrorSet;
         pub const SlabPageView = SlabPageViewImpl;
+        pub const HeaderPageView = HeaderPageViewT;
     };
 }
