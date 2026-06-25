@@ -116,7 +116,7 @@ test "WBpt paged: Insert, get" {
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};
-    var device = try Device.init(allocator, 110);
+    var device = try Device.init(allocator, 140);
     defer device.deinit();
     var cache = try PageCache.init(&device, allocator, 8);
     defer cache.deinit();

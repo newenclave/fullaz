@@ -218,9 +218,9 @@ test "Subheader.View: typed subheader access" {
     @memset(&buffer, 0);
 
     const TestSubheader = extern struct {
-        magic: u32,
-        count: u16,
-        flags: u16,
+        magic: [4]u8,
+        count: [2]u8,
+        flags: [2]u8,
     };
 
     const SubheaderView = page.subheader.View(u32, u16, TestSubheader, .little, false);
@@ -229,14 +229,14 @@ test "Subheader.View: typed subheader access" {
     view.formatPage(100, 1, 0); // kind=100, page_id=1, metadata_len=0
 
     const subhdr = view.subheaderMut();
-    subhdr.magic = 0xCAFEBABE;
-    subhdr.count = 42;
-    subhdr.flags = 0x0001;
+    subhdr.magic = [_]u8{ 0xCA, 0xFE, 0xBA, 0xBE };
+    subhdr.count = [_]u8{ 0x00, 0x2A };
+    subhdr.flags = [_]u8{ 0x00, 0x01 };
 
     const subhdr_read = view.subheader();
-    try testing.expectEqual(@as(u32, 0xCAFEBABE), subhdr_read.magic);
-    try testing.expectEqual(@as(u16, 42), subhdr_read.count);
-    try testing.expectEqual(@as(u16, 0x0001), subhdr_read.flags);
+    try testing.expectEqual([_]u8{ 0xCA, 0xFE, 0xBA, 0xBE }, subhdr_read.magic);
+    try testing.expectEqual([_]u8{ 0x00, 0x2A }, subhdr_read.count);
+    try testing.expectEqual([_]u8{ 0x00, 0x01 }, subhdr_read.flags);
 }
 
 test "Page/bpt module: contains expected types" {
