@@ -22,4 +22,6 @@ test {
     _ = @import("skip_list_paged.zig");
     _ = @import("fsm_memory_list.zig");
     _ = @import("fsm_paged_slab.zig");
+    _ = @import("fsm2_memory.zig");
+    _ = @import("fsm2_paged_slab.zig");
 }
