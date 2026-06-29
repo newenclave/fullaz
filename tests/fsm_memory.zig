@@ -1,9 +1,9 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
-const fsm2 = fullaz.storage.fsm2;
+const fsm = fullaz.storage.fsm;
 
-const Memory = fsm2.models.Memory(u32, u16);
-const Map = fsm2.Fsm2(Memory);
+const Memory = fsm.models.Memory(u32, u16);
+const Map = fsm.Fsm2(Memory);
 
 test "Fsm2 memory: add, find, update, remove" {
     const allocator = std.testing.allocator;
