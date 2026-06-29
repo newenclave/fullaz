@@ -15,11 +15,31 @@ const Fsm = fsm.Fsm2(FsmMem);
 
 const interfaces = skip_list.models.interfaces;
 
+var globalTestStart: u64 = 0;
+var globalTag: []const u8 = "";
+
 fn getNowTimestamp() u64 {
     const io = std.testing.io;
     const timestamp = std.Io.Clock.real.now(io);
     const millis = @abs(timestamp.toMilliseconds());
     return millis;
+}
+
+fn beforeTest(tag: []const u8) void {
+    globalTestStart = getNowTimestamp();
+    globalTag = tag;
+}
+
+fn timestampPrint(comptime name: []const u8, params: anytype) void {
+    const io = std.testing.io;
+    const timestamp = std.Io.Clock.real.now(io);
+    const millis = @abs(timestamp.toMilliseconds()) - globalTestStart;
+    const hours = millis / (1000 * 60 * 60);
+    const mins = (millis / (1000 * 60)) % 60;
+    const seconds = (millis / 1000) % 60;
+
+    std.debug.print("{d:0>2}:{:0>2}:{:0>2}.{d:0>4} [{s}]: ", .{ hours, mins, seconds, @mod(millis, 1000), globalTag });
+    std.debug.print(name, params);
 }
 
 fn keyCmp(ctx: anytype, k1: []const u8, k2: []const u8) algorithm.Order {
@@ -202,3 +222,79 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     // page is still tracked by the fsm (returned, not dropped)
     try std.testing.expectEqual(@as(?u32, ref.page_id), try fsm_inst.find(1));
 }
+
+fn keyDumper(value: []const u8) void {
+    std.debug.print("{any}; ", .{value});
+}
+
+fn valueDumper(_: []const u8) void {
+    //std.debug.print("={d}; ", .{value.*});
+}
+
+// test "SkipList paged: iterator remove test" {
+//     const allocator = std.testing.allocator;
+//     const Device = device.MemoryBlock(u32);
+//     const PageCache = PageCacheT(Device);
+//     const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+
+//     var dev = try Device.init(allocator, 4096);
+//     defer dev.deinit();
+//     var cache = try PageCache.init(&dev, allocator, 16);
+//     defer cache.deinit();
+//     var mgr = NoneStorageManager{};
+//     var fsm_mem = try FsmMem.init(allocator);
+//     defer fsm_mem.deinit();
+//     var fsm_inst = Fsm.init(&fsm_mem);
+//     defer fsm_inst.deinit();
+
+//     var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
+//     const rand = prng.random();
+
+//     var model = Model.init(&cache, &mgr, &fsm_inst, .{
+//         .max_level = 4,
+//         .key_len = 4,
+//         .value_len = 4,
+//     }, {}, rand);
+//     defer model.deinit();
+
+//     const SL = SkipList(Model);
+//     var sl = SL.init(&model);
+
+//     var desiderKeys = try std.ArrayList(u32).initCapacity(std.testing.allocator, 100);
+//     defer desiderKeys.deinit(std.testing.allocator);
+
+//     timestampPrint("Inserting keys...\n", .{});
+//     for (0..10_000) |k| {
+//         const next = @as(u32, (@as(u32, @intCast(k)) + 1) * 10);
+//         try desiderKeys.append(std.testing.allocator, next);
+//         const kv: *[]u8 = &[_]u8{ @intCast(next >> 24), @intCast(next >> 16), @intCast(next >> 8), @intCast(next) };
+//         try sl.insert(kv, kv);
+//     }
+
+//     timestampPrint("Iterating keys...\n", .{});
+//     var count: usize = 0;
+//     var expected_key: u32 = 0;
+
+//     const half = desiderKeys.items.len / 2;
+
+//     timestampPrint("start removing the keys...\n", .{});
+
+//     for (0..half) |id| {
+//         const next = @as(u32, (@as(u32, @intCast(id * 2)) + 1) * 10);
+//         var it = try sl.find(next);
+//         defer it.deinit();
+
+//         try std.testing.expectEqual((try it.key()).*, next);
+//         it = try sl.removeItr(it);
+//         expected_key += 20;
+//         count += 1;
+//         if (!it.isEnd()) {
+//             try std.testing.expectEqual((try it.key()).*, expected_key);
+//         }
+//     }
+
+//     _ = try sl.dump(keyDumper, valueDumper);
+
+//     timestampPrint("Done removing the keys...\n", .{});
+//     try std.testing.expectEqual(count, half);
+// }

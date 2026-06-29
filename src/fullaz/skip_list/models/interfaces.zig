@@ -11,7 +11,7 @@ pub const requiresStorageManager = contracts.storage_manager.requiresStorageMana
 pub const requiresPageCache = contracts.page_cache.requiresPageCache;
 
 pub fn assertModelAccessor(comptime Model: type) void {
-    const A = Model.AccessorType;
+    const A = Model.Accessor;
     assertAccessor(A);
 
     requiresErrorDeclaration(Model, "Error");

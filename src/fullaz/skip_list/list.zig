@@ -11,7 +11,7 @@ pub fn List(comptime ModelT: type) type {
         const Self = @This();
 
         const Model = ModelT;
-        const Accessor = ModelT.AccessorType;
+        const Accessor = ModelT.Accessor;
 
         pub const KeyIn = Model.KeyIn;
         pub const KeyOut = Model.KeyOut;

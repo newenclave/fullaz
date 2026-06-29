@@ -303,7 +303,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         const Self = @This();
 
         pub const Error = error{ OutOfMemory, OutOfBounds };
-        pub const AccessorType = AccessorImpl;
+        pub const Accessor = AccessorImpl;
 
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
@@ -314,11 +314,11 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         pub const ValueOut = *const ValueIn;
         pub const Path = PathImpl;
 
-        accessor: AccessorType,
+        accessor: Accessor,
 
         pub fn init(allocator: std.mem.Allocator, max_level: usize, rng: std.Random) Error!Self {
             return .{
-                .accessor = try AccessorType.init(allocator, max_level, rng),
+                .accessor = try Accessor.init(allocator, max_level, rng),
             };
         }
 
@@ -330,7 +330,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
             return self.accessor.ctx.max_level;
         }
 
-        pub fn getAccessor(self: *Self) *AccessorType {
+        pub fn getAccessor(self: *Self) *Accessor {
             return &self.accessor;
         }
 
