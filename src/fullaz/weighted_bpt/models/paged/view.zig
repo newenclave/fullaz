@@ -173,7 +173,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             const hdr_size = @sizeOf(SlotHeaderType);
             const total_size: usize = hdr_size + value.len;
             var slot_dir = try self.slotsDirMut();
-            var buffer = try slot_dir.reserveGet(index, total_size);
+            var buffer = try slot_dir.reserveGetAt(index, total_size);
             var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
             slot.weight.set(weight);
 
@@ -310,7 +310,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             const slot_size = @sizeOf(SlotHeaderType);
             var slot_dir = try self.slotsDirMut();
 
-            var buffer = try slot_dir.reserveGet(index, slot_size);
+            var buffer = try slot_dir.reserveGetAt(index, slot_size);
             var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
             slot.child.set(child_page_id);
             slot.weight.set(weight);

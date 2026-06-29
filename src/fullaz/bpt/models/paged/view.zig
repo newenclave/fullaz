@@ -108,7 +108,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub fn insert(self: *Self, index: usize, key: []const u8, value: []const u8) ErrorSet!void {
             const total_size: usize = @sizeOf(SlotHeaderType) + key.len + value.len;
             var slot_dir = try self.slotsDirMut();
-            var buffer = try slot_dir.reserveGet(index, total_size);
+            var buffer = try slot_dir.reserveGetAt(index, total_size);
             var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
 
             slot.key_size.set(@as(@TypeOf(slot.key_size.get()), @intCast(key.len)));
@@ -291,7 +291,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub fn insert(self: *Self, index: usize, key: []const u8, child: PageIdT) ErrorSet!void {
             const total_size: usize = @sizeOf(SlotHeaderType) + key.len;
             var slot_dir = try self.slotsDirMut();
-            var buffer = try slot_dir.reserveGet(index, total_size);
+            var buffer = try slot_dir.reserveGetAt(index, total_size);
             var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
             slot.child.set(child);
             const key_dst = buffer[@sizeOf(SlotHeaderType)..][0..key.len];
