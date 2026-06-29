@@ -4,10 +4,14 @@ const algorithm = @import("fullaz").core.algorithm;
 
 const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
 const device = @import("fullaz").device;
+const fsm = @import("fullaz").storage.fsm;
 
 const ModelType = skip_list.models.Paged;
 const SkipList = skip_list.List;
 const View = skip_list.models.paged.View;
+
+const FsmMem = fsm.models.Memory(u32, u16);
+const Fsm = fsm.Fsm2(FsmMem);
 
 const interfaces = skip_list.models.interfaces;
 
@@ -72,10 +76,14 @@ test "SkipList paged: create and load nodes" {
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
 
-    const Model = ModelType(PageCache, NoneStorageManager, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
+    var fsm_mem = try FsmMem.init(allocator);
+    defer fsm_mem.deinit();
+    var fsm_inst = Fsm.init(&fsm_mem);
+    defer fsm_inst.deinit();
 
     var cache = try PageCache.init(&dev, allocator, 16);
     defer cache.deinit();
@@ -85,10 +93,11 @@ test "SkipList paged: create and load nodes" {
     var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
     const rand = prng.random();
 
-    var model = Model.init(&cache, &mgr, .{
+    var model = Model.init(&cache, &mgr, &fsm_inst, .{
         .max_level = 1,
         .key_len = 4,
         .value_len = 4,
+        .node_page_kind = 42,
     }, {}, rand);
     defer model.deinit();
 }
@@ -128,7 +137,68 @@ test "SkipList paged: interfaces" {
     //const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
 
     comptime interfaces.assertPath(Model.Accessor.Path);
+}
+
+test "SkipList paged: createNode allocates a slot + tracks the page; destroy frees it" {
+    const allocator = std.testing.allocator;
+    const Device = device.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+
+    var dev = try Device.init(allocator, 4096);
+    defer dev.deinit();
+    var cache = try PageCache.init(&dev, allocator, 16);
+    defer cache.deinit();
+    var mgr = NoneStorageManager{};
+    var fsm_mem = try FsmMem.init(allocator);
+    defer fsm_mem.deinit();
+    var fsm_inst = Fsm.init(&fsm_mem);
+    defer fsm_inst.deinit();
+
+    var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
+    const rand = prng.random();
+
+    var model = Model.init(&cache, &mgr, &fsm_inst, .{
+        .max_level = 4,
+        .key_len = 4,
+        .value_len = 4,
+    }, {}, rand);
+    defer model.deinit();
+
+    var node = try model.accessor.createNode("AAAA", "BBBB");
+    const ref = node.id();
+
+    // the data page now carries our slot (inspect via a read-only View)
+    var used_after_create: usize = undefined;
+    {
+        var ph = try cache.fetch(ref.page_id);
+        defer ph.deinit();
+        const v = View(u32, u16, std.builtin.Endian.little, true).init(try ph.getData());
+        try std.testing.expectEqual(@as(usize, 1), try v.entries());
+        const sw = try v.get(ref.slot_id);
+        try std.testing.expect(std.mem.eql(u8, sw.key, "AAAA"));
+        try std.testing.expect(std.mem.eql(u8, sw.value, "BBBB"));
+        used_after_create = try (try v.slotsDir()).usedSpace();
+    }
+
+    // the page is registered in the fsm (it still has room)
+    try std.testing.expectEqual(@as(?u32, ref.page_id), try fsm_inst.find(1));
+
+    // deinit = release the handle only (page + slot stay)
+    model.accessor.deinitNode(&node);
+
+    // destroy = free the slot and return the page to the fsm
+    model.accessor.destroy(ref);
+    {
+        var ph = try cache.fetch(ref.page_id);
+        defer ph.deinit();
+        const v = View(u32, u16, std.builtin.Endian.little, true).init(try ph.getData());
+        const used_after_destroy = try (try v.slotsDir()).usedSpace();
+        try std.testing.expect(used_after_destroy < used_after_create); // slot reclaimed
+    }
+    // page is still tracked by the fsm (returned, not dropped)
+    try std.testing.expectEqual(@as(?u32, ref.page_id), try fsm_inst.find(1));
 }

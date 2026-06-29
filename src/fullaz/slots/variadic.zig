@@ -76,6 +76,10 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             header.freed.set(0);
         }
 
+        pub fn fullSlotSize(obj_len: usize) usize {
+            return @sizeOf(Entry) + obj_len;
+        }
+
         pub fn capacityFor(self: *const Self, obj_len: usize) usize {
             const total_size = self.body.len - @sizeOf(Header);
             return total_size / (@sizeOf(Entry) + obj_len);
@@ -309,10 +313,12 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn insert(self: *Self, data: []const u8) Error!usize {
-            if (read_only) @compileError("Cannot insert into const buffer");
+            if (read_only) {
+                @compileError("Cannot insert into const buffer");
+            }
 
             const len = data.len;
-            const buf = self.reserveGet(self.entriesConst().len, len) catch |err| {
+            const buf = self.reserveGetAt(self.entriesConst().len, len) catch |err| {
                 return err;
             };
             const buf_fixed = buf[0..len];
@@ -321,10 +327,12 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn insertAt(self: *Self, pos: usize, data: []const u8) Error!void {
-            if (read_only) @compileError("Cannot insert into const buffer");
+            if (read_only) {
+                @compileError("Cannot insert into const buffer");
+            }
 
             const len = data.len;
-            const buf = self.reserveGet(pos, len) catch |err| {
+            const buf = self.reserveGetAt(pos, len) catch |err| {
                 return err;
             };
             const buf_fixed = buf[0..len];
@@ -447,7 +455,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return @ptrCast(&self.body[0]);
         }
 
-        pub fn resizeGet(self: *Self, pos: usize, len: usize) ![]u8 {
+        pub fn resizeGet(self: *Self, pos: usize, len: usize) Error![]u8 {
             if (read_only) @compileError("Cannot insert into const buffer");
 
             if (pos > self.entriesConst().len) {
@@ -484,8 +492,13 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             return self.reserveGetExpand(pos, len, false);
         }
 
-        pub fn reserveGet(self: *Self, pos: usize, len: usize) ![]u8 {
+        pub fn reserveGetAt(self: *Self, pos: usize, len: usize) Error![]u8 {
             return self.reserveGetExpand(pos, len, true);
+        }
+
+        pub fn reserveGet(self: *Self, len: usize) Error![]u8 {
+            const slots = self.entriesConst();
+            return self.reserveGetExpand(slots.len, len, true);
         }
 
         fn reserveGetExpand(self: *Self, pos: usize, len: usize, need_slot: bool) Error![]u8 {

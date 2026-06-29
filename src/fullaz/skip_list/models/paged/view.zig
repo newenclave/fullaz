@@ -228,5 +228,14 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             hdr.level = @intCast(levels);
             return try SlotWrapperMut.init(buf);
         }
+
+        pub fn slotSizeNeeded(key_size: usize, value_size: usize, levels: usize) usize {
+            return SlotsDirType.fullSlotSize(SlotWrapper.totalSlotSize(key_size, value_size, levels));
+        }
+
+        pub fn reserveGet(self: *Self, slot_id: usize, len: usize) ErrorSet![]u8 {
+            var sdir = try self.slotsDirMut();
+            return try sdir.reserveGetAt(slot_id, len);
+        }
     };
 }
