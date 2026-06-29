@@ -196,7 +196,7 @@ pub fn Paged(
             if (max_level == 0) {
                 return 0;
             }
-            return self.context.rng.intRangeAtMost(usize, 0, max_level - 1);
+            return self.context.rng.intRangeAtMost(usize, 1, max_level);
         }
 
         fn generateLevel(self: *const Self, k: usize) Error!usize {
