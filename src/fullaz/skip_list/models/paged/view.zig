@@ -11,13 +11,13 @@ fn SlotWrapperView(comptime PageIdT: type, comptime IndexT: type, comptime Endia
     return struct {
         const Self = @This();
 
-        const ByteSlice = if (read_only) []const u8 else []u8;
-        const LevelRefBuf = if (read_only) []const LevelRef else []LevelRef;
-
         const SkipListPageType = SkipListPage(PageIdT, IndexT, Endian);
 
         const SlotHeader = SkipListPageType.SkipListNode;
-        const LevelRef = SkipListPageType.LevelRef;
+        pub const LevelRef = SkipListPageType.LevelRef;
+
+        const ByteSlice = if (read_only) []const u8 else []u8;
+        const LevelRefBuf = if (read_only) []const LevelRef else []LevelRef;
 
         const ErrorSet = SlotsDirType.Error;
 
@@ -114,6 +114,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         const ByteSliceMut = []u8;
 
         const PageViewType = HeaderPageView;
+        const HeaderType = PageViewType.PageHeader;
         const ErrorSet = SlotsDirType.Error;
 
         const SubheaderType = SkipListPage(PageIdT, IndexT, Endian).SkipListSubheader;
@@ -152,6 +153,10 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return (try self.slotsDir()).size();
         }
 
+        pub fn header(self: *const Self) *const HeaderType {
+            return self.page_view.header();
+        }
+
         pub fn subheader(self: *const Self) *const SubheaderType {
             const subhdr = self.page_view.subheader();
             return @ptrCast(@alignCast(&subhdr[0]));
@@ -188,8 +193,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return try SlotWrapperConst.init(slot);
         }
 
-        pub fn getMut(self: *const Self, pos: usize) Error!SlotWrapperMut {
-            const sdir = try self.slotsDirMut();
+        pub fn getMut(self: *Self, pos: usize) Error!SlotWrapperMut {
+            var sdir = try self.slotsDirMut();
             const slot = try sdir.getMut(pos);
             return try SlotWrapperMut.init(slot);
         }
@@ -203,6 +208,15 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             _ = pos;
             const total_len = SlotWrapperConst.totalSlotSize(key.len, value.len, level);
             return (try self.slotsDir()).canInsert(total_len);
+        }
+
+        pub fn compact(self: *Self, tmpBuf: ?[]u8) ErrorSet!void {
+            var sd = try self.slotsDirMut();
+            if (tmpBuf) |buf| {
+                try sd.compactWithBuffer(buf);
+            } else {
+                try sd.compactInPlace();
+            }
         }
 
         pub fn insert(self: *Self, pos: usize, value: ByteSliceConst) ErrorSet!void {
@@ -229,8 +243,12 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return try SlotWrapperMut.init(buf);
         }
 
-        pub fn slotSizeNeeded(key_size: usize, value_size: usize, levels: usize) usize {
+        pub fn fullSlotSizeNeeded(key_size: usize, value_size: usize, levels: usize) usize {
             return SlotsDirType.fullSlotSize(SlotWrapper.totalSlotSize(key_size, value_size, levels));
+        }
+
+        pub fn slotSizeNeeded(key_size: usize, value_size: usize, levels: usize) usize {
+            return SlotWrapper.totalSlotSize(key_size, value_size, levels);
         }
 
         pub fn reserveGet(self: *Self, slot_id: usize, len: usize) ErrorSet![]u8 {

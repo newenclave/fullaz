@@ -88,14 +88,6 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
             return &self.element.value;
         }
 
-        pub fn setKey(self: *Self, key: KeyIn) Error!void {
-            self.element.key = key;
-        }
-
-        pub fn setValue(self: *Self, value: ValueIn) Error!void {
-            self.element.value = value;
-        }
-
         pub fn setPrev(self: *Self, level: usize, pid: ?Pid) Error!void {
             if (level >= self.element.links.items.len) {
                 return Error.OutOfMemory;

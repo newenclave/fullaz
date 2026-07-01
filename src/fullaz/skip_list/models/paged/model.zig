@@ -27,6 +27,8 @@ pub fn Paged(
 
     const NodeViewMut = SubheaderView(BlockIdType, u16, .little, false);
     const NodeViewConst = SubheaderView(BlockIdType, u16, .little, true);
+    const SlotWrapperConst = NodeViewConst.SlotWrapperConst;
+    const SlotWrapper = NodeViewMut.SlotWrapperConst;
 
     _ = cmp;
 
@@ -127,48 +129,96 @@ pub fn Paged(
             return self.pid;
         }
 
-        // TODO(C4): read the node's slot via a const View over 'ph.getData()' at 'pid.slot_id'.
-        pub fn getKey(_: *const Self) Error!KeyOut {
-            @panic("TODO: NodeImpl.getKey");
+        pub fn getKey(self: *const Self) Error!KeyOut {
+            const view = NodeViewConst.init(try self.ph.getData());
+            const sw = try view.get(self.pid.slot_id);
+            return sw.key;
         }
 
-        pub fn getValue(_: *const Self) Error!ValueOut {
-            @panic("TODO: NodeImpl.getValue");
+        pub fn getValue(self: *const Self) Error!ValueOut {
+            const view = NodeViewConst.init(try self.ph.getData());
+            const sw = try view.get(self.pid.slot_id);
+            return sw.value;
         }
 
-        pub fn getLevel(_: *const Self) Error!usize {
-            @panic("TODO: NodeImpl.getLevel");
+        pub fn getLevel(self: *const Self) Error!usize {
+            const view = NodeViewConst.init(try self.ph.getData());
+            const sw = try view.get(self.pid.slot_id);
+            return @as(usize, sw.header().level);
         }
 
-        // TODO(C5): decode the level's LevelRef.prev/.next (PageSlotRef) into ?Pid.
-        pub fn getPrev(_: *const Self, _: usize) Error!?Pid {
-            @panic("TODO: NodeImpl.getPrev");
+        fn getLevelRef(self: *const Self, level: usize) Error!*const SlotWrapperConst.LevelRef {
+            const view = NodeViewConst.init(try self.ph.getData());
+            const sw = try view.get(self.pid.slot_id);
+            const current_level = @as(usize, sw.header().level);
+            if (level >= current_level) {
+                return Error.OutOfBounds;
+            }
+            return &sw.levels[level];
         }
 
-        pub fn getNext(_: *const Self, _: usize) Error!?Pid {
-            @panic("TODO: NodeImpl.getNext");
+        fn getLevelRefMut(self: *Self, level: usize) Error!*SlotWrapper.LevelRef {
+            var view = NodeViewMut.init(try self.ph.getDataMut());
+            const sw = try view.getMut(self.pid.slot_id);
+            const current_level = @as(usize, sw.header().level);
+            if (level >= current_level) {
+                return Error.OutOfBounds;
+            }
+            return &sw.levels[level];
+        }
+
+        pub fn getPrev(self: *const Self, level: usize) Error!?Pid {
+            const lvl_ref = try self.getLevelRef(level);
+            if (lvl_ref.prev.page_id.isMax()) {
+                return null;
+            } else {
+                return .{
+                    .page_id = lvl_ref.prev.page_id.get(),
+                    .slot_id = lvl_ref.prev.slot_id.get(),
+                };
+            }
+        }
+
+        pub fn getNext(self: *const Self, level: usize) Error!?Pid {
+            const lvl_ref = try self.getLevelRef(level);
+            if (lvl_ref.next.page_id.isMax()) {
+                return null;
+            } else {
+                return .{
+                    .page_id = lvl_ref.next.page_id.get(),
+                    .slot_id = lvl_ref.next.slot_id.get(),
+                };
+            }
         }
 
         // TODO(C4): write key/value bytes into the slot via getMut on 'ph.getDataMut()'.
-        pub fn setKey(_: *Self, _: KeyIn) Error!void {
-            @panic("TODO: NodeImpl.setKey");
-        }
-
         pub fn setValue(_: *Self, _: ValueIn) Error!void {
             @panic("TODO: NodeImpl.setValue");
         }
 
-        // TODO(C5): encode 'pid' into the level's LevelRef.prev/.next.
-        pub fn setPrev(_: *Self, _: usize, _: ?Pid) Error!void {
-            @panic("TODO: NodeImpl.setPrev");
+        pub fn setPrev(self: *Self, level: usize, pid: ?Pid) Error!void {
+            const lvl_ref = try self.getLevelRefMut(level);
+            if (pid) |p| {
+                lvl_ref.prev.page_id.set(p.page_id);
+                lvl_ref.prev.slot_id.set(@intCast(p.slot_id));
+            } else {
+                lvl_ref.prev.page_id.setMax();
+                lvl_ref.prev.slot_id.setMax();
+            }
         }
 
-        pub fn setNext(_: *Self, _: usize, _: ?Pid) Error!void {
-            @panic("TODO: NodeImpl.setNext");
+        pub fn setNext(self: *Self, level: usize, pid: ?Pid) Error!void {
+            const lvl_ref = try self.getLevelRefMut(level);
+            if (pid) |p| {
+                lvl_ref.next.page_id.set(p.page_id);
+                lvl_ref.next.slot_id.set(@intCast(p.slot_id));
+            } else {
+                lvl_ref.next.page_id.setMax();
+                lvl_ref.next.slot_id.setMax();
+            }
         }
     };
 
-    // Compile-time proof the skeleton satisfies the Node contract (signatures only).
     comptime {
         interfaces.assertNode(NodeImpl);
     }
@@ -176,6 +226,9 @@ pub fn Paged(
     const AccessorImpl = struct {
         const Self = @This();
 
+        pub const Node = NodeImpl;
+        pub const KeyIn = KeyT;
+        pub const ValueIn = ValueT;
         pub const Pid = PidImpl;
         pub const Error = PageCacheType.Error ||
             StorageManager.Error ||
@@ -189,14 +242,6 @@ pub fn Paged(
             return Self{
                 .context = ctx,
             };
-        }
-
-        fn generateTargetLevel(self: *const Self) Error!usize {
-            const max_level = self.context.settings.max_level;
-            if (max_level == 0) {
-                return 0;
-            }
-            return self.context.rng.intRangeAtMost(usize, 1, max_level);
         }
 
         fn generateLevel(self: *const Self, k: usize) Error!usize {
@@ -219,24 +264,37 @@ pub fn Paged(
             }
         }
 
+        pub fn checkCompactPage(self: *Self, ph: *PageHandle, key: KeyT, value: ValueT, level_field: usize) Error!bool {
+            var fview = NodeViewMut.init(try ph.getDataMut());
+            const pos = try fview.entries();
+            const available = try fview.canInsert(pos, key, value, level_field);
+            if (available == .need_compact) {
+                var tmp_page = self.context.cache.getTemporaryPage() catch {
+                    try fview.compact(null);
+                    return true;
+                };
+                defer tmp_page.deinit();
+                try fview.compact(try tmp_page.getDataMut());
+                return true;
+            }
+            return available == .enough;
+        }
+
         pub fn createNode(self: *Self, key: KeyT, value: ValueT) Error!NodeImpl {
             const ctx = &self.context;
-            const level_field = try self.generateLevel(try self.generateTargetLevel());
+            const level_field = try self.generateLevel(2) + 1;
 
+            const full_slot_bytes = NodeViewConst.fullSlotSizeNeeded(key.len, value.len, level_field);
             const slot_bytes = NodeViewConst.slotSizeNeeded(key.len, value.len, level_field);
 
             // find a page with room (fsm), else create a fresh one
             var ph: PageHandle = undefined;
             var page_id: BlockIdType = undefined;
             var is_new = false;
-            if (try ctx.fsm.find(@intCast(slot_bytes))) |found| {
+            if (try ctx.fsm.find(@intCast(full_slot_bytes))) |found| {
                 var fph = try ctx.cache.fetch(found);
-                const fits = blk: {
-                    errdefer fph.deinit();
-                    const fview = NodeViewMut.init(try fph.getDataMut());
-                    const pos = try fview.entries();
-                    break :blk (try fview.canInsert(pos, key, value, level_field)) == .enough;
-                };
+                errdefer fph.deinit();
+                const fits = try self.checkCompactPage(&fph, key, value, level_field);
                 if (fits) {
                     ph = fph;
                     page_id = found;
@@ -257,8 +315,7 @@ pub fn Paged(
             const slot_id = try view.entries();
             const sbytes = try view.reserveGet(slot_id, slot_bytes);
 
-            const scratch = NodeViewMut.init(sbytes);
-            const sw = try scratch.createSlot(sbytes, key.len, value.len, level_field);
+            const sw = try view.createSlot(sbytes, key.len, value.len, level_field);
             @memcpy(sw.key, key);
             @memcpy(sw.value, value);
             for (sw.levels) |*lr| {
@@ -278,9 +335,15 @@ pub fn Paged(
             });
         }
 
-        pub fn loadNode(self: *Self, pid: Pid) Error!NodeImpl {
-            var ph = try self.ctx.cache.fetch(pid.page_id);
+        pub fn loadNode(self: *const Self, pid: Pid) Error!NodeImpl {
+            var ph = try self.context.cache.fetch(pid.page_id);
             errdefer ph.deinit();
+
+            const view = NodeViewConst.init(try ph.getData());
+            if (view.header().kind.get() != self.context.settings.node_page_kind) {
+                return Error.BadType;
+            }
+            return NodeImpl.init(ph, pid);
         }
 
         pub fn destroy(self: *Self, pid: PidImpl) void {

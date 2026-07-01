@@ -178,7 +178,10 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     var fsm_inst = Fsm.init(&fsm_mem);
     defer fsm_inst.deinit();
 
-    var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
+    const ts = getNowTimestamp();
+    std.debug.print("Test timestamp: {d}\n", .{ts});
+
+    var prng: std.Random.DefaultPrng = .init(ts);
     const rand = prng.random();
 
     var model = Model.init(&cache, &mgr, &fsm_inst, .{
@@ -202,6 +205,18 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
         try std.testing.expect(std.mem.eql(u8, sw.key, "AAAA"));
         try std.testing.expect(std.mem.eql(u8, sw.value, "BBBB"));
         used_after_create = try (try v.slotsDir()).usedSpace();
+    }
+
+    // read the node back through its own accessors (C4)
+    const got_key = try node.getKey();
+    const got_value = try node.getValue();
+
+    try std.testing.expect(std.mem.eql(u8, got_key, "AAAA"));
+    try std.testing.expect(std.mem.eql(u8, got_value, "BBBB"));
+    {
+        const lvl = try node.getLevel();
+        std.debug.print("Node level: {d}\n", .{lvl});
+        try std.testing.expect(lvl >= 1 and lvl <= 4); // max_level = 4
     }
 
     // the page is registered in the fsm (it still has room)
@@ -229,6 +244,218 @@ fn keyDumper(value: []const u8) void {
 
 fn valueDumper(_: []const u8) void {
     //std.debug.print("={d}; ", .{value.*});
+}
+
+test "SkipList paged: node next/prev links round-trip per level" {
+    const allocator = std.testing.allocator;
+    const Device = device.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+
+    var dev = try Device.init(allocator, 4096);
+    defer dev.deinit();
+    var cache = try PageCache.init(&dev, allocator, 16);
+    defer cache.deinit();
+    var mgr = NoneStorageManager{};
+    var fsm_mem = try FsmMem.init(allocator);
+    defer fsm_mem.deinit();
+    var fsm_inst = Fsm.init(&fsm_mem);
+    defer fsm_inst.deinit();
+
+    var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
+    const rand = prng.random();
+
+    var model = Model.init(&cache, &mgr, &fsm_inst, .{
+        .max_level = 4,
+        .key_len = 4,
+        .value_len = 4,
+    }, {}, rand);
+    defer model.deinit();
+
+    // two real nodes on the page; n2 is the link target (its slot_id is non-zero)
+    var n1 = try model.accessor.createNode("K1AA", "V1BB");
+    defer model.accessor.deinitNode(&n1);
+    var n2 = try model.accessor.createNode("K2AA", "V2BB");
+    defer model.accessor.deinitNode(&n2);
+
+    const id2 = n2.id();
+
+    // a freshly created node has every level's next/prev formatted to null
+    const nlevels = try n1.getLevel();
+    try std.testing.expect(nlevels >= 1);
+    {
+        var lvl: usize = 0;
+        while (lvl < nlevels) : (lvl += 1) {
+            try std.testing.expect((try n1.getNext(lvl)) == null);
+            try std.testing.expect((try n1.getPrev(lvl)) == null);
+        }
+    }
+
+    // out-of-range levels are rejected on both read and write
+    try std.testing.expectError(error.OutOfBounds, n1.getNext(nlevels));
+    try std.testing.expectError(error.OutOfBounds, n1.getPrev(nlevels));
+    try std.testing.expectError(error.OutOfBounds, n1.setNext(nlevels, id2));
+
+    const top = nlevels - 1;
+
+    // set next at the top level -> reads back the same pid; prev stays null (fields are independent)
+    try n1.setNext(top, id2);
+    {
+        const got = (try n1.getNext(top)).?;
+        try std.testing.expectEqual(id2.page_id, got.page_id);
+        try std.testing.expectEqual(id2.slot_id, got.slot_id);
+    }
+    try std.testing.expect((try n1.getPrev(top)) == null);
+
+    // set prev at the top level -> reads back; next link is unchanged
+    try n1.setPrev(top, id2);
+    {
+        const got = (try n1.getPrev(top)).?;
+        try std.testing.expectEqual(id2.page_id, got.page_id);
+        try std.testing.expectEqual(id2.slot_id, got.slot_id);
+    }
+    try std.testing.expect((try n1.getNext(top)) != null);
+
+    // levels are indexed independently: level 0 is untouched by writes at the top level
+    if (nlevels > 1) {
+        try std.testing.expect((try n1.getNext(0)) == null);
+        try n1.setNext(0, id2);
+        try std.testing.expect((try n1.getNext(0)) != null);
+        try std.testing.expect((try n1.getNext(top)) != null); // top link survives
+    }
+
+    // clearing writes null back through the max sentinel
+    try n1.setNext(top, null);
+    try n1.setPrev(top, null);
+    try std.testing.expect((try n1.getNext(top)) == null);
+    try std.testing.expect((try n1.getPrev(top)) == null);
+}
+
+test "SkipList paged: View.compact reclaims a freed hole and preserves slot ids" {
+    var buf: [1024]u8 = .{0} ** 1024;
+    const ViewT = View(u32, u16, std.builtin.Endian.little, false);
+    var v = ViewT.init(buf[0..]);
+    try v.formatPage(1, 7, 0);
+
+    // four level-0 slots with distinct keys at indices 0..3
+    const keys = [_][]const u8{ "AAAA", "BBBB", "CCCC", "DDDD" };
+    for (keys, 0..) |k, i| {
+        var scratch: [64]u8 = undefined;
+        const s = try v.createSlot(scratch[0..], 4, 4, 0);
+        @memcpy(s.key, k);
+        @memcpy(s.value, "vvvv");
+        for (s.levels) |*lr| lr.format();
+        try v.insert(i, s.body());
+    }
+    try std.testing.expectEqual(@as(usize, 4), try v.entries());
+
+    // free a middle slot -> a fragmented hole above free_end (only compaction reclaims it)
+    {
+        var sd = try v.slotsDirMut();
+        try sd.free(1);
+    }
+    const contiguous_pre = (try v.slotsDir()).availableSpace();
+
+    try v.compact(null);
+
+    // the hole is now folded into the contiguous free region
+    try std.testing.expect((try v.slotsDir()).availableSpace() > contiguous_pre);
+
+    // slot ids are stable: surviving slots keep index -> data (what skip-list links rely on)
+    try std.testing.expect(std.mem.eql(u8, (try v.get(0)).key, "AAAA"));
+    try std.testing.expect(std.mem.eql(u8, (try v.get(2)).key, "CCCC"));
+    try std.testing.expect(std.mem.eql(u8, (try v.get(3)).key, "DDDD"));
+    // free() (not remove()) keeps the directory length
+    try std.testing.expectEqual(@as(usize, 4), try v.entries());
+}
+
+test "SkipList paged: checkCompactPage compacts a fragmented page so a larger slot fits" {
+    const allocator = std.testing.allocator;
+    const Device = device.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+
+    var dev = try Device.init(allocator, 1024); // small page -> easy to fill and fragment
+    defer dev.deinit();
+    var cache = try PageCache.init(&dev, allocator, 16);
+    defer cache.deinit();
+    var mgr = NoneStorageManager{};
+    var fsm_mem = try FsmMem.init(allocator);
+    defer fsm_mem.deinit();
+    var fsm_inst = Fsm.init(&fsm_mem);
+    defer fsm_inst.deinit();
+
+    var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
+    const rand = prng.random();
+
+    var model = Model.init(&cache, &mgr, &fsm_inst, .{
+        .max_level = 4,
+        .key_len = 4,
+        .value_len = 4,
+    }, {}, rand);
+    defer model.deinit();
+
+    const ViewT = View(u32, u16, std.builtin.Endian.little, false);
+
+    // a real, formatted node page we fill by hand
+    var ph = try cache.create();
+    defer ph.deinit();
+    {
+        var v = ViewT.init(try ph.getDataMut());
+        try v.formatPage(1, try ph.pid(), 0);
+    }
+
+    // fill with small (level 0) slots until the contiguous free region is exhausted
+    var count: usize = 0;
+    while (true) {
+        var v = ViewT.init(try ph.getDataMut());
+        const pos = try v.entries();
+        if ((try v.canInsert(pos, "smal", "vvvv", 0)) != .enough) break;
+        var scratch: [128]u8 = undefined;
+        const s = try v.createSlot(scratch[0..], 4, 4, 0);
+        @memcpy(s.key, "smal");
+        @memcpy(s.value, "vvvv");
+        for (s.levels) |*lr| lr.format();
+        try v.insert(pos, s.body());
+        count += 1;
+    }
+    try std.testing.expect(count >= 4);
+
+    // mark the last slot (never freed) so we can prove its index survives compaction
+    const survivor = count - 1;
+    {
+        var v = ViewT.init(try ph.getDataMut());
+        const sw = try v.getMut(survivor);
+        @memcpy(sw.key, "LAST");
+    }
+
+    // free front slots until inserting a big (level 4) slot needs compaction to fit
+    var reached = false;
+    var f: usize = 0;
+    while (f < survivor) : (f += 1) {
+        const vc = ViewT.init(try ph.getDataMut());
+        const pos = try vc.entries();
+        if ((try vc.canInsert(pos, "bigk", "vvvv", 4)) == .need_compact) {
+            reached = true;
+            break;
+        }
+        var vm = ViewT.init(try ph.getDataMut());
+        var sd = try vm.slotsDirMut();
+        try sd.free(f);
+    }
+    try std.testing.expect(reached); // we actually constructed the .need_compact state
+
+    // the user's method: sees .need_compact, compacts (via a temp page), reports it now fits
+    const fits = try model.accessor.checkCompactPage(&ph, "bigk", "vvvv", 4);
+    try std.testing.expect(fits);
+
+    // post: the big slot fits contiguously now, and the survivor kept its index -> data
+    {
+        const v = ViewT.init(try ph.getDataMut());
+        const pos = try v.entries();
+        try std.testing.expect((try v.canInsert(pos, "bigk", "vvvv", 4)) == .enough);
+        try std.testing.expect(std.mem.eql(u8, (try v.get(survivor)).key, "LAST"));
+    }
 }
 
 // test "SkipList paged: iterator remove test" {

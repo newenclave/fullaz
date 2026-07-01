@@ -83,8 +83,6 @@ pub fn assertNode(comptime Node: type) void {
     requiresTypeDeclaration(Node, "ValueOut");
     requiresTypeDeclaration(Node, "Pid");
 
-    const KeyIn = Node.KeyIn;
-    const ValueIn = Node.ValueIn;
     const KeyOut = Node.KeyOut;
     const ValueOut = Node.ValueOut;
     const Pid = Node.Pid;
@@ -96,13 +94,10 @@ pub fn assertNode(comptime Node: type) void {
 
     requiresFnSignature(Node, "getPrev", fn (*const Node, usize) Error!?Pid);
     requiresFnSignature(Node, "getNext", fn (*const Node, usize) Error!?Pid);
-
-    requiresFnSignature(Node, "getLevel", fn (*const Node) Error!usize);
-
-    requiresFnSignature(Node, "setKey", fn (*Node, KeyIn) Error!void);
-    requiresFnSignature(Node, "setValue", fn (*Node, ValueIn) Error!void);
     requiresFnSignature(Node, "setPrev", fn (*Node, usize, ?Pid) Error!void);
     requiresFnSignature(Node, "setNext", fn (*Node, usize, ?Pid) Error!void);
+
+    requiresFnSignature(Node, "getLevel", fn (*const Node) Error!usize);
 }
 
 pub fn assertPath(comptime Path: type) void {
