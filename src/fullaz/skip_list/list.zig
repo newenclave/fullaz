@@ -99,7 +99,6 @@ pub fn List(comptime ModelT: type) type {
                     .on => |*node| {
                         if (try node.getNext(0)) |next_pid| {
                             const next_node = try acc.loadNode(next_pid);
-                            errdefer acc.deinitNode(&next_node);
                             acc.deinitNode(node);
                             self.cursor = .{ .on = next_node };
                             return true;
@@ -244,11 +243,13 @@ pub fn List(comptime ModelT: type) type {
             var acc = self.getAccessor();
 
             var next = try it.clone();
-            errdefer next.deinit();
             _ = next.next() catch {
                 next.deinit();
+                var consumed = it;
+                consumed.deinit();
                 return Iterator.init(self, .after_last);
             };
+            errdefer next.deinit();
 
             switch (it.cursor) {
                 .before_first, .after_last => return Error.InvalidIterator,
