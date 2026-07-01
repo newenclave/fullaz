@@ -529,12 +529,11 @@ test "SkipList paged: iterator remove test" {
         if (!it.isEnd()) {
             const tk = try it.key();
             std.mem.writeInt(u32, kv[0..], expected_key, .big);
-            std.debug.print("Next key after removal: {any}\n", .{tk});
-            std.debug.print("Expected key: {any}\n", .{kv});
-            const cmp_res0 = keyCmp(&model, (try it.key()), &kv);
+            // std.debug.print("Next key after removal: {any}\n", .{tk});
+            // std.debug.print("Expected key: {any}\n", .{kv});
+            const cmp_res0 = keyCmp(&model, tk, &kv);
             try std.testing.expectEqual(cmp_res0, .eq);
         }
-        break;
     }
 
     _ = try sl.dump(keyDumper, valueDumper);
