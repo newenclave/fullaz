@@ -9,7 +9,7 @@
                 "build",
                 "install-tests",
                 "-Doptimize=Debug",
-                "-Dtest-filter=SkipList paged: createNode allocates"
+                "-Dtest-filter=SkipList paged: iterator remove test"
             ],
             "problemMatcher": [],
             "group": {

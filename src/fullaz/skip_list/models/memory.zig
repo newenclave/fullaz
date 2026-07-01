@@ -183,7 +183,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         pub const Error = error{ OutOfMemory, OutOfBounds };
 
         ctx: Context,
-        cmpCtx: Ctx = undefined,
+        cmp_ctx: Ctx = undefined,
         cont: NodeContainer = undefined,
         roots: PidContainer = undefined,
 
@@ -275,19 +275,19 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
             return self.roots.items[level];
         }
 
+        pub fn setRoot(self: *Self, level: usize, pid: ?PidImpl) Error!void {
+            if (self.roots.items.len <= level) {
+                return Error.OutOfMemory;
+            }
+            self.roots.items[level] = pid;
+        }
+
         pub fn createPath(self: *Self) Error!PathImpl {
             return PathImpl.init(self.ctx.allocator, self.ctx.max_level);
         }
 
         pub fn deinitPath(self: *Self, path: *PathImpl) void {
             path.deinit(self.ctx.allocator);
-        }
-
-        pub fn setRoot(self: *Self, level: usize, pid: ?PidImpl) Error!void {
-            if (self.roots.items.len <= level) {
-                return Error.OutOfMemory;
-            }
-            self.roots.items[level] = pid;
         }
     };
 
@@ -327,14 +327,14 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         }
 
         pub fn keysCompare(self: *const Self, k1: KeyIn, k2: KeyIn) std.math.Order {
-            const CmpReturnType = @TypeOf(cmp(self.accessor.cmpCtx, k1, k2));
+            const CmpReturnType = @TypeOf(cmp(self.accessor.cmp_ctx, k1, k2));
             const is_error_union = @typeInfo(CmpReturnType) == .error_union;
 
             const order = blk: {
                 if (comptime is_error_union) {
-                    break :blk cmp(self.accessor.cmpCtx, k1, k2) catch return .eq;
+                    break :blk cmp(self.accessor.cmp_ctx, k1, k2) catch return .eq;
                 } else {
-                    break :blk cmp(self.accessor.cmpCtx, k1, k2);
+                    break :blk cmp(self.accessor.cmp_ctx, k1, k2);
                 }
             };
             return order;

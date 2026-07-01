@@ -30,8 +30,6 @@ pub fn Paged(
     const SlotWrapperConst = NodeViewConst.SlotWrapperConst;
     const SlotWrapper = NodeViewMut.SlotWrapperConst;
 
-    _ = cmp;
-
     const ContextImpl = struct {
         const Self = @This();
         settings: Settings,
@@ -40,6 +38,7 @@ pub fn Paged(
         storage: *StorageManager = undefined,
         fsm: *FsmT = undefined,
         cmp_ctx: Ctx = undefined,
+        allocator: std.mem.Allocator = undefined,
     };
 
     const PidImpl = struct {
@@ -191,11 +190,6 @@ pub fn Paged(
             }
         }
 
-        // TODO(C4): write key/value bytes into the slot via getMut on 'ph.getDataMut()'.
-        pub fn setValue(_: *Self, _: ValueIn) Error!void {
-            @panic("TODO: NodeImpl.setValue");
-        }
-
         pub fn setPrev(self: *Self, level: usize, pid: ?Pid) Error!void {
             const lvl_ref = try self.getLevelRefMut(level);
             if (pid) |p| {
@@ -244,7 +238,7 @@ pub fn Paged(
             };
         }
 
-        fn generateLevel(self: *const Self, k: usize) Error!usize {
+        pub fn generateLevel(self: *const Self, k: usize) Error!usize {
             if (k == 0) {
                 @panic("k must be greater than 0");
             }
@@ -350,6 +344,29 @@ pub fn Paged(
             self.destroyImpl(pid) catch {};
         }
 
+        pub fn getRoot(self: *const Self, level: usize) Error!?PidImpl {
+            const root_pid = try self.context.storage.getRoot(level);
+            if (root_pid) |rp| {
+                return .{
+                    .page_id = rp.page_id,
+                    .slot_id = rp.slot_id,
+                };
+            } else {
+                return null;
+            }
+        }
+
+        pub fn setRoot(self: *Self, level: usize, pid: ?PidImpl) Error!void {
+            if (pid) |p| {
+                try self.context.storage.setRoot(level, .{
+                    .page_id = p.page_id,
+                    .slot_id = p.slot_id,
+                });
+            } else {
+                try self.context.storage.setRoot(level, null);
+            }
+        }
+
         fn destroyImpl(self: *Self, pid: PidImpl) Error!void {
             var ph = try self.context.cache.fetch(pid.page_id);
             defer ph.deinit();
@@ -372,12 +389,26 @@ pub fn Paged(
             try view.formatPage(self.context.settings.node_page_kind, pid, 0);
             return ph;
         }
+
+        pub fn createPath(self: *Self) Error!PathImpl {
+            return PathImpl.init(self.context.allocator, self.context.settings.max_level);
+        }
+
+        pub fn deinitPath(self: *Self, path: *PathImpl) void {
+            path.deinit(self.context.allocator);
+        }
     };
 
     return struct {
         const Self = @This();
 
-        pub const Error = PageCacheType.Error || StorageManager.Error;
+        pub const Error = PageCacheType.Error ||
+            StorageManager.Error ||
+            errors.SpaceError ||
+            errors.NotFoundError ||
+            errors.LayoutError ||
+            errors.SetError ||
+            errors.IndexError;
 
         pub const Accessor = AccessorImpl;
         pub const Node = NodeImpl;
@@ -392,7 +423,15 @@ pub fn Paged(
 
         accessor: AccessorImpl,
 
-        pub fn init(device: *PageCacheType, storage_mgr: *StorageManager, fsm: *FsmT, settings: Settings, ctx: Ctx, rng: std.Random) Self {
+        pub fn init(
+            device: *PageCacheType,
+            storage_mgr: *StorageManager,
+            fsm: *FsmT,
+            settings: Settings,
+            ctx: Ctx,
+            rng: std.Random,
+            allocator: std.mem.Allocator,
+        ) Self {
             return Self{
                 .accessor = AccessorImpl.init(ContextImpl{
                     .settings = settings,
@@ -401,12 +440,43 @@ pub fn Paged(
                     .storage = storage_mgr,
                     .fsm = fsm,
                     .cmp_ctx = ctx,
+                    .allocator = allocator,
                 }),
             };
         }
 
         pub fn deinit(self: *Self) void {
             self.accessor = undefined; // Clear the accessor to release references to resources.
+        }
+
+        pub fn getMaxLevel(self: *const Self) Error!usize {
+            return self.accessor.context.settings.max_level;
+        }
+
+        pub fn getAccessor(self: *Self) *AccessorImpl {
+            return &self.accessor;
+        }
+
+        pub fn keysCompare(self: *const Self, k1: KeyIn, k2: KeyIn) std.math.Order {
+            const CmpReturnType = @TypeOf(cmp(self.accessor.context.cmp_ctx, k1, k2));
+            const is_error_union = @typeInfo(CmpReturnType) == .error_union;
+
+            const order = blk: {
+                if (comptime is_error_union) {
+                    break :blk cmp(self.accessor.context.cmp_ctx, k1, k2) catch return .eq;
+                } else {
+                    break :blk cmp(self.accessor.context.cmp_ctx, k1, k2);
+                }
+            };
+            return order;
+        }
+
+        pub fn keyOutAsIn(_: *const Self, k: KeyOut) KeyIn {
+            return k;
+        }
+
+        pub fn valueOutAsIn(_: *const Self, v: ValueOut) ValueIn {
+            return v;
         }
     };
 

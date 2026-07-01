@@ -68,6 +68,21 @@ pub fn List(comptime ModelT: type) type {
                 };
             }
 
+            pub fn clone(self: *const Iterator) Error!Iterator {
+                return .{
+                    .list = self.list,
+                    .cursor = switch (self.cursor) {
+                        .before_first => .before_first,
+                        .after_last => .after_last,
+                        .on => |*node| brk: {
+                            const acc = self.list.getAccessor();
+                            const new_node = try acc.loadNode(node.id());
+                            break :brk .{ .on = new_node };
+                        },
+                    },
+                };
+            }
+
             pub fn next(self: *Iterator) Error!bool {
                 var acc = self.list.getAccessor();
                 switch (self.cursor) {
@@ -134,13 +149,16 @@ pub fn List(comptime ModelT: type) type {
             comptime keyDumper: ?fn (KeyOut) void,
             comptime valueDumper: ?fn (ValueOut) void,
         ) !void {
+            const acc = self.getAccessor();
             const max_level = try self.model.getMaxLevel();
             for (0..max_level) |i| {
                 std.debug.print("lvl {d}: ", .{i});
-                if (try self.getAccessor().getRoot(i)) |root_pid| {
+                if (try acc.getRoot(i)) |root_pid| {
                     var curr_pid: ?Pid = root_pid;
                     while (curr_pid) |pid| {
-                        const node = try self.getAccessor().loadNode(pid);
+                        var node = try acc.loadNode(pid);
+                        defer acc.deinitNode(&node);
+
                         if (keyDumper) |kf| {
                             kf(try node.getKey());
                         } else {
@@ -173,17 +191,20 @@ pub fn List(comptime ModelT: type) type {
             for (0..level) |i| {
                 if (try path.get(i)) |pid| {
                     var node = try acc.loadNode(pid);
+                    defer acc.deinitNode(&node);
                     const fwd = try node.getNext(i);
                     try node.setNext(i, new_node.id());
                     try new_node.setNext(i, fwd);
                     try new_node.setPrev(i, pid);
                     if (fwd) |fwd_pid| {
                         var fwd_node = try acc.loadNode(fwd_pid);
+                        defer acc.deinitNode(&fwd_node);
                         try fwd_node.setPrev(i, new_node.id());
                     }
                 } else {
                     if (try acc.getRoot(i)) |root_pid| {
                         var root_node = try acc.loadNode(root_pid);
+                        defer acc.deinitNode(&root_node);
                         try new_node.setNext(i, root_pid);
                         try root_node.setPrev(i, new_node.id());
                     }
@@ -222,9 +243,12 @@ pub fn List(comptime ModelT: type) type {
         pub fn removeItr(self: *Self, it: Iterator) Error!Iterator {
             var acc = self.getAccessor();
 
-            var next = it;
+            var next = try it.clone();
             errdefer next.deinit();
-            _ = next.next() catch return Iterator.init(self, .after_last);
+            _ = next.next() catch {
+                next.deinit();
+                return Iterator.init(self, .after_last);
+            };
 
             switch (it.cursor) {
                 .before_first, .after_last => return Error.InvalidIterator,
@@ -269,13 +293,16 @@ pub fn List(comptime ModelT: type) type {
         }
 
         pub fn find(self: *const Self, key: KeyIn) Error!Iterator {
+            const acc = self.getAccessor();
             const default_iterator = Iterator.init(self, .after_last);
             const pid = try self.findElement(null, key, 0) orelse return default_iterator;
-            var node = try self.getAccessor().loadNode(pid);
-            defer self.getAccessor().deinitNode(&node);
+            var node = try acc.loadNode(pid);
+            errdefer acc.deinitNode(&node);
+
             if (self.model.keysCompare(key, self.model.keyOutAsIn(try node.getKey())) == .eq) {
                 return Iterator.init(self, .{ .on = node });
             } else {
+                acc.deinitNode(&node);
                 return default_iterator;
             }
         }
