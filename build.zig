@@ -74,4 +74,51 @@ pub fn build(b: *std.Build) void {
     // Add install-tests step for debugging
     const install_test_step = b.step("install-tests", "Install test executable for debugging");
     install_test_step.dependOn(&install_tests.step);
+
+    // --- fsx: filesystem-in-a-file example (separate exe + tests) ---
+    const zigline_dep = b.dependency("zigline", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zigline_mod = zigline_dep.module("zigline");
+
+    const fsx_exe = b.addExecutable(.{
+        .name = "fsx",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("fsx/src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "fullaz", .module = mod },
+                .{ .name = "zigline", .module = zigline_mod },
+            },
+        }),
+    });
+    b.installArtifact(fsx_exe);
+
+    const run_fs_step = b.step("run-fs", "Run the fsx example");
+    const run_fs_cmd = b.addRunArtifact(fsx_exe);
+    run_fs_step.dependOn(&run_fs_cmd.step);
+    run_fs_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_fs_cmd.addArgs(args);
+    }
+
+    const fsx_tests_mod = b.addModule("fsx_tests", .{
+        .root_source_file = b.path("fsx/tests/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const fsx_tests = b.addTest(.{ .root_module = fsx_tests_mod });
+    fsx_tests.root_module.addImport("fullaz", mod);
+    fsx_tests.root_module.addImport("zigline", zigline_mod);
+    if (test_filter) |filter| {
+        const owned = b.allocator.dupe(u8, filter) catch @panic("OOM duping fsx test-filter");
+        const filters = b.allocator.alloc([]const u8, 1) catch @panic("OOM alloc fsx filters");
+        filters[0] = owned;
+        fsx_tests.filters = filters;
+    }
+    const run_fsx_tests = b.addRunArtifact(fsx_tests);
+    const test_fs_step = b.step("test-fs", "Run fsx tests");
+    test_fs_step.dependOn(&run_fsx_tests.step);
 }

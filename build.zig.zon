@@ -3,12 +3,18 @@
     .version = "0.0.0",
     .fingerprint = 0xa2569a60576cf985, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .zigline = .{
+            .url = "git+https://github.com/newenclave/zigline.git#ec19d1d972e7db8c5576985162ccdb3b66a1a687",
+            .hash = "zigline-0.0.0-bq7gMbNyAABXL6bup9DRIlv36bjBjDi9blX_PhaghONY",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
         "tests",
+        "fsx",
         // For example...
         //"LICENSE",
         //"README.md",
