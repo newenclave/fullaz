@@ -151,7 +151,7 @@ pub fn List(comptime ModelT: type) type {
             const acc = self.getAccessor();
             const max_level = try self.model.getMaxLevel();
             for (0..max_level) |i| {
-                std.debug.print("lvl {d}: ", .{i});
+                std.debug.print("=====\nlvl {d}: ", .{i});
                 if (try acc.getRoot(i)) |root_pid| {
                     var curr_pid: ?Pid = root_pid;
                     while (curr_pid) |pid| {
@@ -255,12 +255,10 @@ pub fn List(comptime ModelT: type) type {
                 .before_first, .after_last => return Error.InvalidIterator,
                 .on => |node| {
                     var mutNode = node;
-                    defer {
-                        const pid = node.id();
-                        acc.deinitNode(&mutNode);
-                        acc.destroy(pid);
-                    }
+                    const pid = node.id();
                     try self.removeImpl(&mutNode);
+                    acc.deinitNode(&mutNode);
+                    acc.destroy(pid);
                     return next;
                 },
             }

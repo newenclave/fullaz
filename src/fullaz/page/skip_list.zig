@@ -39,8 +39,6 @@ pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: 
 
         pub fn formatHeader(self: *Self) void {
             self.reserved = [3]u8{0} ** 3;
-            self.next.format();
-            self.prev.format();
         }
     };
 

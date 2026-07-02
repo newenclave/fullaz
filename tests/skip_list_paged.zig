@@ -7,6 +7,7 @@ const device = @import("fullaz").device;
 const fsm = @import("fullaz").storage.fsm;
 
 const ModelType = skip_list.models.Paged;
+const MemoryModel = skip_list.models.Memory;
 const SkipList = skip_list.List;
 const View = skip_list.models.paged.View;
 
@@ -245,7 +246,8 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
 }
 
 fn keyDumper(value: []const u8) void {
-    std.debug.print("{any}; ", .{value});
+    const d: u32 = std.mem.readInt(u32, value[0..4], .big);
+    std.debug.print("{any}; ", .{d});
 }
 
 fn valueDumper(_: []const u8) void {
@@ -497,7 +499,7 @@ test "SkipList paged: iterator remove test" {
     defer desiderKeys.deinit(allocator);
 
     timestampPrint("Inserting keys...\n", .{});
-    for (0..100) |k| {
+    for (0..1000) |k| {
         const next = @as(u32, (@as(u32, @intCast(k)) + 1)) * 10;
         try desiderKeys.append(allocator, next);
         var kv: [@sizeOf(u32)]u8 = undefined;
@@ -540,4 +542,162 @@ test "SkipList paged: iterator remove test" {
 
     timestampPrint("Done removing the keys...\n", .{});
     //    try std.testing.expectEqual(count, half);
+}
+
+fn keyCmpU32(_: anytype, k1: u32, k2: u32) std.math.Order {
+    return std.math.order(k1, k2);
+}
+
+/// Collect the level-0 key sequence of a memory-backed list as u32s.
+fn collectMemLevel0(comptime SL: type, sl: *SL, allocator: std.mem.Allocator) !std.ArrayList(u32) {
+    const acc = sl.getModel().getAccessor();
+    var list = try std.ArrayList(u32).initCapacity(allocator, 0);
+    errdefer list.deinit(allocator);
+    var curr = try acc.getRoot(0);
+    while (curr) |pid| {
+        var node = try acc.loadNode(pid);
+        defer acc.deinitNode(&node);
+        try list.append(allocator, (try node.getKey()).*);
+        if (list.items.len > 100_000) return error.CollectOverflow; // cycle guard
+        curr = try node.getNext(0);
+    }
+    return list;
+}
+
+/// Collect the level-0 key sequence of a paged-backed list as u32s (keys are 4-byte big-endian).
+fn collectPagedLevel0(comptime SL: type, sl: *SL, allocator: std.mem.Allocator) !std.ArrayList(u32) {
+    const acc = sl.getModel().getAccessor();
+    var list = try std.ArrayList(u32).initCapacity(allocator, 0);
+    errdefer list.deinit(allocator);
+    var curr = try acc.getRoot(0);
+    while (curr) |pid| {
+        var node = try acc.loadNode(pid);
+        defer acc.deinitNode(&node);
+        const ko = try node.getKey();
+        try list.append(allocator, std.mem.readInt(u32, ko[0..4], .big));
+        if (list.items.len > 100_000) return error.CollectOverflow; // cycle guard
+        curr = try node.getNext(0);
+    }
+    return list;
+}
+
+/// memory == paged == sorted(oracle) for the level-0 (fully ordered) sequence.
+fn expectParity(
+    comptime MemSL: type,
+    mem_sl: *MemSL,
+    comptime PagedSL: type,
+    paged_sl: *PagedSL,
+    oracle: *std.AutoHashMap(u32, void),
+    allocator: std.mem.Allocator,
+) !void {
+    var mem_keys = try collectMemLevel0(MemSL, mem_sl, allocator);
+    defer mem_keys.deinit(allocator);
+    var paged_keys = try collectPagedLevel0(PagedSL, paged_sl, allocator);
+    defer paged_keys.deinit(allocator);
+
+    // the two independent implementations agree
+    try std.testing.expectEqualSlices(u32, mem_keys.items, paged_keys.items);
+
+    // ...and both match a trivially-correct sorted set
+    var sorted = try std.ArrayList(u32).initCapacity(allocator, oracle.count());
+    defer sorted.deinit(allocator);
+    var it = oracle.keyIterator();
+    while (it.next()) |kp| try sorted.append(allocator, kp.*);
+    std.mem.sort(u32, sorted.items, {}, std.sort.asc(u32));
+    try std.testing.expectEqualSlices(u32, sorted.items, paged_keys.items);
+}
+
+test "SkipList paged: randomized parity vs memory model" {
+    const allocator = std.testing.allocator;
+
+    const MemModel = MemoryModel(u32, u32, keyCmpU32, void);
+    const MemSL = SkipList(MemModel);
+
+    const Device = device.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const PagedModel = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const PagedSL = SkipList(PagedModel);
+
+    // one seed drives the op stream; print it so any failure is reproducible.
+    const op_seed = getNowTimestamp();
+    std.debug.print("parity op_seed = {d}\n", .{op_seed});
+    var op_prng: std.Random.DefaultPrng = .init(op_seed);
+    const op_rand = op_prng.random();
+    var mem_prng: std.Random.DefaultPrng = .init(op_seed ^ 0xA5A5);
+    var paged_prng: std.Random.DefaultPrng = .init(op_seed ^ 0x5A5A);
+
+    var mem_model = try MemModel.init(allocator, 6, mem_prng.random());
+    defer mem_model.deinit();
+    var mem_sl = MemSL.init(&mem_model);
+    defer mem_sl.deinit();
+
+    var dev = try Device.init(allocator, 4096);
+    defer dev.deinit();
+    var cache = try PageCache.init(&dev, allocator, 32);
+    defer cache.deinit();
+    var mgr = NoneStorageManager{};
+    var fsm_mem = try FsmMem.init(allocator);
+    defer fsm_mem.deinit();
+    var fsm_inst = Fsm.init(&fsm_mem);
+    defer fsm_inst.deinit();
+
+    var paged_model = PagedModel.init(&cache, &mgr, &fsm_inst, .{
+        .max_level = 6,
+        .key_len = 4,
+        .value_len = 4,
+    }, {}, paged_prng.random(), allocator);
+    defer paged_model.deinit();
+    var paged_sl = PagedSL.init(&paged_model);
+    defer paged_sl.deinit();
+
+    // the set of keys currently present (independent oracle)
+    var oracle = std.AutoHashMap(u32, void).init(allocator);
+    defer oracle.deinit();
+
+    const N_OPS = 2000;
+    const KEY_RANGE = 256;
+
+    for (0..N_OPS) |i| {
+        const k = op_rand.intRangeLessThan(u32, 0, KEY_RANGE);
+        var kv: [4]u8 = undefined;
+        std.mem.writeInt(u32, kv[0..], k, .big);
+
+        // toggle: present -> remove from both, absent -> insert into both.
+        // keeps the op stream well-defined (no dup-insert / remove-absent semantics).
+        if (oracle.contains(k)) {
+            try mem_sl.remove(k);
+            try paged_sl.remove(&kv);
+            _ = oracle.remove(k);
+        } else {
+            try mem_sl.insert(k, k);
+            try paged_sl.insert(&kv, &kv);
+            try oracle.put(k, {});
+        }
+
+        if (i % 500 == 0) {
+            try expectParity(MemSL, &mem_sl, PagedSL, &paged_sl, &oracle, allocator);
+        }
+    }
+
+    try expectParity(MemSL, &mem_sl, PagedSL, &paged_sl, &oracle, allocator);
+
+    // find parity across the whole key space: present AND absent keys agree on both models.
+    for (0..KEY_RANGE) |kk| {
+        const k: u32 = @intCast(kk);
+        var kv: [4]u8 = undefined;
+        std.mem.writeInt(u32, kv[0..], k, .big);
+        const want = oracle.contains(k);
+
+        var mit = try mem_sl.find(k);
+        defer mit.deinit();
+        var pit = try paged_sl.find(&kv);
+        defer pit.deinit();
+
+        try std.testing.expectEqual(want, !mit.isEnd());
+        try std.testing.expectEqual(want, !pit.isEnd());
+        if (want) {
+            try std.testing.expectEqual(k, (try mit.key()).*);
+            try std.testing.expectEqual(k, std.mem.readInt(u32, (try pit.key())[0..4], .big));
+        }
+    }
 }
