@@ -10,6 +10,7 @@ test {
     _ = @import("slots_variadic.zig");
     _ = @import("slots_fixed.zig");
     _ = @import("device_memory_block.zig");
+    _ = @import("device_file_block.zig");
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
     _ = @import("chain_storage.zig");

@@ -9,13 +9,13 @@ const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 
 /// Compile-time concept check for block device types.
 /// A valid BlockDevice must have:
-/// - `pub const Error` error set
-/// - `pub const BlockId` type
-/// - `fn blockSize(*const Self) usize`
-/// - `fn readBlock(*const Self, BlockId, []u8) !void`
-/// - `fn writeBlock(*const Self, BlockId, []u8) !void`
-/// - `fn appendBlock(*Self) !BlockId`
-/// - `fn blocksCount(*const Self) usize`
+/// - 'pub const Error' error set
+/// - 'pub const BlockId' type
+/// - 'fn blockSize(*const Self) usize'
+/// - 'fn readBlock(*const Self, BlockId, []u8) !void'
+/// - 'fn writeBlock(*const Self, BlockId, []u8) !void'
+/// - 'fn appendBlock(*Self) !BlockId'
+/// - 'fn blocksCount(*const Self) usize'
 pub fn assertBlockDevice(comptime T: type) void {
     requiresTypeDeclaration(T, "BlockId");
     requiresErrorDeclaration(T, "Error");

@@ -1,3 +1,13 @@
+pub const IoError = error{
+    IoError,
+};
+
+pub const FileError = error{
+    OpenFailed,
+    CreateFailed,
+    IoError,
+};
+
 pub const EmptySet = error{};
 
 pub const HandleError = error{
