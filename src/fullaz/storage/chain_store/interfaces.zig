@@ -24,3 +24,9 @@ pub fn requiresStorageManager(comptime T: type) void {
 
     requiresFnSignature(T, "destroyPage", fn (*T, T.PageId) Error!void);
 }
+
+pub fn requiresStorageManagerIndexRoot(comptime T: type) void {
+    const Error = T.Error;
+    requiresFnSignature(T, "getIndexRoot", fn (*const T) ?T.PageId);
+    requiresFnSignature(T, "setIndexRoot", fn (*T, ?T.PageId) Error!void);
+}

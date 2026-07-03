@@ -4,28 +4,38 @@ const page_header = @import("../../page/header.zig");
 const interfaces = @import("../../contracts/contracts.zig");
 const errors = @import("../../core/errors.zig");
 const requiresStorageManager = @import("interfaces.zig").requiresStorageManager;
+const requiresStorageManagerIndexRoot = @import("interfaces.zig").requiresStorageManagerIndexRoot;
+const weighted_index = @import("weighted_index.zig");
 
 pub const Settings = struct {
     chunk_page_kind: u16 = 0x21,
 };
 
-// const StorageManager = struct {
-//     const Error = error{};
-//     const PageId = u64;
-//     const Size = u64;
-//     fn getTotalSize(self: *const StorageManager) Error!Size;
-//     fn setTotalSize(self: *StorageManager, size: Size) Error!void;
-//     fn getFirst(self: *const StorageManager) Error!?PageId;
-//     fn getLast(self: *const StorageManager) Error!?PageId;
-//     fn setFirst(self: *StorageManager, page_id: ?PageId) Error!void;
-//     fn setLast(self: *StorageManager, page_id: ?PageId) Error!void;
-//     fn destroyPage(self: *StorageManager, page_id: PageId) void;
-// };
-
+// Wrap the Indexed Implementation with the zero-cost default (linear walk).
 pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type {
+    const PosType = StorageManager.Size;
+    const BlockDevice = PageCacheType.UnderlyingDevice;
+    const BlockIdType = BlockDevice.BlockId;
+    const NoIndexImpl = weighted_index.NoIndex(BlockIdType, PosType);
+
+    return Indexed(PageCacheType, StorageManager, NoIndexImpl);
+}
+
+// Wrap the Indexed Implementation with the paged weighted offset index, so
+// getPosition is O(log n). Requires the StorageManager to provide the index-root
+// slot (getIndexRoot/setIndexRoot) enforced by Indexed's contract check.
+pub fn HandleWeighted(comptime PageCacheType: type, comptime StorageManager: type) type {
+    const IndexImpl = weighted_index.WeightedIndex(PageCacheType, StorageManager, .little);
+    return Indexed(PageCacheType, StorageManager, IndexImpl);
+}
+
+pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comptime IndexT: type) type {
     comptime {
         interfaces.page_cache.requiresPageCache(PageCacheType);
         requiresStorageManager(StorageManager);
+        if (@hasDecl(IndexT, "requires_root")) {
+            requiresStorageManagerIndexRoot(StorageManager);
+        }
     }
 
     const PosType = StorageManager.Size;
@@ -288,7 +298,8 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             CommonErrors ||
             errors.PageError ||
             errors.IndexError ||
-            error{AlreadyExists};
+            error{AlreadyExists} ||
+            IndexT.Error;
 
         const Position = struct {
             page_id: ?Pid,
@@ -300,6 +311,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         p_pos: Position = undefined,
 
         ctx: Context,
+        index: IndexT,
 
         pub const View = view.View;
         pub fn init(cache: *PageCacheType, mgr: *StorageManager, settings: Settings) Self {
@@ -327,12 +339,13 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
                 .g_pos = start_pos,
                 .p_pos = start_pos,
                 .ctx = ctx,
+                .index = IndexT.init(cache, mgr, settings),
             };
             return result;
         }
 
-        pub fn deinit(_: *Self) void {
-            // Clean up resources if needed
+        pub fn deinit(self: *Self) void {
+            self.index.deinit();
         }
 
         pub fn open(_: *Self) Error!void {}
@@ -346,6 +359,9 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             const pid = try ph.pid();
             try self.ctx.mgr.setFirst(pid);
             try self.ctx.mgr.setLast(pid);
+            // Fresh chain: the sole chunk is the (unsealed) tail, so the index
+            // starts empty. clear() is a no-op for NoIndex.
+            try self.index.clear();
             self.g_pos = Position{
                 .page_id = pid,
                 .pos = 0,
@@ -420,6 +436,13 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         }
 
         pub fn getPosition(self: *const Self, pos: usize) Error!Position {
+            if (try self.index.locate(@intCast(pos))) |loc| {
+                return .{
+                    .page_id = @as(Pid, @intCast(loc.page_id)),
+                    .pos = @as(Index, @intCast(pos - @as(usize, @intCast(loc.chunk_start)))),
+                    .total_pos = pos,
+                };
+            }
             var cursor = try self.begin();
             defer cursor.deinit();
 
@@ -623,11 +646,16 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             var result = ChunkImpl.init(ph);
 
             if (last == new_pid) {
-                // First chunk being added
                 try self.ctx.mgr.setFirst(new_pid);
                 try self.ctx.mgr.setLast(new_pid);
             } else {
+                var old_last_ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
+                const old_last_v = ViewTypesConst.Chunk.init(try old_last_ph.getData());
+                const old_last_size = old_last_v.getLink().getDataSize();
+                old_last_ph.deinit();
+
                 try self.pushChunkImpl(&result, last);
+                try self.index.onSeal(last, @intCast(old_last_size));
             }
             try self.ctx.mgr.setLast(new_pid);
 
@@ -791,6 +819,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             } else {
                 try self.ctx.mgr.setLast(prev);
                 try self.popImpl(prev);
+                try self.index.onUnseal();
             }
             try self.ctx.mgr.destroyPage(last);
         }

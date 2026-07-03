@@ -64,7 +64,7 @@ test "WBpt paged: Create with Paged model" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Model = PagedModel(PageCache, NoneStorageManager, u32, void);
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};
@@ -112,7 +112,7 @@ test "WBpt paged: Insert, get" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Model = PagedModel(PageCache, NoneStorageManager, u32, void);
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};
@@ -150,7 +150,7 @@ test "WBpt paged: tree create, insert" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Model = PagedModel(PageCache, NoneStorageManager, u32, void);
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};
@@ -195,7 +195,7 @@ test "WBpt paged remove: simple smoke" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Model = PagedModel(PageCache, NoneStorageManager, u32, void);
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};
@@ -230,7 +230,7 @@ test "WBpt paged: stress test - random insertions" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Model = PagedModel(PageCache, NoneStorageManager, u32, void);
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};
@@ -363,7 +363,7 @@ test "WBpt paged remove: random removal stress test" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = PagedModel(PageCache, NoneStorageManager, void);
+    const Model = PagedModel(PageCache, NoneStorageManager, u32, void);
     const Tree = wbpt.WeightedBpt(Model);
 
     var store_mgr = NoneStorageManager{};

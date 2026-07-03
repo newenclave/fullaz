@@ -12,7 +12,7 @@ pub const Settings = struct {
     inode_page_kind: u16 = 1,
 };
 
-pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, comptime ValuePolicy: type) type {
+pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, comptime WeightT: type, comptime ValuePolicy: type) type {
     comptime {
         contracts.storage_manager.requiresStorageManager(StorageManager);
         contracts.page_cache.requiresPageCache(PageCacheType);
@@ -21,7 +21,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
     const BlockDevice = PageCacheType.UnderlyingDevice;
     const PageHandle = PageCacheType.Handle;
     const BlockIdType = BlockDevice.BlockId;
-    const Weight = u32;
+    const Weight = WeightT;
     const Index = u16;
 
     const Value = []const u8;
@@ -108,10 +108,10 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             right: usize,
         };
 
-        pub fn expectedSplitDataFormat(_: *const Self, val: Value, pos: usize) SplitFormat {
+        pub fn expectedSplitDataFormat(_: *const Self, val: Value, _: usize) SplitFormat {
             return .{
-                .left = pos,
-                .right = val.len - pos,
+                .left = val.len,
+                .right = val.len,
             };
         }
     };
