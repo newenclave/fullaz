@@ -116,9 +116,14 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
     };
 
+    const ValuePolicyType = comptime if (@typeInfo(ValuePolicy) == .void)
+        ValuePolicyImplDefault
+    else
+        ValuePolicy;
+
     const ValueViewImpl = struct {
         const Self = @This();
-        const Error = ValuePolicyImplDefault.Error;
+        const Error = ValuePolicyType.Error;
 
         val: Value,
 
@@ -138,11 +143,6 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             return self.val;
         }
     };
-
-    const ValuePolicyType = comptime if (@typeInfo(ValuePolicy) == .void)
-        ValuePolicyImplDefault
-    else
-        ValuePolicy;
 
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
@@ -299,10 +299,10 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
                 return try view.canInsert(try vp.get()) != .not_enough;
             } else {
                 const entry = try view.get(pos.pos);
-                var target_val = ValuePolicyImplDefault.init(self.ctx, entry.value);
+                var target_val = ValuePolicyType.init(self.ctx, entry.value);
                 defer target_val.deinit();
 
-                var new_val = ValuePolicyImplDefault.init(self.ctx, val);
+                var new_val = ValuePolicyType.init(self.ctx, val);
                 defer new_val.deinit();
 
                 const expected_split_format = target_val.expectedSplitDataFormat(try target_val.get(), pos.diff);
