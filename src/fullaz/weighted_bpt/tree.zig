@@ -172,6 +172,11 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         const Self = @This();
         const Iterator = IteratorImpl;
 
+        pub const FoundAt = struct {
+            value_len: usize,
+            intra_weight: Weight,
+        };
+
         model: *Model,
         rebalance_policy: RebalancePolicy = .neighbor_share,
 
@@ -261,6 +266,31 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                     try self.leafHandleUnderflow(leaf);
                 }
             }
+        }
+
+        pub fn findByWeight(self: *Self, weight: Weight, out: []u8) Error!?FoundAt {
+            var acc = self.getAccessor();
+            const root = (try acc.getRoot()) orelse return null;
+            var find_result = try self.findLeafForWeight(root, weight);
+            defer acc.deinitLeaf(&find_result.leaf);
+
+            const leaf_sz = try find_result.leaf.size();
+            const leaf_pos = find_result.node_pos.pos;
+            if (leaf_pos >= leaf_sz) {
+                return null; // weight is at or beyond the end
+            }
+
+            var val = try find_result.leaf.getValue(leaf_pos);
+            defer val.deinit();
+            const bytes = try val.get();
+            if (bytes.len > out.len) {
+                return Error.OutOfBounds;
+            }
+            @memcpy(out[0..bytes.len], bytes);
+            return FoundAt{
+                .value_len = bytes.len,
+                .intra_weight = find_result.node_pos.diff,
+            };
         }
 
         pub fn dump(self: *Self) void {

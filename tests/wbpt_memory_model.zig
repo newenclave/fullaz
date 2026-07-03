@@ -114,6 +114,51 @@ test "WBpt: insertion" {
     std.debug.print("\n", .{});
 }
 
+test "WBpt: findByWeight positional lookup" {
+    const Model = MemoryModel(u8, 4);
+    const Tree = wbpt.WeightedBpt(Model);
+
+    const allocator = std.testing.allocator;
+    var model = try Model.init(allocator);
+    defer model.deinit();
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+
+    var buf: [32]u8 = undefined;
+
+    // empty tree -> null
+    try std.testing.expect((try tree.findByWeight(0, &buf)) == null);
+
+    _ = try tree.insert(0, "Hello"); // weight 5, covers offsets [0,5)
+    _ = try tree.insert(5, "World"); // weight 5, covers offsets [5,10)
+
+    // inside the first entry
+    {
+        const r = (try tree.findByWeight(0, &buf)).?;
+        try std.testing.expectEqualSlices(u8, "Hello", buf[0..r.value_len]);
+        try std.testing.expectEqual(@as(usize, 0), @as(usize, @intCast(r.intra_weight)));
+    }
+    {
+        const r = (try tree.findByWeight(3, &buf)).?;
+        try std.testing.expectEqualSlices(u8, "Hello", buf[0..r.value_len]);
+        try std.testing.expectEqual(@as(usize, 3), @as(usize, @intCast(r.intra_weight)));
+    }
+    // an exact boundary resolves to the next entry at intra 0
+    {
+        const r = (try tree.findByWeight(5, &buf)).?;
+        try std.testing.expectEqualSlices(u8, "World", buf[0..r.value_len]);
+        try std.testing.expectEqual(@as(usize, 0), @as(usize, @intCast(r.intra_weight)));
+    }
+    {
+        const r = (try tree.findByWeight(7, &buf)).?;
+        try std.testing.expectEqualSlices(u8, "World", buf[0..r.value_len]);
+        try std.testing.expectEqual(@as(usize, 2), @as(usize, @intCast(r.intra_weight)));
+    }
+    // at or beyond the total weight -> null
+    try std.testing.expect((try tree.findByWeight(10, &buf)) == null);
+    try std.testing.expect((try tree.findByWeight(100, &buf)) == null);
+}
+
 test "WBpt: stress test - random insertions" {
     const maximum_insertion_to_dump = 100;
     const num_insertions = 100;
