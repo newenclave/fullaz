@@ -82,6 +82,18 @@ pub fn build(b: *std.Build) void {
     });
     const zigline_mod = zigline_dep.module("zigline");
 
+    // The fsx library surface (fsx/src/root.zig), imported by both the exe and
+    // the tests so fsx source is compiled once and testable across the tests/src
+    // module boundary.
+    const fsx_mod = b.addModule("fsx", .{
+        .root_source_file = b.path("fsx/src/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "fullaz", .module = mod },
+            .{ .name = "zigline", .module = zigline_mod },
+        },
+    });
+
     const fsx_exe = b.addExecutable(.{
         .name = "fsx",
         .root_module = b.createModule(.{
@@ -91,6 +103,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "fullaz", .module = mod },
                 .{ .name = "zigline", .module = zigline_mod },
+                .{ .name = "fsx", .module = fsx_mod },
             },
         }),
     });
@@ -112,6 +125,7 @@ pub fn build(b: *std.Build) void {
     const fsx_tests = b.addTest(.{ .root_module = fsx_tests_mod });
     fsx_tests.root_module.addImport("fullaz", mod);
     fsx_tests.root_module.addImport("zigline", zigline_mod);
+    fsx_tests.root_module.addImport("fsx", fsx_mod);
     if (test_filter) |filter| {
         const owned = b.allocator.dupe(u8, filter) catch @panic("OOM duping fsx test-filter");
         const filters = b.allocator.alloc([]const u8, 1) catch @panic("OOM alloc fsx filters");
