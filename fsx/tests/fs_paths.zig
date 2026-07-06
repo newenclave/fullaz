@@ -11,7 +11,7 @@ const MemoryBlock = fullaz.device.MemoryBlock;
 
 const Device = MemoryBlock(u32);
 const PageCache = PageCacheT(Device);
-const FsT = fs.Fs(PageCache);
+const FsT = fs.Fs(PageCache, fsx.path.Default);
 
 const Collector = struct {
     count: usize = 0,

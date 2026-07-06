@@ -10,11 +10,6 @@ const IndexValuePolicy = chain_index.IndexValuePolicy;
 const WeightedIndex = chain_index.WeightedIndex;
 const PagedModel = wbpt.models.paged.PagedModel;
 
-/// Minimal chain-side StorageManager for driving WeightedIndex directly: the
-/// index needs the index-root slot (getIndexRoot/setIndexRoot), destroyPage, the
-/// active last-chunk pointer (getLast, for the derived tail), and the
-/// Size/PageId/Error type declarations. `last` is set by the test to mirror what
-/// the Handle would maintain as the active (unsealed) chunk.
 const IndexSM = struct {
     const Self = @This();
     pub const Error = error{};

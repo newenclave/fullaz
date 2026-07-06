@@ -11,7 +11,6 @@ pub const Settings = struct {
     chunk_page_kind: u16 = 0x21,
 };
 
-// Wrap the Indexed Implementation with the zero-cost default (linear walk).
 pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type, comptime Endian: std.builtin.Endian) type {
     const PosType = StorageManager.Size;
     const BlockDevice = PageCacheType.UnderlyingDevice;
@@ -41,7 +40,6 @@ pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comp
     const PageHandle = PageCacheType.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
-    //    const CommonPageView = page_header.View(BlockIdType, u16, .little, false);
     const CommonPageViewConst = page_header.View(BlockIdType, Index, Endian, true);
     const ViewTypes = view.View(BlockIdType, Index, PosType, Endian, false);
     const ViewTypesConst = view.View(BlockIdType, Index, PosType, Endian, true);

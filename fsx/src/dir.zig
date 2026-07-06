@@ -44,7 +44,6 @@ pub fn Directory(comptime PageCacheType: type) type {
 
     const Model = bpt.models.PagedModel(PageCacheType, DirSM, nameCmp, void);
     const Tree = bpt.Bpt(Model);
-    const insert_policy = bpt.RebalancePolicy.neighbor_share;
 
     return struct {
         const Self = @This();
@@ -66,7 +65,7 @@ pub fn Directory(comptime PageCacheType: type) type {
             }
             var sm = DirSM{ .root = self.root };
             var model = Model.init(self.cache, &sm, settings, {});
-            var tree = Tree.init(&model, insert_policy);
+            var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
             var buf: [inode.file_len]u8 = undefined;
@@ -78,8 +77,10 @@ pub fn Directory(comptime PageCacheType: type) type {
 
         pub fn lookup(self: *Self, name: []const u8) !?Inode {
             var sm = DirSM{ .root = self.root };
+
             var model = Model.init(self.cache, &sm, settings, {});
-            var tree = Tree.init(&model, insert_policy);
+
+            var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
             var it = (try tree.find(name)) orelse return null;
@@ -91,7 +92,7 @@ pub fn Directory(comptime PageCacheType: type) type {
         pub fn update(self: *Self, name: []const u8, node: Inode) !bool {
             var sm = DirSM{ .root = self.root };
             var model = Model.init(self.cache, &sm, settings, {});
-            var tree = Tree.init(&model, insert_policy);
+            var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
             var buf: [inode.file_len]u8 = undefined;
@@ -104,7 +105,7 @@ pub fn Directory(comptime PageCacheType: type) type {
         pub fn remove(self: *Self, name: []const u8) !bool {
             var sm = DirSM{ .root = self.root };
             var model = Model.init(self.cache, &sm, settings, {});
-            var tree = Tree.init(&model, insert_policy);
+            var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
             const ok = try tree.remove(name);
@@ -119,7 +120,7 @@ pub fn Directory(comptime PageCacheType: type) type {
         ) !void {
             var sm = DirSM{ .root = self.root };
             var model = Model.init(self.cache, &sm, settings, {});
-            var tree = Tree.init(&model, insert_policy);
+            var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
             var it_opt = try tree.iterator();

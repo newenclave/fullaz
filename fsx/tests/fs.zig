@@ -14,7 +14,7 @@ test "Fs: format then open validates; bad block size rejected" {
     const allocator = std.testing.allocator;
     const Device = MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const FsT = fs.Fs(PageCache);
+    const FsT = fs.Fs(PageCache, fsx.path.Default);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
@@ -32,7 +32,7 @@ test "Fs: format requires a fresh device" {
     const allocator = std.testing.allocator;
     const Device = MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const FsT = fs.Fs(PageCache);
+    const FsT = fs.Fs(PageCache, fsx.path.Default);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
@@ -47,7 +47,7 @@ test "Fs: root dir root persists across a real reopen (new cache)" {
     const allocator = std.testing.allocator;
     const Device = MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const FsT = fs.Fs(PageCache);
+    const FsT = fs.Fs(PageCache, fsx.path.Default);
 
     var device = try Device.init(allocator, 4096);
     defer device.deinit();

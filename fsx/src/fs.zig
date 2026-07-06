@@ -1,25 +1,25 @@
-const std = @import("std");
 const constants = @import("constants.zig");
 const superblock = @import("superblock.zig");
 const inode = @import("inode.zig");
 const dir = @import("dir.zig");
+const file = @import("file.zig");
 
 const PageId = constants.PageId;
+const Size = constants.Size;
 const Inode = inode.Inode;
-
-const max_depth: usize = 32;
 
 pub const Error = error{
     NotFreshDevice,
     NotFound,
     NotADirectory,
+    IsADirectory,
     AlreadyExists,
-    PathTooDeep,
     InvalidPath,
 };
 
-pub fn Fs(comptime PageCacheType: type) type {
+pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
     const Dir = dir.Directory(PageCacheType);
+    const FileT = file.File(PageCacheType);
 
     return struct {
         const Self = @This();
@@ -64,10 +64,13 @@ pub fn Fs(comptime PageCacheType: type) type {
         }
 
         pub fn resolve(self: *Self, path: []const u8) !?Inode {
+            var comps_buf: [PathPolicy.MaxDepth][]const u8 = undefined;
+            const n = try PathPolicy.split(path, &comps_buf);
+            const comps = comps_buf[0..n];
+
             const root0 = try self.getRootDirRoot();
             var cur = Inode{ .dir = .{ .root = root0 } };
-            var it = std.mem.tokenizeScalar(u8, path, '/');
-            while (it.next()) |comp| {
+            for (comps) |comp| {
                 const droot = switch (cur) {
                     .dir => |d| d.root,
                     .file => {
@@ -80,31 +83,9 @@ pub fn Fs(comptime PageCacheType: type) type {
             return cur;
         }
 
-        fn splitPath(path: []const u8, comps: *[max_depth][]const u8) !usize {
-            var n: usize = 0;
-            var it = std.mem.tokenizeScalar(u8, path, '/');
-            while (it.next()) |comp| {
-                if (n >= max_depth) {
-                    return Error.PathTooDeep;
-                }
-                comps[n] = comp;
-                n += 1;
-            }
-            return n;
-        }
-
-        pub fn mkdir(self: *Self, path: []const u8) !void {
-            var comps: [max_depth][]const u8 = undefined;
-            const n = try splitPath(path, &comps);
-            if (n == 0) {
-                return Error.InvalidPath;
-            }
-
-            var roots: [max_depth]?PageId = undefined;
-            roots[0] = try self.getRootDirRoot();
-
+        fn descendParents(self: *Self, comps: []const []const u8, roots: []?PageId) !void {
             var i: usize = 0;
-            while (i + 1 < n) : (i += 1) {
+            while (i + 1 < comps.len) : (i += 1) {
                 var d = Dir.init(self.cache, roots[i]);
                 const child = (try d.lookup(comps[i])) orelse return Error.NotFound;
                 roots[i + 1] = switch (child) {
@@ -114,19 +95,10 @@ pub fn Fs(comptime PageCacheType: type) type {
                     },
                 };
             }
+        }
 
-            const p = n - 1;
-            const root0_before = roots[0];
-            {
-                var parent = Dir.init(self.cache, roots[p]);
-                if ((try parent.lookup(comps[p])) != null) {
-                    return Error.AlreadyExists;
-                }
-                _ = try parent.insert(comps[p], Inode.newDir());
-                roots[p] = parent.getRoot();
-            }
-
-            var j = p;
+        fn flushUp(self: *Self, comps: []const []const u8, roots: []?PageId, root0_before: ?PageId) !void {
+            var j: usize = comps.len - 1;
             while (j > 0) {
                 var up = Dir.init(self.cache, roots[j - 1]);
                 const before = roots[j - 1];
@@ -137,10 +109,99 @@ pub fn Fs(comptime PageCacheType: type) type {
                 }
                 j -= 1;
             }
-
             if (roots[0] != root0_before) {
                 try self.setRootDirRoot(roots[0]);
             }
+        }
+
+        fn createEntry(self: *Self, path: []const u8, node: Inode) !void {
+            var comps_buf: [PathPolicy.MaxDepth][]const u8 = undefined;
+            const n = try PathPolicy.split(path, &comps_buf);
+            if (n == 0) {
+                return Error.InvalidPath;
+            }
+            const comps = comps_buf[0..n];
+
+            var roots_buf: [PathPolicy.MaxDepth]?PageId = undefined;
+            const roots = roots_buf[0..n];
+            roots[0] = try self.getRootDirRoot();
+            try self.descendParents(comps, roots);
+
+            const p = n - 1;
+            const root0_before = roots[0];
+            {
+                var parent = Dir.init(self.cache, roots[p]);
+                if ((try parent.lookup(comps[p])) != null) {
+                    return Error.AlreadyExists;
+                }
+                _ = try parent.insert(comps[p], node);
+                roots[p] = parent.getRoot();
+            }
+            try self.flushUp(comps, roots, root0_before);
+        }
+
+        pub fn mkdir(self: *Self, path: []const u8) !void {
+            try self.createEntry(path, Inode.newDir());
+        }
+
+        pub fn touch(self: *Self, path: []const u8) !void {
+            try self.createEntry(path, Inode.newFile());
+        }
+
+        pub fn write(self: *Self, path: []const u8, bytes: []const u8) !usize {
+            var comps_buf: [PathPolicy.MaxDepth][]const u8 = undefined;
+            const n = try PathPolicy.split(path, &comps_buf);
+            if (n == 0) {
+                return Error.InvalidPath;
+            }
+            const comps = comps_buf[0..n];
+
+            var roots_buf: [PathPolicy.MaxDepth]?PageId = undefined;
+            const roots = roots_buf[0..n];
+            roots[0] = try self.getRootDirRoot();
+            try self.descendParents(comps, roots);
+
+            const p = n - 1;
+            const root0_before = roots[0];
+            var written: usize = 0;
+            {
+                var parent = Dir.init(self.cache, roots[p]);
+                const entry = (try parent.lookup(comps[p])) orelse return Error.NotFound;
+                const froots = switch (entry) {
+                    .file => |fr| fr,
+                    .dir => {
+                        return Error.IsADirectory;
+                    },
+                };
+                var f = FileT.init(self.cache, froots);
+                written = try f.append(bytes);
+                _ = try parent.update(comps[p], Inode{ .file = f.getRoots() });
+                roots[p] = parent.getRoot();
+            }
+            try self.flushUp(comps, roots, root0_before);
+            return written;
+        }
+
+        pub fn read(self: *Self, path: []const u8, buf: []u8) !usize {
+            const node = (try self.resolve(path)) orelse return Error.NotFound;
+            const froots = switch (node) {
+                .file => |fr| fr,
+                .dir => {
+                    return Error.IsADirectory;
+                },
+            };
+            var f = FileT.init(self.cache, froots);
+            return try f.read(buf);
+        }
+
+        pub fn size(self: *Self, path: []const u8) !Size {
+            const node = (try self.resolve(path)) orelse return Error.NotFound;
+            return switch (node) {
+                .file => |fr| fr.total,
+                .dir => {
+                    return Error.IsADirectory;
+                },
+            };
         }
 
         pub fn ls(
