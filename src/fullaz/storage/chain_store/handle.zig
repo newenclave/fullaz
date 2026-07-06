@@ -12,24 +12,21 @@ pub const Settings = struct {
 };
 
 // Wrap the Indexed Implementation with the zero-cost default (linear walk).
-pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type {
+pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type, comptime Endian: std.builtin.Endian) type {
     const PosType = StorageManager.Size;
     const BlockDevice = PageCacheType.UnderlyingDevice;
     const BlockIdType = BlockDevice.BlockId;
     const NoIndexImpl = weighted_index.NoIndex(BlockIdType, PosType);
 
-    return Indexed(PageCacheType, StorageManager, NoIndexImpl);
+    return Indexed(PageCacheType, StorageManager, NoIndexImpl, Endian);
 }
 
-// Wrap the Indexed Implementation with the paged weighted offset index, so
-// getPosition is O(log n). Requires the StorageManager to provide the index-root
-// slot (getIndexRoot/setIndexRoot) enforced by Indexed's contract check.
-pub fn HandleWeighted(comptime PageCacheType: type, comptime StorageManager: type) type {
-    const IndexImpl = weighted_index.WeightedIndex(PageCacheType, StorageManager, .little);
-    return Indexed(PageCacheType, StorageManager, IndexImpl);
+pub fn HandleWeighted(comptime PageCacheType: type, comptime StorageManager: type, comptime Endian: std.builtin.Endian) type {
+    const IndexImpl = weighted_index.WeightedIndex(PageCacheType, StorageManager, Endian);
+    return Indexed(PageCacheType, StorageManager, IndexImpl, Endian);
 }
 
-pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comptime IndexT: type) type {
+pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comptime IndexT: type, comptime Endian: std.builtin.Endian) type {
     comptime {
         interfaces.page_cache.requiresPageCache(PageCacheType);
         requiresStorageManager(StorageManager);
@@ -45,9 +42,9 @@ pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comp
     const BlockIdType = BlockDevice.BlockId;
 
     //    const CommonPageView = page_header.View(BlockIdType, u16, .little, false);
-    const CommonPageViewConst = page_header.View(BlockIdType, Index, .little, true);
-    const ViewTypes = view.View(BlockIdType, Index, PosType, .little, false);
-    const ViewTypesConst = view.View(BlockIdType, Index, PosType, .little, true);
+    const CommonPageViewConst = page_header.View(BlockIdType, Index, Endian, true);
+    const ViewTypes = view.View(BlockIdType, Index, PosType, Endian, false);
+    const ViewTypesConst = view.View(BlockIdType, Index, PosType, Endian, true);
 
     const CommonErrors = PageCacheType.Error ||
         StorageManager.Error ||

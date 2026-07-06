@@ -18,12 +18,17 @@ const MemStore = struct {
     pub fn setRoot(self: *Self, r: ?u32) Error!void {
         self.root = r;
     }
+
     pub fn pageMut(self: *Self, pid: u32) Error![]u8 {
-        if (pid >= self.buffers.len) return Error.OutOfBounds;
+        if (pid >= self.buffers.len) {
+            return Error.OutOfBounds;
+        }
         return self.buffers[pid][0..];
     }
     pub fn pageConst(self: *Self, pid: u32) Error![]const u8 {
-        if (pid >= self.buffers.len) return Error.OutOfBounds;
+        if (pid >= self.buffers.len) {
+            return Error.OutOfBounds;
+        }
         return self.buffers[pid][0..];
     }
 };

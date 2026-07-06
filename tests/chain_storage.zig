@@ -61,7 +61,7 @@ test "ChainStore View Test" {
 test "ChainStore handle: init deinit" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -76,7 +76,7 @@ test "ChainStore handle: init deinit" {
 test "ChainStore handle: write page" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -104,7 +104,7 @@ test "ChainStore handle: write page" {
 test "ChainStore handle: write page handle" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -132,7 +132,7 @@ test "ChainStore handle: write page handle" {
 test "ChainStore Handle. read/write across multiple pages" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -170,7 +170,7 @@ test "ChainStore Handle. read/write across multiple pages" {
 test "ChainStore Handle. truncate basic" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -203,7 +203,7 @@ test "ChainStore Handle. truncate basic" {
 test "ChainStore Handle. truncate adjusts get position" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -236,7 +236,7 @@ test "ChainStore Handle. truncate adjusts get position" {
 test "ChainStore Handle. truncate adjusts put position" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -269,7 +269,7 @@ test "ChainStore Handle. truncate adjusts put position" {
 test "ChainStore Handle. truncate adjusts both positions" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -312,7 +312,7 @@ test "ChainStore Handle. truncate adjusts both positions" {
 test "ChainStore Handle. truncate to zero" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -341,7 +341,7 @@ test "ChainStore Handle. truncate to zero" {
 test "ChainStore Handle. truncate preserves data within range" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -373,7 +373,7 @@ test "ChainStore Handle. truncate preserves data within range" {
 test "ChainStore Handle. truncate with large data across pages" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -424,7 +424,7 @@ test "ChainStore Handle. truncate with large data across pages" {
 test "ChainStore Handle. truncate position within range not affected" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -458,7 +458,7 @@ test "ChainStore Handle. truncate position within range not affected" {
 test "ChainStore Handle. truncate more than have" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -492,7 +492,7 @@ test "ChainStore Handle. truncate more than have" {
 test "ChainStore Handle. extend basic" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -530,7 +530,7 @@ test "ChainStore Handle. extend basic" {
 test "ChainStore Handle. extend empty file" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -561,7 +561,7 @@ test "ChainStore Handle. extend empty file" {
 test "ChainStore Handle. extend with large size" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -612,7 +612,7 @@ test "ChainStore Handle. extend with large size" {
 test "ChainStore Handle. extend and write to extended region" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -659,7 +659,7 @@ test "ChainStore Handle. extend and write to extended region" {
 test "ChainStore Handle. extend multiple times" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -702,7 +702,7 @@ test "ChainStore Handle. extend multiple times" {
 test "ChainStore Handle. extend preserves positions" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -742,7 +742,7 @@ test "ChainStore Handle. extend preserves positions" {
 test "ChainStore Handle. extend zero length" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -768,7 +768,7 @@ test "ChainStore Handle. extend zero length" {
 test "ChainStore Handle. extend then truncate" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -807,7 +807,7 @@ test "ChainStore Handle. extend then truncate" {
 test "ChainStore Handle. extend spanning multiple chunks" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = chain_store.Handle(Cache, NoneStorageManager);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);

@@ -201,8 +201,6 @@ test "chain WeightedIndex: seal/unseal + derived-tail locate" {
 
 const chain_store = fullaz.storage.chain_store;
 
-/// Full chain StorageManager (the whole requiresStorageManager contract) plus the
-/// index-root slot that HandleWeighted needs.
 const FullSM = struct {
     const Self = @This();
     pub const PageId = u32;
@@ -244,10 +242,8 @@ const FullSM = struct {
     }
 };
 
-/// A chunk of the chain, as observed by an index-INDEPENDENT walk (begin/moveNext).
 const GtChunk = struct { start: u32, pid: u32, size: u32 };
 
-/// Walk the chain directly (not via the index) to build ground truth.
 fn walkChunks(hdl: anytype, out: []GtChunk) !usize {
     var cur = try hdl.begin();
     defer cur.deinit();
@@ -290,7 +286,7 @@ test "chain HandleWeighted: getPosition matches a linear walk over a large file"
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Handle = chain_store.HandleWeighted(PageCache, FullSM);
+    const Handle = chain_store.HandleWeighted(PageCache, FullSM, .little);
 
     var sm = FullSM{};
     var device = try Device.init(allocator, 4096);
@@ -358,7 +354,7 @@ test "chain HandleWeighted: getPosition stays correct after truncate (onUnseal)"
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Handle = chain_store.HandleWeighted(PageCache, FullSM);
+    const Handle = chain_store.HandleWeighted(PageCache, FullSM, .little);
 
     var sm = FullSM{};
     var device = try Device.init(allocator, 4096);
