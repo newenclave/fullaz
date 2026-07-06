@@ -36,7 +36,12 @@ pub fn Paged(comptime PageCacheType: type, comptime SlabStorageManagerT: type, c
         settings: Settings,
 
         pub fn init(cache: *PageCacheType, sm: *SlabStorageManagerT, policy: SizePolicyT, settings: Settings) Self {
-            return .{ .cache = cache, .sm = sm, .policy = policy, .settings = settings };
+            return .{
+                .cache = cache,
+                .sm = sm,
+                .policy = policy,
+                .settings = settings,
+            };
         }
 
         pub fn deinit(self: *Self) void {
