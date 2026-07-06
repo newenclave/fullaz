@@ -50,6 +50,7 @@ pub fn View(comptime read_only: bool) type {
             }
             return @ptrCast(self.page.ptr);
         }
+
         pub fn format(self: *Self, block_size: u32) void {
             if (read_only) {
                 @compileError("cannot format a read-only superblock view");

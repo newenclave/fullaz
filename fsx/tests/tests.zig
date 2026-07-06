@@ -14,4 +14,7 @@ test {
     _ = @import("constants.zig");
     _ = @import("superblock.zig");
     _ = @import("inode.zig");
+    _ = @import("dir.zig");
+    _ = @import("fs.zig");
+    _ = @import("fs_paths.zig");
 }

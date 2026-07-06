@@ -58,13 +58,10 @@ test "inode value: decode rejects bad kind / short buffer" {
     var buf: [64]u8 = undefined;
     const bytes = try inode.encode(inode.Inode.newDir(), &buf);
 
-    // Corrupt the kind tag.
     buf[0] = 0xEE;
     try std.testing.expectError(inode.Error.BadKind, inode.decode(bytes));
 
-    // Empty buffer -> ShortBuffer.
     try std.testing.expectError(inode.Error.ShortBuffer, inode.kindOf(buf[0..0]));
-    // Encoding a file into too small a buffer -> ShortBuffer.
     var tiny: [3]u8 = undefined;
     try std.testing.expectError(inode.Error.ShortBuffer, inode.encode(inode.Inode.newFile(), &tiny));
 }

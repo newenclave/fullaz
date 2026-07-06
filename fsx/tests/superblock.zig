@@ -7,7 +7,7 @@ const PageId = constants.PageId;
 
 test "superblock: format is a fresh image, roots round-trip" {
     var page: [128]u8 = undefined;
-    // Pre-dirty the buffer so we prove format zeroes + writes deterministically.
+
     @memset(&page, 0xAA);
 
     const SbMut = superblock.View(false);
@@ -15,11 +15,9 @@ test "superblock: format is a fresh image, roots round-trip" {
     sb.format(4096);
 
     try sb.validate(4096);
-    // A fresh image: empty root directory and empty free list.
     try std.testing.expect(sb.getRootDirRoot() == null);
     try std.testing.expect(sb.getFreedHead() == null);
 
-    // Set the two roots; read back through a const view over the same bytes.
     sb.setRootDirRoot(7);
     sb.setFreedHead(99);
     const rd = superblock.View(true).init(&page);
@@ -27,7 +25,6 @@ test "superblock: format is a fresh image, roots round-trip" {
     try std.testing.expectEqual(@as(?PageId, 7), rd.getRootDirRoot());
     try std.testing.expectEqual(@as(?PageId, 99), rd.getFreedHead());
 
-    // Clearing maps back to null.
     sb.setRootDirRoot(null);
     try std.testing.expect(sb.getRootDirRoot() == null);
 }

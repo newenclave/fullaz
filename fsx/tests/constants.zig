@@ -12,6 +12,7 @@ test "fsx constants: sane values, distinct page kinds" {
         K.superblock, K.inode,           K.dir_leaf,         K.dir_inode,
         K.file_chunk, K.file_index_leaf, K.file_index_inode,
     };
+
     for (roles, 0..) |a, i| {
         try std.testing.expect(a != K.freed);
         for (roles[i + 1 ..]) |b| {

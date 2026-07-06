@@ -35,7 +35,6 @@ const FileEntry = extern struct {
 pub const dir_len = @sizeOf(DirEntry);
 pub const file_len = @sizeOf(FileEntry);
 
-/// adapter.
 pub const FileRoots = struct {
     first: ?PageId = null,
     last: ?PageId = null,
@@ -76,7 +75,9 @@ pub fn encodedLen(node: Inode) usize {
 }
 
 pub fn kindOf(bytes: []const u8) Error!Kind {
-    if (bytes.len < @sizeOf(Tag)) return Error.ShortBuffer;
+    if (bytes.len < @sizeOf(Tag)) {
+        return Error.ShortBuffer;
+    }
     const t: *const Tag = @ptrCast(bytes.ptr);
     return switch (t.kind.get()) {
         @intFromEnum(Kind.file) => .file,
@@ -88,14 +89,18 @@ pub fn kindOf(bytes: []const u8) Error!Kind {
 pub fn encode(node: Inode, buf: []u8) Error![]const u8 {
     switch (node) {
         .dir => |d| {
-            if (buf.len < dir_len) return Error.ShortBuffer;
+            if (buf.len < dir_len) {
+                return Error.ShortBuffer;
+            }
             const e: *DirEntry = @ptrCast(buf.ptr);
             e.kind.set(@intFromEnum(Kind.dir));
             e.root.set(wrap(d.root));
             return buf[0..dir_len];
         },
         .file => |f| {
-            if (buf.len < file_len) return Error.ShortBuffer;
+            if (buf.len < file_len) {
+                return Error.ShortBuffer;
+            }
             const e: *FileEntry = @ptrCast(buf.ptr);
             e.kind.set(@intFromEnum(Kind.file));
             e.first.set(wrap(f.first));
@@ -110,12 +115,16 @@ pub fn encode(node: Inode, buf: []u8) Error![]const u8 {
 pub fn decode(bytes: []const u8) Error!Inode {
     switch (try kindOf(bytes)) {
         .dir => {
-            if (bytes.len < dir_len) return Error.ShortBuffer;
+            if (bytes.len < dir_len) {
+                return Error.ShortBuffer;
+            }
             const e: *const DirEntry = @ptrCast(bytes.ptr);
             return .{ .dir = .{ .root = unwrap(e.root.get()) } };
         },
         .file => {
-            if (bytes.len < file_len) return Error.ShortBuffer;
+            if (bytes.len < file_len) {
+                return Error.ShortBuffer;
+            }
             const e: *const FileEntry = @ptrCast(bytes.ptr);
             return .{ .file = .{
                 .first = unwrap(e.first.get()),

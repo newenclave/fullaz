@@ -5,3 +5,5 @@
 pub const constants = @import("constants.zig");
 pub const superblock = @import("superblock.zig");
 pub const inode = @import("inode.zig");
+pub const dir = @import("dir.zig");
+pub const fs = @import("fs.zig");
