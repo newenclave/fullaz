@@ -1,5 +1,12 @@
 const std = @import("std");
 
+//pub const OptimizeMode = enum {
+//    Debug,
+//    ReleaseSafe,
+//    ReleaseFast,
+//    ReleaseSmall,
+//};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});

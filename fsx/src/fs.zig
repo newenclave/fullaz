@@ -302,5 +302,47 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
             var d = Dir.init(&self.cache, droot);
             try d.iterate(ctx, cb);
         }
+
+        pub fn tree(
+            self: *Self,
+            path: []const u8,
+            ctx: anytype,
+            comptime cb: fn (@TypeOf(ctx), usize, []const u8, Inode) anyerror!void,
+        ) !void {
+            const node = (try self.resolve(path)) orelse return Error.NotFound;
+            const root = switch (node) {
+                .dir => |d| d.root,
+                .file => {
+                    return Error.NotADirectory;
+                },
+            };
+            try self.treeDir(root, 0, ctx, cb);
+        }
+
+        fn treeDir(
+            self: *Self,
+            root: ?PageId,
+            depth: usize,
+            ctx: anytype,
+            comptime cb: fn (@TypeOf(ctx), usize, []const u8, Inode) anyerror!void,
+        ) !void {
+            const Frame = struct {
+                fs: *Self,
+                depth: usize,
+                ctx: @TypeOf(ctx),
+            };
+            var frame = Frame{ .fs = self, .depth = depth, .ctx = ctx };
+            const W = struct {
+                fn walk(fr: *Frame, name: []const u8, node: Inode) anyerror!void {
+                    try cb(fr.ctx, fr.depth, name, node);
+                    switch (node) {
+                        .dir => |d| try fr.fs.treeDir(d.root, fr.depth + 1, fr.ctx, cb),
+                        .file => {},
+                    }
+                }
+            };
+            var d = Dir.init(&self.cache, root);
+            try d.iterate(&frame, W.walk);
+        }
     };
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const zigline = @import("zigline");
 const inode = @import("inode.zig");
 
 pub fn Cli(comptime FsType: type) type {
@@ -53,22 +54,27 @@ pub fn Cli(comptime FsType: type) type {
         }
 
         pub fn exec(self: *Self, line: []const u8, writer: anytype) !void {
-            self.run(line, writer) catch |e| {
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const tokens = zigline.tokenize(arena.allocator(), line) catch |e| {
+                try writer.print("error: {s}\n", .{@errorName(e)});
+                return;
+            };
+            try self.execTokens(tokens, writer);
+        }
+
+        pub fn execTokens(self: *Self, tokens: []const []const u8, writer: anytype) !void {
+            self.dispatch(tokens, writer) catch |e| {
                 try writer.print("error: {s}\n", .{@errorName(e)});
             };
         }
 
-        fn run(self: *Self, line: []const u8, writer: anytype) !void {
-            const trimmed = std.mem.trim(u8, line, " \t\r\n");
-            if (trimmed.len == 0) {
+        fn dispatch(self: *Self, tokens: []const []const u8, writer: anytype) !void {
+            if (tokens.len == 0) {
                 return;
             }
-            const sp = std.mem.indexOfScalar(u8, trimmed, ' ');
-            const cmd = if (sp) |i| trimmed[0..i] else trimmed;
-            const rest = if (sp) |i| std.mem.trimStart(u8, trimmed[i + 1 ..], " ") else "";
-            const sp2 = std.mem.indexOfScalar(u8, rest, ' ');
-            const arg1 = if (sp2) |i| rest[0..i] else rest;
-            const rest2 = if (sp2) |i| rest[i + 1 ..] else "";
+            const cmd = tokens[0];
+            const arg1: []const u8 = if (tokens.len > 1) tokens[1] else "";
 
             var scratch: [max_path]u8 = undefined;
 
@@ -80,6 +86,8 @@ pub fn Cli(comptime FsType: type) type {
                 try self.cmdCd(arg1, &scratch);
             } else if (std.mem.eql(u8, cmd, "ls")) {
                 try self.cmdLs(arg1, &scratch, writer);
+            } else if (std.mem.eql(u8, cmd, "tree")) {
+                try self.cmdTree(arg1, &scratch, writer);
             } else if (std.mem.eql(u8, cmd, "mkdir")) {
                 try self.fs.mkdir(self.resolve(arg1, &scratch));
             } else if (std.mem.eql(u8, cmd, "rmdir")) {
@@ -89,7 +97,13 @@ pub fn Cli(comptime FsType: type) type {
             } else if (std.mem.eql(u8, cmd, "rm")) {
                 try self.fs.rm(self.resolve(arg1, &scratch));
             } else if (std.mem.eql(u8, cmd, "write")) {
-                _ = try self.fs.write(self.resolve(arg1, &scratch), rest2);
+                var wa = std.heap.ArenaAllocator.init(self.allocator);
+                defer wa.deinit();
+                const content = if (tokens.len > 2)
+                    try std.mem.join(wa.allocator(), " ", tokens[2..])
+                else
+                    "";
+                _ = try self.fs.write(self.resolve(arg1, &scratch), content);
             } else if (std.mem.eql(u8, cmd, "cat")) {
                 try self.cmdCat(arg1, &scratch, writer);
             } else if (std.mem.eql(u8, cmd, "stat")) {
@@ -136,6 +150,28 @@ pub fn Cli(comptime FsType: type) type {
             try self.fs.ls(path, writer, P.cb);
         }
 
+        fn cmdTree(self: *Self, arg: []const u8, scratch: []u8, writer: anytype) !void {
+            const path = if (arg.len == 0) self.cwd() else self.resolve(arg, scratch);
+            try writer.print("{s}\n", .{path});
+            const Ctx = struct { w: @TypeOf(writer) };
+            var ctx = Ctx{ .w = writer };
+            const P = struct {
+                fn cb(c: *Ctx, depth: usize, name: []const u8, node: inode.Inode) anyerror!void {
+                    var i: usize = 0;
+                    while (i <= depth) : (i += 1) {
+                        try c.w.writeAll("  ");
+                    }
+                    try c.w.writeAll(name);
+                    switch (node) {
+                        .dir => try c.w.writeAll("/"),
+                        .file => {},
+                    }
+                    try c.w.writeAll("\n");
+                }
+            };
+            try self.fs.tree(path, &ctx, P.cb);
+        }
+
         fn cmdCat(self: *Self, arg: []const u8, scratch: []u8, writer: anytype) !void {
             const path = self.resolve(arg, scratch);
             const sz = try self.fs.size(path);
@@ -157,7 +193,7 @@ pub fn Cli(comptime FsType: type) type {
         }
 
         const help_text =
-            \\commands: pwd cd ls mkdir rmdir touch rm write cat stat help quit
+            \\commands: pwd cd ls tree mkdir rmdir touch rm write cat stat help quit
             \\
         ;
     };

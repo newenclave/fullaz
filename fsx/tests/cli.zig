@@ -35,6 +35,12 @@ fn run(c: *CliT, col: *Collector, line: []const u8) ![]const u8 {
     return col.buf[0..col.len];
 }
 
+fn runTokens(c: *CliT, col: *Collector, tokens: []const []const u8) ![]const u8 {
+    col.reset();
+    try c.execTokens(tokens, col);
+    return col.buf[0..col.len];
+}
+
 test "cli: full session over mkdir/cd/touch/write/cat/ls/stat/rm/rmdir" {
     const allocator = std.testing.allocator;
     var device = try Device.init(allocator, 4096);
@@ -89,4 +95,73 @@ test "cli: friendly errors and unknown command" {
     try std.testing.expectEqualStrings("error: IsADirectory\n", try run(&c, &col, "cat /a"));
     try std.testing.expectEqualStrings("unknown command: frob\n", try run(&c, &col, "frob x"));
     try std.testing.expectEqualStrings("", try run(&c, &col, "   "));
+}
+
+test "cli: tree prints an indented recursive listing" {
+    const allocator = std.testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 32);
+    defer cache.deinit();
+
+    var f = try FsT.format(&cache, 4096);
+    var c = CliT.init(&f, allocator);
+    var col = Collector{};
+
+    _ = try run(&c, &col, "mkdir /a");
+    _ = try run(&c, &col, "mkdir /a/b");
+    _ = try run(&c, &col, "touch /a/b/f");
+    _ = try run(&c, &col, "mkdir /a/c");
+    _ = try run(&c, &col, "touch /a/g");
+
+    try std.testing.expectEqualStrings(
+        "/a\n  b/\n    f\n  c/\n  g\n",
+        try run(&c, &col, "tree /a"),
+    );
+}
+
+test "cli: tokenizer handles quoted names and spaced content" {
+    const allocator = std.testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 32);
+    defer cache.deinit();
+
+    var f = try FsT.format(&cache, 4096);
+    var c = CliT.init(&f, allocator);
+    var col = Collector{};
+
+    _ = try run(&c, &col, "mkdir \"very long name\"");
+    try std.testing.expectEqualStrings("very long name/\n", try run(&c, &col, "ls"));
+
+    _ = try run(&c, &col, "touch note");
+    _ = try run(&c, &col, "write note \"hello   spaced   world\"");
+    try std.testing.expectEqualStrings("hello   spaced   world\n", try run(&c, &col, "cat note"));
+
+    try std.testing.expectEqualStrings("error: UnterminatedQuote\n", try run(&c, &col, "mkdir \"oops"));
+}
+
+test "cli: execTokens dispatches pre-split argv (one-shot path)" {
+    const allocator = std.testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 32);
+    defer cache.deinit();
+
+    var f = try FsT.format(&cache, 4096);
+    var c = CliT.init(&f, allocator);
+    var col = Collector{};
+
+    _ = try runTokens(&c, &col, &.{ "mkdir", "very long name" });
+    try std.testing.expectEqualStrings("very long name/\n", try runTokens(&c, &col, &.{"ls"}));
+
+    _ = try runTokens(&c, &col, &.{ "touch", "note" });
+    _ = try runTokens(&c, &col, &.{ "write", "note", "hello", "world" });
+    try std.testing.expectEqualStrings("hello world\n", try runTokens(&c, &col, &.{ "cat", "note" }));
+
+    try std.testing.expectEqualStrings(
+        "error: AlreadyExists\n",
+        try runTokens(&c, &col, &.{ "mkdir", "very long name" }),
+    );
+    try std.testing.expectEqualStrings("", try runTokens(&c, &col, &.{}));
 }

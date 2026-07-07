@@ -126,3 +126,36 @@ test "Fs mkdir: structure persists across a real reopen" {
         try std.testing.expect((try f.resolve("/a/b/z")) == null);
     }
 }
+
+const TreeCollector = struct {
+    buf: [256]u8 = undefined,
+    len: usize = 0,
+
+    fn cb(self: *TreeCollector, depth: usize, name: []const u8, node: inode.Inode) anyerror!void {
+        _ = node;
+        const s = try std.fmt.bufPrint(self.buf[self.len..], "{d}:{s} ", .{ depth, name });
+        self.len += s.len;
+    }
+};
+
+test "Fs tree: depth-first traversal with depths" {
+    const allocator = std.testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 32);
+    defer cache.deinit();
+
+    var f = try FsT.format(&cache, 4096);
+    try f.mkdir("/a");
+    try f.mkdir("/a/b");
+    try f.touch("/a/b/f");
+    try f.mkdir("/a/c");
+    try f.touch("/a/g");
+
+    var col = TreeCollector{};
+    try f.tree("/a", &col, TreeCollector.cb);
+    try std.testing.expectEqualStrings("0:b 1:f 0:c 0:g ", col.buf[0..col.len]);
+
+    try std.testing.expectError(fs.Error.NotADirectory, f.tree("/a/g", &col, TreeCollector.cb));
+    try std.testing.expectError(fs.Error.NotFound, f.tree("/nope", &col, TreeCollector.cb));
+}
