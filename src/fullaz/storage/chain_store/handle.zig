@@ -793,12 +793,15 @@ pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comp
             return target_len;
         }
 
+        // TODO: There is a bag here. It leaves 2 chunks but not 1, when fully truncated.
         pub fn popChunk(self: *Self) Error!void {
             if (try self.ctx.mgr.getLast() == null) {
                 return;
             }
             const last = (try self.ctx.mgr.getLast()).?;
             const first = (try self.ctx.mgr.getFirst()).?;
+
+            // TODO: do not remove the first here.
 
             var last_chunk_ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
             defer last_chunk_ph.deinit();
@@ -808,6 +811,7 @@ pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comp
             var last_chunk_l = last_chunk_v.getLinkMut();
             const prev = last_chunk_l.link.back.get();
 
+            // TODO: remove it here :)
             if (prev == first) {
                 return;
                 // Removing the last chunk

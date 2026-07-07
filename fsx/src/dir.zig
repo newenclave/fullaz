@@ -28,6 +28,7 @@ pub fn Directory(comptime PageCacheType: type) type {
         pub const PageId = constants.PageId;
         pub const Error = error{};
 
+        cache: *PageCacheType,
         root: ?constants.PageId = null,
 
         pub fn getRoot(self: *const SmSelf) ?constants.PageId {
@@ -37,8 +38,9 @@ pub fn Directory(comptime PageCacheType: type) type {
             self.root = r;
         }
         pub fn destroyPage(self: *SmSelf, id: constants.PageId) SmSelf.Error!void {
-            _ = self;
-            _ = id;
+            if (comptime @hasDecl(PageCacheType, "free")) {
+                self.cache.free(id) catch {};
+            }
         }
     };
 
@@ -63,7 +65,7 @@ pub fn Directory(comptime PageCacheType: type) type {
             if (name.len > constants.max_name_len) {
                 return Error.NameTooLong;
             }
-            var sm = DirSM{ .root = self.root };
+            var sm = DirSM{ .cache = self.cache, .root = self.root };
             var model = Model.init(self.cache, &sm, settings, {});
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
@@ -76,7 +78,7 @@ pub fn Directory(comptime PageCacheType: type) type {
         }
 
         pub fn lookup(self: *Self, name: []const u8) !?Inode {
-            var sm = DirSM{ .root = self.root };
+            var sm = DirSM{ .cache = self.cache, .root = self.root };
 
             var model = Model.init(self.cache, &sm, settings, {});
 
@@ -90,7 +92,7 @@ pub fn Directory(comptime PageCacheType: type) type {
         }
 
         pub fn update(self: *Self, name: []const u8, node: Inode) !bool {
-            var sm = DirSM{ .root = self.root };
+            var sm = DirSM{ .cache = self.cache, .root = self.root };
             var model = Model.init(self.cache, &sm, settings, {});
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
@@ -103,7 +105,7 @@ pub fn Directory(comptime PageCacheType: type) type {
         }
 
         pub fn remove(self: *Self, name: []const u8) !bool {
-            var sm = DirSM{ .root = self.root };
+            var sm = DirSM{ .cache = self.cache, .root = self.root };
             var model = Model.init(self.cache, &sm, settings, {});
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
@@ -118,7 +120,7 @@ pub fn Directory(comptime PageCacheType: type) type {
             ctx: anytype,
             comptime cb: fn (@TypeOf(ctx), []const u8, Inode) anyerror!void,
         ) !void {
-            var sm = DirSM{ .root = self.root };
+            var sm = DirSM{ .cache = self.cache, .root = self.root };
             var model = Model.init(self.cache, &sm, settings, {});
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
@@ -131,6 +133,19 @@ pub fn Directory(comptime PageCacheType: type) type {
                     try cb(ctx, res.key, node);
                 }
             }
+        }
+
+        pub fn isEmpty(self: *Self) !bool {
+            const S = struct {
+                fn cb(flag: *bool, name: []const u8, node: Inode) anyerror!void {
+                    _ = name;
+                    _ = node;
+                    flag.* = true;
+                }
+            };
+            var any = false;
+            try self.iterate(&any, S.cb);
+            return !any;
         }
     };
 }

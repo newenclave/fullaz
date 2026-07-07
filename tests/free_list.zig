@@ -2,6 +2,9 @@ const std = @import("std");
 const fullaz = @import("fullaz");
 const FreeList = fullaz.storage.free_list.FreeList;
 
+const page_cache = @import("fullaz").storage.page_cache;
+const devices = @import("fullaz").device;
+
 const PAGE = 64;
 
 const MemStore = struct {
@@ -9,7 +12,6 @@ const MemStore = struct {
     pub const Error = error{OutOfBounds};
     pub const PageId = u32;
 
-    buffers: [][PAGE]u8,
     root: ?u32 = null,
 
     pub fn getRoot(self: *const Self) ?u32 {
@@ -18,30 +20,28 @@ const MemStore = struct {
     pub fn setRoot(self: *Self, r: ?u32) Error!void {
         self.root = r;
     }
-
-    pub fn pageMut(self: *Self, pid: u32) Error![]u8 {
-        if (pid >= self.buffers.len) {
-            return Error.OutOfBounds;
-        }
-        return self.buffers[pid][0..];
-    }
-    pub fn pageConst(self: *Self, pid: u32) Error![]const u8 {
-        if (pid >= self.buffers.len) {
-            return Error.OutOfBounds;
-        }
-        return self.buffers[pid][0..];
-    }
 };
 
 test "FreeList: LIFO push/pop, empty behaviour, head persists in the Store" {
     const allocator = std.testing.allocator;
-    const bufs = try allocator.alloc([PAGE]u8, 8);
-    defer allocator.free(bufs);
-    for (bufs) |*b| @memset(b, 0);
 
-    var store = MemStore{ .buffers = bufs };
-    const FL = FreeList(MemStore, .little);
-    var fl = FL.init(&store);
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    var device = try Device.init(allocator, PAGE);
+    defer device.deinit();
+    var cache = try Cache.init(&device, allocator, 8);
+    defer cache.deinit();
+
+    for (0..8) |i| {
+        var ph = try cache.create();
+        defer ph.deinit();
+        //std.debug.print("Creating page {d}\n", .{i});
+        _ = i;
+    }
+
+    var store = MemStore{};
+    const FL = FreeList(Cache, MemStore, .little);
+    var fl = FL.init(&cache, &store);
 
     // Empty.
     try std.testing.expect(fl.isEmpty());
@@ -71,7 +71,8 @@ test "FreeList: LIFO push/pop, empty behaviour, head persists in the Store" {
     // FreeList over the same Store sees the same stack.
     try fl.push(1);
     try fl.push(3);
-    var fl2 = FL.init(&store);
+
+    var fl2 = FL.init(&cache, &store);
     try std.testing.expectEqual(@as(?u32, 3), try fl2.pop());
     try std.testing.expectEqual(@as(?u32, 1), try fl2.pop());
     try std.testing.expect(fl2.isEmpty());

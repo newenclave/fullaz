@@ -14,6 +14,7 @@ pub fn File(comptime PageCacheType: type) type {
         pub const Size = constants.Size;
         pub const Error = error{};
 
+        cache: *PageCacheType,
         roots: FileRoots,
 
         pub fn getTotalSize(self: *const SmSelf) Error!Size {
@@ -35,8 +36,9 @@ pub fn File(comptime PageCacheType: type) type {
             self.roots.last = pid;
         }
         pub fn destroyPage(self: *SmSelf, id: PageId) Error!void {
-            _ = self;
-            _ = id;
+            if (comptime @hasDecl(PageCacheType, "free")) {
+                self.cache.free(id) catch {};
+            }
         }
         pub fn getIndexRoot(self: *const SmSelf) ?PageId {
             return self.roots.index;
@@ -68,7 +70,7 @@ pub fn File(comptime PageCacheType: type) type {
         }
 
         pub fn append(self: *Self, bytes: []const u8) !usize {
-            var sm = FileSM{ .roots = self.roots };
+            var sm = FileSM{ .cache = self.cache, .roots = self.roots };
             var handle = Chain.init(self.cache, &sm, chain_settings);
             defer handle.deinit();
 
@@ -83,7 +85,7 @@ pub fn File(comptime PageCacheType: type) type {
         }
 
         pub fn read(self: *Self, buf: []u8) !usize {
-            var sm = FileSM{ .roots = self.roots };
+            var sm = FileSM{ .cache = self.cache, .roots = self.roots };
             var handle = Chain.init(self.cache, &sm, chain_settings);
             defer handle.deinit();
 
@@ -92,6 +94,31 @@ pub fn File(comptime PageCacheType: type) type {
             }
             try handle.setg(0);
             return try handle.read(buf);
+        }
+
+        // TODO: chain_store.Handle has a bug. So it should be fixed as well here.
+        pub fn destroy(self: *Self) !void {
+            var sm = FileSM{ .cache = self.cache, .roots = self.roots };
+            var handle = Chain.init(self.cache, &sm, chain_settings);
+            defer handle.deinit();
+
+            if (sm.roots.first != null) {
+                try handle.truncate(sm.roots.total);
+                const first = sm.roots.first;
+                const last = sm.roots.last;
+                if (first) |fp| {
+                    try self.cache.free(fp);
+                }
+                if (last) |lp| {
+                    if (first == null or lp != first.?) {
+                        try self.cache.free(lp);
+                    }
+                }
+                if (sm.roots.index) |ip| {
+                    try self.cache.free(ip);
+                }
+            }
+            self.roots = .{};
         }
     };
 }

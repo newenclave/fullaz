@@ -15,8 +15,11 @@ test {
     _ = @import("superblock.zig");
     _ = @import("inode.zig");
     _ = @import("path.zig");
+    _ = @import("reclaiming_cache.zig");
     _ = @import("dir.zig");
     _ = @import("fs.zig");
     _ = @import("fs_paths.zig");
     _ = @import("fs_files.zig");
+    _ = @import("fs_rm.zig");
+    _ = @import("fs_reclaim.zig");
 }
