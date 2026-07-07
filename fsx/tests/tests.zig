@@ -22,4 +22,5 @@ test {
     _ = @import("fs_files.zig");
     _ = @import("fs_rm.zig");
     _ = @import("fs_reclaim.zig");
+    _ = @import("cli.zig");
 }
