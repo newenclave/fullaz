@@ -804,6 +804,44 @@ test "ChainStore Handle. extend then truncate" {
     }
 }
 
+test "ChainStore Handle. truncate all collapses to a single chunk" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 1000);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.create();
+    try hdl.open();
+
+    var data: [5000]u8 = undefined;
+    for (&data, 0..) |*b, i| {
+        b.* = @intCast(i % 256);
+    }
+    _ = try hdl.write(&data);
+    try std.testing.expect(try hdl.totalSize() == 5000);
+    try std.testing.expect((try mgr.getFirst()).? != (try mgr.getLast()).?);
+
+    try hdl.truncate(5000);
+    try std.testing.expect(try hdl.totalSize() == 0);
+    try std.testing.expect((try mgr.getFirst()).? == (try mgr.getLast()).?);
+
+    _ = try hdl.write("hi");
+    try std.testing.expect(try hdl.totalSize() == 2);
+    try hdl.setg(0);
+    var buf: [2]u8 = undefined;
+    const read = try hdl.read(&buf);
+    try std.testing.expect(read == 2);
+    try std.testing.expectEqualStrings("hi", &buf);
+}
+
 test "ChainStore Handle. extend spanning multiple chunks" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);

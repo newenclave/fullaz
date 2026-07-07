@@ -801,7 +801,9 @@ pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comp
             const last = (try self.ctx.mgr.getLast()).?;
             const first = (try self.ctx.mgr.getFirst()).?;
 
-            // TODO: do not remove the first here.
+            if (last == first) {
+                return;
+            }
 
             var last_chunk_ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
             defer last_chunk_ph.deinit();
@@ -811,15 +813,9 @@ pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comp
             var last_chunk_l = last_chunk_v.getLinkMut();
             const prev = last_chunk_l.link.back.get();
 
-            // TODO: remove it here :)
-            if (prev == first) {
-                return;
-                // Removing the last chunk
-            } else {
-                try self.ctx.mgr.setLast(prev);
-                try self.popImpl(prev);
-                try self.index.onUnseal();
-            }
+            try self.ctx.mgr.setLast(prev);
+            try self.popImpl(prev);
+            try self.index.onUnseal();
             try self.ctx.mgr.destroyPage(last);
         }
 
