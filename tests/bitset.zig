@@ -168,7 +168,7 @@ test "bitset: pseudo-random toggles with popcount tracking" {
     var seed: u64 = 0x1234_5678_9ABC_DEF0;
     inline for (0..512) |_| { // 512 operations
         seed = seed *% 6364136223846793005 +% 1;
-        const idx: usize = @as(usize, @intCast(seed >> 58)); // 6 bits — 0..63
+        const idx: usize = @as(usize, @intCast(seed >> 58)); // 6 bits -- 0..63
 
         if ((seed & 1) == 0) {
             // set

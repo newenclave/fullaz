@@ -15,6 +15,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
         file: Io.File,
         block_size: usize,
         block_count: usize,
+        physical_blocks: usize,
         is_open_flag: bool,
 
         pub fn create(io: Io, path: []const u8, block_size: usize) Error!Self {
@@ -27,6 +28,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
                 .file = file,
                 .block_size = block_size,
                 .block_count = 0,
+                .physical_blocks = 0,
                 .is_open_flag = true,
             };
         }
@@ -37,11 +39,13 @@ pub fn FileBlock(comptime BlockIdT: type) type {
             }) catch return Error.OpenFailed;
             errdefer file.close(io);
             const end = file.length(io) catch return Error.IoError;
+            const blocks = @as(usize, @intCast(end)) / block_size;
             return Self{
                 .io = io,
                 .file = file,
                 .block_size = block_size,
-                .block_count = @as(usize, @intCast(end)) / block_size,
+                .block_count = blocks,
+                .physical_blocks = blocks,
                 .is_open_flag = true,
             };
         }
@@ -70,23 +74,25 @@ pub fn FileBlock(comptime BlockIdT: type) type {
         }
 
         pub fn appendBlock(self: *Self) Error!BlockId {
+            // Logical only: the file is not grown until the block is written.
             const new_id = self.block_count;
-            const new_len = (new_id + 1) * self.block_size;
-            self.file.setLength(self.io, @as(u64, @intCast(new_len))) catch return Error.IoError;
             self.block_count = new_id + 1;
             return @as(BlockId, @intCast(new_id));
         }
 
-        // removes count blocks fro the end.
+        // removes count blocks from the end.
         pub fn truncateBlocks(self: *Self, count: usize) Error!void {
             if (count > self.block_count) {
                 return Error.InvalidId;
             }
             const new_count = self.block_count - count;
-            const new_len = new_count * self.block_size;
-            self.file.setLength(self.io, @as(u64, @intCast(new_len))) catch {
-                return Error.IoError;
-            };
+
+            if (self.physical_blocks > new_count) {
+                self.file.setLength(self.io, @as(u64, @intCast(new_count * self.block_size))) catch {
+                    return Error.IoError;
+                };
+                self.physical_blocks = new_count;
+            }
             self.block_count = new_count;
         }
 
@@ -96,6 +102,11 @@ pub fn FileBlock(comptime BlockIdT: type) type {
                 return Error.InvalidId;
             }
             const len = @min(output.len, self.block_size);
+            if (idx >= self.physical_blocks) {
+                // Appended but never written: reads as a zero block.
+                @memset(output[0..len], 0);
+                return;
+            }
             const offset = @as(u64, @intCast(idx * self.block_size));
             _ = self.file.readPositionalAll(self.io, output[0..len], offset) catch return Error.IoError;
         }
@@ -104,6 +115,10 @@ pub fn FileBlock(comptime BlockIdT: type) type {
             const idx = @as(usize, @intCast(block_id));
             if (idx >= self.block_count) {
                 return Error.InvalidId;
+            }
+            if (idx >= self.physical_blocks) {
+                self.file.setLength(self.io, @as(u64, @intCast((idx + 1) * self.block_size))) catch return Error.IoError;
+                self.physical_blocks = idx + 1;
             }
             const len = @min(output.len, self.block_size);
             const offset = @as(u64, @intCast(idx * self.block_size));

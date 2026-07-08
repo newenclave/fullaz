@@ -143,3 +143,84 @@ test "FileBlock: truncate blocks" {
     try std.testing.expectError(Dev.Error.InvalidId, dev.writeBlock(3, &buf));
     try std.testing.expectError(Dev.Error.InvalidId, dev.writeBlock(4, &buf));
 }
+
+test "FileBlock: appendBlock is lazy, no physical growth until write" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_lazy_append.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    const Dev = FileBlock(u32);
+
+    var dev = try Dev.create(io, path, 64);
+    defer dev.deinit();
+
+    _ = try dev.appendBlock();
+    _ = try dev.appendBlock();
+    _ = try dev.appendBlock();
+
+    // Logical count grew, but the file on disk did not.
+    try std.testing.expectEqual(@as(usize, 3), dev.blocksCount());
+    try std.testing.expectEqual(@as(u64, 0), try dev.file.length(io));
+}
+
+test "FileBlock: reading an appended-but-unwritten block yields zeros" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_lazy_read.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    const Dev = FileBlock(u32);
+
+    var dev = try Dev.create(io, path, 64);
+    defer dev.deinit();
+
+    _ = try dev.appendBlock();
+    var buf: [64]u8 = undefined;
+    @memset(&buf, 0xFF);
+    try dev.readBlock(0, &buf);
+    try std.testing.expectEqualSlices(u8, &(.{0} ** 64), &buf);
+}
+
+test "FileBlock: truncating purely-appended blocks never touches the file" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_lazy_truncate.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    const Dev = FileBlock(u32);
+
+    var dev = try Dev.create(io, path, 64);
+    defer dev.deinit();
+
+    for (0..3) |_| {
+        _ = try dev.appendBlock();
+    }
+    try std.testing.expectEqual(@as(u64, 0), try dev.file.length(io));
+
+    // The discard path: rolling appends back is a pure in-memory reset.
+    try dev.truncateBlocks(3);
+    try std.testing.expectEqual(@as(usize, 0), dev.blocksCount());
+    try std.testing.expectEqual(@as(u64, 0), try dev.file.length(io));
+}
+
+test "FileBlock: only physically-written blocks persist across reopen" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_lazy_persist.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    const Dev = FileBlock(u32);
+
+    {
+        var dev = try Dev.create(io, path, 64);
+        defer dev.deinit();
+        _ = try dev.appendBlock(); // block 0
+        _ = try dev.appendBlock(); // block 1, appended but never written
+        var buf: [64]u8 = undefined;
+        @memset(&buf, 0x11);
+        try dev.writeBlock(0, &buf);
+    }
+    {
+        var dev = try Dev.open(io, path, 64);
+        defer dev.deinit();
+        // Only block 0 reached disk; the trailing unwritten append is gone.
+        try std.testing.expectEqual(@as(usize, 1), dev.blocksCount());
+    }
+}
