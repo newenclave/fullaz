@@ -15,7 +15,7 @@ test "PageCache: init and deinit" {
     defer cache.deinit();
 
     try testing.expectEqual(4, cache.availableFrames());
-    try testing.expectEqual(4, cache.maximum_pages);
+    try testing.expectEqual(4, cache.policy.maximum_pages);
 }
 
 test "PageCache: fetch loads page from device" {
@@ -372,4 +372,137 @@ test "PageCache: NoFreeFrames when all pinned" {
     // Try to fetch another page
     const result = cache.fetch(2);
     try testing.expectError(error.NoFreeFrames, result);
+}
+
+test "PageCache batch: commit publishes, nothing flushes before commit" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 8);
+    defer cache.deinit();
+
+    // Baseline: page 0 = 0xAA on disk.
+    {
+        var h = try cache.create();
+        defer h.deinit();
+        (try h.getDataMut())[0] = 0xAA;
+    }
+    try cache.flushAll();
+    try testing.expectEqual(@as(u8, 0xAA), device.storage.items[0]);
+
+    var wb = try cache.begin();
+    {
+        var h = try cache.fetch(0);
+        defer h.deinit();
+        (try h.getDataMut())[0] = 0xBB;
+    }
+    // Still the old byte on disk mid-batch.
+    try testing.expectEqual(@as(u8, 0xAA), device.storage.items[0]);
+
+    try wb.commit();
+    // Published only on commit.
+    try testing.expectEqual(@as(u8, 0xBB), device.storage.items[0]);
+}
+
+test "PageCache batch: discard reverts content and file growth" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 8);
+    defer cache.deinit();
+
+    {
+        var h = try cache.create();
+        defer h.deinit();
+        (try h.getDataMut())[0] = 0xAA;
+    }
+    try cache.flushAll();
+    const blocks_before = device.blocksCount();
+
+    var wb = try cache.begin();
+    {
+        var h = try cache.fetch(0);
+        defer h.deinit();
+        (try h.getDataMut())[0] = 0xBB;
+    }
+    {
+        var h1 = try cache.create();
+        defer h1.deinit();
+        (try h1.getDataMut())[0] = 0xCC;
+        var h2 = try cache.create();
+        defer h2.deinit();
+        (try h2.getDataMut())[0] = 0xDD;
+    }
+    try testing.expectEqual(blocks_before + 2, device.blocksCount());
+
+    try wb.discard();
+
+    // File shrank back and page 0 was never overwritten on disk.
+    try testing.expectEqual(blocks_before, device.blocksCount());
+    try testing.expectEqual(@as(u8, 0xAA), device.storage.items[0]);
+
+    // Re-fetch reads the original bytes from disk.
+    var h = try cache.fetch(0);
+    defer h.deinit();
+    try testing.expectEqual(@as(u8, 0xAA), (try h.getData())[0]);
+}
+
+test "PageCache batch: dirty overflow returns BatchTooLarge" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 4);
+    defer cache.deinit();
+
+    var wb = try cache.begin();
+    for (0..4) |_| {
+        var h = try cache.create();
+        h.deinit();
+    }
+    // All four frames hold dirty pages that can't be flushed mid-batch.
+    try testing.expectError(error.BatchTooLarge, cache.create());
+    try wb.discard();
+    try testing.expectEqual(@as(usize, 0), device.blocksCount());
+}
+
+test "PageCache batch: begin while active is rejected" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 8);
+    defer cache.deinit();
+
+    var wb = try cache.begin();
+    try testing.expectError(error.BatchActive, cache.begin());
+    try wb.discard();
+}
+
+test "PageCache batch: deinit while locked rolls back" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    const blocks_before = device.blocksCount();
+    {
+        var cache = try PageCache(Dev).init(&device, allocator, 8);
+        defer cache.deinit(); // deinit while a batch is still open
+
+        var wb = try cache.begin();
+        _ = &wb;
+        var h1 = try cache.create();
+        h1.deinit();
+        var h2 = try cache.create();
+        h2.deinit();
+        try testing.expectEqual(blocks_before + 2, device.blocksCount());
+    }
+    try testing.expectEqual(blocks_before, device.blocksCount());
 }

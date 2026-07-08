@@ -112,3 +112,34 @@ test "FileBlock: PageCache round-trips a page to disk" {
         try std.testing.expectEqualSlices(u8, "hello", data[0..5]);
     }
 }
+
+test "FileBlock: truncate blocks" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_truncate.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    const Dev = FileBlock(u32);
+
+    var dev = try Dev.create(io, path, 64);
+    defer dev.deinit();
+
+    // Append 5 blocks
+    for (0..5) |i| {
+        _ = try dev.appendBlock();
+        try std.testing.expectEqual(i + 1, dev.blocksCount());
+    }
+
+    // Truncate 2 blocks
+    try dev.truncateBlocks(2);
+    try std.testing.expectEqual(3, dev.blocksCount());
+
+    var buf: [64]u8 = undefined;
+
+    // Reading block 3 and 4 should fail
+    try std.testing.expectError(Dev.Error.InvalidId, dev.readBlock(3, &buf));
+    try std.testing.expectError(Dev.Error.InvalidId, dev.readBlock(4, &buf));
+
+    // Writing to block 3 and 4 should fail
+    try std.testing.expectError(Dev.Error.InvalidId, dev.writeBlock(3, &buf));
+    try std.testing.expectError(Dev.Error.InvalidId, dev.writeBlock(4, &buf));
+}

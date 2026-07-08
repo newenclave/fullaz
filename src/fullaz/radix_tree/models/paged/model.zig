@@ -1,6 +1,6 @@
 const std = @import("std");
 const device_interface = @import("../../../device/interfaces.zig");
-const page_cache = @import("../../../storage/page_cache.zig");
+const page_cache = @import("../../../storage/storage.zig").page_cache;
 const radix_page = @import("view.zig");
 const contracts = @import("../../../contracts/contracts.zig");
 const core = @import("../../../core/core.zig");

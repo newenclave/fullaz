@@ -91,8 +91,13 @@ pub fn main(init: std.process.Init) !void {
         if (trimmed.len > 0) {
             try editor.historyAdd(line);
         }
+        var wb = try cache.begin();
+        errdefer wb.discard() catch |err| {
+            out.print("fsx: error discarding batch: {any}\n", .{err}) catch {};
+            out.flush() catch {};
+        };
         try shell.exec(line, out);
         try out.flush();
-        try cache.flushAll();
+        try wb.commit();
     }
 }

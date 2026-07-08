@@ -48,6 +48,16 @@ pub fn MemoryBlock(comptime BlockIdT: type) type {
             return @as(BlockId, @intCast(old_size / self.block_size));
         }
 
+        pub fn truncateBlocks(self: *Self, count: usize) Error!void {
+            const current_count = self.blocksCount();
+            if (count > current_count) {
+                return Error.InvalidId;
+            }
+            const new_count = current_count - count;
+            const new_size = new_count * self.block_size;
+            try self.storage.resize(self.allocator, new_size);
+        }
+
         pub fn readBlock(self: *const Self, block_id: BlockId, output: []u8) Error!void {
             const offset = @as(usize, @intCast(block_id)) * self.block_size;
             if (offset + self.block_size > self.storage.items.len) {

@@ -1,7 +1,7 @@
 const std = @import("std");
 const device = @import("fullaz").device;
 
-test "Allocate and use device memory block" {
+test "DevMemBlock: Allocate and use device memory block" {
     const MemoryBlock = device.MemoryBlock;
 
     const allocator = std.testing.allocator;
@@ -19,7 +19,7 @@ test "Allocate and use device memory block" {
     try std.testing.expectEqual(1, mem_block.blocksCount());
 }
 
-test "Write and read single block" {
+test "DevMemBlock: Write and read single block" {
     const MemoryBlock = device.MemoryBlock;
     const block_size = 64;
 
@@ -42,7 +42,7 @@ test "Write and read single block" {
     try std.testing.expectEqualStrings("Hello, World!", read_buf[0..13]);
 }
 
-test "Write and read multiple blocks" {
+test "DevMemBlock: Write and read multiple blocks" {
     const MemoryBlock = device.MemoryBlock;
     const block_size = 32;
 
@@ -85,7 +85,7 @@ test "Write and read multiple blocks" {
     try std.testing.expectEqual(@as(u8, 'C'), read_buf[31]);
 }
 
-test "Read invalid block returns error" {
+test "DevMemBlock: Read invalid block returns error" {
     const MemoryBlock = device.MemoryBlock(u32);
     const Error = MemoryBlock.Error;
     const block_size = 64;
@@ -105,7 +105,7 @@ test "Read invalid block returns error" {
     try std.testing.expectError(Error.InvalidId, mem_block.readBlock(1, &read_buf));
 }
 
-test "Write invalid block returns error" {
+test "DevMemBlock: Write invalid block returns error" {
     const MemoryBlock = device.MemoryBlock(u32);
     const Error = MemoryBlock.Error;
     const block_size = 64;
@@ -117,4 +117,33 @@ test "Write invalid block returns error" {
 
     // Writing to empty storage should fail
     try std.testing.expectError(Error.InvalidId, mem_block.writeBlock(0, &write_buf));
+}
+
+test "DevMemBlock: truncate blocks reduces count and invalidates removed blocks" {
+    const MemoryBlock = device.MemoryBlock(u32);
+    const Error = MemoryBlock.Error;
+    const block_size = 64;
+
+    var mem_block = try MemoryBlock.init(std.testing.allocator, block_size);
+    defer mem_block.deinit();
+
+    // Append 5 blocks
+    for (0..5) |i| {
+        _ = try mem_block.appendBlock();
+        try std.testing.expectEqual(i + 1, mem_block.blocksCount());
+    }
+
+    // Truncate 2 blocks
+    try mem_block.truncateBlocks(2);
+    try std.testing.expectEqual(3, mem_block.blocksCount());
+
+    var buf: [64]u8 = undefined;
+
+    // Reading block 3 and 4 should fail
+    try std.testing.expectError(Error.InvalidId, mem_block.readBlock(3, &buf));
+    try std.testing.expectError(Error.InvalidId, mem_block.readBlock(4, &buf));
+
+    // Writing to block 3 and 4 should fail
+    try std.testing.expectError(Error.InvalidId, mem_block.writeBlock(3, &buf));
+    try std.testing.expectError(Error.InvalidId, mem_block.writeBlock(4, &buf));
 }

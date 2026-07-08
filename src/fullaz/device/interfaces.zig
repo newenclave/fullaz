@@ -30,4 +30,7 @@ pub fn assertBlockDevice(comptime T: type) void {
     requiresFnSignature(T, "readBlock", fn (*const T, T.BlockId, []u8) Error!void);
     requiresFnSignature(T, "writeBlock", fn (*T, T.BlockId, []u8) Error!void);
     requiresFnSignature(T, "appendBlock", fn (*T) Error!T.BlockId);
+    // truncates blocks from the end of the device, new size must be less than current size
+    // removes count blocks from the end.
+    requiresFnSignature(T, "truncateBlocks", fn (*T, usize) Error!void);
 }

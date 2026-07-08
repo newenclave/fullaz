@@ -33,6 +33,8 @@ pub const NotFoundError = error{
 
 pub const CacheError = error{
     NoFreeFrames,
+    BatchActive,
+    BatchTooLarge,
 };
 
 pub const IndexError = error{

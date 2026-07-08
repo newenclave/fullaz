@@ -77,6 +77,19 @@ pub fn FileBlock(comptime BlockIdT: type) type {
             return @as(BlockId, @intCast(new_id));
         }
 
+        // removes count blocks fro the end.
+        pub fn truncateBlocks(self: *Self, count: usize) Error!void {
+            if (count > self.block_count) {
+                return Error.InvalidId;
+            }
+            const new_count = self.block_count - count;
+            const new_len = new_count * self.block_size;
+            self.file.setLength(self.io, @as(u64, @intCast(new_len))) catch {
+                return Error.IoError;
+            };
+            self.block_count = new_count;
+        }
+
         pub fn readBlock(self: *const Self, block_id: BlockId, output: []u8) Error!void {
             const idx = @as(usize, @intCast(block_id));
             if (idx >= self.block_count) {
