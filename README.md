@@ -91,7 +91,7 @@ If something can be made simpler for learning purposes, it probably will be.
 
 - [X]  **B+ tree (in-memory / paged)** implemented
 - [X]  **Weighted B+ tree (in-memory / paged)**
-- [ ]  **Skip list**
+- [X]  **Skip list**
 - [ ]  **Weighted skip list**
 - [ ]  **B+ tree over spatial keys** (Morton/Z-order or similar)
 
