@@ -4,6 +4,8 @@ const core = @import("../../core/core.zig");
 const errors = core.errors;
 const assertBlockDevice = @import("../../device/device.zig").interfaces.assertBlockDevice;
 const memory_policy = @import("memory_policy.zig");
+const memory_policy_iface = @import("interfaces.zig");
+
 const wal_mod = @import("../wal/wal.zig");
 
 pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (type) type, comptime WalPolicy: type) type {
@@ -119,7 +121,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
     };
 
     const Policy = MemoryCachePolicy(Frame);
-    comptime memory_policy.assertMemoryCachePolicy(Policy, Frame);
+    comptime memory_policy_iface.assertMemoryCachePolicy(Policy, Frame);
 
     return struct {
         const Self = @This();
