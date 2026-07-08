@@ -8,8 +8,8 @@ const device = fullaz.device;
 const constants = fsx.constants;
 
 const Device = device.FileBlock(constants.PageId);
-const FileLog = fullaz.storage.wal.FileLog;
-const WalT = fullaz.storage.wal.Wal(device.FileLog, constants.PageId, constants.endian);
+const FileLog = fullaz.storage.wal.FileLog(constants.PageId);
+const WalT = fullaz.storage.wal.Wal(FileLog, constants.PageId, constants.endian);
 const PageCache = fullaz.storage.page_cache.PageCacheImpl(Device, fullaz.storage.memory_policy.DefaultMemoryPolicy, WalT);
 const FsT = fsx.fs.Fs(PageCache, fsx.path.Default);
 const CliT = fsx.cli.Cli(FsT);

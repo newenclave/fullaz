@@ -18,7 +18,7 @@ pub const NoWal = struct {
 // redo-only WAL (write-ahead log).
 pub fn Wal(comptime LogBackendT: type, comptime PidT: type, comptime Endian: std.builtin.Endian) type {
     comptime {
-        device.interfaces.assertIsLogBackend(LogBackendT);
+        device.interfaces.assertLogDevice(LogBackendT);
     }
 
     const U16 = PackedInt(u16, Endian);
@@ -42,20 +42,21 @@ pub fn Wal(comptime LogBackendT: type, comptime PidT: type, comptime Endian: std
 
         pub const enabled = true;
         pub const Error = ErrorSet || LogBackendT.Error || std.mem.Allocator.Error;
-        pub const page_header_len: usize = @sizeOf(PageHeader);
-        pub const commit_rec_len: usize = @sizeOf(CommitRec);
+        pub const page_header_len: Offset = @sizeOf(PageHeader);
+        pub const commit_rec_len: Offset = @sizeOf(CommitRec);
+        pub const Offset = LogBackendT.Offset;
 
         allocator: std.mem.Allocator,
         backend: *LogBackendT,
-        page_size: usize,
+        page_size: Offset,
         scratch: []u8,
 
-        pub fn init(allocator: std.mem.Allocator, backend: *LogBackendT, page_size: usize) Error!Self {
+        pub fn init(allocator: std.mem.Allocator, backend: *LogBackendT, page_size: Offset) Error!Self {
             return .{
                 .allocator = allocator,
                 .backend = backend,
                 .page_size = page_size,
-                .scratch = try allocator.alloc(u8, page_header_len + page_size),
+                .scratch = try allocator.alloc(u8, page_header_len + @as(usize, @intCast(page_size))),
             };
         }
 
@@ -93,31 +94,31 @@ pub fn Wal(comptime LogBackendT: type, comptime PidT: type, comptime Endian: std
         pub fn replay(self: *Self, ctx: anytype, cb: anytype) !void {
             const committed_end = try self.scanCommittedEnd();
             const total = page_header_len + self.page_size;
-            var off: usize = 0;
+            var off: Offset = 0;
             while (off < committed_end) {
                 if (try self.readKind(off) == kind_page) {
-                    try self.backend.readAt(off, self.scratch[0..total]);
+                    try self.backend.readAt(@intCast(off), self.scratch[0..total]);
                     const hdr: *const PageHeader = @ptrCast(self.scratch.ptr);
                     try cb(ctx, hdr.pid.get(), self.scratch[page_header_len..total]);
-                    off += total;
+                    off += @as(Offset, @intCast(total));
                 } else {
                     off += commit_rec_len;
                 }
             }
         }
 
-        fn readKind(self: *Self, off: usize) Error!u16 {
+        fn readKind(self: *Self, off: Offset) Error!u16 {
             var kbuf: [2]u8 = undefined;
             try self.backend.readAt(off, &kbuf);
             return std.mem.readInt(u16, &kbuf, Endian);
         }
 
-        fn scanCommittedEnd(self: *Self) Error!usize {
+        fn scanCommittedEnd(self: *Self) Error!Offset {
             const size = self.backend.size();
             const total = page_header_len + self.page_size;
 
-            var off: usize = 0;
-            var committed_end: usize = 0;
+            var off: Offset = 0;
+            var committed_end: Offset = 0;
 
             while ((off + 2) <= size) {
                 const k = try self.readKind(off);
@@ -130,7 +131,7 @@ pub fn Wal(comptime LogBackendT: type, comptime PidT: type, comptime Endian: std
                     if (crc32(self.scratch[page_header_len..total]) != hdr.crc.get()) {
                         break;
                     }
-                    off += total;
+                    off += @as(Offset, @intCast(total));
                 } else if (k == kind_commit) {
                     if ((off + commit_rec_len) > size) {
                         break;

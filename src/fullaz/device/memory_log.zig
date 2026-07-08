@@ -7,10 +7,11 @@ const Io = std.Io;
 pub const MemoryLog = struct {
     const Self = @This();
     pub const Error = std.mem.Allocator.Error;
+    pub const Offset = usize;
 
     allocator: std.mem.Allocator,
     buf: std.ArrayList(u8),
-    synced: usize,
+    synced: Offset,
 
     pub fn init(allocator: std.mem.Allocator) Error!Self {
         return .{
@@ -37,11 +38,11 @@ pub const MemoryLog = struct {
         self.synced = 0;
     }
 
-    pub fn size(self: *const Self) usize {
+    pub fn size(self: *const Self) Offset {
         return self.buf.items.len;
     }
 
-    pub fn readAt(self: *const Self, offset: usize, dst: []u8) Error!void {
+    pub fn readAt(self: *const Self, offset: Offset, dst: []u8) Error!void {
         @memcpy(dst, self.buf.items[offset .. offset + dst.len]);
     }
 };

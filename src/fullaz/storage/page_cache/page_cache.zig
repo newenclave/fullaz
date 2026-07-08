@@ -190,13 +190,13 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
 
         fn recover(self: *Self) Error!void {
             const applyRedo = struct {
-                fn f(cache: *Self, pid: Pid, bytes: []const u8) Error!void {
+                fn call(cache: *Self, pid: Pid, bytes: []const u8) Error!void {
                     while (cache.device.blocksCount() <= @as(usize, @intCast(pid))) {
                         _ = try cache.device.appendBlock();
                     }
                     try cache.device.writeBlock(pid, @constCast(bytes));
                 }
-            }.f;
+            }.call;
             try self.wal.replay(self, applyRedo);
             try self.device.sync();
             try self.wal.checkpoint();

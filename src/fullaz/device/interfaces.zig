@@ -42,11 +42,12 @@ pub fn assertBlockDevice(comptime T: type) void {
 // Compile time concept check for log device types.
 pub fn assertLogDevice(comptime T: type) void {
     requiresErrorDeclaration(T, "Error");
+    requiresTypeDeclaration(T, "Offset");
     const Error = T.Error;
 
     requiresFnSignature(T, "append", fn (*T, []const u8) Error!void);
     requiresFnSignature(T, "sync", fn (*T) Error!void);
     requiresFnSignature(T, "reset", fn (*T) Error!void);
-    requiresFnSignature(T, "size", fn (*const T) usize);
-    requiresFnSignature(T, "readAt", fn (*const T, usize, []u8) Error!void);
+    requiresFnSignature(T, "size", fn (*const T) T.Offset);
+    requiresFnSignature(T, "readAt", fn (*const T, T.Offset, []u8) Error!void);
 }
