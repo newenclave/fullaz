@@ -3,11 +3,14 @@ const Io = std.Io;
 const fullaz = @import("fullaz");
 const zigline = @import("zigline");
 const fsx = @import("fsx");
+const device = fullaz.device;
 
 const constants = fsx.constants;
 
-const Device = fullaz.device.FileBlock(constants.PageId);
-const PageCache = fullaz.storage.page_cache.PageCache(Device);
+const Device = device.FileBlock(constants.PageId);
+const FileLog = fullaz.storage.wal.FileLog;
+const WalT = fullaz.storage.wal.Wal(device.FileLog, constants.PageId, constants.endian);
+const PageCache = fullaz.storage.page_cache.PageCacheImpl(Device, fullaz.storage.memory_policy.DefaultMemoryPolicy, WalT);
 const FsT = fsx.fs.Fs(PageCache, fsx.path.Default);
 const CliT = fsx.cli.Cli(FsT);
 
@@ -47,13 +50,24 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const block_size = constants.default_block_size;
-    var device = if (do_format)
+    var dev = if (do_format)
         try Device.create(io, image, block_size)
     else
         try Device.open(io, image, block_size);
-    defer device.deinit();
+    defer dev.deinit();
 
-    var cache = try PageCache.init(&device, gpa, 64);
+    // The WAL lives in a sidecar file next to the image; recovery on open (in
+    // initWal) replays any transaction committed to the log but not yet applied.
+    var wal_path_buf: [1024]u8 = undefined;
+    const wal_path = try std.fmt.bufPrint(&wal_path_buf, "{s}.wal", .{image});
+    var log = if (do_format)
+        try FileLog.create(io, wal_path)
+    else
+        FileLog.open(io, wal_path) catch try FileLog.create(io, wal_path);
+    defer log.deinit();
+
+    const wal = try WalT.init(gpa, &log, block_size);
+    var cache = try PageCache.initWal(&dev, gpa, 64, wal);
     defer cache.deinit();
 
     var fs = if (do_format)
@@ -64,9 +78,11 @@ pub fn main(init: std.process.Init) !void {
     var shell = CliT.init(&fs, gpa);
 
     if (cmd_n > 0) {
+        var wb = try cache.begin();
+        errdefer wb.discard() catch {};
         try shell.execTokens(cmd_buf[0..cmd_n], out);
         try out.flush();
-        try cache.flushAll();
+        try wb.commit();
         return;
     }
 

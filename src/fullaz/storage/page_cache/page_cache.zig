@@ -4,8 +4,9 @@ const core = @import("../../core/core.zig");
 const errors = core.errors;
 const assertBlockDevice = @import("../../device/device.zig").interfaces.assertBlockDevice;
 const memory_policy = @import("memory_policy.zig");
+const wal_mod = @import("../wal/wal.zig");
 
-pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (type) type) type {
+pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (type) type, comptime WalPolicy: type) type {
     // Compile-time check that DeviceT is a valid block device
     comptime assertBlockDevice(DeviceT);
 
@@ -132,8 +133,9 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
 
         // Extract device error set from method signatures
         const DeviceError = DeviceT.Error;
+        const WalErrors = if (WalPolicy.enabled) WalPolicy.Error else error{};
 
-        pub const Error = errors.CacheError || DeviceError || std.mem.Allocator.Error;
+        pub const Error = errors.CacheError || DeviceError || std.mem.Allocator.Error || WalErrors;
 
         device: *UnderlyingDevice = undefined,
         allocator: std.mem.Allocator = undefined,
@@ -141,6 +143,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         frames_cache: FrameHashMap = undefined,
         locked: bool = false,
         appended_in_batch: usize = 0,
+        wal: WalPolicy = undefined,
 
         pub const WriteBatch = struct {
             cache: *Self,
@@ -155,12 +158,46 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         };
 
         pub fn init(underlying_device: *UnderlyingDevice, allocator: std.mem.Allocator, init_maximum_pages: usize) Error!Self {
+            if (WalPolicy.enabled) {
+                @compileError("WAL-enabled page cache must be created with initWal");
+            }
             return Self{
                 .device = underlying_device,
                 .allocator = allocator,
                 .policy = try Policy.init(allocator, underlying_device.blockSize(), init_maximum_pages),
                 .frames_cache = FrameHashMap.init(allocator),
+                .wal = .{},
             };
+        }
+
+        pub fn initWal(underlying_device: *UnderlyingDevice, allocator: std.mem.Allocator, init_maximum_pages: usize, wal: WalPolicy) Error!Self {
+            if (!WalPolicy.enabled) {
+                @compileError("initWal requires a WAL policy; use init for NoWal");
+            }
+            var self = Self{
+                .device = underlying_device,
+                .allocator = allocator,
+                .policy = try Policy.init(allocator, underlying_device.blockSize(), init_maximum_pages),
+                .frames_cache = FrameHashMap.init(allocator),
+                .wal = wal,
+            };
+            // trying to recore from the WAL
+            try self.recover();
+            return self;
+        }
+
+        fn recover(self: *Self) Error!void {
+            const applyRedo = struct {
+                fn f(cache: *Self, pid: Pid, bytes: []const u8) Error!void {
+                    while (cache.device.blocksCount() <= @as(usize, @intCast(pid))) {
+                        _ = try cache.device.appendBlock();
+                    }
+                    try cache.device.writeBlock(pid, @constCast(bytes));
+                }
+            }.f;
+            try self.wal.replay(self, applyRedo);
+            try self.device.sync();
+            try self.wal.checkpoint();
         }
 
         pub fn deinit(self: *Self) void {
@@ -187,6 +224,9 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
 
             self.policy.deinit();
             self.frames_cache.deinit();
+            if (WalPolicy.enabled) {
+                self.wal.deinit();
+            }
         }
 
         pub fn pageSize(self: *const Self) usize {
@@ -289,7 +329,27 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         }
 
         fn commitBatch(self: *Self) Error!void {
-            try self.flushAll();
+            if (WalPolicy.enabled) {
+                // Write-ahead: log every dirty page + a commit record,
+                // fsync the log (the commit point),
+                // apply to home and fsync it,
+                // and drop the now-redundant log.
+                var count: u32 = 0;
+                var it = self.frames_cache.iterator();
+                while (it.next()) |entry| {
+                    const frame = entry.value_ptr.*;
+                    if (frame.frame_type == .dirty) {
+                        try self.wal.appendPage(frame.pid, frame.data);
+                        count += 1;
+                    }
+                }
+                try self.wal.sealCommit(count);
+                try self.flushAll();
+                try self.device.sync();
+                try self.wal.checkpoint();
+            } else {
+                try self.flushAll();
+            }
             self.appended_in_batch = 0;
             self.locked = false;
         }
@@ -306,7 +366,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                 }
             }
             // Undo the blocks that create() eagerly appended during the batch.
-            // TODO: Need to be fixed. When the batch is active, to not allocate new blocks on device.
+            //      file device does not extend the file on appendBlock, but the memoryBlock does.
             try self.device.truncateBlocks(self.appended_in_batch);
             self.appended_in_batch = 0;
             self.locked = false;
@@ -316,8 +376,6 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             if (self.policy.popFree()) |ff| {
                 return ff;
             }
-            // While a batch is open, dirty frames may not be written, so only
-            // clean frames are reclaimable.
             if (self.policy.selectVictim(!self.locked)) |victim| {
                 try self.evict(victim);
                 return victim;
@@ -339,5 +397,5 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
 }
 
 pub fn PageCache(comptime DeviceT: type) type {
-    return PageCacheImpl(DeviceT, memory_policy.DefaultMemoryPolicy);
+    return PageCacheImpl(DeviceT, memory_policy.DefaultMemoryPolicy, wal_mod.NoWal);
 }

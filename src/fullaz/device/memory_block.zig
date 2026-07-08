@@ -80,5 +80,9 @@ pub fn MemoryBlock(comptime BlockIdT: type) type {
             const stored_slice = self.storage.items[offset .. offset + output_len];
             @memcpy(stored_slice, output_slice);
         }
+
+        pub fn sync(_: *Self) Error!void {
+            // In-memory device: nothing to flush here
+        }
     };
 }
