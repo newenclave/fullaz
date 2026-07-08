@@ -136,7 +136,7 @@ If something can be made simpler for learning purposes, it probably will be.
 
 #### Durability & Recovery
 
-- [ ]  **Write-Ahead Log (WAL)** planned
+- [X]  **Write-Ahead Log (WAL)** (partially; simple redo-only)
 - [ ]  **Page diffs / delta logging** planned
 - [ ]  **Snapshot / copy-on-write experiments**
 - [ ]  **Generation-based page tracking**
