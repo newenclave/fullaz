@@ -25,4 +25,6 @@ test {
     _ = @import("fsm_memory.zig");
     _ = @import("fsm_paged_slab.zig");
     _ = @import("free_list.zig");
+    _ = @import("wal.zig");
+    _ = @import("rtree_geometry.zig");
 }

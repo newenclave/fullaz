@@ -12,8 +12,8 @@ pub fn BoundingBox(comptime CoordT: type, comptime DimV: usize) type {
 
         pub fn init() Self {
             return Self{
-                .low = [Dim]Coord{.{@as(Coord, 0)} ** Dim},
-                .high = [Dim]Coord{.{@as(Coord, 0)} ** Dim},
+                .low = [_]Coord{0} ** Dim,
+                .high = [_]Coord{0} ** Dim,
             };
         }
 
@@ -74,6 +74,31 @@ pub fn BoundingBox(comptime CoordT: type, comptime DimV: usize) type {
                 }
             }
             return true;
+        }
+
+        pub fn enlargement(self: *const Self, other: Self) Coord {
+            return self.merged(other).measure() - self.measure();
+        }
+
+        pub fn overlapMeasure(self: *const Self, other: Self) Coord {
+            var result: Coord = 1;
+            inline for (0..Dim) |i| {
+                const lo = @max(self.low[i], other.low[i]);
+                const hi = @min(self.high[i], other.high[i]);
+                if (hi <= lo) {
+                    return 0;
+                }
+                result *= (hi - lo);
+            }
+            return result;
+        }
+
+        pub fn center(self: *const Self) Point {
+            var result: Point = undefined;
+            inline for (0..Dim) |i| {
+                result[i] = self.low[i] + @divTrunc(self.high[i] - self.low[i], 2);
+            }
+            return result;
         }
     };
 }
