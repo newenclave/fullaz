@@ -1,5 +1,6 @@
 # fullaz
 
+
 **fullaz** is a low-level storage and indexing library written in Zig.
 
 This project is an **educational Zig-native reimplementation** of the ideas and architecture behind the C++ project **fulla**.
@@ -110,8 +111,8 @@ If something can be made simpler for learning purposes, it probably will be.
 
 #### Spatial index structures
 
-- [ ]  **R-tree**
-- [ ]  **R*-tree split/reinsert experiments**
+- [X]  **R-tree**
+- [X]  **R*-tree split/reinsert experiments**
 - [ ]  **KD-tree**
 - [ ]  **Quadtree**
 - [ ]  **Octree**
@@ -231,6 +232,92 @@ Errors are reported, never fatal:
 ```
 $ fsx demo.img cat /docs/missing
 error: NotFound
+```
+
+---
+
+## galaxy: an R-tree you can fly through
+
+**galaxy** is a second demo built *on top of* fullaz: a ship exploring an
+endless 2-D starfield backed by the paged **R\*-tree**. It turns the spatial
+index into something you can *see* "looking around" is a window query, moving
+reveals new space, and the whole galaxy lives in one file so you can pick up
+exploring where you left off.
+
+- **The viewport is a query.** `look` is an R-tree `search(box)` over the 16×16
+  window around you; the stars it returns are drawn to an ASCII map.
+- **Endless, deterministic space.** The world is tiled into cells; a cell's
+  stars are a pure function of its coordinates and the world seed, so `--seed N`
+  fully determines the galaxy (including where you spawn). Cells are populated
+  the first time they scroll into view and never regenerated: the R-tree file
+  *is* the saved galaxy, no side bookkeeping.
+- **Real coordinates.** Positions are `f64` "light-years", so you appear
+  somewhere like `(850920.8, 380720.3)` in a vast space. This exercises
+  fullaz's float on-page encoding (`PackedFloat` / `PackedNumber`).
+- **One image, real persistence.** Like fsx, each command below is a *separate
+  process* reading and writing the same file (flush + `fsync` on save/quit).
+- **Two ways to drive it:** one-shot commands (shown below) and an interactive
+  [zigline](https://github.com/newenclave/zigline) REPL: `w`/`a`/`s`/`d` to fly.
+
+### Building & running
+
+```sh
+zig build                                    # builds the fullaz library + the galaxy exe
+zig build run-galaxy -- <image> [--format] [--seed N] [command]
+zig build test-galaxy                        # runs the galaxy test suite
+```
+
+Or call the built binary directly (`zig-out/bin/galaxy`). The commands:
+
+```
+commands: look (l)   w a s d (fly N/W/S/E; also north south east west)   where   save   help   quit
+```
+
+### Example session (real output)
+
+Appear in a fresh galaxy and look around. `--format` creates the image and
+`--seed` makes the whole galaxy reproducible; `@` is your ship, dead-center:
+
+```
+$ galaxy world.gx --format --seed 42 look
+                                +
+*       * *+         **         ++         ·
+                     ✦                        *
+ ✦+ +                                       ✦             *
+        ✦            ·
+         *          *✦*                             ·
+                     +
+                        ✦                             ·· +
+                           ··  +  ·
+                               ✦   +                    +
+                              @                        +
++                               + *                +    ✦
+               *            · +    ✦                ✦·✦+
+             *✦
+      · +                                ✦    ·             *
+                               ·+        ·  *·
+             + ·✦               ·   ✦              *✦
+           ·                       +           ·*    *  +
+                                                *      ✦
+  * +     **    ·  +                    +
+         +·  ·       ✦               *·
+at (850920.8, 380720.3)  view 16x16  stars in view: 98
+```
+
+Fly east: a brand-new process reading the image from disk. New space scrolls
+in and its stars are generated on the spot (the map redraws around you):
+
+```
+$ galaxy world.gx d
+9 new star(s) drift into view
+at (850921.8, 380720.3)  view 16x16  stars in view: 103
+```
+
+Reopen later and you are right where you left off:
+
+```
+$ galaxy world.gx where
+at (850921.8, 380720.3)  view 16x16
 ```
 
 ---
