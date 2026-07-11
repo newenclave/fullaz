@@ -12,12 +12,20 @@ pub const Direction = enum { north, south, east, west };
 
 pub fn Galaxy(comptime PageCacheType: type) type {
     const Storage = storage.RootStorage(PageCacheType);
+
+    const PageId = PageCacheType.Pid;
+    const RtreePage = fullaz.page.rtree.Rtree(PageId, u16, f64, 2, constants.endian);
+    const SlotEntry = fullaz.slots.Variadic(u16, constants.endian, false).Entry;
+    const leaf_slot = @sizeOf(RtreePage.LeafSlotHeader) + Star.size + @sizeOf(SlotEntry);
+    const inode_slot = @sizeOf(RtreePage.InodeSlotHeader) + @sizeOf(SlotEntry);
+    const max_entries = constants.default_block_size / @min(leaf_slot, inode_slot);
+
     const Model = rtree.models.Paged(
         PageCacheType,
         Storage,
         f64,
         2,
-        constants.max_entries,
+        max_entries,
         constants.max_value_size,
         constants.endian,
     );

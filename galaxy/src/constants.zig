@@ -13,7 +13,7 @@ pub const superblock_pid: PageId = 0;
 pub const pid_none: PageId = std.math.maxInt(PageId);
 
 // Paged R-tree tuning for the star index.
-pub const max_entries: usize = 32;
+pub const max_entries: usize = 64;
 pub const max_value_size: usize = 16;
 pub const cache_frames: usize = 64;
 
