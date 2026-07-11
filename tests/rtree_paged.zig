@@ -239,3 +239,64 @@ test "RTree paged: state persists across a cache reopen (device round-trip)" {
         }
     }
 }
+
+// A float-coordinate paged model — exercises PackedNumber's float path on-page.
+const FloatModel = rtree.models.Paged(PageCache, NoneStorageManager, f32, 2, 4, 32, .little);
+const FKey = FloatModel.KeyType;
+
+comptime {
+    rtree.models.interfaces.assertModel(FloatModel);
+}
+
+fn fbox(x0: f32, y0: f32, x1: f32, y1: f32) FKey {
+    return FKey.initWith(.{ x0, y0 }, .{ x1, y1 });
+}
+
+const FCollector = struct {
+    seen: [128]bool = [_]bool{false} ** 128,
+    count: usize = 0,
+    fn cb(self: *FCollector, _: FKey, value: []const u8) anyerror!void {
+        self.seen[std.mem.readInt(u32, value[0..4], .little)] = true;
+        self.count += 1;
+    }
+};
+
+test "RTree paged: float coordinates round-trip through the page layout" {
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 32);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = FloatModel.init(&cache, &store_mgr, .{});
+
+    var t = rtree.RStarTree(FloatModel).init(&model);
+
+    const N = 50;
+    var boxes: [N]FKey = undefined;
+    var i: usize = 0;
+    while (i < N) : (i += 1) {
+        const x: f32 = @as(f32, @floatFromInt((i * 7) % 25)) + 0.5;
+        const y: f32 = @as(f32, @floatFromInt((i * 11) % 25)) + 0.25;
+        boxes[i] = fbox(x, y, x + 3.5, y + 3.5);
+        var buf: [4]u8 = undefined;
+        std.mem.writeInt(u32, &buf, @intCast(i), .little);
+        try t.insert(boxes[i], &buf);
+    }
+
+    try testing.expect((try t.height()) >= 2);
+
+    const queries = [_]FKey{
+        fbox(0.0, 0.0, 5.5, 5.5),
+        fbox(10.0, 10.0, 20.0, 20.0),
+        fbox(-1.0, -1.0, 30.0, 30.0),
+    };
+    for (queries) |q| {
+        var got = FCollector{};
+        try t.search(q, &got, FCollector.cb);
+        i = 0;
+        while (i < N) : (i += 1) {
+            try testing.expectEqual(boxes[i].overlaps(&q), got.seen[i]);
+        }
+    }
+}

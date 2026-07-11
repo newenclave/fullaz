@@ -6,6 +6,8 @@ const fullaz = @import("fullaz");
 const PackedInt = fullaz.core.packed_int.PackedInt;
 const PackedIntLe = fullaz.core.packed_int.PackedIntLe;
 const PackedIntBe = fullaz.core.packed_int.PackedIntBe;
+const PackedFloat = fullaz.core.packed_int.PackedFloat;
+const PackedNumber = fullaz.core.packed_int.PackedNumber;
 
 // ---------------------------------------------
 // A "view" wrapper for mapping onto a buffer.
@@ -197,6 +199,78 @@ test "WordT: randomized roundtrip for multiple types/endians" {
             }
         }
     }
+}
+
+// ---------------------------------------------
+// Tests: PackedFloat + PackedNumber selector
+// ---------------------------------------------
+test "PackedFloat: init/get/set roundtrip (f64)" {
+    var w = PackedFloat(f64, .little).init(3.5);
+    try std.testing.expectEqual(@as(f64, 3.5), w.get());
+    w.set(-2.25);
+    try std.testing.expectEqual(@as(f64, -2.25), w.get());
+}
+
+test "PackedFloat: byte order matches the IEEE-754 bits (f32)" {
+    // 1.0f == 0x3F800000
+    const le = PackedFloat(f32, .little).init(1.0);
+    try expectBytesEqual(&[_]u8{ 0x00, 0x00, 0x80, 0x3F }, le.bytes[0..]);
+
+    const be = PackedFloat(f32, .big).init(1.0);
+    try expectBytesEqual(&[_]u8{ 0x3F, 0x80, 0x00, 0x00 }, be.bytes[0..]);
+}
+
+test "PackedFloat: fromSlice/writeTo roundtrip and short-buffer error" {
+    const W = PackedFloat(f64, .big);
+    const w = W.init(12345.678);
+
+    var buf: [8]u8 = undefined;
+    try w.writeTo(buf[0..]);
+    const w2 = try W.fromSlice(buf[0..]);
+    try std.testing.expectEqual(@as(f64, 12345.678), w2.get());
+
+    var too_small: [3]u8 = undefined;
+    try std.testing.expectError(error.BufferTooSmall, w.writeTo(too_small[0..]));
+}
+
+test "PackedFloat: bit-exact roundtrip incl. inf/nan/negzero" {
+    inline for (.{ f16, f32, f64, f128 }) |T| {
+        inline for (.{ std.builtin.Endian.little, std.builtin.Endian.big }) |E| {
+            const W = PackedFloat(T, E);
+            const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+
+            var prng = std.Random.DefaultPrng.init(0xF10A7);
+            const rnd = prng.random();
+
+            const specials = [_]T{ 0.0, -0.0, std.math.inf(T), -std.math.inf(T), std.math.nan(T) };
+            for (specials) |val| {
+                const w = W.init(val);
+                // Compare bit patterns so NaN and -0.0 verify exactly.
+                try std.testing.expectEqual(@as(Bits, @bitCast(val)), @as(Bits, @bitCast(w.get())));
+            }
+
+            var i: usize = 0;
+            while (i < 200) : (i += 1) {
+                const bits: Bits = rnd.int(Bits);
+                const val: T = @bitCast(bits);
+                const w = W.init(val);
+                try std.testing.expectEqual(bits, @as(Bits, @bitCast(w.get())));
+            }
+        }
+    }
+}
+
+test "PackedNumber: selects PackedInt for ints and PackedFloat for floats" {
+    try std.testing.expect(PackedNumber(u32, .little) == PackedInt(u32, .little));
+    try std.testing.expect(PackedNumber(i64, .big) == PackedInt(i64, .big));
+    try std.testing.expect(PackedNumber(f32, .little) == PackedFloat(f32, .little));
+    try std.testing.expect(PackedNumber(f64, .big) == PackedFloat(f64, .big));
+
+    // Both branches are usable through the same surface.
+    var wi = PackedNumber(i32, .little).init(-7);
+    try std.testing.expectEqual(@as(i32, -7), wi.get());
+    var wf = PackedNumber(f32, .little).init(1.5);
+    try std.testing.expectEqual(@as(f32, 1.5), wf.get());
 }
 
 // ---------------------------------------------

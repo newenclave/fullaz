@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("../core/core.zig");
 const PackedInt = core.packed_int.PackedInt;
+const PackedNumber = core.packed_int.PackedNumber;
 
 pub fn Rtree(
     comptime PageIdT: type,
@@ -11,8 +12,9 @@ pub fn Rtree(
 ) type {
     const PageIdType = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
-    const CoordType = PackedInt(CoordT, Endian);
+    const CoordType = PackedNumber(CoordT, Endian);
 
+    // Fixed on-page bounding box: low[dims] then high[dims].
     const MbrType = extern struct {
         low: [dims]CoordType,
         high: [dims]CoordType,
@@ -26,6 +28,7 @@ pub fn Rtree(
         }
     };
 
+    // Value trails the MBR; its length is derived from the slot length.
     const LeafSlotHeaderType = extern struct {
         mbr: MbrType,
     };
