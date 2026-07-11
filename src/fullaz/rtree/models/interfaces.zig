@@ -114,6 +114,10 @@ pub fn assertModel(comptime T: type) void {
 
     requiresTypeDeclaration(T, "ValueInType");
     requiresTypeDeclaration(T, "ValueOutType");
+    // An owned, by-value copy of a value. The tree gathers these into stack
+    // buffers so split/reinsert survive rewriting the source node (a paged
+    // ValueOut is a slice into page bytes that a clear() would invalidate).
+    requiresTypeDeclaration(T, "ValueBufType");
 
     // Comptime fanout bound (M). Sizes the tree's stack split/reinsert buffers.
     requiresTypeDeclaration(T, "max_entries");
@@ -129,5 +133,7 @@ pub fn assertModel(comptime T: type) void {
 
     requiresFnSignature(T, "getAccessor", fn (*T) *T.AccessorType);
     requiresFnSignature(T, "valueOutAsIn", fn (*const T, T.ValueOutType) T.ValueInType);
+    requiresFnSignature(T, "copyValueOut", fn (*const T, T.ValueOutType) T.ValueBufType);
+    requiresFnSignature(T, "valueBufAsIn", fn (*const T, *const T.ValueBufType) T.ValueInType);
     requiresFnSignature(T, "isValidId", fn (*const T, ?T.NodeIdType) bool);
 }

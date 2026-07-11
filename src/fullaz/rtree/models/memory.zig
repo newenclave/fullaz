@@ -449,6 +449,7 @@ pub fn Model(
         pub const KeyType = Key;
         pub const ValueInType = ValueT;
         pub const ValueOutType = ValueT;
+        pub const ValueBufType = ValueT;
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
         pub const AccessorType = AccessorImpl;
@@ -472,6 +473,14 @@ pub fn Model(
 
         pub fn valueOutAsIn(_: *const Self, value: ValueOutType) ValueInType {
             return value;
+        }
+
+        pub fn copyValueOut(_: *const Self, value: ValueOutType) ValueBufType {
+            return value;
+        }
+
+        pub fn valueBufAsIn(_: *const Self, buf: *const ValueBufType) ValueInType {
+            return buf.*;
         }
 
         pub fn isValidId(self: *const Self, id: ?Pid) bool {

@@ -11,6 +11,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
 
     const Pid = ModelT.NodeIdType;
     const ValueIn = ModelT.ValueInType;
+    const ValueBuf = ModelT.ValueBufType;
     const Max = ModelT.max_entries;
 
     return struct {
@@ -116,7 +117,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             var split: ?Pid = null;
             var reinsert_n: usize = 0;
             var r_mbr: [Max + 1]Key = undefined;
-            var r_val: [Max + 1]ValueIn = undefined;
+            var r_val: [Max + 1]ValueBuf = undefined;
             {
                 var leaf = (try acc.loadLeaf(cur)).?;
                 defer acc.deinitLeaf(leaf);
@@ -138,21 +139,21 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
 
             var i: usize = 0;
             while (i < reinsert_n) : (i += 1) {
-                try self.insertValue(r_mbr[i], r_val[i], reinserted);
+                try self.insertValue(r_mbr[i], self.model.valueBufAsIn(&r_val[i]), reinserted);
             }
         }
 
-        fn reinsertLeaf(self: *Self, leaf: anytype, new_mbr: Key, new_value: ValueIn, out_mbr: []Key, out_val: []ValueIn) Error!usize {
+        fn reinsertLeaf(self: *Self, leaf: anytype, new_mbr: Key, new_value: ValueIn, out_mbr: []Key, out_val: []ValueBuf) Error!usize {
             const n = try leaf.size();
             var mbrs: [Max + 1]Key = undefined;
-            var vals: [Max + 1]ValueIn = undefined;
+            var vals: [Max + 1]ValueBuf = undefined;
             var i: usize = 0;
             while (i < n) : (i += 1) {
                 mbrs[i] = try leaf.getMbr(i);
-                vals[i] = self.model.valueOutAsIn(try leaf.getValue(i));
+                vals[i] = self.model.copyValueOut(try leaf.getValue(i));
             }
             mbrs[n] = new_mbr;
-            vals[n] = new_value;
+            vals[n] = self.model.copyValueOut(new_value);
             const total = n + 1;
 
             var node_mbr = mbrs[0];
@@ -169,7 +170,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             try leaf.clear();
             i = p;
             while (i < total) : (i += 1) {
-                try leaf.insertEntry(mbrs[order[i]], vals[order[i]]);
+                try leaf.insertEntry(mbrs[order[i]], self.model.valueBufAsIn(&vals[order[i]]));
             }
             i = 0;
             while (i < p) : (i += 1) {
@@ -183,14 +184,14 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             const acc = self.model.getAccessor();
             const n = try leaf.size();
             var mbrs: [Max + 1]Key = undefined;
-            var vals: [Max + 1]ValueIn = undefined;
+            var vals: [Max + 1]ValueBuf = undefined;
             var i: usize = 0;
             while (i < n) : (i += 1) {
                 mbrs[i] = try leaf.getMbr(i);
-                vals[i] = self.model.valueOutAsIn(try leaf.getValue(i));
+                vals[i] = self.model.copyValueOut(try leaf.getValue(i));
             }
             mbrs[n] = new_mbr;
-            vals[n] = new_value;
+            vals[n] = self.model.copyValueOut(new_value);
             const total = n + 1;
 
             var assign: [Max + 1]u8 = undefined;
@@ -201,10 +202,11 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             defer acc.deinitLeaf(sibling);
             i = 0;
             while (i < total) : (i += 1) {
+                const v = self.model.valueBufAsIn(&vals[i]);
                 if (assign[i] == 0) {
-                    try leaf.insertEntry(mbrs[i], vals[i]);
+                    try leaf.insertEntry(mbrs[i], v);
                 } else {
-                    try sibling.insertEntry(mbrs[i], vals[i]);
+                    try sibling.insertEntry(mbrs[i], v);
                 }
             }
             return sibling.id();
@@ -375,7 +377,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             const acc = self.model.getAccessor();
 
             var v_mbr: [Max]Key = undefined;
-            var v_val: [Max]ValueIn = undefined;
+            var v_val: [Max]ValueBuf = undefined;
             var vn: usize = 0;
 
             var s_mbr: [orphan_cap]Key = undefined;
@@ -394,7 +396,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                     var i: usize = 0;
                     while (i < n) : (i += 1) {
                         v_mbr[vn] = try leaf.getMbr(i);
-                        v_val[vn] = self.model.valueOutAsIn(try leaf.getValue(i));
+                        v_val[vn] = self.model.copyValueOut(try leaf.getValue(i));
                         vn += 1;
                     }
                     remove_child = true;
@@ -468,7 +470,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             {
                 var i: usize = 0;
                 while (i < vn) : (i += 1) {
-                    try self.insertValue(v_mbr[i], v_val[i], &flag);
+                    try self.insertValue(v_mbr[i], self.model.valueBufAsIn(&v_val[i]), &flag);
                 }
             }
 
