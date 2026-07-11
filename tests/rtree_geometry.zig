@@ -56,3 +56,7 @@ test "BoundingBox: overlapMeasure = area of the intersection (0 if disjoint)" {
 test "BoundingBox: center" {
     try testing.expectEqual(BB.Point{ 1, 2 }, box(0, 0, 2, 4).center());
 }
+
+test "rtree contract: BoundingBox satisfies assertKey" {
+    comptime fullaz.rtree.models.interfaces.assertKey(BB);
+}
