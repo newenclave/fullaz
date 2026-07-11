@@ -32,4 +32,5 @@ test {
     _ = @import("rtree_tree.zig");
     _ = @import("rtree_rstar.zig");
     _ = @import("rtree_delete.zig");
+    _ = @import("rtree_paged.zig");
 }
