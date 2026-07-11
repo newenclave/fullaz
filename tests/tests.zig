@@ -31,4 +31,5 @@ test {
     _ = @import("rtree_strategy.zig");
     _ = @import("rtree_tree.zig");
     _ = @import("rtree_rstar.zig");
+    _ = @import("rtree_delete.zig");
 }

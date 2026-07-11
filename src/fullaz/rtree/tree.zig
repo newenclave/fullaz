@@ -306,5 +306,236 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             };
             return self.levelOf(root);
         }
+
+        // ---- delete ---- //
+        const Hit = struct {
+            leaf_id: Pid,
+            entry_idx: usize,
+        };
+
+        const orphan_cap = max_depth * Max;
+
+        pub fn remove(self: *Self, query: Key, ctx: anytype, matches: anytype) Error!bool {
+            const acc = self.model.getAccessor();
+            const root = acc.getRoot() orelse {
+                return false;
+            };
+
+            var path = Path{};
+            const hit = (try self.findLeaf(root, query, ctx, matches, &path)) orelse {
+                return false;
+            };
+
+            {
+                var leaf = (try acc.loadLeaf(hit.leaf_id)).?;
+                defer acc.deinitLeaf(leaf);
+                try leaf.erase(hit.entry_idx);
+            }
+
+            try self.condenseTree(&path, hit.leaf_id);
+            return true;
+        }
+
+        fn findLeaf(self: *Self, id: Pid, query: Key, ctx: anytype, matches: anytype, path: *Path) Error!?Hit {
+            const acc = self.model.getAccessor();
+            if (try acc.isLeafId(id)) {
+                var leaf = (try acc.loadLeaf(id)).?;
+                defer acc.deinitLeaf(leaf);
+
+                const n = try leaf.size();
+                var i: usize = 0;
+                while (i < n) : (i += 1) {
+                    const mbr = try leaf.getMbr(i);
+                    if (mbr.overlaps(&query) and matches(ctx, mbr, try leaf.getValue(i))) {
+                        return .{
+                            .leaf_id = id,
+                            .entry_idx = i,
+                        };
+                    }
+                }
+                return null;
+            }
+            var inode = (try acc.loadInode(id)).?;
+            defer acc.deinitInode(inode);
+            const n = try inode.size();
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                if ((try inode.getMbr(i)).overlaps(&query)) {
+                    path.push(.{ .id = id, .idx = i });
+                    if (try self.findLeaf(try inode.getChild(i), query, ctx, matches, path)) |hit| {
+                        return hit;
+                    }
+                    _ = path.pop();
+                }
+            }
+            return null;
+        }
+
+        fn condenseTree(self: *Self, path: *Path, leaf_id: Pid) Error!void {
+            const acc = self.model.getAccessor();
+
+            var v_mbr: [Max]Key = undefined;
+            var v_val: [Max]ValueIn = undefined;
+            var vn: usize = 0;
+
+            var s_mbr: [orphan_cap]Key = undefined;
+            var s_id: [orphan_cap]Pid = undefined;
+            var s_lvl: [orphan_cap]usize = undefined;
+            var sn: usize = 0;
+
+            var child_id = leaf_id;
+            var remove_child = false;
+
+            {
+                var leaf = (try acc.loadLeaf(leaf_id)).?;
+                defer acc.deinitLeaf(leaf);
+                if ((path.len > 0) and (try leaf.size()) < min_fill) {
+                    const n = try leaf.size();
+                    var i: usize = 0;
+                    while (i < n) : (i += 1) {
+                        v_mbr[vn] = try leaf.getMbr(i);
+                        v_val[vn] = self.model.valueOutAsIn(try leaf.getValue(i));
+                        vn += 1;
+                    }
+                    remove_child = true;
+                }
+            }
+
+            while (path.len > 0) {
+                const frame = path.pop();
+                var parent = (try acc.loadInode(frame.id)).?;
+                defer acc.deinitInode(parent);
+
+                if (remove_child) {
+                    try parent.erase(frame.idx);
+                    try acc.destroy(child_id);
+                } else {
+                    try parent.updateChildMbr(frame.idx, try self.nodeMbrOf(child_id));
+                }
+
+                const is_root = path.len == 0;
+                if (!is_root and (try parent.size()) < min_fill) {
+                    const plvl = try parent.getLevel();
+                    const n = try parent.size();
+                    var i: usize = 0;
+                    while (i < n) : (i += 1) {
+                        s_mbr[sn] = try parent.getMbr(i);
+                        s_id[sn] = try parent.getChild(i);
+                        s_lvl[sn] = plvl - 1;
+                        sn += 1;
+                    }
+                    remove_child = true;
+                } else {
+                    remove_child = false;
+                }
+                child_id = frame.id;
+            }
+
+            if (!(try acc.isLeafId(child_id))) {
+                if (try acc.loadInode(child_id)) |*rv| {
+                    const rs = try rv.size();
+                    acc.deinitInode(rv.*);
+                    if (rs == 0) {
+                        try acc.destroy(child_id);
+                        try acc.setRoot(null);
+                    }
+                }
+            }
+
+            var order: [orphan_cap]usize = undefined;
+            {
+                var i: usize = 0;
+                while (i < sn) : (i += 1) {
+                    order[i] = i;
+                }
+            }
+            const LvlCtx = struct { lvl: []const usize };
+            const lt_call = struct {
+                fn desc(c: LvlCtx, a: usize, b: usize) bool {
+                    return c.lvl[a] > c.lvl[b];
+                }
+            };
+            std.mem.sort(usize, order[0..sn], LvlCtx{ .lvl = s_lvl[0..sn] }, lt_call.desc);
+            {
+                var i: usize = 0;
+                while (i < sn) : (i += 1) {
+                    const oi = order[i];
+                    try self.insertSubtree(s_mbr[oi], s_id[oi], s_lvl[oi]);
+                }
+            }
+
+            var flag = false;
+            {
+                var i: usize = 0;
+                while (i < vn) : (i += 1) {
+                    try self.insertValue(v_mbr[i], v_val[i], &flag);
+                }
+            }
+
+            while (true) {
+                const root = acc.getRoot() orelse {
+                    break;
+                };
+                if (try acc.isLeafId(root)) break;
+                var r = (try acc.loadInode(root)).?;
+                const rs = try r.size();
+                const only: ?Pid = if (rs == 1) try r.getChild(0) else null;
+                acc.deinitInode(r);
+                if (only) |child| {
+                    try acc.destroy(root);
+                    try acc.setRoot(child);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        fn insertSubtree(self: *Self, mbr: Key, child_id: Pid, target_level: usize) Error!void {
+            const acc = self.model.getAccessor();
+
+            const root = acc.getRoot() orelse {
+                try acc.setRoot(child_id);
+                return;
+            };
+
+            if ((try self.levelOf(root)) <= target_level) {
+                var nr = try acc.createInode();
+                defer acc.deinitInode(nr);
+                try nr.setLevel(target_level + 1);
+                try nr.insertChild(try self.nodeMbrOf(root), root);
+                try nr.insertChild(mbr, child_id);
+                try acc.setRoot(nr.id());
+                return;
+            }
+
+            var path = Path{};
+            var cur = root;
+            while ((try self.levelOf(cur)) > target_level + 1) {
+                var inode = (try acc.loadInode(cur)).?;
+                defer acc.deinitInode(inode);
+                const n = try inode.size();
+                var child_mbrs: [Max]Key = undefined;
+                var k: usize = 0;
+                while (k < n) : (k += 1) {
+                    child_mbrs[k] = try inode.getMbr(k);
+                }
+                const children_are_leaves = (try inode.getLevel()) == 1;
+                const idx = Strategy.chooseSubtree(child_mbrs[0..n], mbr, children_are_leaves);
+                path.push(.{ .id = cur, .idx = idx });
+                cur = try inode.getChild(idx);
+            }
+
+            var split: ?Pid = null;
+            {
+                var inode = (try acc.loadInode(cur)).?;
+                defer acc.deinitInode(inode);
+                if (try inode.canInsertChild(mbr, child_id)) {
+                    try inode.insertChild(mbr, child_id);
+                } else {
+                    split = try self.splitInode(&inode, mbr, child_id);
+                }
+            }
+            try self.adjustTree(&path, cur, split);
+        }
     };
 }
