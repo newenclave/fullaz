@@ -7,6 +7,9 @@ pub fn assertStrategy(comptime Strategy: type, comptime Key: type) void {
     }
     helpers.requiresFnSignature(Strategy, "chooseSubtree", fn ([]const Key, Key, bool) usize);
     helpers.requiresFnSignature(Strategy, "splitEntries", fn ([]const Key, usize, []u8) void);
+    if (Strategy.wants_reinsert) {
+        helpers.requiresFnSignature(Strategy, "reinsertOrder", fn ([]const Key, Key, []usize) void);
+    }
 }
 
 // the very original Guttman R-tree strategy, with quadratic split and no reinsert
@@ -141,6 +144,205 @@ pub fn GuttmanStrategy(comptime Key: type) type {
                 return 1;
             }
             return if (cnt0 <= cnt1) 0 else 1;
+        }
+    };
+}
+
+// R*-tree strategy porting
+pub fn RStarStrategy(comptime Key: type) type {
+    const Coord = Key.Coord;
+    const Point = Key.Point;
+    const dims = Key.Dim;
+    const split_cap = 512;
+
+    return struct {
+        pub const wants_reinsert = true;
+
+        pub fn chooseSubtree(child_mbrs: []const Key, entry: Key, children_are_leaves: bool) usize {
+            if (children_are_leaves) {
+                return leastOverlap(child_mbrs, entry);
+            }
+            return leastEnlargement(child_mbrs, entry);
+        }
+
+        fn leastEnlargement(child_mbrs: []const Key, entry: Key) usize {
+            var best: usize = 0;
+            var b_enl = child_mbrs[0].enlargement(&entry);
+            var b_area = child_mbrs[0].measure();
+            for (child_mbrs[1..], 1..) |mbr, i| {
+                const enl = mbr.enlargement(&entry);
+                const area = mbr.measure();
+                if (enl < b_enl or (enl == b_enl and area < b_area)) {
+                    best = i;
+                    b_enl = enl;
+                    b_area = area;
+                }
+            }
+            return best;
+        }
+
+        fn leastOverlap(child_mbrs: []const Key, entry: Key) usize {
+            var best: usize = 0;
+            var found = false;
+            var b_ovl: Coord = undefined;
+            var b_enl: Coord = undefined;
+            var b_area: Coord = undefined;
+            for (child_mbrs, 0..) |ci, i| {
+                const expanded = ci.merged(&entry);
+                var ovl: Coord = 0;
+                for (child_mbrs, 0..) |cj, j| {
+                    if (i == j) continue;
+                    ovl += expanded.overlapMeasure(&cj) - ci.overlapMeasure(&cj);
+                }
+                const enl = ci.enlargement(&entry);
+                const area = ci.measure();
+                if (!found or less3(ovl, enl, area, b_ovl, b_enl, b_area)) {
+                    found = true;
+                    best = i;
+                    b_ovl = ovl;
+                    b_enl = enl;
+                    b_area = area;
+                }
+            }
+            return best;
+        }
+
+        pub fn splitEntries(mbrs: []const Key, min_fill: usize, assignment: []u8) void {
+            const n = mbrs.len;
+
+            var best_axis: usize = 0;
+            var best_margin: Coord = undefined;
+            var found = false;
+            var d: usize = 0;
+            while (d < dims) : (d += 1) {
+                const s = axisMarginSum(mbrs, min_fill, d);
+                if (!found or s < best_margin) {
+                    found = true;
+                    best_margin = s;
+                    best_axis = d;
+                }
+            }
+
+            var order: [split_cap]usize = undefined;
+            sortByEdge(order[0..n], mbrs, best_axis, true);
+
+            var best_k: usize = min_fill;
+            var b_ovl: Coord = undefined;
+            var b_measure: Coord = undefined;
+            var kfound = false;
+            var k: usize = min_fill;
+            while (k <= (n - min_fill)) : (k += 1) {
+                const g1 = bboxOf(mbrs, order[0..k]);
+                const g2 = bboxOf(mbrs, order[k..n]);
+                const ovl = g1.overlapMeasure(&g2);
+                const measure = g1.measure() + g2.measure();
+                if (!kfound or ovl < b_ovl or (ovl == b_ovl and measure < b_measure)) {
+                    kfound = true;
+                    best_k = k;
+                    b_ovl = ovl;
+                    b_measure = measure;
+                }
+            }
+
+            for (order[0..n], 0..) |idx, i| {
+                assignment[idx] = if (i < best_k) 0 else 1;
+            }
+        }
+
+        pub fn reinsertOrder(mbrs: []const Key, node_mbr: Key, out: []usize) void {
+            const c = node_mbr.center();
+            for (out, 0..) |*o, i| {
+                o.* = i;
+            }
+            const Ctx = struct {
+                mbrs: []const Key,
+                c: Point,
+            };
+            const cmp = struct {
+                fn farther(ctx: Ctx, a: usize, b: usize) bool {
+                    return distSq(ctx.mbrs[a].center(), ctx.c) > distSq(
+                        ctx.mbrs[b].center(),
+                        ctx.c,
+                    );
+                }
+            }.farther;
+            std.mem.sort(usize, out, Ctx{
+                .mbrs = mbrs,
+                .c = c,
+            }, cmp);
+        }
+
+        fn axisMarginSum(mbrs: []const Key, min_fill: usize, axis: usize) Coord {
+            const n = mbrs.len;
+            var order: [split_cap]usize = undefined;
+            var total: Coord = 0;
+            sortByEdge(order[0..n], mbrs, axis, true);
+            total += distMarginSum(mbrs, order[0..n], min_fill);
+            sortByEdge(order[0..n], mbrs, axis, false);
+            total += distMarginSum(mbrs, order[0..n], min_fill);
+            return total;
+        }
+
+        fn distMarginSum(mbrs: []const Key, order: []const usize, min_fill: usize) Coord {
+            const n = order.len;
+            var sum: Coord = 0;
+            var k: usize = min_fill;
+            while (k <= n - min_fill) : (k += 1) {
+                sum += bboxOf(mbrs, order[0..k]).perimeter() + bboxOf(mbrs, order[k..n]).perimeter();
+            }
+            return sum;
+        }
+
+        // the minimum box of the mbrs.
+        fn bboxOf(mbrs: []const Key, order: []const usize) Key {
+            var acc = mbrs[order[0]];
+            for (order[1..]) |idx| {
+                acc = acc.merged(&mbrs[idx]);
+            }
+            return acc;
+        }
+
+        fn sortByEdge(order: []usize, mbrs: []const Key, axis: usize, low: bool) void {
+            for (order, 0..) |*o, i| {
+                o.* = i;
+            }
+            const Ctx = struct {
+                mbrs: []const Key,
+                axis: usize,
+                low: bool,
+            };
+            const cmp = struct {
+                fn lt(ctx: Ctx, a: usize, b: usize) bool {
+                    const ea = if (ctx.low) ctx.mbrs[a].low[ctx.axis] else ctx.mbrs[a].high[ctx.axis];
+                    const eb = if (ctx.low) ctx.mbrs[b].low[ctx.axis] else ctx.mbrs[b].high[ctx.axis];
+                    return ea < eb;
+                }
+            }.lt;
+            std.mem.sort(usize, order, Ctx{
+                .mbrs = mbrs,
+                .axis = axis,
+                .low = low,
+            }, cmp);
+        }
+
+        fn distSq(p: Point, q: Point) Coord {
+            var s: Coord = 0;
+            var d: usize = 0;
+            while (d < dims) : (d += 1) {
+                const diff = p[d] - q[d];
+                s += diff * diff;
+            }
+            return s;
+        }
+
+        fn less3(a: Coord, b: Coord, c: Coord, ba: Coord, bb: Coord, bc: Coord) bool {
+            if (a != ba) {
+                return a < ba;
+            }
+            if (b != bb) {
+                return b < bb;
+            }
+            return c < bc;
         }
     };
 }

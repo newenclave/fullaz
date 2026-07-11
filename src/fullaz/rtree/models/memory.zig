@@ -202,7 +202,7 @@ pub fn Model(
             }
             var acc = items[0].mbr;
             for (items[1..]) |*e| {
-                acc = acc.merged(e.mbr);
+                acc = acc.merged(&e.mbr);
             }
             return acc;
         }
