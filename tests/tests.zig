@@ -27,4 +27,5 @@ test {
     _ = @import("free_list.zig");
     _ = @import("wal.zig");
     _ = @import("rtree_geometry.zig");
+    _ = @import("rtree_memory.zig");
 }
