@@ -1,5 +1,9 @@
 # fullaz
 
+**Demos built on it:** 
+
+[**fsx**](#fsx-a-filesystem-in-a-single-file): a persistent filesystem in a single file 
+[**galaxy**](#galaxy-an-r-tree-you-can-fly-through): a starfield explorer you can fly through, on the paged R\*-tree.
 
 **fullaz** is a low-level storage and indexing library written in Zig.
 
