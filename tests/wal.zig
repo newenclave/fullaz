@@ -213,10 +213,12 @@ test "WAL: FileLog round-trips across a reopen" {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
     defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
-    const FileWal = wal.Wal(wal.FileLog, u32, .little);
+    const FileLog = wal.FileLog(u32);
+
+    const FileWal = wal.Wal(FileLog, u32, .little);
 
     {
-        var log = try wal.FileLog.create(io, path);
+        var log = try FileLog.create(io, path);
         defer log.deinit();
         var w = try FileWal.init(testing.allocator, &log, PAGE);
         defer w.deinit();
@@ -224,7 +226,7 @@ test "WAL: FileLog round-trips across a reopen" {
         try w.sealCommit(1);
     }
     {
-        var log = try wal.FileLog.open(io, path);
+        var log = try FileLog.open(io, path);
         defer log.deinit();
         var w = try FileWal.init(testing.allocator, &log, PAGE);
         defer w.deinit();

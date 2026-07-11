@@ -49,7 +49,7 @@ pub fn BoundingBox(comptime CoordT: type, comptime DimV: usize) type {
             return result;
         }
 
-        pub fn merged(self: *const Self, other: Self) Self {
+        pub fn merged(self: *const Self, other: *const Self) Self {
             var result = Self.init();
             inline for (0..Dim) |i| {
                 result.low[i] = @min(self.low[i], other.low[i]);
@@ -67,7 +67,7 @@ pub fn BoundingBox(comptime CoordT: type, comptime DimV: usize) type {
             return true;
         }
 
-        pub fn overlaps(self: *const Self, other: Self) bool {
+        pub fn overlaps(self: *const Self, other: *const Self) bool {
             inline for (0..Dim) |i| {
                 if ((self.high[i] <= other.low[i]) or (other.high[i] <= self.low[i])) {
                     return false;
@@ -76,11 +76,11 @@ pub fn BoundingBox(comptime CoordT: type, comptime DimV: usize) type {
             return true;
         }
 
-        pub fn enlargement(self: *const Self, other: Self) Coord {
+        pub fn enlargement(self: *const Self, other: *const Self) Coord {
             return self.merged(other).measure() - self.measure();
         }
 
-        pub fn overlapMeasure(self: *const Self, other: Self) Coord {
+        pub fn overlapMeasure(self: *const Self, other: *const Self) Coord {
             var result: Coord = 1;
             inline for (0..Dim) |i| {
                 const lo = @max(self.low[i], other.low[i]);

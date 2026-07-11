@@ -23,15 +23,15 @@ test "BoundingBox: measure and perimeter" {
 }
 
 test "BoundingBox: merged is the union" {
-    const m = box(0, 0, 2, 2).merged(box(1, 1, 3, 3));
+    const m = box(0, 0, 2, 2).merged(&box(1, 1, 3, 3));
     try testing.expectEqual(box(0, 0, 3, 3), m);
     try testing.expectEqual(@as(i64, 9), m.measure());
 }
 
 test "BoundingBox: overlaps (half-open, touching does not overlap)" {
-    try testing.expect(box(0, 0, 2, 2).overlaps(box(1, 1, 3, 3)));
-    try testing.expect(!box(0, 0, 1, 1).overlaps(box(2, 2, 3, 3)));
-    try testing.expect(!box(0, 0, 1, 1).overlaps(box(1, 1, 2, 2))); // touching edges
+    try testing.expect(box(0, 0, 2, 2).overlaps(&box(1, 1, 3, 3)));
+    try testing.expect(!box(0, 0, 1, 1).overlaps(&box(2, 2, 3, 3)));
+    try testing.expect(!box(0, 0, 1, 1).overlaps(&box(1, 1, 2, 2))); // touching edges
 }
 
 test "BoundingBox: contains a point (half-open)" {
@@ -43,14 +43,14 @@ test "BoundingBox: contains a point (half-open)" {
 
 test "BoundingBox: enlargement = area added to include another box" {
     const a = box(0, 0, 2, 2); // area 4
-    try testing.expectEqual(@as(i64, 5), a.enlargement(box(1, 1, 3, 3))); // union area 9 - 4
-    try testing.expectEqual(@as(i64, 0), a.enlargement(box(0, 0, 1, 1))); // already contained
+    try testing.expectEqual(@as(i64, 5), a.enlargement(&box(1, 1, 3, 3))); // union area 9 - 4
+    try testing.expectEqual(@as(i64, 0), a.enlargement(&box(0, 0, 1, 1))); // already contained
 }
 
 test "BoundingBox: overlapMeasure = area of the intersection (0 if disjoint)" {
-    try testing.expectEqual(@as(i64, 1), box(0, 0, 2, 2).overlapMeasure(box(1, 1, 3, 3)));
-    try testing.expectEqual(@as(i64, 0), box(0, 0, 1, 1).overlapMeasure(box(2, 2, 3, 3)));
-    try testing.expectEqual(@as(i64, 0), box(0, 0, 1, 1).overlapMeasure(box(1, 1, 2, 2))); // touching
+    try testing.expectEqual(@as(i64, 1), box(0, 0, 2, 2).overlapMeasure(&box(1, 1, 3, 3)));
+    try testing.expectEqual(@as(i64, 0), box(0, 0, 1, 1).overlapMeasure(&box(2, 2, 3, 3)));
+    try testing.expectEqual(@as(i64, 0), box(0, 0, 1, 1).overlapMeasure(&box(1, 1, 2, 2))); // touching
 }
 
 test "BoundingBox: center" {

@@ -28,4 +28,5 @@ test {
     _ = @import("wal.zig");
     _ = @import("rtree_geometry.zig");
     _ = @import("rtree_memory.zig");
+    _ = @import("rtree_strategy.zig");
 }
