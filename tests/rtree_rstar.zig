@@ -97,3 +97,30 @@ test "RStarTree: window query matches brute force after many inserts" {
         }
     }
 }
+
+test "RStarTree: forced reinsert loses no entries (full query returns all N)" {
+    var m = try Model.init(testing.allocator);
+    defer m.deinit();
+    var t = RStarTree.init(&m);
+
+    // 100 distinct values across a grid — heavy enough that leaf overflows (and
+    // thus forced reinserts) happen many times.
+    const N = 100;
+    var i: usize = 0;
+    while (i < N) : (i += 1) {
+        const x: i64 = @intCast(i % 10);
+        const y: i64 = @intCast(i / 10);
+        try t.insert(box(x, y, x + 1, y + 1), @intCast(i));
+    }
+
+    var got = Collector{};
+    try t.search(box(-1, -1, 100, 100), &got, Collector.cb);
+
+    // every value present exactly once — no entry dropped or duplicated by the
+    // reinsert/split machinery.
+    try testing.expectEqual(@as(usize, N), got.count);
+    i = 0;
+    while (i < N) : (i += 1) {
+        try testing.expect(got.seen[i]);
+    }
+}

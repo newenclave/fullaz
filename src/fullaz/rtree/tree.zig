@@ -51,7 +51,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             try self.searchNode(root, query, ctx, cb);
         }
 
-        // cb here is: fn(ctx: anytype, mbr: Key, value: ValueIn) anyerror!void
+        // cb here is: fn(ctx: anytype, mbr: Key, value: ValueIn) anyerror!void //
         fn searchNode(self: *Self, id: Pid, query: Key, ctx: anytype, cb: anytype) !void {
             const acc = self.model.getAccessor();
             if (try acc.isLeafId(id)) {
@@ -81,6 +81,11 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
 
         // ---- insert ---- //
         pub fn insert(self: *Self, mbr: Key, value: ValueIn) Error!void {
+            var reinserted = false;
+            try self.insertValue(mbr, value, &reinserted);
+        }
+
+        fn insertValue(self: *Self, mbr: Key, value: ValueIn, reinserted: *bool) Error!void {
             const acc = self.model.getAccessor();
 
             const root = acc.getRoot() orelse {
@@ -91,7 +96,6 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 return;
             };
 
-            // Descend to a leaf, recording (inode id, chosen child index) per level.
             var path = Path{};
             var cur = root;
             while (!(try acc.isLeafId(cur))) {
@@ -109,19 +113,70 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 cur = try inode.getChild(idx);
             }
 
-            // Insert into the leaf; split if full.
             var split: ?Pid = null;
+            var reinsert_n: usize = 0;
+            var r_mbr: [Max + 1]Key = undefined;
+            var r_val: [Max + 1]ValueIn = undefined;
             {
                 var leaf = (try acc.loadLeaf(cur)).?;
                 defer acc.deinitLeaf(leaf);
                 if (try leaf.canInsertEntry(mbr, value)) {
                     try leaf.insertEntry(mbr, value);
+                } else if (Strategy.wants_reinsert) {
+                    if (!reinserted.* and path.len > 0) {
+                        reinserted.* = true;
+                        reinsert_n = try self.reinsertLeaf(&leaf, mbr, value, &r_mbr, &r_val);
+                    } else {
+                        split = try self.splitLeaf(&leaf, mbr, value);
+                    }
                 } else {
                     split = try self.splitLeaf(&leaf, mbr, value);
                 }
             }
 
             try self.adjustTree(&path, cur, split);
+
+            var i: usize = 0;
+            while (i < reinsert_n) : (i += 1) {
+                try self.insertValue(r_mbr[i], r_val[i], reinserted);
+            }
+        }
+
+        fn reinsertLeaf(self: *Self, leaf: anytype, new_mbr: Key, new_value: ValueIn, out_mbr: []Key, out_val: []ValueIn) Error!usize {
+            const n = try leaf.size();
+            var mbrs: [Max + 1]Key = undefined;
+            var vals: [Max + 1]ValueIn = undefined;
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                mbrs[i] = try leaf.getMbr(i);
+                vals[i] = self.model.valueOutAsIn(try leaf.getValue(i));
+            }
+            mbrs[n] = new_mbr;
+            vals[n] = new_value;
+            const total = n + 1;
+
+            var node_mbr = mbrs[0];
+            i = 1;
+            while (i < total) : (i += 1) {
+                node_mbr = node_mbr.merged(&mbrs[i]);
+            }
+
+            var order: [Max + 1]usize = undefined;
+            Strategy.reinsertOrder(mbrs[0..total], node_mbr, order[0..total]);
+
+            const p = @max(1, (total * 3) / 10);
+
+            try leaf.clear();
+            i = p;
+            while (i < total) : (i += 1) {
+                try leaf.insertEntry(mbrs[order[i]], vals[order[i]]);
+            }
+            i = 0;
+            while (i < p) : (i += 1) {
+                out_mbr[i] = mbrs[order[i]];
+                out_val[i] = vals[order[i]];
+            }
+            return p;
         }
 
         fn splitLeaf(self: *Self, leaf: anytype, new_mbr: Key, new_value: ValueIn) Error!Pid {
