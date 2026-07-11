@@ -20,6 +20,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         pub const min_fill: usize = @max(2, Max * 2 / 5);
 
         const max_depth = 64;
+        const orphan_cap = max_depth * Max;
         const Frame = struct {
             id: Pid,
             idx: usize,
@@ -34,6 +35,40 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             fn pop(self: *Path) Frame {
                 self.len -= 1;
                 return self.items[self.len];
+            }
+        };
+
+        // State for R* forced reinsertion during one insert operation.
+        // done[level] ensures reinsertion happens only once per level.
+        // Any later overflow at the same level is handled by splitting.
+        //
+        // Removed entries are queued here and reinserted from the root after
+        // the current insert/update step is complete.
+        //
+        // Leaf values use level 0. Subtree entries store their subtree level.
+        const InsertCtx = struct {
+            done: [max_depth]bool = [_]bool{false} ** max_depth,
+
+            s_mbr: [orphan_cap]Key = undefined,
+            s_id: [orphan_cap]Pid = undefined,
+            s_lvl: [orphan_cap]usize = undefined,
+            sn: usize = 0,
+
+            v_mbr: [Max + 1]Key = undefined,
+            v_val: [Max + 1]ValueBuf = undefined,
+            vn: usize = 0,
+
+            fn pushSubtree(self: *InsertCtx, mbr: Key, child_id: Pid, level: usize) void {
+                self.s_mbr[self.sn] = mbr;
+                self.s_id[self.sn] = child_id;
+                self.s_lvl[self.sn] = level;
+                self.sn += 1;
+            }
+
+            fn pushValue(self: *InsertCtx, mbr: Key, value: ValueBuf) void {
+                self.v_mbr[self.vn] = mbr;
+                self.v_val[self.vn] = value;
+                self.vn += 1;
             }
         };
 
@@ -82,11 +117,12 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
 
         // ---- insert ---- //
         pub fn insert(self: *Self, mbr: Key, value: ValueIn) Error!void {
-            var reinserted = false;
-            try self.insertValue(mbr, value, &reinserted);
+            var ctx = InsertCtx{};
+            try self.insertValue(mbr, value, &ctx);
+            try self.drainReinserts(&ctx);
         }
 
-        fn insertValue(self: *Self, mbr: Key, value: ValueIn, reinserted: *bool) Error!void {
+        fn insertValue(self: *Self, mbr: Key, value: ValueIn, ctx: *InsertCtx) Error!void {
             const acc = self.model.getAccessor();
 
             const root = acc.getRoot() orelse {
@@ -115,35 +151,36 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             }
 
             var split: ?Pid = null;
-            var reinsert_n: usize = 0;
-            var r_mbr: [Max + 1]Key = undefined;
-            var r_val: [Max + 1]ValueBuf = undefined;
             {
                 var leaf = (try acc.loadLeaf(cur)).?;
                 defer acc.deinitLeaf(leaf);
                 if (try leaf.canInsertEntry(mbr, value)) {
                     try leaf.insertEntry(mbr, value);
-                } else if (Strategy.wants_reinsert) {
-                    if (!reinserted.* and path.len > 0) {
-                        reinserted.* = true;
-                        reinsert_n = try self.reinsertLeaf(&leaf, mbr, value, &r_mbr, &r_val);
-                    } else {
-                        split = try self.splitLeaf(&leaf, mbr, value);
-                    }
+                } else if (Strategy.wants_reinsert and !ctx.done[0] and path.len > 0) {
+                    ctx.done[0] = true;
+                    try self.reinsertLeaf(&leaf, mbr, value, ctx);
                 } else {
                     split = try self.splitLeaf(&leaf, mbr, value);
                 }
             }
 
-            try self.adjustTree(&path, cur, split);
+            try self.adjustTree(&path, cur, split, ctx);
+        }
 
-            var i: usize = 0;
-            while (i < reinsert_n) : (i += 1) {
-                try self.insertValue(r_mbr[i], self.model.valueBufAsIn(&r_val[i]), reinserted);
+        fn drainReinserts(self: *Self, ctx: *InsertCtx) Error!void {
+            var si: usize = 0;
+            var vi: usize = 0;
+            while (si < ctx.sn or vi < ctx.vn) {
+                while (si < ctx.sn) : (si += 1) {
+                    try self.insertSubtree(ctx.s_mbr[si], ctx.s_id[si], ctx.s_lvl[si], ctx);
+                }
+                while (vi < ctx.vn) : (vi += 1) {
+                    try self.insertValue(ctx.v_mbr[vi], self.model.valueBufAsIn(&ctx.v_val[vi]), ctx);
+                }
             }
         }
 
-        fn reinsertLeaf(self: *Self, leaf: anytype, new_mbr: Key, new_value: ValueIn, out_mbr: []Key, out_val: []ValueBuf) Error!usize {
+        fn reinsertLeaf(self: *Self, leaf: anytype, new_mbr: Key, new_value: ValueIn, ctx: *InsertCtx) Error!void {
             const n = try leaf.size();
             var mbrs: [Max + 1]Key = undefined;
             var vals: [Max + 1]ValueBuf = undefined;
@@ -174,10 +211,44 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             }
             i = 0;
             while (i < p) : (i += 1) {
-                out_mbr[i] = mbrs[order[i]];
-                out_val[i] = vals[order[i]];
+                ctx.pushValue(mbrs[order[i]], vals[order[i]]);
             }
-            return p;
+        }
+
+        fn reinsertInode(_: *Self, inode: anytype, new_mbr: Key, new_child: Pid, ctx: *InsertCtx) Error!void {
+            const n = try inode.size();
+            var mbrs: [Max + 1]Key = undefined;
+            var kids: [Max + 1]Pid = undefined;
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                mbrs[i] = try inode.getMbr(i);
+                kids[i] = try inode.getChild(i);
+            }
+            mbrs[n] = new_mbr;
+            kids[n] = new_child;
+            const total = n + 1;
+
+            var node_mbr = mbrs[0];
+            i = 1;
+            while (i < total) : (i += 1) {
+                node_mbr = node_mbr.merged(&mbrs[i]);
+            }
+
+            var order: [Max + 1]usize = undefined;
+            Strategy.reinsertOrder(mbrs[0..total], node_mbr, order[0..total]);
+
+            const p = @max(1, (total * 3) / 10);
+            const level = try inode.getLevel();
+
+            try inode.clear();
+            i = p;
+            while (i < total) : (i += 1) {
+                try inode.insertChild(mbrs[order[i]], kids[order[i]]);
+            }
+            i = 0;
+            while (i < p) : (i += 1) {
+                ctx.pushSubtree(mbrs[order[i]], kids[order[i]], level - 1);
+            }
         }
 
         fn splitLeaf(self: *Self, leaf: anytype, new_mbr: Key, new_value: ValueIn) Error!Pid {
@@ -245,7 +316,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             return sibling.id();
         }
 
-        fn adjustTree(self: *Self, path: *Path, child_start: Pid, split_start: ?Pid) Error!void {
+        fn adjustTree(self: *Self, path: *Path, child_start: Pid, split_start: ?Pid, ctx: *InsertCtx) Error!void {
             const acc = self.model.getAccessor();
             var child_id = child_start;
             var split = split_start;
@@ -263,7 +334,15 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                         try parent.insertChild(sib_mbr, sib_id);
                         split = null;
                     } else {
-                        split = try self.splitInode(&parent, sib_mbr, sib_id);
+                        // `path.len > 0` here means `parent` is not the root.
+                        const level = try parent.getLevel();
+                        if (Strategy.wants_reinsert and path.len > 0 and !ctx.done[level]) {
+                            ctx.done[level] = true;
+                            try self.reinsertInode(&parent, sib_mbr, sib_id, ctx);
+                            split = null;
+                        } else {
+                            split = try self.splitInode(&parent, sib_mbr, sib_id);
+                        }
                     }
                 }
                 child_id = frame.id;
@@ -314,8 +393,6 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             leaf_id: Pid,
             entry_idx: usize,
         };
-
-        const orphan_cap = max_depth * Max;
 
         pub fn remove(self: *Self, query: Key, ctx: anytype, matches: anytype) Error!bool {
             const acc = self.model.getAccessor();
@@ -458,21 +535,23 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 }
             };
             std.mem.sort(usize, order[0..sn], LvlCtx{ .lvl = s_lvl[0..sn] }, lt_call.desc);
+
+            var ins_ctx = InsertCtx{};
             {
                 var i: usize = 0;
                 while (i < sn) : (i += 1) {
                     const oi = order[i];
-                    try self.insertSubtree(s_mbr[oi], s_id[oi], s_lvl[oi]);
+                    try self.insertSubtree(s_mbr[oi], s_id[oi], s_lvl[oi], &ins_ctx);
                 }
             }
-
-            var flag = false;
             {
                 var i: usize = 0;
                 while (i < vn) : (i += 1) {
-                    try self.insertValue(v_mbr[i], self.model.valueBufAsIn(&v_val[i]), &flag);
+                    try self.insertValue(v_mbr[i], self.model.valueBufAsIn(&v_val[i]), &ins_ctx);
                 }
             }
+            // Flush any forced-reinsert cascades those reinserts triggered.
+            try self.drainReinserts(&ins_ctx);
 
             while (true) {
                 const root = acc.getRoot() orelse {
@@ -492,7 +571,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             }
         }
 
-        fn insertSubtree(self: *Self, mbr: Key, child_id: Pid, target_level: usize) Error!void {
+        fn insertSubtree(self: *Self, mbr: Key, child_id: Pid, target_level: usize, ctx: *InsertCtx) Error!void {
             const acc = self.model.getAccessor();
 
             const root = acc.getRoot() orelse {
@@ -537,7 +616,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                     split = try self.splitInode(&inode, mbr, child_id);
                 }
             }
-            try self.adjustTree(&path, cur, split);
+            try self.adjustTree(&path, cur, split, ctx);
         }
     };
 }

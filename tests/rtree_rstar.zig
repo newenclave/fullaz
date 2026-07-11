@@ -98,6 +98,82 @@ test "RStarTree: window query matches brute force after many inserts" {
     }
 }
 
+fn boxesEqual(a: Key, b: Key) bool {
+    inline for (0..2) |d| {
+        if (a.low[d] != b.low[d] or a.high[d] != b.high[d]) return false;
+    }
+    return true;
+}
+
+// Recursively assert the R-tree invariant: every inode entry's stored MBR is
+// exactly the bounding box of the child it points at. Returns the subtree's
+// true nodeMbr so the parent can be checked against it.
+const InvariantChecker = struct {
+    fn check(acc: anytype, id: Model.NodeIdType) !Key {
+        if (try acc.isLeafId(id)) {
+            var leaf = (try acc.loadLeaf(id)).?;
+            defer acc.deinitLeaf(leaf);
+            return try leaf.nodeMbr();
+        }
+        var inode = (try acc.loadInode(id)).?;
+        defer acc.deinitInode(inode);
+        const n = try inode.size();
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const stored = try inode.getMbr(i);
+            const child_true = try check(acc, try inode.getChild(i));
+            try testing.expect(boxesEqual(stored, child_true));
+        }
+        return try inode.nodeMbr();
+    }
+};
+
+test "RStarTree: multi-level reinsert keeps every entry and the MBR invariant" {
+    var m = try Model.init(testing.allocator);
+    defer m.deinit();
+    var t = RStarTree.init(&m);
+
+    // Enough distinct boxes (M=4) to build several inode levels, so inode
+    // overflows — not just leaf overflows — trigger forced reinsert.
+    const N = 120;
+    var boxes: [N]Key = undefined;
+    var i: usize = 0;
+    while (i < N) : (i += 1) {
+        const x: i64 = @intCast(i % 12);
+        const y: i64 = @intCast(i / 12);
+        boxes[i] = box(x * 2, y * 2, x * 2 + 1, y * 2 + 1);
+        try t.insert(boxes[i], @intCast(i));
+    }
+
+    try testing.expect((try t.height()) >= 2);
+
+    // No entry dropped or duplicated by the reinsert/split machinery.
+    var got = Collector{};
+    try t.search(box(-1, -1, 1000, 1000), &got, Collector.cb);
+    try testing.expectEqual(@as(usize, N), got.count);
+    i = 0;
+    while (i < N) : (i += 1) {
+        try testing.expect(got.seen[i]);
+    }
+
+    // The parent-MBR-equals-child-bbox invariant holds everywhere.
+    const acc = m.getAccessor();
+    if (acc.getRoot()) |root| {
+        _ = try InvariantChecker.check(acc, root);
+    }
+
+    // Window queries still match brute force.
+    const queries = [_]Key{ box(0, 0, 6, 6), box(4, 4, 12, 12), box(10, 0, 24, 8) };
+    for (queries) |q| {
+        var w = Collector{};
+        try t.search(q, &w, Collector.cb);
+        i = 0;
+        while (i < N) : (i += 1) {
+            try testing.expectEqual(boxes[i].overlaps(&q), w.seen[i]);
+        }
+    }
+}
+
 test "RStarTree: forced reinsert loses no entries (full query returns all N)" {
     var m = try Model.init(testing.allocator);
     defer m.deinit();
