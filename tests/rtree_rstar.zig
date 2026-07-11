@@ -40,8 +40,9 @@ test "RStar chooseSubtree: at leaf level prefers least overlap growth" {
 
 test "RStar splitEntries: valid partition, respects min_fill, separates clusters" {
     const mbrs = [_]BB{
-        box(0, 0, 1, 1),    box(0, 0, 1, 1),
-        box(20, 20, 21, 21), box(20, 20, 21, 21), box(20, 20, 21, 21),
+        box(0, 0, 1, 1),     box(0, 0, 1, 1),
+        box(20, 20, 21, 21), box(20, 20, 21, 21),
+        box(20, 20, 21, 21),
     };
     var assign = [_]u8{9} ** 5;
     RStar.splitEntries(&mbrs, 2, &assign);
@@ -134,7 +135,7 @@ test "RStarTree: multi-level reinsert keeps every entry and the MBR invariant" {
     var t = RStarTree.init(&m);
 
     // Enough distinct boxes (M=4) to build several inode levels, so inode
-    // overflows — not just leaf overflows — trigger forced reinsert.
+    // overflows: not just leaf overflows trigger forced reinsert.
     const N = 120;
     var boxes: [N]Key = undefined;
     var i: usize = 0;
@@ -179,7 +180,7 @@ test "RStarTree: forced reinsert loses no entries (full query returns all N)" {
     defer m.deinit();
     var t = RStarTree.init(&m);
 
-    // 100 distinct values across a grid — heavy enough that leaf overflows (and
+    // 100 distinct values across a grid; heavy enough that leaf overflows (and
     // thus forced reinserts) happen many times.
     const N = 100;
     var i: usize = 0;
@@ -192,7 +193,7 @@ test "RStarTree: forced reinsert loses no entries (full query returns all N)" {
     var got = Collector{};
     try t.search(box(-1, -1, 100, 100), &got, Collector.cb);
 
-    // every value present exactly once — no entry dropped or duplicated by the
+    // every value present exactly once; no entry dropped or duplicated by the
     // reinsert/split machinery.
     try testing.expectEqual(@as(usize, N), got.count);
     i = 0;

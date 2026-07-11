@@ -240,7 +240,6 @@ test "RTree paged: state persists across a cache reopen (device round-trip)" {
     }
 }
 
-// A float-coordinate paged model — exercises PackedNumber's float path on-page.
 const FloatModel = rtree.models.Paged(PageCache, NoneStorageManager, f32, 2, 4, 32, .little);
 const FKey = FloatModel.KeyType;
 
@@ -299,4 +298,163 @@ test "RTree paged: float coordinates round-trip through the page layout" {
             try testing.expectEqual(boxes[i].overlaps(&q), got.seen[i]);
         }
     }
+}
+
+// ---------------------------------------------
+// Stress: huge random insert, remove half, revalidate
+// ---------------------------------------------
+
+fn keyEq(a: Key, b: Key) bool {
+    inline for (0..2) |d| {
+        if (a.low[d] != b.low[d] or a.high[d] != b.high[d]) return false;
+    }
+    return true;
+}
+
+const PagedInvariant = struct {
+    fn checkAll(model: *Model) !void {
+        const acc = model.getAccessor();
+        if (acc.getRoot()) |root| {
+            _ = try check(acc, root);
+        }
+    }
+
+    fn check(acc: anytype, id: Model.NodeIdType) !Key {
+        if (try acc.isLeafId(id)) {
+            var leaf = (try acc.loadLeaf(id)).?;
+            defer acc.deinitLeaf(leaf);
+            const n = try leaf.size();
+            try testing.expect(n >= 1 and n <= Model.max_entries);
+            return try leaf.nodeMbr();
+        }
+        var inode = (try acc.loadInode(id)).?;
+        defer acc.deinitInode(inode);
+        const n = try inode.size();
+        try testing.expect(n >= 1 and n <= Model.max_entries);
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const stored = try inode.getMbr(i);
+            const child_true = try check(acc, try inode.getChild(i));
+            try testing.expect(keyEq(stored, child_true));
+        }
+        return try inode.nodeMbr();
+    }
+};
+
+const BigCollector = struct {
+    seen: []bool,
+    count: usize = 0,
+    fn cb(self: *BigCollector, _: Key, value: []const u8) anyerror!void {
+        self.seen[std.mem.readInt(u32, value[0..4], .little)] = true;
+        self.count += 1;
+    }
+};
+
+// A full-window query must return exactly the not-removed indices, once each
+// (count == survivor count catches duplicates; membership catches loss/leak).
+fn expectExactSet(t: anytype, removed: []const bool, seen: []bool, n: usize) !void {
+    @memset(seen, false);
+    var coll = BigCollector{ .seen = seen };
+    try t.search(box(-1, -1, 1_000_000, 1_000_000), &coll, BigCollector.cb);
+    var survivors: usize = 0;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        try testing.expectEqual(!removed[i], seen[i]);
+        if (!removed[i]) survivors += 1;
+    }
+    try testing.expectEqual(survivors, coll.count);
+}
+
+test "RTree paged: stress; random insert of huge N, remove half, stays valid" {
+    const allocator = testing.allocator;
+    const N: usize = 5000;
+    const coord_max: i64 = 10_000;
+
+    // Small pages (M=4 cap dominates) keep the device footprint modest at scale.
+    var device = try Device.init(allocator, 1024);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 256);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = Model.init(&cache, &store_mgr, .{});
+
+    const available_before = cache.availableFrames();
+
+    // R* so inserts also exercise forced reinsert at every level.
+    var t = rtree.RStarTree(Model).init(&model);
+
+    const boxes = try allocator.alloc(Key, N);
+    defer allocator.free(boxes);
+    const removed = try allocator.alloc(bool, N);
+    defer allocator.free(removed);
+    @memset(removed, false);
+    const seen = try allocator.alloc(bool, N);
+    defer allocator.free(seen);
+
+    var prng = std.Random.DefaultPrng.init(0xBADC0FFE_5EED);
+    const rnd = prng.random();
+
+    // Insert N random boxes; value = index (u32 LE).
+    var i: usize = 0;
+    while (i < N) : (i += 1) {
+        const x = rnd.intRangeAtMost(i64, 0, coord_max);
+        const y = rnd.intRangeAtMost(i64, 0, coord_max);
+        const w = rnd.intRangeAtMost(i64, 1, 25);
+        const h = rnd.intRangeAtMost(i64, 1, 25);
+        boxes[i] = box(x, y, x + w, y + h);
+        try insertIdx(&t, boxes[i], @intCast(i));
+    }
+
+    // Everything present right after loading.
+    try PagedInvariant.checkAll(&model);
+    try expectExactSet(&t, removed, seen, N);
+
+    // Remove a random half.
+    const order = try allocator.alloc(u32, N);
+    defer allocator.free(order);
+    i = 0;
+    while (i < N) : (i += 1) order[i] = @intCast(i);
+    rnd.shuffle(u32, order);
+
+    const half = N / 2;
+    i = 0;
+    while (i < half) : (i += 1) {
+        const idx = order[i];
+        const m = MatchIdx{ .want = idx };
+        try testing.expect(try t.remove(boxes[idx], &m, MatchIdx.call));
+        removed[idx] = true;
+    }
+
+    // Structure is still a valid R-tree...
+    try PagedInvariant.checkAll(&model);
+
+    // ...and it contains exactly the survivor; no losses, no resurrections,
+    // no duplicates (verified by count as well as membership).
+    try expectExactSet(&t, removed, seen, N);
+
+    // Random window queries agree with a brute-force scan over survivors.
+    var q: usize = 0;
+    while (q < 10) : (q += 1) {
+        const qx = rnd.intRangeAtMost(i64, 0, coord_max);
+        const qy = rnd.intRangeAtMost(i64, 0, coord_max);
+        const query = box(qx, qy, qx + 500, qy + 500);
+        @memset(seen, false);
+        var wc = BigCollector{ .seen = seen };
+        try t.search(query, &wc, BigCollector.cb);
+        i = 0;
+        while (i < N) : (i += 1) {
+            const want = (!removed[i]) and boxes[i].overlaps(&query);
+            try testing.expectEqual(want, seen[i]);
+        }
+    }
+
+    // Removing something already gone is a no-op that reports "not found".
+    {
+        const gone = order[0];
+        const m = MatchIdx{ .want = gone };
+        try testing.expect(!(try t.remove(boxes[gone], &m, MatchIdx.call)));
+    }
+
+    // No cache frames leaked across the whole run.
+    try testing.expectEqual(available_before, cache.availableFrames());
 }
