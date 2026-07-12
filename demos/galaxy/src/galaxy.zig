@@ -10,7 +10,7 @@ const Star = starfield.Star;
 
 pub const Direction = enum { north, south, east, west };
 
-pub fn Galaxy(comptime PageCacheType: type) type {
+pub fn Galaxy(comptime PageCacheType: type, comptime RStar: bool) type {
     const Storage = storage.RootStorage(PageCacheType);
 
     const PageId = PageCacheType.Pid;
@@ -29,7 +29,7 @@ pub fn Galaxy(comptime PageCacheType: type) type {
         constants.max_value_size,
         constants.endian,
     );
-    const Tree = rtree.RStarTree(Model);
+    const Tree = if (RStar) rtree.RStarTree(Model) else rtree.RTree(Model);
     const Key = Model.KeyType;
 
     return struct {

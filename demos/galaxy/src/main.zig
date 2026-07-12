@@ -19,7 +19,7 @@ const constants = galaxy.constants;
 
 const Device = device.FileBlock(constants.PageId);
 const PageCache = fullaz.storage.page_cache.PageCache(Device);
-const G = galaxy.Galaxy(PageCache);
+const G = galaxy.Galaxy(PageCache, true);
 
 const help_text =
     \\commands:

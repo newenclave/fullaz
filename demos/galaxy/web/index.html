@@ -18,6 +18,10 @@
   button { background: #1e2030; color: #cdd6f4; border: 1px solid #45475a;
     border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
   button:hover { border-color: #89b4fa; }
+  .seg { display: inline-flex; border: 1px solid #45475a; border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 5px 10px; }
+  .seg button + button { border-left: 1px solid #45475a; }
+  .seg button.on { background: #45475a; color: #fff; }
   .hint { color: #6c7086; }
   #map { position: fixed; top: 14px; right: 14px; width: 220px; height: 220px;
     background: rgba(8,10,18,.72); border: 1px solid #313244; border-radius: 8px; }
@@ -31,6 +35,10 @@
   <span class="hint"><b>W A S D</b>/arrows move &nbsp;·&nbsp; <b>drag</b> pan &nbsp;·&nbsp; <b>scroll</b>/pinch zoom &nbsp;·&nbsp; the viewport is an R-tree window query</span>
   <span class="spacer"></span>
   <span id="msg"></span>
+  <span class="hint">strategy</span>
+  <span class="seg">
+    <button id="rstar" class="on">R*</button><button id="guttman">Guttman</button>
+  </span>
   <button id="new">new galaxy</button>
 </div>
 <script>
@@ -40,7 +48,7 @@ const hud = document.getElementById("hud");
 const msg = document.getElementById("msg");
 const mapCanvas = document.getElementById("map");
 const mctx = mapCanvas.getContext("2d");
-let wasm = null, seed = 0, dpr = 1;
+let wasm = null, seed = 0, dpr = 1, useRStar = true;
 let mapBoxes = null, mapExt = null;
 
 function resize() {
@@ -154,7 +162,8 @@ function draw(t) {
   hud.innerHTML =
     `<b>fullaz · galaxy</b>  <span class="hint">wasm · paged R*-tree</span>\n\n` +
     L("position")     + `(${ex.playerX().toFixed(1)}, ${ex.playerY().toFixed(1)})\n` +
-    L("viewport")     + `${ex.viewW().toFixed(0)}×${ex.viewH().toFixed(0)}   ·   zoom ${zoom.toFixed(2)}×   ·   in view: ${n}\n\n` +
+    L("viewport")     + `${ex.viewW().toFixed(0)}×${ex.viewH().toFixed(0)}   ·   zoom ${zoom.toFixed(2)}×   ·   in view: ${n}\n` +
+    L("strategy")     + `${useRStar ? "R*-tree" : "Guttman R-tree"}\n\n` +
     L("total stars")  + `${ex.totalStars()}\n` +
     L("R-tree depth") + `${ex.treeHeight()} level(s)\n` +
     L("pages")        + `${pages}  (${kib} KiB on device)\n` +
@@ -251,12 +260,27 @@ window.addEventListener("touchend", (e) => {
 function newGalaxy() {
   if (!wasm) return;
   seed = (Math.random() * 4294967296) >>> 0;
-  wasm.exports.init(seed);
+  wasm.exports.init(seed, useRStar ? 1 : 0);
   zoom = 1.0;
   refreshMap();
   msg.textContent = "";
 }
 document.getElementById("new").addEventListener("click", newGalaxy);
+
+// Flip the insertion strategy on the SAME seed — same stars, different tree, so
+// the minimap shows how R* vs Guttman partition the identical star field.
+function setStrategy(rstar) {
+  useRStar = rstar;
+  document.getElementById("rstar").classList.toggle("on", rstar);
+  document.getElementById("guttman").classList.toggle("on", !rstar);
+  if (!wasm) return;
+  wasm.exports.init(seed, rstar ? 1 : 0);
+  zoom = 1.0;
+  refreshMap();
+  msg.textContent = rstar ? "R*-tree" : "Guttman R-tree";
+}
+document.getElementById("rstar").addEventListener("click", () => setStrategy(true));
+document.getElementById("guttman").addEventListener("click", () => setStrategy(false));
 
 async function boot() {
   resize();

@@ -6,15 +6,14 @@ pub const dev = fullaz.device;
 
 pub const Device = dev.MemoryBlock(u32);
 pub const PageCache = fullaz.storage.page_cache.PageCache(Device);
-pub const G = galaxy.Galaxy(PageCache);
+pub const G = galaxy.Galaxy(PageCache, true);
+pub const GGuttman = galaxy.Galaxy(PageCache, false);
 
 pub const block_size: u32 = 4096;
 pub const frames: usize = 64;
 
 pub const Rec = struct { id: u32, x: f64, y: f64 };
 
-// Collects every star a query visits into a growable list, decoding the id and
-// position so tests can compare star *sets* across galaxies / reopens.
 pub const Collector = struct {
     alloc: std.mem.Allocator,
     items: std.ArrayList(Rec),
