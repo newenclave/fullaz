@@ -1,6 +1,6 @@
 # fullaz
 
-**Demos built on it:** 
+**Demos built on it** (under [`demos/`](demos/)): 
 
 [**fsx**](#fsx-a-filesystem-in-a-single-file): a persistent filesystem in a single file 
 

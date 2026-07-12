@@ -82,11 +82,11 @@ pub fn build(b: *std.Build) void {
     });
     const zigline_mod = zigline_dep.module("zigline");
 
-    // The fsx library surface (fsx/src/root.zig), imported by both the exe and
+    // The fsx library surface (demos/fsx/src/root.zig), imported by both the exe and
     // the tests so fsx source is compiled once and testable across the tests/src
     // module boundary.
     const fsx_mod = b.addModule("fsx", .{
-        .root_source_file = b.path("fsx/src/root.zig"),
+        .root_source_file = b.path("demos/fsx/src/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "fullaz", .module = mod },
@@ -97,7 +97,7 @@ pub fn build(b: *std.Build) void {
     const fsx_exe = b.addExecutable(.{
         .name = "fsx",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("fsx/src/main.zig"),
+            .root_source_file = b.path("demos/fsx/src/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -118,7 +118,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const fsx_tests_mod = b.addModule("fsx_tests", .{
-        .root_source_file = b.path("fsx/tests/tests.zig"),
+        .root_source_file = b.path("demos/fsx/tests/tests.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -138,7 +138,7 @@ pub fn build(b: *std.Build) void {
 
     // --- galaxy: R-tree galaxy-explorer demo (separate exe + tests) ---
     const galaxy_mod = b.addModule("galaxy", .{
-        .root_source_file = b.path("galaxy/src/root.zig"),
+        .root_source_file = b.path("demos/galaxy/src/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "fullaz", .module = mod },
@@ -149,7 +149,7 @@ pub fn build(b: *std.Build) void {
     const galaxy_exe = b.addExecutable(.{
         .name = "galaxy",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("galaxy/src/main.zig"),
+            .root_source_file = b.path("demos/galaxy/src/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -170,7 +170,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const galaxy_tests_mod = b.addModule("galaxy_tests", .{
-        .root_source_file = b.path("galaxy/tests/tests.zig"),
+        .root_source_file = b.path("demos/galaxy/tests/tests.zig"),
         .target = target,
         .optimize = optimize,
     });
