@@ -210,6 +210,30 @@ pub fn Galaxy(comptime PageCacheType: type) type {
             try self.tree.search(window(lx, ly, hx, hy), ctx, cb);
         }
 
+        // Visit every R-tree node
+        pub fn walkNodes(self: *Self, ctx: anytype, cb: anytype) !void {
+            const acc = self.model.getAccessor();
+            const root = acc.getRoot() orelse return;
+            try walkNode(acc, root, ctx, cb);
+        }
+
+        fn walkNode(acc: anytype, id: Model.NodeIdType, ctx: anytype, cb: anytype) !void {
+            if (try acc.isLeafId(id)) {
+                var leaf = (try acc.loadLeaf(id)).?;
+                defer acc.deinitLeaf(leaf);
+                try cb(ctx, try leaf.nodeMbr(), @as(usize, 0), true);
+                return;
+            }
+            var inode = (try acc.loadInode(id)).?;
+            defer acc.deinitInode(inode);
+            try cb(ctx, try inode.nodeMbr(), try inode.getLevel(), false);
+            const n = try inode.size();
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                try walkNode(acc, try inode.getChild(i), ctx, cb);
+            }
+        }
+
         pub fn renderGrid(self: *Self, grid: *[constants.map_rows * constants.map_cols]u21) !usize {
             for (grid) |*c| c.* = ' ';
 
@@ -225,8 +249,8 @@ pub fn Galaxy(comptime PageCacheType: type) type {
                     p.count += 1;
                     const sx = mbr.low[0];
                     const sy = mbr.low[1];
-                    const fx = (sx - p.lx) / p.vw; // 0..1 left→right
-                    const fy = (sy - p.ly) / p.vh; // 0..1 bottom→top
+                    const fx = (sx - p.lx) / p.vw; // 0..1 left->right
+                    const fy = (sy - p.ly) / p.vh; // 0..1 bottom->top
                     if (fx < 0 or fx >= 1 or fy < 0 or fy >= 1) {
                         return;
                     }

@@ -186,4 +186,46 @@ pub fn build(b: *std.Build) void {
     const run_galaxy_tests = b.addRunArtifact(galaxy_tests);
     const test_galaxy_step = b.step("test-galaxy", "Run galaxy tests");
     test_galaxy_step.dependOn(&run_galaxy_tests.step);
+
+    // --- galaxy WASM build: runs in a browser (wasm32-freestanding) ---
+    // Fresh module instances targeting wasm (the ones above are pinned to the
+    // host). The engine + MemoryBlock storage are I/O-free, so they compile for
+    // freestanding wasm; only main.zig (std.process/std.Io/zigline) is excluded.
+    const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+
+    const fullaz_wasm = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+    });
+    const galaxy_wasm_mod = b.createModule(.{
+        .root_source_file = b.path("demos/galaxy/src/root.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+        .imports = &.{
+            .{ .name = "fullaz", .module = fullaz_wasm },
+        },
+    });
+    const galaxy_wasm = b.addExecutable(.{
+        .name = "galaxy",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("demos/galaxy/src/wasm.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{
+                .{ .name = "fullaz", .module = fullaz_wasm },
+                .{ .name = "galaxy", .module = galaxy_wasm_mod },
+            },
+        }),
+    });
+    galaxy_wasm.entry = .disabled; // no _start; JS drives via the exports
+    galaxy_wasm.rdynamic = true; // export the `export fn`s
+
+    const wasm_step = b.step("wasm-galaxy", "Build the galaxy WASM demo into zig-out/web");
+    const install_wasm = b.addInstallArtifact(galaxy_wasm, .{
+        .dest_dir = .{ .override = .{ .custom = "web" } },
+    });
+    wasm_step.dependOn(&install_wasm.step);
+    const install_html = b.addInstallFile(b.path("demos/galaxy/web/index.html"), "web/index.html");
+    wasm_step.dependOn(&install_html.step);
 }

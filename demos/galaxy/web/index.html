@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>fullaz · galaxy</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05060a; color: #cdd6f4;
+    font: 13px/1.5 ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; overflow: hidden; }
+  #sky { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; top: 12px; left: 14px; pointer-events: none;
+    text-shadow: 0 0 6px #000; white-space: pre; }
+  #hud b { color: #89b4fa; }
+  #bar { position: fixed; bottom: 12px; left: 14px; right: 14px; display: flex;
+    gap: 10px; align-items: center; }
+  #bar .spacer { flex: 1; }
+  button { background: #1e2030; color: #cdd6f4; border: 1px solid #45475a;
+    border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #89b4fa; }
+  .hint { color: #6c7086; }
+  #map { position: fixed; top: 14px; right: 14px; width: 220px; height: 220px;
+    background: rgba(8,10,18,.72); border: 1px solid #313244; border-radius: 8px; }
+</style>
+</head>
+<body>
+<canvas id="sky"></canvas>
+<canvas id="map"></canvas>
+<div id="hud"></div>
+<div id="bar">
+  <span class="hint">move: <b>W A S D</b> / arrows &nbsp;·&nbsp; the viewport is an R-tree window query</span>
+  <span class="spacer"></span>
+  <span id="msg"></span>
+  <button id="new">new galaxy</button>
+</div>
+<script>
+const canvas = document.getElementById("sky");
+const ctx = canvas.getContext("2d");
+const hud = document.getElementById("hud");
+const msg = document.getElementById("msg");
+const mapCanvas = document.getElementById("map");
+const mctx = mapCanvas.getContext("2d");
+let wasm = null, seed = 0, dpr = 1;
+let mapBoxes = null, mapExt = null;
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(innerWidth * dpr);
+  canvas.height = Math.floor(innerHeight * dpr);
+  mapCanvas.width = Math.floor(220 * dpr);
+  mapCanvas.height = Math.floor(220 * dpr);
+}
+
+// Pull the R-tree node boxes out of wasm — only changes on move / init.
+function refreshMap() {
+  if (!wasm) return;
+  const ex = wasm.exports;
+  ex.snapshotBoxes();
+  const bc = ex.boxesCount();
+  mapBoxes = new Float64Array(ex.memory.buffer, ex.boxesPtr(), bc * 5).slice();
+  mapExt = bc > 0 ? [mapBoxes[0], mapBoxes[1], mapBoxes[2], mapBoxes[3]] : null;
+}
+
+// The minimap: the R-tree's node MBRs over the whole discovered extent, with
+// the current viewport and the ship marked. Inodes = amber outlines, leaves =
+// cyan; you can see the tree's (overlapping) spatial partition grow as you fly.
+function drawMap() {
+  const W = mapCanvas.width, H = mapCanvas.height;
+  mctx.clearRect(0, 0, W, H);
+  mctx.fillStyle = "#6c7086";
+  mctx.font = `${11 * dpr}px ui-monospace, monospace`;
+  mctx.fillText("R-tree · discovered space", 8 * dpr, 16 * dpr);
+  if (!wasm || !mapBoxes || !mapExt) return;
+  const ex = wasm.exports;
+  const pad = 16 * dpr;
+  const [x0, y0, x1, y1] = mapExt;
+  const ew = Math.max(x1 - x0, 1e-9), eh = Math.max(y1 - y0, 1e-9);
+  const toX = (wx) => pad + (wx - x0) / ew * (W - 2 * pad);
+  const toY = (wy) => pad + (1 - (wy - y0) / eh) * (H - 2 * pad);
+  const bc = mapBoxes.length / 5;
+  for (let pass = 0; pass < 2; pass++) {   // inodes first, leaves on top
+    for (let i = 0; i < bc; i++) {
+      const isLeaf = mapBoxes[i * 5 + 4] === 0;
+      if ((pass === 0) === isLeaf) continue;
+      const mx = toX(mapBoxes[i * 5]), my = toY(mapBoxes[i * 5 + 3]);
+      const mw = toX(mapBoxes[i * 5 + 2]) - mx, mh = toY(mapBoxes[i * 5 + 1]) - my;
+      if (isLeaf) {
+        mctx.fillStyle = "rgba(137,220,235,0.10)";
+        mctx.strokeStyle = "rgba(137,220,235,0.55)";
+        mctx.lineWidth = 1 * dpr;
+        mctx.fillRect(mx, my, mw, mh);
+        mctx.strokeRect(mx, my, mw, mh);
+      } else {
+        mctx.strokeStyle = "rgba(250,179,135,0.85)";
+        mctx.lineWidth = 1.4 * dpr;
+        mctx.strokeRect(mx, my, mw, mh);
+      }
+    }
+  }
+  const px = ex.playerX(), py = ex.playerY(), vw = ex.viewW(), vh = ex.viewH();
+  const rx = toX(px - vw / 2), ry = toY(py + vh / 2);
+  mctx.strokeStyle = "#f9e2af";
+  mctx.lineWidth = 1.5 * dpr;
+  mctx.strokeRect(rx, ry, toX(px + vw / 2) - rx, toY(py - vh / 2) - ry);
+  mctx.fillStyle = "#89dceb";
+  mctx.beginPath();
+  mctx.arc(toX(px), toY(py), 2.6 * dpr, 0, 6.283);
+  mctx.fill();
+}
+window.addEventListener("resize", () => { resize(); });
+
+function draw(t) {
+  requestAnimationFrame(draw);
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = "#05060a";
+  ctx.fillRect(0, 0, W, H);
+  if (!wasm) return;
+
+  const ex = wasm.exports;
+  const n = ex.starsCount();
+  // Re-view memory each frame: growing the wasm heap detaches old buffers.
+  const stars = new Float32Array(ex.memory.buffer, ex.starsPtr(), n * 3);
+
+  for (let i = 0; i < n; i++) {
+    const fx = stars[i * 3], fy = stars[i * 3 + 1], b = stars[i * 3 + 2];
+    const x = fx * W;
+    const y = (1 - fy) * H;          // world +y is up; screen y is down
+    // gentle twinkle so the field feels alive
+    const tw = 0.8 + 0.2 * Math.sin(t * 0.002 + i * 1.7);
+    const r = (1 + b * 2.6) * dpr;
+    ctx.globalAlpha = (0.35 + 0.65 * b) * tw;
+    ctx.fillStyle = b > 0.75 ? "#ffffff" : b > 0.4 ? "#cfe3ff" : "#9fb4d8";
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 6.283);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // the ship, dead center
+  const cx = W / 2, cy = H / 2, s = 7 * dpr;
+  ctx.strokeStyle = "#89dceb";
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.beginPath(); ctx.arc(cx, cy, s, 0, 6.283); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 2, cy); ctx.lineTo(cx - s, cy);
+  ctx.moveTo(cx + s, cy); ctx.lineTo(cx + s * 2, cy);
+  ctx.moveTo(cx, cy - s * 2); ctx.lineTo(cx, cy - s);
+  ctx.moveTo(cx, cy + s); ctx.lineTo(cx, cy + s * 2);
+  ctx.stroke();
+
+  const pages = ex.blocksAllocated();
+  const kib = (pages * ex.pageBytes() / 1024).toFixed(1);
+  const L = (s) => s.padEnd(14);
+  hud.innerHTML =
+    `<b>fullaz · galaxy</b>  <span class="hint">wasm · paged R*-tree</span>\n\n` +
+    L("position")     + `(${ex.playerX().toFixed(1)}, ${ex.playerY().toFixed(1)})\n` +
+    L("viewport")     + `${ex.viewW().toFixed(0)}×${ex.viewH().toFixed(0)}   stars in view: ${n}\n\n` +
+    L("total stars")  + `${ex.totalStars()}\n` +
+    L("R-tree depth") + `${ex.treeHeight()} level(s)\n` +
+    L("pages")        + `${pages}  (${kib} KiB on device)\n` +
+    L("cache frames") + `${ex.framesUsed()} / ${ex.framesTotal()} in use\n` +
+    L("seed")         + `${seed >>> 0}`;
+
+  drawMap();
+}
+
+const DIR = { w: 0, s: 1, d: 2, a: 3,
+  arrowup: 0, arrowdown: 1, arrowright: 2, arrowleft: 3 };
+
+window.addEventListener("keydown", (e) => {
+  if (!wasm) return;
+  const d = DIR[e.key.toLowerCase()];
+  if (d === undefined) return;
+  e.preventDefault();
+  const created = wasm.exports.move(d);
+  refreshMap();
+  msg.textContent = created > 0 ? `+${created} star(s) drift into view` : "";
+});
+
+function newGalaxy() {
+  if (!wasm) return;
+  seed = (Math.random() * 4294967296) >>> 0;
+  wasm.exports.init(seed);
+  refreshMap();
+  msg.textContent = "";
+}
+document.getElementById("new").addEventListener("click", newGalaxy);
+
+async function boot() {
+  resize();
+  requestAnimationFrame(draw);
+  const bytes = await (await fetch("galaxy.wasm")).arrayBuffer();
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  wasm = instance;
+  newGalaxy();
+}
+boot();
+</script>
+</body>
+</html>
