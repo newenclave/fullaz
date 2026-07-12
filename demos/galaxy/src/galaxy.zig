@@ -200,6 +200,18 @@ pub fn Galaxy(comptime PageCacheType: type) type {
             return self.reveal();
         }
 
+        pub fn moveBy(self: *Self, dx: f64, dy: f64) !usize {
+            self.px += dx;
+            self.py += dy;
+            return self.reveal();
+        }
+
+        pub fn setView(self: *Self, w: f64, h: f64) !usize {
+            self.view_w = w;
+            self.view_h = h;
+            return self.reveal();
+        }
+
         pub fn queryViewport(self: *Self, ctx: anytype, cb: anytype) !void {
             const hw = self.view_w / 2;
             const hh = self.view_h / 2;
@@ -210,7 +222,6 @@ pub fn Galaxy(comptime PageCacheType: type) type {
             try self.tree.search(window(lx, ly, hx, hy), ctx, cb);
         }
 
-        // Visit every R-tree node
         pub fn walkNodes(self: *Self, ctx: anytype, cb: anytype) !void {
             const acc = self.model.getAccessor();
             const root = acc.getRoot() orelse return;
@@ -249,8 +260,8 @@ pub fn Galaxy(comptime PageCacheType: type) type {
                     p.count += 1;
                     const sx = mbr.low[0];
                     const sy = mbr.low[1];
-                    const fx = (sx - p.lx) / p.vw; // 0..1 left->right
-                    const fy = (sy - p.ly) / p.vh; // 0..1 bottom->top
+                    const fx = (sx - p.lx) / p.vw; // 0..1 left→right
+                    const fy = (sy - p.ly) / p.vh; // 0..1 bottom→top
                     if (fx < 0 or fx >= 1 or fy < 0 or fy >= 1) {
                         return;
                     }

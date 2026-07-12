@@ -74,6 +74,14 @@ export fn move(dir: u32) u32 {
     return @intCast(created);
 }
 
+// Free pan by a world-space delta (from mouse/touch drag on the JS side).
+export fn panBy(dx: f64, dy: f64) u32 {
+    if (!ready) return 0;
+    const created = game.moveBy(dx, dy) catch return 0;
+    snapshot();
+    return @intCast(created);
+}
+
 const Collector = struct {
     lx: f64,
     ly: f64,
@@ -119,10 +127,22 @@ export fn playerY() f64 {
     return if (ready) game.py else 0;
 }
 export fn viewW() f64 {
-    return constants.view_w;
+    return if (ready) game.view_w else constants.view_w;
 }
 export fn viewH() f64 {
-    return constants.view_h;
+    return if (ready) game.view_h else constants.view_h;
+}
+
+// Zoom: set the viewport to `z` × the base view (z<1 = in, z>1 = out), clamped
+// so zooming out never asks reveal() to generate an unbounded number of cells.
+const min_zoom = 0.25;
+const max_zoom = 4.0;
+export fn setZoom(z: f64) u32 {
+    if (!ready) return 0;
+    const zc = std.math.clamp(z, min_zoom, max_zoom);
+    const created = game.setView(constants.view_w * zc, constants.view_h * zc) catch return 0;
+    snapshot();
+    return @intCast(created);
 }
 
 // --- scene stats (what the storage engine is doing under the hood) ---

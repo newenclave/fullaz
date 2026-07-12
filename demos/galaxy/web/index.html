@@ -7,7 +7,8 @@
 <style>
   html, body { margin: 0; height: 100%; background: #05060a; color: #cdd6f4;
     font: 13px/1.5 ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; overflow: hidden; }
-  #sky { display: block; width: 100vw; height: 100vh; }
+  #sky { display: block; width: 100vw; height: 100vh; cursor: grab; touch-action: none; }
+  #sky.drag { cursor: grabbing; }
   #hud { position: fixed; top: 12px; left: 14px; pointer-events: none;
     text-shadow: 0 0 6px #000; white-space: pre; }
   #hud b { color: #89b4fa; }
@@ -27,7 +28,7 @@
 <canvas id="map"></canvas>
 <div id="hud"></div>
 <div id="bar">
-  <span class="hint">move: <b>W A S D</b> / arrows &nbsp;·&nbsp; the viewport is an R-tree window query</span>
+  <span class="hint"><b>W A S D</b>/arrows move &nbsp;·&nbsp; <b>drag</b> pan &nbsp;·&nbsp; <b>scroll</b>/pinch zoom &nbsp;·&nbsp; the viewport is an R-tree window query</span>
   <span class="spacer"></span>
   <span id="msg"></span>
   <button id="new">new galaxy</button>
@@ -153,7 +154,7 @@ function draw(t) {
   hud.innerHTML =
     `<b>fullaz · galaxy</b>  <span class="hint">wasm · paged R*-tree</span>\n\n` +
     L("position")     + `(${ex.playerX().toFixed(1)}, ${ex.playerY().toFixed(1)})\n` +
-    L("viewport")     + `${ex.viewW().toFixed(0)}×${ex.viewH().toFixed(0)}   stars in view: ${n}\n\n` +
+    L("viewport")     + `${ex.viewW().toFixed(0)}×${ex.viewH().toFixed(0)}   ·   zoom ${zoom.toFixed(2)}×   ·   in view: ${n}\n\n` +
     L("total stars")  + `${ex.totalStars()}\n` +
     L("R-tree depth") + `${ex.treeHeight()} level(s)\n` +
     L("pages")        + `${pages}  (${kib} KiB on device)\n` +
@@ -168,6 +169,8 @@ const DIR = { w: 0, s: 1, d: 2, a: 3,
 
 window.addEventListener("keydown", (e) => {
   if (!wasm) return;
+  if (e.key === "+" || e.key === "=") { e.preventDefault(); applyZoom(zoom / 1.25); return; }
+  if (e.key === "-" || e.key === "_") { e.preventDefault(); applyZoom(zoom * 1.25); return; }
   const d = DIR[e.key.toLowerCase()];
   if (d === undefined) return;
   e.preventDefault();
@@ -176,10 +179,80 @@ window.addEventListener("keydown", (e) => {
   msg.textContent = created > 0 ? `+${created} star(s) drift into view` : "";
 });
 
+// --- drag to pan + scroll/pinch to zoom ---
+let dragging = false, lastX = 0, lastY = 0, zoom = 1.0;
+let pinching = false, pinchDist0 = 0, pinchZoom0 = 1;
+
+function panPixels(ddx, ddy) {
+  if (!wasm) return;
+  const ex = wasm.exports;
+  // grab-the-sky feel: content follows the pointer, so the camera moves opposite
+  // (and screen-y is flipped vs world-y).
+  const dx = -ddx * (ex.viewW() / innerWidth);
+  const dy =  ddy * (ex.viewH() / innerHeight);
+  if (ex.panBy(dx, dy) > 0) refreshMap();
+}
+
+canvas.addEventListener("mousedown", (e) => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.classList.add("drag");
+});
+window.addEventListener("mousemove", (e) => {
+  if (!dragging) return;
+  panPixels(e.clientX - lastX, e.clientY - lastY);
+  lastX = e.clientX; lastY = e.clientY;
+});
+window.addEventListener("mouseup", () => { dragging = false; canvas.classList.remove("drag"); });
+
+function applyZoom(z) {
+  if (!wasm) return;
+  zoom = Math.min(4, Math.max(0.25, z));
+  if (wasm.exports.setZoom(zoom) > 0) refreshMap();
+}
+canvas.addEventListener("wheel", (e) => {
+  if (!wasm) return;
+  e.preventDefault();
+  applyZoom(zoom * (e.deltaY < 0 ? 1 / 1.15 : 1.15));   // wheel up = zoom in
+}, { passive: false });
+
+function touchDist(e) {
+  const a = e.touches[0], b = e.touches[1];
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+canvas.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 1) {
+    dragging = true; pinching = false;
+    lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+  } else if (e.touches.length === 2) {
+    pinching = true; dragging = false;
+    pinchDist0 = touchDist(e); pinchZoom0 = zoom;
+  }
+  e.preventDefault();
+}, { passive: false });
+window.addEventListener("touchmove", (e) => {
+  if (!wasm) return;
+  if (pinching && e.touches.length === 2) {
+    const d = touchDist(e);
+    if (d > 0) applyZoom(pinchZoom0 * (pinchDist0 / d));   // spread fingers = zoom in
+    e.preventDefault();
+  } else if (dragging && e.touches.length === 1) {
+    panPixels(e.touches[0].clientX - lastX, e.touches[0].clientY - lastY);
+    lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+    e.preventDefault();
+  }
+}, { passive: false });
+window.addEventListener("touchend", (e) => {
+  if (e.touches.length === 0) { dragging = false; pinching = false; }
+  else if (e.touches.length === 1) {
+    pinching = false; dragging = true;
+    lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+  }
+});
+
 function newGalaxy() {
   if (!wasm) return;
   seed = (Math.random() * 4294967296) >>> 0;
   wasm.exports.init(seed);
+  zoom = 1.0;
   refreshMap();
   msg.textContent = "";
 }
