@@ -1,15 +1,27 @@
 const std = @import("std");
 const helpers = @import("../contracts/interfaces.zig");
 
-pub fn assertStrategy(comptime Strategy: type, comptime Key: type) void {
+fn assertChooseStrategy(comptime Strategy: type, comptime Key: type) void {
+    helpers.requiresFnSignature(Strategy, "chooseSubtree", fn ([]const Key, Key, bool) usize);
+}
+
+fn assertSplitStrategy(comptime Strategy: type, comptime Key: type) void {
+    helpers.requiresFnSignature(Strategy, "splitEntries", fn ([]const Key, usize, []u8) void);
+}
+
+fn assertReinsertStrategy(comptime Strategy: type, comptime Key: type) void {
     if (!@hasDecl(Strategy, "wants_reinsert")) {
         @compileError("Strategy missing decl: wants_reinsert");
     }
-    helpers.requiresFnSignature(Strategy, "chooseSubtree", fn ([]const Key, Key, bool) usize);
-    helpers.requiresFnSignature(Strategy, "splitEntries", fn ([]const Key, usize, []u8) void);
     if (Strategy.wants_reinsert) {
         helpers.requiresFnSignature(Strategy, "reinsertOrder", fn ([]const Key, Key, []usize) void);
     }
+}
+
+pub fn assertStrategy(comptime Strategy: type, comptime Key: type) void {
+    assertChooseStrategy(Strategy, Key);
+    assertSplitStrategy(Strategy, Key);
+    assertReinsertStrategy(Strategy, Key);
 }
 
 // the very original Guttman R-tree strategy, with quadratic split and no reinsert
@@ -354,9 +366,9 @@ pub fn HybridStrategyBase(
     comptime SplitStrategyT: fn (comptime Key: type) type,
 ) type {
     comptime {
-        assertStrategy(ChooseStrategyT(Key), Key);
-        assertStrategy(ReinsertStrategyT(Key), Key);
-        assertStrategy(SplitStrategyT(Key), Key);
+        assertChooseStrategy(ChooseStrategyT(Key), Key);
+        assertReinsertStrategy(ReinsertStrategyT(Key), Key);
+        assertSplitStrategy(SplitStrategyT(Key), Key);
     }
 
     return struct {
