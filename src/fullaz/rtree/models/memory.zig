@@ -216,6 +216,10 @@ pub fn Model(
             _ = self.container.entries.orderedRemove(pos);
         }
 
+        pub fn compact(_: *Self) Error!void {
+            // nothing to do here
+        }
+
         pub fn clear(self: *Self) Error!void {
             self.container.entries.clearRetainingCapacity();
         }

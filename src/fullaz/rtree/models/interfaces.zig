@@ -65,6 +65,7 @@ fn assertNodeCommon(comptime Model: type, comptime Node: type) void {
     requiresFnSignature(Node, "nodeMbr", fn (*const Node) Error!KeyType);
     requiresFnSignature(Node, "erase", fn (*Node, usize) Error!void);
     requiresFnSignature(Node, "clear", fn (*Node) Error!void);
+    requiresFnSignature(Node, "compact", fn (*Node) Error!void);
 
     requiresFnSignature(Node, "setParent", fn (*Node, ?NodeIdType) Error!void);
     requiresFnSignature(Node, "getParent", fn (*const Node) Error!?NodeIdType);
