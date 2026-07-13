@@ -154,12 +154,16 @@ pub fn PagedModel(
         pub fn canInsertEntry(self: *const Self, _: Key, value: ValueType) Error!bool {
             if (value.len > max_value_size) return Error.ValueTooLarge;
             const view = ConstView.init(try self.handle.getData());
-            if ((try view.entries()) >= max_entries_v) return false;
+            if ((try view.entries()) >= max_entries_v) {
+                return false;
+            }
             return (try view.canAppend(value.len)) != .not_enough;
         }
 
         pub fn insertEntry(self: *Self, mbr: Key, value: ValueType) Error!void {
-            if (value.len > max_value_size) return Error.ValueTooLarge;
+            if (value.len > max_value_size) {
+                return Error.ValueTooLarge;
+            }
             const status = blk: {
                 const view = ConstView.init(try self.handle.getData());
                 break :blk try view.canAppend(value.len);

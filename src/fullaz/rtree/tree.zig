@@ -256,70 +256,96 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             }
         }
 
-        // TODO: We dont need mbrs(?), vals here. We need a bitmask, that can track the moved element.
-        fn splitLeaf(self: *Self, leaf: anytype, new_mbr: Key, new_value: ValueIn) Error!Pid {
+        // Split in place: gather only the MBRs (cheap) for the strategy, then MOVE
+        // the group-1 entries straight into the sibling and erase them from the
+        // node. Values never leave the pages (no ValueBuf, no clear()) — they are
+        // copied page→page by the sibling's insertEntry while the node is intact.
+        fn splitLeaf(self: *Self, leaf: *Leaf, new_mbr: Key, new_value: ValueIn) Error!Pid {
             const acc = self.model.getAccessor();
             const n = try leaf.size();
+            const total = n + 1;
+
             var mbrs: [Max + 1]Key = undefined;
-            var vals: [Max + 1]ValueBuf = undefined;
             var i: usize = 0;
             while (i < n) : (i += 1) {
                 mbrs[i] = try leaf.getMbr(i);
-                vals[i] = self.model.copyValueOut(try leaf.getValue(i));
             }
             mbrs[n] = new_mbr;
-            vals[n] = self.model.copyValueOut(new_value);
-            const total = n + 1;
 
             var assign: [Max + 1]u8 = undefined;
             Strategy.splitEntries(mbrs[0..total], min_fill, assign[0..total]);
 
-            try leaf.clear();
             var sibling = try acc.createLeaf();
             defer acc.deinitLeaf(sibling);
+
+            // Copy the group-1 entries into the sibling (leaf still intact).
             i = 0;
-            while (i < total) : (i += 1) {
-                const v = self.model.valueBufAsIn(&vals[i]);
-                if (assign[i] == 0) {
-                    try leaf.insertEntry(mbrs[i], v);
-                } else {
-                    try sibling.insertEntry(mbrs[i], v);
+            while (i < n) : (i += 1) {
+                if (assign[i] != 0) {
+                    try sibling.insertEntry(mbrs[i], self.model.valueOutAsIn(try leaf.getValue(i)));
                 }
+            }
+            // Now erase them from the leaf; indices shift left as we remove.
+            var cursor: usize = 0;
+            i = 0;
+            while (i < n) : (i += 1) {
+                if (assign[i] != 0) {
+                    try leaf.erase(i - cursor);
+                    cursor += 1;
+                }
+            }
+            try leaf.compact();
+            // Place the new entry on its assigned side.
+            if (assign[n] != 0) {
+                try sibling.insertEntry(new_mbr, new_value);
+            } else {
+                try leaf.insertEntry(new_mbr, new_value);
             }
             return sibling.id();
         }
 
-        // TODO: Here we dont copy values. So it's not as heavy as splitLeaf.
-        //  But we still need to copy mbrs. Can we avoid that?
+        // Same in-place move for inodes (children are just page ids — no value
+        // bytes to move, so this was always the light case).
         fn splitInode(self: *Self, inode: *Inode, new_mbr: Key, new_child: Pid) Error!Pid {
             const acc = self.model.getAccessor();
             const n = try inode.size();
+            const total = n + 1;
+
             var mbrs: [Max + 1]Key = undefined;
-            var children: [Max + 1]Pid = undefined;
             var i: usize = 0;
             while (i < n) : (i += 1) {
                 mbrs[i] = try inode.getMbr(i);
-                children[i] = try inode.getChild(i);
             }
             mbrs[n] = new_mbr;
-            children[n] = new_child;
-            const total = n + 1;
 
             var assign: [Max + 1]u8 = undefined;
             Strategy.splitEntries(mbrs[0..total], min_fill, assign[0..total]);
 
             const level = try inode.getLevel();
-            try inode.clear();
             var sibling = try acc.createInode();
             defer acc.deinitInode(sibling);
             try sibling.setLevel(level);
+
             i = 0;
-            while (i < total) : (i += 1) {
-                if (assign[i] == 0) {
-                    try inode.insertChild(mbrs[i], children[i]);
-                } else {
-                    try sibling.insertChild(mbrs[i], children[i]);
+            while (i < n) : (i += 1) {
+                if (assign[i] != 0) {
+                    try sibling.insertChild(mbrs[i], try inode.getChild(i));
                 }
+            }
+            var cursor: usize = 0;
+            i = 0;
+            while (i < n) : (i += 1) {
+                if (assign[i] != 0) {
+                    try inode.erase(i - cursor);
+                    cursor += 1;
+                }
+            }
+
+            try inode.compact();
+            if (assign[n] != 0) {
+                try sibling.insertChild(new_mbr, new_child);
+            } else {
+                try inode.insertChild(new_mbr, new_child);
             }
             return sibling.id();
         }

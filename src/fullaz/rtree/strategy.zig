@@ -1,12 +1,6 @@
 const std = @import("std");
 const helpers = @import("../contracts/interfaces.zig");
 
-pub fn assertMbrGetter(comptime MG: type, comptime Key: type) void {
-    helpers.requiresFnSignature(MG, "get", fn (*const MG, usize) Key);
-    helpers.requiresFnSignature(MG, "set", fn (*MG, usize, Key) void);
-    helpers.requiresFnSignature(MG, "len", fn (*const MG) usize);
-}
-
 pub fn assertStrategy(comptime Strategy: type, comptime Key: type) void {
     if (!@hasDecl(Strategy, "wants_reinsert")) {
         @compileError("Strategy missing decl: wants_reinsert");
@@ -31,7 +25,7 @@ pub fn GuttmanStrategy(comptime Key: type) type {
             var best_enl = child_mbrs[0].enlargement(&entry);
             var best_area = child_mbrs[0].measure();
 
-            // select the childres with the least enlargement, breaking ties by area
+            // select the child with the least enlargement, breaking ties by area
             for (child_mbrs[1..], 1..) |mbr, i| {
                 const enl = mbr.enlargement(&entry);
                 const area = mbr.measure();
@@ -159,8 +153,6 @@ pub fn RStarStrategy(comptime Key: type) type {
     const Coord = Key.Coord;
     const Point = Key.Point;
     const dims = Key.Dim;
-
-    // TODO: Stack!
     const split_cap = 512;
 
     return struct {
@@ -199,9 +191,7 @@ pub fn RStarStrategy(comptime Key: type) type {
                 const expanded = ci.merged(&entry);
                 var ovl: Coord = 0;
                 for (child_mbrs, 0..) |cj, j| {
-                    if (i == j) {
-                        continue;
-                    }
+                    if (i == j) continue;
                     ovl += expanded.overlapMeasure(&cj) - ci.overlapMeasure(&cj);
                 }
                 const enl = ci.enlargement(&entry);

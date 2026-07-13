@@ -250,6 +250,11 @@ pub fn View(
             };
         }
 
+        pub fn compactInPlace(self: *Self) ErrorSet!void {
+            var sd = try self.slotsDirMut();
+            try sd.compactInPlace();
+        }
+
         pub fn erase(self: *Self, pos: usize) ErrorSet!void {
             var sd = try self.slotsDirMut();
             return sd.remove(pos);
