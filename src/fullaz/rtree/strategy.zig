@@ -153,6 +153,8 @@ pub fn RStarStrategy(comptime Key: type) type {
     const Coord = Key.Coord;
     const Point = Key.Point;
     const dims = Key.Dim;
+
+    // TODO: Stack!
     const split_cap = 512;
 
     return struct {

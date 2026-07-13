@@ -30,6 +30,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             idx: usize,
         };
 
+        // TODO: Stack! Needs to be a part of model/accessor API? getPath/deinitPath
         const Path = struct {
             items: [max_depth]Frame = undefined,
             len: usize = 0,
@@ -51,6 +52,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         // the current insert/update step is complete.
         //
         // Leaf values use level 0. Subtree entries store their subtree level.
+        // TODO: Stack! Needs to be a part of model/accessor API? getContext/deinitContext
         const InsertCtx = struct {
             done: [max_depth]bool = [_]bool{false} ** max_depth,
 
