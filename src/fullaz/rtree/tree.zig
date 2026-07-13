@@ -48,10 +48,6 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         // done[level] ensures reinsertion happens only once per level.
         // Any later overflow at the same level is handled by splitting.
         //
-        // Removed entries are queued here and reinserted from the root after
-        // the current insert/update step is complete.
-        //
-        // Leaf values use level 0. Subtree entries store their subtree level.
         // TODO: Stack! Needs to be a part of model/accessor API? getContext/deinitContext
         const InsertCtx = struct {
             done: [max_depth]bool = [_]bool{false} ** max_depth,
