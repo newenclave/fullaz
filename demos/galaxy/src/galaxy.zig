@@ -175,7 +175,9 @@ pub fn Galaxy(comptime PageCacheType: type, comptime RStar: bool) type {
             while (cy <= max_cy) : (cy += 1) {
                 var cx = min_cx;
                 while (cx <= max_cx) : (cx += 1) {
-                    if (try self.cellGenerated(cx, cy)) continue;
+                    if (try self.cellGenerated(cx, cy)) {
+                        continue;
+                    }
                     var specs: [constants.star_jitter]starfield.StarSpec = undefined;
                     const k = starfield.genCell(cx, cy, self.cell, self.seed, self.star_counter, &specs);
                     var i: usize = 0;
@@ -260,9 +262,9 @@ pub fn Galaxy(comptime PageCacheType: type, comptime RStar: bool) type {
                     p.count += 1;
                     const sx = mbr.low[0];
                     const sy = mbr.low[1];
-                    const fx = (sx - p.lx) / p.vw; // 0..1 left→right
-                    const fy = (sy - p.ly) / p.vh; // 0..1 bottom→top
-                    if (fx < 0 or fx >= 1 or fy < 0 or fy >= 1) {
+                    const fx = (sx - p.lx) / p.vw; // 0..1 left->right
+                    const fy = (sy - p.ly) / p.vh; // 0..1 bottom->top
+                    if ((fx < 0) or (fx >= 1) or (fy < 0) or (fy >= 1)) {
                         return;
                     }
                     const col: usize = @intFromFloat(fx * @as(f64, constants.map_cols));

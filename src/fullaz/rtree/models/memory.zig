@@ -453,7 +453,6 @@ pub fn Model(
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
         pub const AccessorType = AccessorImpl;
-        pub const max_entries = max_entries_v;
 
         accessor: AccessorImpl,
 

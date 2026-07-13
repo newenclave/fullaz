@@ -14,17 +14,22 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
     const ValueBuf = ModelT.ValueBufType;
     const Max = ModelT.max_entries;
 
+    const Leaf = ModelT.LeafType;
+    const Inode = ModelT.InodeType;
+
     return struct {
         const Self = @This();
         pub const Error = ModelT.Error;
-        pub const min_fill: usize = @max(2, Max * 2 / 5);
+        pub const min_fill: usize = @max(2, Max * 2 / 5); // 40% is minimum.
 
         const max_depth = 64;
-        const orphan_cap = max_depth * Max;
+        const orphan_cap = max_depth * min_fill;
+
         const Frame = struct {
             id: Pid,
             idx: usize,
         };
+
         const Path = struct {
             items: [max_depth]Frame = undefined,
             len: usize = 0,
@@ -170,7 +175,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         fn drainReinserts(self: *Self, ctx: *InsertCtx) Error!void {
             var si: usize = 0;
             var vi: usize = 0;
-            while (si < ctx.sn or vi < ctx.vn) {
+            while ((si < ctx.sn) or (vi < ctx.vn)) {
                 while (si < ctx.sn) : (si += 1) {
                     try self.insertSubtree(ctx.s_mbr[si], ctx.s_id[si], ctx.s_lvl[si], ctx);
                 }
@@ -180,7 +185,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             }
         }
 
-        fn reinsertLeaf(self: *Self, leaf: anytype, new_mbr: Key, new_value: ValueIn, ctx: *InsertCtx) Error!void {
+        fn reinsertLeaf(self: *Self, leaf: *Leaf, new_mbr: Key, new_value: ValueIn, ctx: *InsertCtx) Error!void {
             const n = try leaf.size();
             var mbrs: [Max + 1]Key = undefined;
             var vals: [Max + 1]ValueBuf = undefined;
@@ -283,7 +288,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             return sibling.id();
         }
 
-        fn splitInode(self: *Self, inode: anytype, new_mbr: Key, new_child: Pid) Error!Pid {
+        fn splitInode(self: *Self, inode: *Inode, new_mbr: Key, new_child: Pid) Error!Pid {
             const acc = self.model.getAccessor();
             const n = try inode.size();
             var mbrs: [Max + 1]Key = undefined;
@@ -334,7 +339,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                         try parent.insertChild(sib_mbr, sib_id);
                         split = null;
                     } else {
-                        // `path.len > 0` here means `parent` is not the root.
+                        // 'path.len > 0' here means 'parent' is not the root.
                         const level = try parent.getLevel();
                         if (Strategy.wants_reinsert and path.len > 0 and !ctx.done[level]) {
                             ctx.done[level] = true;
@@ -550,6 +555,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                     try self.insertValue(v_mbr[i], self.model.valueBufAsIn(&v_val[i]), &ins_ctx);
                 }
             }
+
             // Flush any forced-reinsert cascades those reinserts triggered.
             try self.drainReinserts(&ins_ctx);
 

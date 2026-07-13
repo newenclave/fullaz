@@ -191,7 +191,9 @@ pub fn RStarStrategy(comptime Key: type) type {
                 const expanded = ci.merged(&entry);
                 var ovl: Coord = 0;
                 for (child_mbrs, 0..) |cj, j| {
-                    if (i == j) continue;
+                    if (i == j) {
+                        continue;
+                    }
                     ovl += expanded.overlapMeasure(&cj) - ci.overlapMeasure(&cj);
                 }
                 const enl = ci.enlargement(&entry);
