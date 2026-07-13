@@ -183,6 +183,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             }
         }
 
+        // TODO: again. do we need here vals? We can use them right from the leaf.
         fn reinsertLeaf(self: *Self, leaf: *Leaf, new_mbr: Key, new_value: ValueIn, ctx: *InsertCtx) Error!void {
             const n = try leaf.size();
             var mbrs: [Max + 1]Key = undefined;
@@ -218,6 +219,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             }
         }
 
+        // TODO: Not so heavy as with the leafs. ?
         fn reinsertInode(_: *Self, inode: anytype, new_mbr: Key, new_child: Pid, ctx: *InsertCtx) Error!void {
             const n = try inode.size();
             var mbrs: [Max + 1]Key = undefined;
@@ -254,6 +256,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             }
         }
 
+        // TODO: We dont need mbrs(?), vals here. We need a bitmask, that can track the moved element.
         fn splitLeaf(self: *Self, leaf: anytype, new_mbr: Key, new_value: ValueIn) Error!Pid {
             const acc = self.model.getAccessor();
             const n = try leaf.size();
@@ -286,6 +289,8 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             return sibling.id();
         }
 
+        // TODO: Here we dont copy values. So it's not as heavy as splitLeaf.
+        //  But we still need to copy mbrs. Can we avoid that?
         fn splitInode(self: *Self, inode: *Inode, new_mbr: Key, new_child: Pid) Error!Pid {
             const acc = self.model.getAccessor();
             const n = try inode.size();
@@ -392,6 +397,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         }
 
         // ---- delete ---- //
+        // TODO: Same as Frame.
         const Hit = struct {
             leaf_id: Pid,
             entry_idx: usize,

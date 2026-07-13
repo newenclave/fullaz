@@ -1,6 +1,12 @@
 const std = @import("std");
 const helpers = @import("../contracts/interfaces.zig");
 
+pub fn assertMbrGetter(comptime MG: type, comptime Key: type) void {
+    helpers.requiresFnSignature(MG, "get", fn (*const MG, usize) Key);
+    helpers.requiresFnSignature(MG, "set", fn (*MG, usize, Key) void);
+    helpers.requiresFnSignature(MG, "len", fn (*const MG) usize);
+}
+
 pub fn assertStrategy(comptime Strategy: type, comptime Key: type) void {
     if (!@hasDecl(Strategy, "wants_reinsert")) {
         @compileError("Strategy missing decl: wants_reinsert");

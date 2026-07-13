@@ -118,6 +118,20 @@ pub fn PagedModel(
             return view.erase(pos);
         }
 
+        pub fn compact(self: *Self) Error!void {
+            var view = MutView.init(try self.handle.getDataMut());
+            var ph = self.ctx.cache.getTemporaryPage() catch {
+                view.compactInPlace();
+                return;
+            };
+            defer ph.deinit();
+            const data = ph.getDataMut() catch {
+                view.compactInPlace();
+                return;
+            };
+            view.compactInPlace(data);
+        }
+
         pub fn clear(self: *Self) Error!void {
             var view = MutView.init(try self.handle.getDataMut());
             return view.clear();
