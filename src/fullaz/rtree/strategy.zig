@@ -128,6 +128,8 @@ pub fn GuttmanStrategy(comptime Key: type) type {
             }
         }
 
+        pub fn reinsertOrder(_: []const Key, _: Key, _: []usize) void {}
+
         fn waste(a: *const Key, b: *const Key) Coord {
             return a.merged(b).measure() - a.measure() - b.measure();
         }

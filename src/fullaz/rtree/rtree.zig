@@ -17,7 +17,7 @@ pub fn RStarTree(comptime ModelT: type) type {
     return tree.Tree(ModelT, RStarStrategy);
 }
 
-// R*-tree = hybrid strategy. without reinsertion of underfull leaves.
+// R*-tree = hybrid strategy. without reinsertion.
 pub fn RStarHybridTree(comptime ModelT: type) type {
     return tree.Tree(ModelT, strategy.HybridStrategy);
 }
