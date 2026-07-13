@@ -29,7 +29,7 @@ pub fn Galaxy(comptime PageCacheType: type, comptime RStar: bool) type {
         constants.max_value_size,
         constants.endian,
     );
-    const Tree = if (RStar) rtree.RStarTree(Model) else rtree.RTree(Model);
+    const Tree = if (RStar) rtree.RStarHybridTree(Model) else rtree.RTree(Model);
     const Key = Model.KeyType;
 
     return struct {

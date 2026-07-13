@@ -346,3 +346,44 @@ pub fn RStarStrategy(comptime Key: type) type {
         }
     };
 }
+
+pub fn HybridStrategyBase(
+    comptime Key: type,
+    comptime ChooseStrategyT: fn (comptime Key: type) type,
+    comptime ReinsertStrategyT: fn (comptime Key: type) type,
+    comptime SplitStrategyT: fn (comptime Key: type) type,
+) type {
+    comptime {
+        assertStrategy(ChooseStrategyT(Key), Key);
+        assertStrategy(ReinsertStrategyT(Key), Key);
+        assertStrategy(SplitStrategyT(Key), Key);
+    }
+
+    return struct {
+        pub const ChooseStrategy = ChooseStrategyT(Key);
+        pub const ReinsertStrategy = ReinsertStrategyT(Key);
+        pub const SplitStrategy = SplitStrategyT(Key);
+        pub const wants_reinsert = ReinsertStrategy.wants_reinsert;
+
+        pub fn chooseSubtree(child_mbrs: []const Key, entry: Key, children_are_leaves: bool) usize {
+            return ChooseStrategy.chooseSubtree(child_mbrs, entry, children_are_leaves);
+        }
+
+        pub fn splitEntries(mbrs: []const Key, min_fill: usize, assignment: []u8) void {
+            SplitStrategy.splitEntries(mbrs, min_fill, assignment);
+        }
+
+        pub fn reinsertOrder(mbrs: []const Key, node_mbr: Key, out: []usize) void {
+            ReinsertStrategy.reinsertOrder(mbrs, node_mbr, out);
+        }
+    };
+}
+
+pub fn HybridStrategy(comptime Key: type) type {
+    return HybridStrategyBase(
+        Key,
+        RStarStrategy,
+        GuttmanStrategy,
+        RStarStrategy,
+    );
+}
