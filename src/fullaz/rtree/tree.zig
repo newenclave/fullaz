@@ -183,19 +183,19 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             }
         }
 
-        // TODO: again. do we need here vals? We can use them right from the leaf.
+        // In place: keep the nearest entries where they sit, eject the farthest
+        // ~30% for reinsertion from the root. Only the EJECTED values are copied
+        // out (they must outlive this leaf: see ctx/drainReinserts);
         fn reinsertLeaf(self: *Self, leaf: *Leaf, new_mbr: Key, new_value: ValueIn, ctx: *InsertCtx) Error!void {
             const n = try leaf.size();
+            const total = n + 1;
+
             var mbrs: [Max + 1]Key = undefined;
-            var vals: [Max + 1]ValueBuf = undefined;
             var i: usize = 0;
             while (i < n) : (i += 1) {
                 mbrs[i] = try leaf.getMbr(i);
-                vals[i] = self.model.copyValueOut(try leaf.getValue(i));
             }
             mbrs[n] = new_mbr;
-            vals[n] = self.model.copyValueOut(new_value);
-            const total = n + 1;
 
             var node_mbr = mbrs[0];
             i = 1;
@@ -207,31 +207,48 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             Strategy.reinsertOrder(mbrs[0..total], node_mbr, order[0..total]);
 
             const p = @max(1, (total * 3) / 10);
+            var eject = [_]bool{false} ** (Max + 1);
 
-            try leaf.clear();
-            i = p;
-            while (i < total) : (i += 1) {
-                try leaf.insertEntry(mbrs[order[i]], self.model.valueBufAsIn(&vals[order[i]]));
-            }
             i = 0;
             while (i < p) : (i += 1) {
-                ctx.pushValue(mbrs[order[i]], vals[order[i]]);
+                eject[order[i]] = true;
+            }
+
+            i = 0;
+            while (i < n) : (i += 1) {
+                if (eject[i]) {
+                    ctx.pushValue(mbrs[i], self.model.copyValueOut(try leaf.getValue(i)));
+                }
+            }
+
+            var cursor: usize = 0;
+            i = 0;
+            while (i < n) : (i += 1) {
+                if (eject[i]) {
+                    try leaf.erase(i - cursor);
+                    cursor += 1;
+                }
+            }
+            try leaf.compact();
+
+            if (eject[n]) {
+                ctx.pushValue(new_mbr, self.model.copyValueOut(new_value));
+            } else {
+                try leaf.insertEntry(new_mbr, new_value);
             }
         }
 
-        // TODO: Not so heavy as with the leafs. ?
-        fn reinsertInode(_: *Self, inode: anytype, new_mbr: Key, new_child: Pid, ctx: *InsertCtx) Error!void {
+        // Same in place
+        fn reinsertInode(_: *Self, inode: *Inode, new_mbr: Key, new_child: Pid, ctx: *InsertCtx) Error!void {
             const n = try inode.size();
+            const total = n + 1;
+
             var mbrs: [Max + 1]Key = undefined;
-            var kids: [Max + 1]Pid = undefined;
             var i: usize = 0;
             while (i < n) : (i += 1) {
                 mbrs[i] = try inode.getMbr(i);
-                kids[i] = try inode.getChild(i);
             }
             mbrs[n] = new_mbr;
-            kids[n] = new_child;
-            const total = n + 1;
 
             var node_mbr = mbrs[0];
             i = 1;
@@ -245,21 +262,36 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             const p = @max(1, (total * 3) / 10);
             const level = try inode.getLevel();
 
-            try inode.clear();
-            i = p;
-            while (i < total) : (i += 1) {
-                try inode.insertChild(mbrs[order[i]], kids[order[i]]);
-            }
+            var eject = [_]bool{false} ** (Max + 1);
             i = 0;
             while (i < p) : (i += 1) {
-                ctx.pushSubtree(mbrs[order[i]], kids[order[i]], level - 1);
+                eject[order[i]] = true;
+            }
+
+            i = 0;
+            while (i < n) : (i += 1) {
+                if (eject[i]) {
+                    ctx.pushSubtree(mbrs[i], try inode.getChild(i), level - 1);
+                }
+            }
+            var cursor: usize = 0;
+            i = 0;
+            while (i < n) : (i += 1) {
+                if (eject[i]) {
+                    try inode.erase(i - cursor);
+                    cursor += 1;
+                }
+            }
+            try inode.compact();
+
+            if (eject[n]) {
+                ctx.pushSubtree(new_mbr, new_child, level - 1);
+            } else {
+                try inode.insertChild(new_mbr, new_child);
             }
         }
 
-        // Split in place: gather only the MBRs (cheap) for the strategy, then MOVE
-        // the group-1 entries straight into the sibling and erase them from the
-        // node. Values never leave the pages (no ValueBuf, no clear()) — they are
-        // copied page→page by the sibling's insertEntry while the node is intact.
+        // Split in place: We dont need buffers for values anymore
         fn splitLeaf(self: *Self, leaf: *Leaf, new_mbr: Key, new_value: ValueIn) Error!Pid {
             const acc = self.model.getAccessor();
             const n = try leaf.size();
@@ -278,14 +310,14 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             var sibling = try acc.createLeaf();
             defer acc.deinitLeaf(sibling);
 
-            // Copy the group-1 entries into the sibling (leaf still intact).
             i = 0;
             while (i < n) : (i += 1) {
                 if (assign[i] != 0) {
                     try sibling.insertEntry(mbrs[i], self.model.valueOutAsIn(try leaf.getValue(i)));
                 }
             }
-            // Now erase them from the leaf; indices shift left as we remove.
+
+            // erasing the moved values
             var cursor: usize = 0;
             i = 0;
             while (i < n) : (i += 1) {
@@ -295,7 +327,8 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 }
             }
             try leaf.compact();
-            // Place the new entry on its assigned side.
+
+            // the new value.
             if (assign[n] != 0) {
                 try sibling.insertEntry(new_mbr, new_value);
             } else {
@@ -304,8 +337,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             return sibling.id();
         }
 
-        // Same in-place move for inodes (children are just page ids — no value
-        // bytes to move, so this was always the light case).
+        // Same in-place move for inodes
         fn splitInode(self: *Self, inode: *Inode, new_mbr: Key, new_child: Pid) Error!Pid {
             const acc = self.model.getAccessor();
             const n = try inode.size();
@@ -340,7 +372,6 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                     cursor += 1;
                 }
             }
-
             try inode.compact();
             if (assign[n] != 0) {
                 try sibling.insertChild(new_mbr, new_child);
