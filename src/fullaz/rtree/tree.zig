@@ -519,9 +519,9 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         fn condenseTree(self: *Self, path: *Path, leaf_id: Pid) Error!void {
             const acc = self.model.getAccessor();
 
-            var v_mbr: [Max]Key = undefined;
-            var v_val: [Max]ValueBuf = undefined;
-            var vn: usize = 0;
+            // The one under-full leaf is detached but NOT destroyed
+            // the  page stays valid and we reinsert its entries straight from it.
+            var orphan_leaf: ?Pid = null;
 
             var s_mbr: [orphan_cap]Key = undefined;
             var s_id: [orphan_cap]Pid = undefined;
@@ -535,13 +535,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 var leaf = (try acc.loadLeaf(leaf_id)).?;
                 defer acc.deinitLeaf(leaf);
                 if ((path.len > 0) and (try leaf.size()) < min_fill) {
-                    const n = try leaf.size();
-                    var i: usize = 0;
-                    while (i < n) : (i += 1) {
-                        v_mbr[vn] = try leaf.getMbr(i);
-                        v_val[vn] = self.model.copyValueOut(try leaf.getValue(i));
-                        vn += 1;
-                    }
+                    orphan_leaf = leaf_id;
                     remove_child = true;
                 }
             }
@@ -553,7 +547,10 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
 
                 if (remove_child) {
                     try parent.erase(frame.idx);
-                    try acc.destroy(child_id);
+                    // destoy only inodes, leaves should be valid for further reinsertion
+                    if (!(try acc.isLeafId(child_id))) {
+                        try acc.destroy(child_id);
+                    }
                 } else {
                     try parent.updateChildMbr(frame.idx, try self.nodeMbrOf(child_id));
                 }
@@ -610,14 +607,17 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                     try self.insertSubtree(s_mbr[oi], s_id[oi], s_lvl[oi], &ins_ctx);
                 }
             }
-            {
+            if (orphan_leaf) |olid| {
+                var leaf = (try acc.loadLeaf(olid)).?; // must be alive here
+                const n = try leaf.size();
                 var i: usize = 0;
-                while (i < vn) : (i += 1) {
-                    try self.insertValue(v_mbr[i], self.model.valueBufAsIn(&v_val[i]), &ins_ctx);
+                while (i < n) : (i += 1) {
+                    try self.insertValue(try leaf.getMbr(i), self.model.valueOutAsIn(try leaf.getValue(i)), &ins_ctx);
                 }
+                acc.deinitLeaf(leaf);
+                try acc.destroy(olid);
             }
 
-            // Flush any forced-reinsert cascades those reinserts triggered.
             try self.drainReinserts(&ins_ctx);
 
             while (true) {
