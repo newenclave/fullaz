@@ -453,6 +453,7 @@ pub fn Model(
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
         pub const AccessorType = AccessorImpl;
+        pub const max_entries: usize = max_entries_v;
 
         accessor: AccessorImpl,
 
@@ -485,6 +486,10 @@ pub fn Model(
         pub fn isValidId(self: *const Self, id: ?Pid) bool {
             const pid = id orelse return false;
             return pid < self.accessor.values.items.len;
+        }
+
+        pub fn maxEntries(_: *const Self) usize {
+            return max_entries_v;
         }
     };
 }

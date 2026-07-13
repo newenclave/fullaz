@@ -419,5 +419,10 @@ pub fn PagedModel(
             const pid = id orelse return false;
             return pid != std.math.maxInt(NodeIdType);
         }
+
+        // TODO: needs to be calculated?
+        pub fn maxEntries(_: *const Self) usize {
+            return max_entries_v;
+        }
     };
 }
