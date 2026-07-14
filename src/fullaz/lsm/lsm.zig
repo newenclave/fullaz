@@ -1,5 +1,6 @@
 pub const value = @import("value.zig");
 pub const strategy = @import("strategy.zig");
+pub const bloom = @import("bloom.zig");
 
 pub const memtable = struct {
     const sorted_vector = @import("memtable/sorted_vector.zig");
