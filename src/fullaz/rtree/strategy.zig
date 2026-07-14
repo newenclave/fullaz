@@ -24,6 +24,19 @@ pub fn assertStrategy(comptime Strategy: type, comptime Key: type) void {
     assertReinsertStrategy(Strategy, Key);
 }
 
+pub fn NoReinsertStrategy(comptime Key: type) type {
+    return struct {
+        pub const wants_reinsert = false;
+
+        pub fn reinsertOrder(mbrs: []const Key, node_mbr: Key, out: []usize) void {
+            _ = mbrs;
+            _ = node_mbr;
+            _ = out;
+            @panic("This strategy does not support reinsertion. Must not be called.");
+        }
+    };
+}
+
 // the very original Guttman R-tree strategy, with quadratic split and no reinsert
 pub fn GuttmanStrategy(comptime Key: type) type {
     const Coord = Key.Coord;
@@ -127,8 +140,6 @@ pub fn GuttmanStrategy(comptime Key: type) type {
                 assigned += 1;
             }
         }
-
-        pub fn reinsertOrder(_: []const Key, _: Key, _: []usize) void {}
 
         fn waste(a: *const Key, b: *const Key) Coord {
             return a.merged(b).measure() - a.measure() - b.measure();
@@ -397,7 +408,7 @@ pub fn HybridStrategy(comptime Key: type) type {
     return HybridStrategyBase(
         Key,
         RStarStrategy,
-        GuttmanStrategy,
+        NoReinsertStrategy,
         RStarStrategy,
     );
 }
