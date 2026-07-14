@@ -84,7 +84,22 @@ pub fn wyHash(_: void, key: []const u8, seed: u64) !u64 {
     return std.hash.Wyhash.hash(seed, key);
 }
 
-pub fn BloomImpl(comptime HashType: type, comptime hash_call: anytype, comptime HashCtx: type) type {
+fn intCastOrTruncate(comptime T: type, value: anytype) T {
+    const Source = @TypeOf(value);
+
+    return if (@bitSizeOf(T) < @bitSizeOf(Source))
+        @truncate(value)
+    else
+        @intCast(value);
+}
+
+pub fn BloomImpl(
+    comptime HashType: type,
+    comptime hash_call: anytype,
+    comptime HashCtx: type,
+    comptime seed1: HashType,
+    comptime seed2: HashType,
+) type {
     return struct {
         const Self = @This();
 
@@ -107,9 +122,9 @@ pub fn BloomImpl(comptime HashType: type, comptime hash_call: anytype, comptime 
             self.* = undefined;
         }
 
-        fn initHashes(self: *const Self, key: []const u8, seed1: HashType, seed2: HashType) HashSet {
-            const h1 = hash_call(self.ctx, key, seed1) catch unreachable;
-            const h2 = hash_call(self.ctx, key, seed2) catch unreachable;
+        fn initHashes(self: *const Self, key: []const u8, s1: HashType, s2: HashType) HashSet {
+            const h1 = hash_call(self.ctx, key, s1) catch unreachable;
+            const h2 = hash_call(self.ctx, key, s2) catch unreachable;
             return .{ h1, h2 };
         }
 
@@ -132,7 +147,7 @@ pub fn BloomImpl(comptime HashType: type, comptime hash_call: anytype, comptime 
             if (nbits == 0) {
                 return;
             }
-            const h = self.initHashes(key, seed_a, seed_b);
+            const h = self.initHashes(key, seed1, seed2);
             var i: usize = 0;
             while (i < k) : (i += 1) {
                 bits.set(combineHashes(h, i, nbits)) catch unreachable;
@@ -144,7 +159,7 @@ pub fn BloomImpl(comptime HashType: type, comptime hash_call: anytype, comptime 
             if (nbits == 0) {
                 return true;
             }
-            const h = self.initHashes(key, seed_a, seed_b);
+            const h = self.initHashes(key, seed1, seed2);
             var i: usize = 0;
             while (i < k) : (i += 1) {
                 if (!bits.isSet(combineHashes(h, i, nbits))) {
@@ -156,4 +171,4 @@ pub fn BloomImpl(comptime HashType: type, comptime hash_call: anytype, comptime 
     };
 }
 
-pub const Bloom = BloomImpl(u64, wyHash, void);
+pub const Bloom = BloomImpl(u64, wyHash, void, seed_a, seed_b);

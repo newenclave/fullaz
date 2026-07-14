@@ -140,16 +140,20 @@ test "LSM bloom: false-positive rate stays near target; BloomImpl with context" 
     var f = try Filter.init(alloc, n, 0.01);
     defer f.deinit(alloc);
 
+    // u32 just to check different types.
     const Context = struct {
         const Self = @This();
         enter: usize = 0,
-        fn hash(self: *Self, key: []const u8, seed: u64) !u64 {
+        fn hash(self: *Self, key: []const u8, seed: u32) !u32 {
             self.enter += 1;
-            return std.hash.Wyhash.hash(seed, key);
+            return @truncate(std.hash.Wyhash.hash(seed, key));
         }
     };
 
-    const BloomImplWithContext = bloom.BloomImpl(u64, Context.hash, *Context);
+    const seed_a: u32 = 0x7f4a7c15;
+    const seed_b: u32 = 0x27d4eb4f;
+
+    const BloomImplWithContext = bloom.BloomImpl(u32, Context.hash, *Context, seed_a, seed_b);
 
     var ctx = Context{};
 
