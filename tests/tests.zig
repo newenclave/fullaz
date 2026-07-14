@@ -35,4 +35,5 @@ test {
     _ = @import("rtree_delete.zig");
     _ = @import("rtree_paged.zig");
     _ = @import("lsm_value.zig");
+    _ = @import("lsm_memtable.zig");
 }

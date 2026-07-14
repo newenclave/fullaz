@@ -76,3 +76,11 @@ pub const BptError = error{
     NotEnoughTemporaryBuffer,
     NotEnoughSpaceForUpdate,
 };
+
+pub const LsmError = error{
+    TooManySSTables,
+    NotAscending,
+    ValueTooLargeForPage,
+    Corrupt,
+    BadManifest,
+};
