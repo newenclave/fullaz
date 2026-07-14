@@ -7,9 +7,13 @@ const Star = galaxy.starfield.Star;
 
 const Device = fullaz.device.MemoryBlock(u32);
 const PageCache = fullaz.storage.page_cache.PageCache(Device);
-const G = galaxy.Galaxy(PageCache, true);
-const GGuttman = galaxy.Galaxy(PageCache, false);
-const Key = G.KeyType;
+
+// One Galaxy type per insertion strategy. All three share the same page layout
+// and Key, so JS can rebuild the world under any of them on the same seed.
+const GGuttman = galaxy.Galaxy(PageCache, .guttman);
+const GLinear = galaxy.Galaxy(PageCache, .linear);
+const GHybrid = galaxy.Galaxy(PageCache, .hybrid);
+const Key = GHybrid.KeyType;
 
 // Freestanding wasm has no default panic handler (the std one needs the OS).
 // Trap on panic — the JS side sees the instance abort.
@@ -23,9 +27,13 @@ pub const panic = std.debug.FullPanic(struct {
 // (backed by @wasmMemoryGrow) — the "proper allocator" a browser build needs.
 const gpa = std.heap.wasm_allocator;
 
+// The active world. Every variant is a Galaxy differing only in its comptime
+// strategy, so field/method names line up and `inline else` dispatches to all
+// three with a single arm.
 const GameUnion = union(enum) {
-    G: G,
-    GGut: GGuttman,
+    guttman: GGuttman,
+    linear: GLinear,
+    hybrid: GHybrid,
 };
 
 var device: Device = undefined;
@@ -51,23 +59,25 @@ fn teardown() void {
         return;
     }
     switch (game) {
-        .G => game.G.deinit(),
-        .GGut => game.GGut.deinit(),
+        inline else => |*g| g.deinit(),
     }
     cache.deinit();
     device.deinit();
     ready = false;
 }
 
-export fn init(seed: u32, use_rstar: bool) void {
+// strat: 0 = Guttman, 1 = Linear, 2 = Hybrid (R* choose+split, no reinsert).
+export fn init(seed: u32, strat: u32) void {
     teardown();
     device = Device.init(gpa, constants.default_block_size) catch @trap();
     cache = PageCache.init(&device, gpa, constants.cache_frames) catch @trap();
     const spawn = deriveSpawn(seed);
-    game = if (use_rstar)
-        .{ .G = G.format(gpa, &cache, @intCast(constants.default_block_size), seed, spawn[0], spawn[1]) catch @trap() }
-    else
-        .{ .GGut = GGuttman.format(gpa, &cache, @intCast(constants.default_block_size), seed, spawn[0], spawn[1]) catch @trap() };
+    const bs: u32 = @intCast(constants.default_block_size);
+    game = switch (strat) {
+        1 => .{ .linear = GLinear.format(gpa, &cache, bs, seed, spawn[0], spawn[1]) catch @trap() },
+        2 => .{ .hybrid = GHybrid.format(gpa, &cache, bs, seed, spawn[0], spawn[1]) catch @trap() },
+        else => .{ .guttman = GGuttman.format(gpa, &cache, bs, seed, spawn[0], spawn[1]) catch @trap() },
+    };
     ready = true;
     snapshot();
 }
@@ -82,8 +92,7 @@ export fn move(dir: u32) u32 {
         else => .west,
     };
     const created = switch (game) {
-        .G => game.G.move(d) catch return 0,
-        .GGut => game.GGut.move(d) catch return 0,
+        inline else => |*g| g.move(d) catch return 0,
     };
     snapshot();
     return @intCast(created);
@@ -95,8 +104,7 @@ export fn panBy(dx: f64, dy: f64) u32 {
         return 0;
     }
     const created = switch (game) {
-        .G => game.G.moveBy(dx, dy) catch return 0,
-        .GGut => game.GGut.moveBy(dx, dy) catch return 0,
+        inline else => |*g| g.moveBy(dx, dy) catch return 0,
     };
     snapshot();
     return @intCast(created);
@@ -129,29 +137,16 @@ export fn snapshot() void {
         return;
     }
     star_count = 0;
-
-    var c = Collector{
-        .lx = switch (game) {
-            .G => game.G.px - game.G.view_w / 2,
-            .GGut => game.GGut.px - game.GGut.view_w / 2,
-        },
-        .ly = switch (game) {
-            .G => game.G.py - game.G.view_h / 2,
-            .GGut => game.GGut.py - game.GGut.view_h / 2,
-        },
-        .vw = switch (game) {
-            .G => game.G.view_w,
-            .GGut => game.GGut.view_w,
-        },
-        .vh = switch (game) {
-            .G => game.G.view_h,
-            .GGut => game.GGut.view_h,
-        },
-    };
-
     switch (game) {
-        .G => game.G.queryViewport(&c, Collector.cb) catch {},
-        .GGut => game.GGut.queryViewport(&c, Collector.cb) catch {},
+        inline else => |*g| {
+            var c = Collector{
+                .lx = g.px - g.view_w / 2,
+                .ly = g.py - g.view_h / 2,
+                .vw = g.view_w,
+                .vh = g.view_h,
+            };
+            g.queryViewport(&c, Collector.cb) catch {};
+        },
     }
 }
 
@@ -162,32 +157,28 @@ export fn starsCount() u32 {
     return @intCast(star_count);
 }
 export fn playerX() f64 {
-    const px = switch (game) {
-        .G => game.G.px,
-        .GGut => game.GGut.px,
+    if (!ready) return 0;
+    return switch (game) {
+        inline else => |*g| g.px,
     };
-    return if (ready) px else 0;
 }
 export fn playerY() f64 {
-    const py = switch (game) {
-        .G => game.G.py,
-        .GGut => game.GGut.py,
+    if (!ready) return 0;
+    return switch (game) {
+        inline else => |*g| g.py,
     };
-    return if (ready) py else 0;
 }
 export fn viewW() f64 {
-    const view_w = switch (game) {
-        .G => game.G.view_w,
-        .GGut => game.GGut.view_w,
+    if (!ready) return constants.view_w;
+    return switch (game) {
+        inline else => |*g| g.view_w,
     };
-    return if (ready) view_w else constants.view_w;
 }
 export fn viewH() f64 {
-    const view_h = switch (game) {
-        .G => game.G.view_h,
-        .GGut => game.GGut.view_h,
+    if (!ready) return constants.view_h;
+    return switch (game) {
+        inline else => |*g| g.view_h,
     };
-    return if (ready) view_h else constants.view_h;
 }
 
 const min_zoom = 0.25;
@@ -198,8 +189,7 @@ export fn setZoom(z: f64) u32 {
     }
     const zc = std.math.clamp(z, min_zoom, max_zoom);
     const created = switch (game) {
-        .G => game.G.setView(constants.view_w * zc, constants.view_h * zc) catch return 0,
-        .GGut => game.GGut.setView(constants.view_w * zc, constants.view_h * zc) catch return 0,
+        inline else => |*g| g.setView(constants.view_w * zc, constants.view_h * zc) catch return 0,
     };
     snapshot();
     return @intCast(created);
@@ -210,19 +200,18 @@ export fn setZoom(z: f64) u32 {
 // Every star ever generated is a live R-tree entry (insert-only), so the id
 // counter is the total star count.
 export fn totalStars() u32 {
-    const created = switch (game) {
-        .G => game.G.star_counter,
-        .GGut => game.GGut.star_counter,
+    if (!ready) return 0;
+    return switch (game) {
+        inline else => |*g| g.star_counter,
     };
-    return if (ready) created else 0;
 }
 // R-tree depth: 0 = a single leaf, higher once it has split into inner levels.
 export fn treeHeight() u32 {
+    if (!ready) return 0;
     const height = switch (game) {
-        .G => game.G.tree.height() catch 0,
-        .GGut => game.GGut.tree.height() catch 0,
+        inline else => |*g| g.tree.height() catch 0,
     };
-    return if (ready) @intCast(height) else 0;
+    return @intCast(height);
 }
 // Pages the device has handed out: the superblock plus every leaf/inode page.
 export fn blocksAllocated() u32 {
@@ -267,8 +256,7 @@ export fn snapshotBoxes() void {
     }
     var c = BoxCollector{};
     switch (game) {
-        .G => game.G.walkNodes(&c, BoxCollector.cb) catch {},
-        .GGut => game.GGut.walkNodes(&c, BoxCollector.cb) catch {},
+        inline else => |*g| g.walkNodes(&c, BoxCollector.cb) catch {},
     }
 }
 export fn boxesPtr() usize {

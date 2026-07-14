@@ -10,7 +10,13 @@ const Star = starfield.Star;
 
 pub const Direction = enum { north, south, east, west };
 
-pub fn Galaxy(comptime PageCacheType: type, comptime RStar: bool) type {
+pub const StrategyKind = enum {
+    guttman,
+    linear,
+    hybrid,
+};
+
+pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
     const Storage = storage.RootStorage(PageCacheType);
 
     const PageId = PageCacheType.Pid;
@@ -29,13 +35,23 @@ pub fn Galaxy(comptime PageCacheType: type, comptime RStar: bool) type {
         constants.max_value_size,
         constants.endian,
     );
-    const Tree = if (RStar) rtree.RStarHybridTree(Model) else rtree.RTree(Model);
+    const Tree = switch (kind) {
+        .guttman => rtree.RTree(Model),
+        .linear => rtree.RLinearTree(Model),
+        .hybrid => rtree.RStarHybridTree(Model),
+    };
     const Key = Model.KeyType;
 
     return struct {
         const Self = @This();
 
         pub const KeyType = Key;
+        pub const strategy_kind = kind;
+        pub const strategy_name: []const u8 = switch (kind) {
+            .guttman => "Guttman R-tree",
+            .linear => "Linear R-tree",
+            .hybrid => "R*-tree (hybrid)",
+        };
 
         gpa: std.mem.Allocator,
         cache: *PageCacheType,

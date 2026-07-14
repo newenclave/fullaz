@@ -6,3 +6,4 @@ const galaxy = @import("galaxy.zig");
 
 pub const Galaxy = galaxy.Galaxy;
 pub const Direction = galaxy.Direction;
+pub const StrategyKind = galaxy.StrategyKind;

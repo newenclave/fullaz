@@ -37,7 +37,7 @@
   <span id="msg"></span>
   <span class="hint">strategy</span>
   <span class="seg">
-    <button id="rstar" class="on">R*</button><button id="guttman">Guttman</button>
+    <button id="hybrid" class="on">R*</button><button id="linear">Linear</button><button id="guttman">Guttman</button>
   </span>
   <button id="new">new galaxy</button>
 </div>
@@ -48,7 +48,9 @@ const hud = document.getElementById("hud");
 const msg = document.getElementById("msg");
 const mapCanvas = document.getElementById("map");
 const mctx = mapCanvas.getContext("2d");
-let wasm = null, seed = 0, dpr = 1, useRStar = true;
+// strategy: 0 = Guttman, 1 = Linear, 2 = Hybrid (R* choose+split, no reinsert).
+const STRATS = ["Guttman R-tree", "Linear R-tree", "R*-tree (hybrid)"];
+let wasm = null, seed = 0, dpr = 1, strat = 2;
 let mapBoxes = null, mapExt = null;
 
 function resize() {
@@ -160,10 +162,10 @@ function draw(t) {
   const kib = (pages * ex.pageBytes() / 1024).toFixed(1);
   const L = (s) => s.padEnd(14);
   hud.innerHTML =
-    `<b>fullaz · galaxy</b>  <span class="hint">wasm · paged R*-tree</span>\n\n` +
+    `<b>fullaz · galaxy</b>  <span class="hint">wasm · paged R-tree</span>\n\n` +
     L("position")     + `(${ex.playerX().toFixed(1)}, ${ex.playerY().toFixed(1)})\n` +
     L("viewport")     + `${ex.viewW().toFixed(0)}×${ex.viewH().toFixed(0)}   ·   zoom ${zoom.toFixed(2)}×   ·   in view: ${n}\n` +
-    L("strategy")     + `${useRStar ? "R*-tree" : "Guttman R-tree"}\n\n` +
+    L("strategy")     + `${STRATS[strat]}\n\n` +
     L("total stars")  + `${ex.totalStars()}\n` +
     L("R-tree depth") + `${ex.treeHeight()} level(s)\n` +
     L("pages")        + `${pages}  (${kib} KiB on device)\n` +
@@ -260,27 +262,31 @@ window.addEventListener("touchend", (e) => {
 function newGalaxy() {
   if (!wasm) return;
   seed = (Math.random() * 4294967296) >>> 0;
-  wasm.exports.init(seed, useRStar ? 1 : 0);
+  wasm.exports.init(seed, strat);
   zoom = 1.0;
   refreshMap();
   msg.textContent = "";
 }
 document.getElementById("new").addEventListener("click", newGalaxy);
 
-// Flip the insertion strategy on the SAME seed — same stars, different tree, so
-// the minimap shows how R* vs Guttman partition the identical star field.
-function setStrategy(rstar) {
-  useRStar = rstar;
-  document.getElementById("rstar").classList.toggle("on", rstar);
-  document.getElementById("guttman").classList.toggle("on", !rstar);
+// Rebuild the world under a different insertion strategy on the SAME seed — same
+// stars, different tree, so the minimap shows how each strategy partitions the
+// identical star field.
+const STRAT_BTNS = { 0: "guttman", 1: "linear", 2: "hybrid" };
+function setStrategy(s) {
+  strat = s;
+  for (const [k, id] of Object.entries(STRAT_BTNS)) {
+    document.getElementById(id).classList.toggle("on", Number(k) === s);
+  }
   if (!wasm) return;
-  wasm.exports.init(seed, rstar ? 1 : 0);
+  wasm.exports.init(seed, strat);
   zoom = 1.0;
   refreshMap();
-  msg.textContent = rstar ? "R*-tree" : "Guttman R-tree";
+  msg.textContent = STRATS[s];
 }
-document.getElementById("rstar").addEventListener("click", () => setStrategy(true));
-document.getElementById("guttman").addEventListener("click", () => setStrategy(false));
+document.getElementById("hybrid").addEventListener("click", () => setStrategy(2));
+document.getElementById("linear").addEventListener("click", () => setStrategy(1));
+document.getElementById("guttman").addEventListener("click", () => setStrategy(0));
 
 async function boot() {
   resize();
