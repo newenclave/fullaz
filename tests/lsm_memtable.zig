@@ -1,7 +1,9 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
+const algorithm = fullaz.core.algorithm;
 const strategy = fullaz.lsm.strategy;
 const SortedVector = fullaz.lsm.memtable.SortedVector;
+const SortedVectorImpl = fullaz.lsm.memtable.SortedVectorImpl;
 
 test "LSM memtable: SortedVector satisfies the memtable contract" {
     comptime strategy.assertMemtable(SortedVector);
@@ -76,6 +78,43 @@ test "LSM memtable: seek positions at first key >= target" {
     var it3 = try mt.seek("z");
     defer it3.deinit();
     try std.testing.expectEqual(@as(?strategy.Entry, null), try it3.peek());
+}
+
+test "LSM memtable: custom comparator context flows into ordering" {
+    const Ctx = struct { reverse: bool };
+    const revCmp = struct {
+        fn cmp(ctx: Ctx, a: []const u8, b: []const u8) algorithm.Order {
+            const o = algorithm.cmpSlices(u8, a, b, algorithm.CmpNum(u8).asc, {}) catch unreachable;
+            if (!ctx.reverse) {
+                return o;
+            }
+            return switch (o) {
+                .lt => .gt,
+                .gt => .lt,
+                else => o,
+            };
+        }
+    }.cmp;
+    const RevVector = SortedVectorImpl(revCmp, Ctx);
+
+    var mt = try RevVector.initWithContext(std.testing.allocator, .{ .reverse = true });
+    defer mt.deinit();
+
+    try mt.put("a", "1");
+    try mt.put("c", "3");
+    try mt.put("b", "2");
+
+    var it = try mt.iterator();
+    defer it.deinit();
+    const want = [_][]const u8{ "c", "b", "a" };
+    var i: usize = 0;
+    while (try it.peek()) |e| : (try it.advance()) {
+        try std.testing.expectEqualSlices(u8, want[i], e.key);
+        i += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), i);
+
+    try std.testing.expectEqualSlices(u8, "2", (try mt.get("b")).?);
 }
 
 test "LSM memtable: reset clears entries and stays usable" {

@@ -7,14 +7,14 @@ const Rec = struct {
     value: []u8,
 };
 
-fn keyOrder(a: []const u8, b: []const u8) algorithm.Order {
+fn keyOrder(_: void, a: []const u8, b: []const u8) algorithm.Order {
     return algorithm.cmpSlices(u8, a, b, algorithm.CmpNum(u8).asc, {}) catch unreachable;
 }
 
-pub fn SortedVectorImpl(comptime keyCmp: anytype) type {
+pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
     const cmpRecKeyImpl = struct {
-        fn cmp(_: void, rec: Rec, key: []const u8) algorithm.Order {
-            return keyCmp(rec.key, key);
+        fn cmp(ctx: CmpCtx, rec: Rec, key: []const u8) algorithm.Order {
+            return keyCmp(ctx, rec.key, key);
         }
     };
 
@@ -52,12 +52,23 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype) type {
         allocator: std.mem.Allocator,
         recs: Container,
         bytes: usize,
+        cmp_ctx: CmpCtx,
 
+        // Convenience for the common void-context case. Non-void contexts must go
+        // through initWithContext (there is no generic default value to invent).
         pub fn init(allocator: std.mem.Allocator) Error!Self {
+            if (CmpCtx != void) {
+                @compileError("SortedVectorImpl: a non-void context requires initWithContext");
+            }
+            return initWithContext(allocator, {});
+        }
+
+        pub fn initWithContext(allocator: std.mem.Allocator, cmp_ctx: CmpCtx) Error!Self {
             return .{
                 .allocator = allocator,
                 .recs = try Container.initCapacity(allocator, 4),
                 .bytes = 0,
+                .cmp_ctx = cmp_ctx,
             };
         }
 
@@ -75,7 +86,7 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype) type {
 
         pub fn put(self: *Self, key: []const u8, value: []const u8) Error!void {
             const pos = self.position(key);
-            if (pos < self.recs.items.len and keyOrder(self.recs.items[pos].key, key) == .eq) {
+            if (pos < self.recs.items.len and keyCmp(self.cmp_ctx, self.recs.items[pos].key, key) == .eq) {
                 const new_val = try self.allocator.dupe(u8, value);
                 const rec = &self.recs.items[pos];
                 self.bytes -= rec.value.len;
@@ -95,7 +106,7 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype) type {
 
         pub fn get(self: *const Self, key: []const u8) Error!?[]const u8 {
             const pos = self.position(key);
-            if (pos < self.recs.items.len and keyOrder(self.recs.items[pos].key, key) == .eq) {
+            if (pos < self.recs.items.len and keyCmp(self.cmp_ctx, self.recs.items[pos].key, key) == .eq) {
                 return self.recs.items[pos].value;
             }
             return null;
@@ -123,7 +134,7 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype) type {
                 self.recs.items,
                 key,
                 cmpRecKeyImpl.cmp,
-                {},
+                self.cmp_ctx,
             ) catch unreachable;
         }
 
@@ -136,4 +147,4 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype) type {
     };
 }
 
-pub const SortedVector = SortedVectorImpl(keyOrder);
+pub const SortedVector = SortedVectorImpl(keyOrder, void);
