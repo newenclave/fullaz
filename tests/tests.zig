@@ -34,4 +34,5 @@ test {
     _ = @import("rtree_linear.zig");
     _ = @import("rtree_delete.zig");
     _ = @import("rtree_paged.zig");
+    _ = @import("lsm_value.zig");
 }
