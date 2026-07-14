@@ -117,6 +117,28 @@ test "LSM memtable: custom comparator context flows into ordering" {
     try std.testing.expectEqualSlices(u8, "2", (try mt.get("b")).?);
 }
 
+test "LSM memtable: pointer context lets the comparator mutate shared state" {
+    const SortStat = struct { comparisons: usize = 0 };
+    const statCmp = struct {
+        fn cmp(ctx: *SortStat, a: []const u8, b: []const u8) algorithm.Order {
+            ctx.comparisons += 1;
+            return algorithm.cmpSlices(u8, a, b, algorithm.CmpNum(u8).asc, {}) catch unreachable;
+        }
+    }.cmp;
+    const StatVector = SortedVectorImpl(statCmp, *SortStat);
+
+    var stat = SortStat{};
+    var mt = try StatVector.initWithContext(std.testing.allocator, &stat);
+    defer mt.deinit();
+
+    try mt.put("b", "2");
+    try mt.put("a", "1");
+    try mt.put("c", "3");
+    _ = try mt.get("a"); // get takes *const Self, yet still mutates stat via the pointer
+
+    try std.testing.expect(stat.comparisons > 0);
+}
+
 test "LSM memtable: reset clears entries and stays usable" {
     var mt = try SortedVector.init(std.testing.allocator);
     defer mt.deinit();
