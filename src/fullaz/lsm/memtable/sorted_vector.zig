@@ -54,8 +54,7 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
         bytes: usize,
         cmp_ctx: CmpCtx,
 
-        // Convenience for the common void-context case. Non-void contexts must go
-        // through initWithContext (there is no generic default value to invent).
+        // Convenience for the common void-context case. Non-void contexts must use initWithContext.
         pub fn init(allocator: std.mem.Allocator) Error!Self {
             if (CmpCtx != void) {
                 @compileError("SortedVectorImpl: a non-void context requires initWithContext");
