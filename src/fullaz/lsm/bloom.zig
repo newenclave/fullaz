@@ -84,15 +84,6 @@ pub fn wyHash(_: void, key: []const u8, seed: u64) !u64 {
     return std.hash.Wyhash.hash(seed, key);
 }
 
-fn intCastOrTruncate(comptime T: type, value: anytype) T {
-    const Source = @TypeOf(value);
-
-    return if (@bitSizeOf(T) < @bitSizeOf(Source))
-        @truncate(value)
-    else
-        @intCast(value);
-}
-
 pub fn BloomImpl(
     comptime HashType: type,
     comptime hash_call: anytype,

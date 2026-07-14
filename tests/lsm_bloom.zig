@@ -81,7 +81,7 @@ test "LSM bloom: false-positive rate stays near target" {
     try std.testing.expect(false_pos * 100 < probes * 5);
 }
 
-test "LSM bloom: no false negatives for added keysö BloomImpl" {
+test "LSM bloom: no false negatives for added keys: BloomImpl" {
     const alloc = std.testing.allocator;
     const n = 1000;
     var f = try Filter.init(alloc, n, 0.01);
@@ -179,8 +179,5 @@ test "LSM bloom: false-positive rate stays near target; BloomImpl with context" 
     }
 
     try std.testing.expect(false_pos * 100 < probes * 5);
-
-    std.debug.print("hashes called: {d}\n", .{ctx.enter});
-
     try std.testing.expect(ctx.enter > 0);
 }
