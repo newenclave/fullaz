@@ -3,13 +3,19 @@ pub const BoundingBox = geometry.BoundingBox;
 pub const models = @import("models/models.zig");
 pub const strategy = @import("strategy.zig");
 pub const GuttmanStrategy = strategy.GuttmanStrategy;
+pub const LinearStrategy = strategy.LinearStrategy;
 pub const RStarStrategy = strategy.RStarStrategy;
 pub const tree = @import("tree.zig");
 pub const Tree = tree.Tree;
 
-// R-tree = the generic tree with the Guttman insertion strategy.
+// R-tree = the generic tree with the classic Guttman quadratic split strategy.
 pub fn RTree(comptime ModelT: type) type {
     return tree.Tree(ModelT, GuttmanStrategy);
+}
+
+// R-tree with Guttman cheaper linear-cost split (lower splitting quality).
+pub fn RLinearTree(comptime ModelT: type) type {
+    return tree.Tree(ModelT, LinearStrategy);
 }
 
 // R*-tree = the generic tree with the R* insertion strategy.

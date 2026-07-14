@@ -173,6 +173,140 @@ pub fn GuttmanStrategy(comptime Key: type) type {
     };
 }
 
+// Guttman linear split
+pub fn LinearStrategy(comptime Key: type) type {
+    const Coord = Key.Coord;
+    const dims = Key.Dim;
+
+    return struct {
+        pub const wants_reinsert = false;
+
+        pub const chooseSubtree = GuttmanStrategy(Key).chooseSubtree;
+
+        pub fn splitEntries(mbrs: []const Key, min_fill: usize, assignment: []u8) void {
+            const n = mbrs.len;
+            const unassigned: u8 = 2;
+            for (assignment) |*a| {
+                a.* = unassigned;
+            }
+
+            // LinearPickSeeds: on each axis take the two most-separated boxes
+            // (greatest low side vs least high side), normalise the gap by the
+            // axis extent, and seed from the axis with the largest normalised
+            // separation.
+            var s0: usize = 0;
+            var s1: usize = 1;
+            var best_norm: f64 = undefined;
+            var found = false;
+            var d: usize = 0;
+            while (d < dims) : (d += 1) {
+                var hi_low: usize = 0; // greatest low side
+                var lo_high: usize = 0; // least high side
+                var min_low: Coord = mbrs[0].low[d];
+                var max_high: Coord = mbrs[0].high[d];
+                var e: usize = 1;
+                while (e < n) : (e += 1) {
+                    if (mbrs[e].low[d] > mbrs[hi_low].low[d]) {
+                        hi_low = e;
+                    }
+                    if (mbrs[e].high[d] < mbrs[lo_high].high[d]) {
+                        lo_high = e;
+                    }
+                    if (mbrs[e].low[d] < min_low) {
+                        min_low = mbrs[e].low[d];
+                    }
+                    if (mbrs[e].high[d] > max_high) {
+                        max_high = mbrs[e].high[d];
+                    }
+                }
+                const sep = mbrs[hi_low].low[d] - mbrs[lo_high].high[d];
+                const width = max_high - min_low; // always >= 0
+                const norm = if (width != 0) toF64(sep) / toF64(width) else toF64(sep);
+                if (!found or norm > best_norm) {
+                    found = true;
+                    best_norm = norm;
+                    s0 = hi_low;
+                    s1 = lo_high;
+                }
+            }
+            if (s0 == s1) {
+                s1 = (s0 + 1) % n; // degenerate (e.g. all-equal boxes)
+            }
+
+            assignment[s0] = 0;
+            assignment[s1] = 1;
+            var mbr0 = mbrs[s0];
+            var mbr1 = mbrs[s1];
+            var cnt0: usize = 1;
+            var cnt1: usize = 1;
+            var assigned: usize = 2;
+
+            var e: usize = 0;
+            while (e < n) : (e += 1) {
+                if (assignment[e] != unassigned) {
+                    continue;
+                }
+                const remaining = n - assigned;
+                if (cnt0 + remaining <= min_fill) {
+                    assignRest(assignment, 0);
+                    return;
+                }
+                if (cnt1 + remaining <= min_fill) {
+                    assignRest(assignment, 1);
+                    return;
+                }
+
+                const d0 = mbr0.enlargement(&mbrs[e]);
+                const d1 = mbr1.enlargement(&mbrs[e]);
+                if (pickGroup(d0, d1, mbr0, mbr1, cnt0, cnt1) == 0) {
+                    assignment[e] = 0;
+                    mbr0 = mbr0.merged(&mbrs[e]);
+                    cnt0 += 1;
+                } else {
+                    assignment[e] = 1;
+                    mbr1 = mbr1.merged(&mbrs[e]);
+                    cnt1 += 1;
+                }
+                assigned += 1;
+            }
+        }
+
+        fn toF64(v: Coord) f64 {
+            return switch (@typeInfo(Coord)) {
+                .int => @floatFromInt(v),
+                .float => @floatCast(v),
+                else => @compileError("Coord must be int or float"),
+            };
+        }
+
+        fn assignRest(assignment: []u8, group: u8) void {
+            for (assignment) |*a| {
+                if (a.* == 2) {
+                    a.* = group;
+                }
+            }
+        }
+
+        fn pickGroup(d0: Coord, d1: Coord, mbr0: Key, mbr1: Key, cnt0: usize, cnt1: usize) u8 {
+            if (d0 < d1) {
+                return 0;
+            }
+            if (d1 < d0) {
+                return 1;
+            }
+            const a0 = mbr0.measure();
+            const a1 = mbr1.measure();
+            if (a0 < a1) {
+                return 0;
+            }
+            if (a1 < a0) {
+                return 1;
+            }
+            return if (cnt0 <= cnt1) 0 else 1;
+        }
+    };
+}
+
 // R*-tree strategy porting
 pub fn RStarStrategy(comptime Key: type) type {
     const Coord = Key.Coord;
