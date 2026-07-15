@@ -84,16 +84,24 @@ pub fn wyHash(_: void, key: []const u8, seed: u64) !u64 {
     return std.hash.Wyhash.hash(seed, key);
 }
 
+pub const BloomParams = struct {
+    bloom_bits: usize,
+    hash_count: usize,
+    bitset_bits: usize,
+    bitset_words: usize,
+};
+
 pub fn BloomImpl(
-    comptime HashType: type,
+    comptime HashT: type,
     comptime hash_call: anytype,
     comptime HashCtx: type,
-    comptime seed1: HashType,
-    comptime seed2: HashType,
+    comptime seed1: HashT,
+    comptime seed2: HashT,
 ) type {
     return struct {
         const Self = @This();
 
+        pub const HashType = HashT;
         const HashSet = [2]HashType;
 
         ctx: HashCtx,
@@ -158,6 +166,20 @@ pub fn BloomImpl(
                 }
             }
             return true;
+        }
+
+        pub fn calculateBloomParams(n: usize, target_false_positive_rate: f64) BloomParams {
+            const hash_bits = @bitSizeOf(HashType);
+            const m_bits = bitsForKeys(n, target_false_positive_rate);
+            const words = (m_bits + (hash_bits - 1)) / hash_bits;
+            const nbits = words * hash_bits;
+            const k = probeCount(nbits, n);
+            return .{
+                .bloom_bits = m_bits,
+                .hash_count = k,
+                .bitset_bits = nbits,
+                .bitset_words = words,
+            };
         }
     };
 }

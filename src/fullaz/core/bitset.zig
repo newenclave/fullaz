@@ -125,6 +125,7 @@ pub fn BitSet(comptime Word: type, comptime Endian: std.builtin.Endian) type {
         }
 
         pub fn reset(self: *Self) Error!void {
+            // use memset is better here?
             const words = try self.requireWritable();
             for (words) |*w| {
                 w.set(0);

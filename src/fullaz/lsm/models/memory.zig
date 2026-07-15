@@ -1,108 +1,232 @@
 const std = @import("std");
 const interfaces = @import("interfaces.zig");
+const core = @import("../../core/core.zig");
 
 pub fn MemoryModel(comptime MemtableT: type) type {
-    comptime interfaces.assertMemtable(MemtableT);
+    comptime {
+        interfaces.assertMemtable(MemtableT);
+    }
+
+    const Bloom = core.bloom.Bloom;
+    const BloomWord = Bloom.HashType;
+
+    const RunId = usize;
+    const BloomBits = core.bitset.BitSet(BloomWord, .native);
+    const target_false_positive_rate: f64 = 0.01;
+
+    const StoredRun = struct {
+        const Self = @This();
+
+        table: MemtableT,
+        bloom_buf: []u8,
+        bloom_bits: BloomBits,
+        bloom_k: usize,
+
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.table.deinit();
+            allocator.free(self.bloom_buf);
+        }
+    };
+
+    const Context = struct {
+        allocator: std.mem.Allocator,
+        active: MemtableT,
+        run_table: std.ArrayList(?*StoredRun),
+        run_order: std.ArrayList(RunId),
+    };
+
+    const RunImpl = struct {
+        const Self = @This();
+
+        stored: *const StoredRun,
+        run_id: RunId,
+
+        pub const Error = MemtableT.Error;
+        pub const Iterator = MemtableT.Iterator;
+
+        pub fn id(self: *const Self) RunId {
+            return self.run_id;
+        }
+
+        pub fn byteSize(self: *const Self) usize {
+            return self.stored.table.byteSize();
+        }
+
+        pub fn count(self: *const Self) usize {
+            return self.stored.table.count();
+        }
+
+        pub fn get(self: *const Self, key: []const u8) Error!?[]const u8 {
+            var bloom = Bloom.init();
+            defer bloom.deinit();
+            if (!bloom.mightContain(&self.stored.bloom_bits, key, self.stored.bloom_k)) {
+                return null;
+            }
+            return self.stored.table.get(key);
+        }
+
+        pub fn iterator(self: *const Self) Error!Iterator {
+            return self.stored.table.iterator();
+        }
+
+        pub fn seek(self: *const Self, key: []const u8) Error!Iterator {
+            return self.stored.table.seek(key);
+        }
+    };
+
+    const AccessorImpl = struct {
+        const Self = @This();
+
+        pub const Error = MemtableT.Error ||
+            std.mem.Allocator.Error ||
+            BloomBits.Error;
+
+        ctx: Context = undefined,
+
+        pub fn init(allocator: std.mem.Allocator) Error!Self {
+            return .{
+                .ctx = .{
+                    .allocator = allocator,
+                    .active = try MemtableT.init(allocator),
+                    .run_table = try std.ArrayList(?*StoredRun).initCapacity(allocator, 2),
+                    .run_order = try std.ArrayList(RunId).initCapacity(allocator, 2),
+                },
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.ctx.active.deinit();
+            for (self.ctx.run_table.items) |slot| {
+                if (slot) |stored| {
+                    stored.deinit(self.ctx.allocator);
+                    self.ctx.allocator.destroy(stored);
+                }
+            }
+            self.ctx.run_table.deinit(self.ctx.allocator);
+            self.ctx.run_order.deinit(self.ctx.allocator);
+        }
+
+        pub fn activeMemtable(self: *Self) *MemtableT {
+            return &self.ctx.active;
+        }
+
+        pub fn runCount(self: *const Self) usize {
+            return self.ctx.run_order.items.len;
+        }
+
+        pub fn runIdAt(self: *const Self, index: usize) RunId {
+            return self.ctx.run_order.items[index];
+        }
+
+        pub fn loadRun(self: *Self, run_id: RunId) Error!?RunImpl {
+            const slot = self.ctx.run_table.items[run_id] orelse {
+                return null;
+            };
+            return RunImpl{
+                .stored = slot,
+                .run_id = run_id,
+            };
+        }
+
+        pub fn closeRun(self: *Self, run: ?RunImpl) void {
+            _ = self;
+            _ = run;
+        }
+
+        pub fn buildRun(self: *Self, cursor: anytype) Error!RunId {
+            const stored = try self.ctx.allocator.create(StoredRun);
+            errdefer self.ctx.allocator.destroy(stored);
+
+            stored.table = try MemtableT.init(self.ctx.allocator);
+            errdefer stored.table.deinit();
+
+            while (try cursor.peek()) |e| : (try cursor.advance()) {
+                try stored.table.put(e.key, e.value);
+            }
+
+            var bloom = Bloom.init();
+            defer bloom.deinit();
+            const bloom_params = Bloom.calculateBloomParams(
+                stored.table.count(),
+                target_false_positive_rate,
+            );
+            stored.bloom_k = bloom_params.hash_count;
+            stored.bloom_buf = try self.ctx.allocator.alloc(u8, bloom_params.bitset_words * @sizeOf(BloomWord));
+            errdefer self.ctx.allocator.free(stored.bloom_buf);
+
+            @memset(stored.bloom_buf, 0);
+
+            stored.bloom_bits = try BloomBits.initMutable(stored.bloom_buf, bloom_params.bitset_bits);
+
+            var it = try stored.table.iterator();
+            defer it.deinit();
+
+            while (try it.peek()) |e| : (try it.advance()) {
+                bloom.add(&stored.bloom_bits, e.key, stored.bloom_k);
+            }
+
+            const run_id = self.ctx.run_table.items.len;
+            try self.ctx.run_table.append(self.ctx.allocator, stored);
+            return run_id;
+        }
+
+        pub fn publish(self: *Self, old_ids: []const RunId, new_id: ?RunId) Error!void {
+            const at = if (old_ids.len == 0) 0 else self.positionOf(old_ids[0]).?;
+
+            for (old_ids) |_| {
+                _ = self.ctx.run_order.orderedRemove(at);
+            }
+            for (old_ids) |old_id| {
+                self.destroyRunAt(old_id);
+            }
+
+            if (new_id) |id| {
+                try self.ctx.run_order.insert(self.ctx.allocator, at, id);
+            }
+        }
+
+        fn positionOf(self: *const Self, run_id: RunId) ?usize {
+            for (self.ctx.run_order.items, 0..) |id, i| {
+                if (id == run_id) {
+                    return i;
+                }
+            }
+            return null;
+        }
+
+        fn destroyRunAt(self: *Self, run_id: RunId) void {
+            const slot = self.ctx.run_table.items[run_id] orelse {
+                return;
+            };
+            slot.deinit(self.ctx.allocator);
+            self.ctx.allocator.destroy(slot);
+            self.ctx.run_table.items[run_id] = null;
+        }
+    };
 
     return struct {
         const Self = @This();
 
-        pub const RunIdType = usize;
-        pub const Error = MemtableT.Error || std.mem.Allocator.Error;
+        pub const AccessorType = AccessorImpl;
+        pub const RunType = RunImpl;
+
+        pub const RunIdType = RunId;
+        pub const Error = MemtableT.Error ||
+            std.mem.Allocator.Error ||
+            AccessorType.Error;
         pub const MemtableType = MemtableT;
-
-        pub const RunType = struct {
-            table: *const MemtableT,
-            run_id: RunIdType,
-
-            pub const Error = MemtableT.Error;
-            pub const Iterator = MemtableT.Iterator;
-
-            pub fn id(self: *const RunType) RunIdType {
-                return self.run_id;
-            }
-
-            pub fn byteSize(self: *const RunType) usize {
-                return self.table.byteSize();
-            }
-
-            pub fn count(self: *const RunType) usize {
-                return self.table.count();
-            }
-
-            pub fn get(self: *const RunType, key: []const u8) RunType.Error!?[]const u8 {
-                return self.table.get(key);
-            }
-
-            pub fn iterator(self: *const RunType) RunType.Error!RunType.Iterator {
-                return self.table.iterator();
-            }
-
-            pub fn seek(self: *const RunType, key: []const u8) RunType.Error!RunType.Iterator {
-                return self.table.seek(key);
-            }
-        };
-
-        pub const AccessorType = struct {
-            allocator: std.mem.Allocator,
-            active: MemtableT,
-            run_table: std.ArrayList(?*MemtableT),
-            run_order: std.ArrayList(RunIdType),
-
-            pub const Error = MemtableT.Error || std.mem.Allocator.Error;
-
-            pub fn init(allocator: std.mem.Allocator) AccessorType.Error!AccessorType {
-                return .{
-                    .allocator = allocator,
-                    .active = try MemtableT.init(allocator),
-                    .run_table = try std.ArrayList(?*MemtableT).initCapacity(allocator, 2),
-                    .run_order = try std.ArrayList(RunIdType).initCapacity(allocator, 2),
-                };
-            }
-
-            pub fn deinit(self: *AccessorType) void {
-                self.active.deinit();
-                for (self.run_table.items) |slot| {
-                    if (slot) |table| {
-                        table.deinit();
-                        self.allocator.destroy(table);
-                    }
-                }
-                self.run_table.deinit(self.allocator);
-                self.run_order.deinit(self.allocator);
-            }
-
-            pub fn activeMemtable(self: *AccessorType) *MemtableT {
-                return &self.active;
-            }
-
-            pub fn runCount(self: *const AccessorType) usize {
-                return self.run_order.items.len;
-            }
-
-            pub fn runIdAt(self: *const AccessorType, index: usize) RunIdType {
-                return self.run_order.items[index];
-            }
-
-            pub fn loadRun(self: *AccessorType, run_id: RunIdType) AccessorType.Error!?RunType {
-                const slot = self.run_table.items[run_id] orelse return null;
-                return RunType{ .table = slot, .run_id = run_id };
-            }
-
-            pub fn closeRun(self: *AccessorType, run: ?RunType) void {
-                _ = self;
-                _ = run;
-            }
-        };
 
         accessor: AccessorType,
 
         pub fn init(allocator: std.mem.Allocator) Error!Self {
-            return Self{ .accessor = try AccessorType.init(allocator) };
+            return Self{
+                .accessor = try AccessorType.init(allocator),
+            };
         }
 
         pub fn deinit(self: *Self) void {
             self.accessor.deinit();
+            self.* = undefined;
         }
 
         pub fn getAccessor(self: *Self) *AccessorType {
