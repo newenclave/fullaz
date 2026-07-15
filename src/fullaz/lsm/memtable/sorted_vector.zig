@@ -1,11 +1,11 @@
 const std = @import("std");
 const algorithm = @import("../../core/algorithm.zig");
-const strategy = @import("../strategy.zig");
+const models_iface = @import("../models/interfaces.zig");
 
-const Rec = struct {
-    key: []u8,
-    value: []u8,
-};
+const Entry = @import("../models/entry.zig").Entry;
+const EntryMut = @import("../models/entry.zig").EntryMut;
+
+const Rec = EntryMut;
 
 fn keyOrder(_: void, a: []const u8, b: []const u8) algorithm.Order {
     return algorithm.cmpSlices(u8, a, b, algorithm.CmpNum(u8).asc, {}) catch unreachable;
@@ -32,12 +32,12 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
             recs: []const Rec,
             idx: usize,
 
-            pub fn peek(self: *const ItSelf) ItSelf.Error!?strategy.Entry {
+            pub fn peek(self: *const ItSelf) ItSelf.Error!?Entry {
                 if (self.idx >= self.recs.len) {
                     return null;
                 }
                 const r = self.recs[self.idx];
-                return strategy.Entry{ .key = r.key, .value = r.value };
+                return Entry{ .key = r.key, .value = r.value };
             }
 
             pub fn advance(self: *ItSelf) ItSelf.Error!void {

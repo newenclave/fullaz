@@ -36,5 +36,5 @@ test {
     _ = @import("rtree_paged.zig");
     _ = @import("lsm_value.zig");
     _ = @import("lsm_memtable.zig");
-    _ = @import("lsm_bloom.zig");
+    _ = @import("bloom.zig");
 }

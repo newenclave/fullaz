@@ -1,6 +1,6 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
-const bloom = fullaz.lsm.bloom;
+const bloom = fullaz.core.bloom;
 const BitSet = fullaz.core.bitset.BitSet(u64, .little);
 
 const Filter = struct {

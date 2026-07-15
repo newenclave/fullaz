@@ -1,12 +1,14 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
 const algorithm = fullaz.core.algorithm;
-const strategy = fullaz.lsm.strategy;
+const models = fullaz.lsm.models;
 const SortedVector = fullaz.lsm.memtable.SortedVector;
 const SortedVectorImpl = fullaz.lsm.memtable.SortedVectorImpl;
 
+const Entry = models.entry.Entry;
+
 test "LSM memtable: SortedVector satisfies the memtable contract" {
-    comptime strategy.assertMemtable(SortedVector);
+    comptime models.interfaces.assertMemtable(SortedVector);
 }
 
 test "LSM memtable: put then get, upsert overwrites" {
@@ -77,7 +79,7 @@ test "LSM memtable: seek positions at first key >= target" {
 
     var it3 = try mt.seek("z");
     defer it3.deinit();
-    try std.testing.expectEqual(@as(?strategy.Entry, null), try it3.peek());
+    try std.testing.expectEqual(@as(?Entry, null), try it3.peek());
 }
 
 test "LSM memtable: custom comparator context flows into ordering" {
