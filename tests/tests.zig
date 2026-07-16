@@ -38,5 +38,6 @@ test {
     _ = @import("lsm_memtable.zig");
     _ = @import("lsm_memory_model.zig");
     _ = @import("lsm_flush_policy.zig");
+    _ = @import("lsm_merge_cursor.zig");
     _ = @import("bloom.zig");
 }

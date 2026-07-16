@@ -62,8 +62,8 @@ pub fn assertRunAccessor(comptime Model: type) void {
     iface.requiresFnSignature(A, "closeRun", fn (*A, ?Model.RunType) void);
     iface.requiresFnSignature(A, "publish", fn (*A, []const Model.RunIdType, ?Model.RunIdType) E!void);
 
-    // buildRun(self: *A, cursor: anytype) E!Model.RunIdType -- anytype cannot
-    // be written as a comparable fn type, so only its presence is checked.
+    // buildRun(self: *A, cursor: anytype) E!Model.RunIdType, so anytype cannot
+    // be written as a comparable fn type
     if (!@hasDecl(A, "buildRun")) {
         @compileError("Missing declaration: " ++ @typeName(A) ++ ".buildRun");
     }
