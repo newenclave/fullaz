@@ -1,6 +1,7 @@
 pub const value = @import("value.zig");
 pub const strategy = @import("strategy.zig");
 pub const models = @import("models/models.zig");
+pub const flush_policy = @import("flush_policy.zig");
 
 pub const memtable = struct {
     const sorted_vector = @import("memtable/sorted_vector.zig");
