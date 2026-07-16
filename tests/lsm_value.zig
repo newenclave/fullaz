@@ -24,3 +24,14 @@ test "LSM value: encodedLen is payload plus tag byte" {
     try std.testing.expectEqual(@as(usize, 1), value.encodedLen(0));
     try std.testing.expectEqual(@as(usize, 11), value.encodedLen(10));
 }
+
+test "LSM value: generic versions of the functions work" {
+    var buf: [64]u8 = undefined;
+    const Value = value.Value(u16, .native);
+    const enc = Value.encodePut_(&buf, "hello", 123);
+    try std.testing.expectEqual(value.Tag.put, Value.tagOf_(enc));
+    try std.testing.expect(!Value.isTombstone_(enc));
+    try std.testing.expectEqualSlices(u8, "hello", Value.payloadOf_(enc));
+    const encodedeLen = Value.encodedLen_(5);
+    try std.testing.expectEqual(encodedeLen, enc.len);
+}
