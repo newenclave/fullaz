@@ -14,18 +14,24 @@ pub fn assertMemtable(comptime M: type) void {
     iface.requiresErrorDeclaration(M, "Error");
     iface.requiresTypeDeclaration(M, "Iterator");
 
+    iface.requiresTypeDeclaration(M, "KeyInType");
+    iface.requiresTypeDeclaration(M, "ValueInType");
+    iface.requiresTypeDeclaration(M, "ValueOutType");
+
     const E = M.Error;
     const It = M.Iterator;
 
-    iface.requiresFnSignature(M, "init", fn (std.mem.Allocator) E!M);
-    iface.requiresFnSignature(M, "deinit", fn (*M) void);
+    const KeyInType = M.KeyInType;
+    const ValueInType = M.ValueInType;
+    const ValueOutType = M.ValueOutType;
+
     iface.requiresFnSignature(M, "reset", fn (*M) E!void);
-    iface.requiresFnSignature(M, "put", fn (*M, []const u8, []const u8) E!void);
-    iface.requiresFnSignature(M, "get", fn (*const M, []const u8) E!?[]const u8);
+    iface.requiresFnSignature(M, "put", fn (*M, KeyInType, ValueInType) E!void);
+    iface.requiresFnSignature(M, "get", fn (*const M, KeyInType) E!?ValueOutType);
     iface.requiresFnSignature(M, "byteSize", fn (*const M) usize);
     iface.requiresFnSignature(M, "count", fn (*const M) usize);
     iface.requiresFnSignature(M, "iterator", fn (*const M) E!It);
-    iface.requiresFnSignature(M, "seek", fn (*const M, []const u8) E!It);
+    iface.requiresFnSignature(M, "seek", fn (*const M, KeyInType) E!It);
     assertKvCursor(It);
 }
 
@@ -43,9 +49,9 @@ pub fn assertRun(comptime Model: type) void {
     iface.requiresFnSignature(R, "id", fn (*const R) Model.RunIdType);
     iface.requiresFnSignature(R, "byteSize", fn (*const R) usize);
     iface.requiresFnSignature(R, "count", fn (*const R) usize);
-    iface.requiresFnSignature(R, "get", fn (*const R, []const u8) E!?[]const u8);
+    iface.requiresFnSignature(R, "get", fn (*const R, Model.KeyInType) E!?Model.ValueEncodedType);
     iface.requiresFnSignature(R, "iterator", fn (*const R) E!It);
-    iface.requiresFnSignature(R, "seek", fn (*const R, []const u8) E!It);
+    iface.requiresFnSignature(R, "seek", fn (*const R, Model.KeyInType) E!It);
     assertKvCursor(It);
 }
 
@@ -55,7 +61,9 @@ pub fn assertRunAccessor(comptime Model: type) void {
     iface.requiresErrorDeclaration(A, "Error");
     const E = A.Error;
 
-    iface.requiresFnSignature(A, "activeMemtable", fn (*A) *Model.MemtableType);
+    iface.requiresFnSignature(A, "loadActiveMemtable", fn (*A) Model.MemtableType);
+    iface.requiresFnSignature(A, "deinitActiveMemtable", fn (*A, *Model.MemtableType) void);
+
     iface.requiresFnSignature(A, "runCount", fn (*const A) usize);
     iface.requiresFnSignature(A, "runIdAt", fn (*const A, usize) Model.RunIdType);
     iface.requiresFnSignature(A, "loadRun", fn (*A, Model.RunIdType) E!?Model.RunType);
@@ -72,6 +80,11 @@ pub fn assertRunAccessor(comptime Model: type) void {
 pub fn assertModel(comptime T: type) void {
     iface.requiresTypeDeclaration(T, "RunIdType");
     iface.requiresErrorDeclaration(T, "Error");
+
+    iface.requiresTypeDeclaration(T, "KeyInType");
+    iface.requiresTypeDeclaration(T, "ValueInType");
+    iface.requiresTypeDeclaration(T, "ValueOutType");
+    iface.requiresTypeDeclaration(T, "ValueEncodedType");
 
     iface.requiresTypeDeclaration(T, "MemtableType");
     assertMemtable(T.MemtableType);

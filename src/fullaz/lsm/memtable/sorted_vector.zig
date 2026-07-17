@@ -24,6 +24,9 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
         const Self = @This();
 
         pub const Error = std.mem.Allocator.Error;
+        pub const KeyInType = []const u8;
+        pub const ValueInType = []const u8;
+        pub const ValueOutType = []const u8;
 
         pub const Iterator = struct {
             const ItSelf = @This();
@@ -83,7 +86,7 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
             self.bytes = 0;
         }
 
-        pub fn put(self: *Self, key: []const u8, value: []const u8) Error!void {
+        pub fn put(self: *Self, key: KeyInType, value: ValueInType) Error!void {
             const pos = self.position(key);
             if (pos < self.recs.items.len and keyCmp(self.cmp_ctx, self.recs.items[pos].key, key) == .eq) {
                 const new_val = try self.allocator.dupe(u8, value);
@@ -103,7 +106,7 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
             self.bytes += k.len + v.len;
         }
 
-        pub fn get(self: *const Self, key: []const u8) Error!?[]const u8 {
+        pub fn get(self: *const Self, key: KeyInType) Error!?ValueOutType {
             const pos = self.position(key);
             if (pos < self.recs.items.len and keyCmp(self.cmp_ctx, self.recs.items[pos].key, key) == .eq) {
                 return self.recs.items[pos].value;
@@ -123,11 +126,11 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
             return Iterator{ .recs = self.recs.items, .idx = 0 };
         }
 
-        pub fn seek(self: *const Self, key: []const u8) Error!Iterator {
+        pub fn seek(self: *const Self, key: KeyInType) Error!Iterator {
             return Iterator{ .recs = self.recs.items, .idx = self.position(key) };
         }
 
-        fn position(self: *const Self, key: []const u8) usize {
+        fn position(self: *const Self, key: KeyInType) usize {
             return algorithm.lowerBound(
                 Rec,
                 self.recs.items,

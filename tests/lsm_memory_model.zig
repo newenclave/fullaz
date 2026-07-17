@@ -38,10 +38,13 @@ test "LSM MemoryModel: buildRun drains a cursor into a readable run" {
     defer model.deinit();
 
     const acc = model.getAccessor();
-    try acc.activeMemtable().put("a", "1");
-    try acc.activeMemtable().put("b", "2");
+    var active_table = acc.loadActiveMemtable();
+    defer acc.deinitActiveMemtable(&active_table);
 
-    var it = try acc.activeMemtable().iterator();
+    try active_table.put("a", "1");
+    try active_table.put("b", "2");
+
+    var it = try active_table.iterator();
     const run_id = try acc.buildRun(&it);
     it.deinit();
 
@@ -60,15 +63,17 @@ test "LSM MemoryModel: Bloom gate never produces a false negative" {
     defer model.deinit();
 
     const acc = model.getAccessor();
+    var active_table = acc.loadActiveMemtable();
+    defer acc.deinitActiveMemtable(&active_table);
 
     var i: usize = 0;
     while (i < 200) : (i += 1) {
         var kbuf: [16]u8 = undefined;
         const key = try std.fmt.bufPrint(&kbuf, "key-{d}", .{i});
-        try acc.activeMemtable().put(key, key);
+        try active_table.put(key, key);
     }
 
-    var it = try acc.activeMemtable().iterator();
+    var it = try active_table.iterator();
     const run_id = try acc.buildRun(&it);
     it.deinit();
 
@@ -98,8 +103,11 @@ test "LSM MemoryModel: publish with an empty span inserts the new run at the fro
     defer model.deinit();
 
     const acc = model.getAccessor();
-    try acc.activeMemtable().put("a", "1");
-    var it = try acc.activeMemtable().iterator();
+    var active_table = acc.loadActiveMemtable();
+    defer acc.deinitActiveMemtable(&active_table);
+
+    try active_table.put("a", "1");
+    var it = try active_table.iterator();
     const run_id = try acc.buildRun(&it);
     it.deinit();
 
@@ -116,27 +124,29 @@ test "LSM MemoryModel: publish replaces a contiguous span and destroys the old r
     defer model.deinit();
 
     const acc = model.getAccessor();
+    var active_table = acc.loadActiveMemtable();
+    defer acc.deinitActiveMemtable(&active_table);
 
     // Three flushes: put one key, build a run from it, publish at the front.
-    try acc.activeMemtable().put("a", "1");
-    var it0 = try acc.activeMemtable().iterator();
+    try active_table.put("a", "1");
+    var it0 = try active_table.iterator();
     const run0 = try acc.buildRun(&it0);
     it0.deinit();
-    try acc.activeMemtable().reset();
+    try active_table.reset();
     try acc.publish(&.{}, run0);
 
-    try acc.activeMemtable().put("b", "2");
-    var it1 = try acc.activeMemtable().iterator();
+    try active_table.put("b", "2");
+    var it1 = try active_table.iterator();
     const run1 = try acc.buildRun(&it1);
     it1.deinit();
-    try acc.activeMemtable().reset();
+    try active_table.reset();
     try acc.publish(&.{}, run1);
 
-    try acc.activeMemtable().put("c", "3");
-    var it2 = try acc.activeMemtable().iterator();
+    try active_table.put("c", "3");
+    var it2 = try active_table.iterator();
     const run2 = try acc.buildRun(&it2);
     it2.deinit();
-    try acc.activeMemtable().reset();
+    try active_table.reset();
     try acc.publish(&.{}, run2);
 
     // Newest-first: [run2, run1, run0].

@@ -1,6 +1,7 @@
 const std = @import("std");
 const interfaces = @import("interfaces.zig");
 const core = @import("../../core/core.zig");
+const value = @import("../value.zig");
 
 pub fn MemoryModel(comptime MemtableT: type) type {
     comptime {
@@ -74,6 +75,56 @@ pub fn MemoryModel(comptime MemtableT: type) type {
         }
     };
 
+    const MemtableWrapper = struct {
+        const Self = @This();
+
+        pub const Error = MemtableT.Error;
+        pub const Iterator = MemtableT.Iterator;
+
+        pub const KeyInType = MemtableT.KeyInType;
+        pub const ValueInType = MemtableT.ValueInType;
+        pub const ValueOutType = MemtableT.ValueOutType;
+
+        table: *MemtableT,
+
+        pub fn init(table: *MemtableT) Self {
+            return .{
+                .table = table,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.* = undefined;
+        }
+
+        pub fn reset(self: *Self) Error!void {
+            return self.table.reset();
+        }
+
+        pub fn put(self: *Self, key: []const u8, value_in: []const u8) Error!void {
+            return self.table.put(key, value_in);
+        }
+
+        pub fn get(self: *const Self, key: []const u8) Error!?[]const u8 {
+            return self.table.get(key);
+        }
+
+        pub fn byteSize(self: *const Self) usize {
+            return self.table.byteSize();
+        }
+
+        pub fn count(self: *const Self) usize {
+            return self.table.count();
+        }
+        pub fn iterator(self: *const Self) Error!MemtableT.Iterator {
+            return self.table.iterator();
+        }
+
+        pub fn seek(self: *const Self, key: []const u8) Error!MemtableT.Iterator {
+            return self.table.seek(key);
+        }
+    };
+
     const AccessorImpl = struct {
         const Self = @This();
 
@@ -106,8 +157,13 @@ pub fn MemoryModel(comptime MemtableT: type) type {
             self.ctx.run_order.deinit(self.ctx.allocator);
         }
 
-        pub fn activeMemtable(self: *Self) *MemtableT {
-            return &self.ctx.active;
+        pub fn loadActiveMemtable(self: *Self) MemtableWrapper {
+            return MemtableWrapper.init(&self.ctx.active);
+        }
+
+        pub fn deinitActiveMemtable(self: *Self, t: *MemtableWrapper) void {
+            _ = self;
+            t.deinit();
         }
 
         pub fn runCount(self: *const Self) usize {
@@ -214,7 +270,13 @@ pub fn MemoryModel(comptime MemtableT: type) type {
         pub const Error = MemtableT.Error ||
             std.mem.Allocator.Error ||
             AccessorType.Error;
-        pub const MemtableType = MemtableT;
+        pub const MemtableType = MemtableWrapper;
+
+        pub const KeyInType = MemtableT.KeyInType;
+        pub const ValueInType = MemtableT.ValueInType;
+        pub const ValueOutType = MemtableT.ValueOutType;
+
+        pub const ValueEncodedType = ValueInType;
 
         accessor: AccessorType,
 

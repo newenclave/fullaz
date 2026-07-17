@@ -40,5 +40,6 @@ test {
     _ = @import("lsm_flush_policy.zig");
     _ = @import("lsm_merge_cursor.zig");
     _ = @import("lsm_strategy.zig");
+    _ = @import("lsm_engine.zig");
     _ = @import("bloom.zig");
 }
