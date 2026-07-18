@@ -64,3 +64,72 @@ test "LSM engine: put after delete makes the key visible again" {
 
     try std.testing.expectEqualSlices(u8, "2", (try lsm.get("a")).?);
 }
+
+test "LSM engine: flushing an empty memtable is a no-op" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try lsm.flush();
+    try std.testing.expectEqual(@as(usize, 0), model.getAccessor().runCount());
+}
+
+test "LSM engine: flush moves data into a run, get() still finds it" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try lsm.put("a", "1");
+    try lsm.put("b", "2");
+
+    try lsm.flush();
+    try std.testing.expectEqual(@as(usize, 1), model.getAccessor().runCount());
+
+    try std.testing.expectEqualSlices(u8, "1", (try lsm.get("a")).?);
+    try std.testing.expectEqualSlices(u8, "2", (try lsm.get("b")).?);
+    try std.testing.expectEqual(@as(?[]const u8, null), try lsm.get("missing"));
+}
+
+test "LSM engine: a tombstone written before flush still hides the key afterward" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try lsm.put("a", "1");
+    try lsm.delete("a");
+
+    try lsm.flush();
+
+    try std.testing.expectEqual(@as(?[]const u8, null), try lsm.get("a"));
+}
+
+test "LSM engine: a newer run shadows an older run for the same key" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try lsm.put("a", "old");
+    try lsm.flush();
+
+    try lsm.put("a", "new");
+    try lsm.flush();
+
+    try std.testing.expectEqual(@as(usize, 2), model.getAccessor().runCount());
+    try std.testing.expectEqualSlices(u8, "new", (try lsm.get("a")).?);
+}

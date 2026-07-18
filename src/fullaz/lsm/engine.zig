@@ -23,6 +23,7 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
         pub const KeyInType = ModelT.KeyInType;
         pub const ValueInType = ModelT.ValueInType;
         pub const ValueOutType = ModelT.ValueOutType;
+        pub const ValueEncodedType = ModelT.ValueEncodedType;
 
         model: *ModelT,
         allocator: std.mem.Allocator,
@@ -62,14 +63,50 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
             try active_table.put(key, enc);
         }
 
-        pub fn get(self: *Self, key: KeyInType) Error!?ValueInType {
+        pub fn get(self: *Self, key: KeyInType) Error!?ValueOutType {
             const acc = self.model.getAccessor();
             var active_table = acc.loadActiveMemtable();
             defer acc.deinitActiveMemtable(&active_table);
 
-            const enc = (try active_table.get(key)) orelse {
-                return null;
-            };
+            if (try active_table.get(key)) |enc| {
+                return decode(enc);
+            }
+
+            const run_count = acc.runCount();
+            var i: usize = 0;
+            while (i < run_count) : (i += 1) {
+                const run_id = acc.runIdAt(i);
+                const run = (try acc.loadRun(run_id)) orelse {
+                    continue;
+                };
+                defer acc.closeRun(run);
+
+                if (try run.get(key)) |enc| {
+                    return decode(enc);
+                }
+            }
+
+            return null;
+        }
+
+        pub fn flush(self: *Self) Error!void {
+            const acc = self.model.getAccessor();
+            var active_table = acc.loadActiveMemtable();
+            defer acc.deinitActiveMemtable(&active_table);
+
+            if (active_table.count() == 0) {
+                return;
+            }
+
+            var it = try active_table.iterator();
+            const new_id = try acc.buildRun(&it);
+            it.deinit();
+
+            try active_table.reset();
+            try acc.publish(&.{}, new_id);
+        }
+
+        fn decode(enc: ValueEncodedType) ?ValueOutType {
             if (value.isTombstone(enc)) {
                 return null;
             }
