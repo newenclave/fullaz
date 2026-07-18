@@ -115,6 +115,59 @@ test "LSM engine: a tombstone written before flush still hides the key afterward
     try std.testing.expectEqual(@as(?[]const u8, null), try lsm.get("a"));
 }
 
+test "LSM engine: byte-size threshold triggers an automatic flush" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, flush_policy.ThresholdFlushPolicy.init(5, null));
+    defer lsm.deinit();
+
+    try lsm.put("a", "1");
+    try std.testing.expectEqual(@as(usize, 0), model.getAccessor().runCount());
+
+    try lsm.put("b", "2");
+    try std.testing.expectEqual(@as(usize, 1), model.getAccessor().runCount());
+
+    try std.testing.expectEqualSlices(u8, "1", (try lsm.get("a")).?);
+    try std.testing.expectEqualSlices(u8, "2", (try lsm.get("b")).?);
+}
+
+test "LSM engine: count threshold triggers an automatic flush" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, flush_policy.ThresholdFlushPolicy.init(null, 2));
+    defer lsm.deinit();
+
+    try lsm.put("a", "1");
+    try std.testing.expectEqual(@as(usize, 0), model.getAccessor().runCount());
+
+    try lsm.put("b", "2");
+    try std.testing.expectEqual(@as(usize, 1), model.getAccessor().runCount());
+
+    try std.testing.expectEqualSlices(u8, "1", (try lsm.get("a")).?);
+    try std.testing.expectEqualSlices(u8, "2", (try lsm.get("b")).?);
+}
+
+test "LSM engine: delete also goes through maybeFlush" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, flush_policy.ThresholdFlushPolicy.init(null, 1));
+    defer lsm.deinit();
+
+    try lsm.delete("a");
+
+    try std.testing.expectEqual(@as(usize, 1), model.getAccessor().runCount());
+    try std.testing.expectEqual(@as(?[]const u8, null), try lsm.get("a"));
+}
+
 test "LSM engine: a newer run shadows an older run for the same key" {
     const allocator = std.testing.allocator;
 

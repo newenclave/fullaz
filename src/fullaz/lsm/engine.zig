@@ -47,9 +47,13 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
             defer self.allocator.free(buf);
             const enc = value.encodePut(buf, payload);
 
-            var active_table = acc.loadActiveMemtable();
-            defer acc.deinitActiveMemtable(&active_table);
-            try active_table.put(key, enc);
+            {
+                var active_table = acc.loadActiveMemtable();
+                defer acc.deinitActiveMemtable(&active_table);
+                try active_table.put(key, enc);
+            }
+
+            try self.maybeFlush();
         }
 
         pub fn delete(self: *Self, key: KeyInType) Error!void {
@@ -58,9 +62,13 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
             var buf: [1]u8 = undefined;
             const enc = value.encodeTombstone(&buf);
 
-            var active_table = acc.loadActiveMemtable();
-            defer acc.deinitActiveMemtable(&active_table);
-            try active_table.put(key, enc);
+            {
+                var active_table = acc.loadActiveMemtable();
+                defer acc.deinitActiveMemtable(&active_table);
+                try active_table.put(key, enc);
+            }
+
+            try self.maybeFlush();
         }
 
         pub fn get(self: *Self, key: KeyInType) Error!?ValueOutType {
@@ -87,6 +95,16 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
             }
 
             return null;
+        }
+
+        pub fn maybeFlush(self: *Self) Error!void {
+            const acc = self.model.getAccessor();
+            var active_table = acc.loadActiveMemtable();
+            defer acc.deinitActiveMemtable(&active_table);
+
+            if (self.flush_policy.shouldFlush(active_table.byteSize(), active_table.count())) {
+                try self.flush();
+            }
         }
 
         pub fn flush(self: *Self) Error!void {
