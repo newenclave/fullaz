@@ -297,3 +297,74 @@ test "LSM engine: SizeTieredStrategy only merges the qualifying contiguous tier,
     }
     try std.testing.expect(found_z_tombstone);
 }
+
+test "LSM engine: Iterator satisfies the KvCursor contract" {
+    comptime models.interfaces.assertKvCursor(SizeTieredEngine.Iterator);
+}
+
+test "LSM engine: iterator() gives an ascending, deduped, tombstone-free view across the memtable and multiple runs" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = SizeTieredEngine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    // Two runs, deliberately different tiers so SizeTieredStrategy never
+    // merges them (a length-1 block never reaches min_tier_runs=4).
+    try lsm.put("a", "1");
+    try lsm.flush();
+    try lsm.put("z", "OLDVALUE_OLDVALUE_12");
+    try lsm.flush();
+    try std.testing.expectEqual(@as(usize, 2), model.getAccessor().runCount());
+
+    // Still in the active memtable: a tombstone shadowing run0's "a", plus
+    // two brand-new keys.
+    try lsm.delete("a");
+    try lsm.put("b", "2");
+    try lsm.put("m", "5");
+
+    var it = try lsm.iterator();
+    defer it.deinit();
+
+    const expect_keys = [_][]const u8{ "b", "m", "z" };
+    const expect_vals = [_][]const u8{ "2", "5", "OLDVALUE_OLDVALUE_12" };
+    var i: usize = 0;
+    while (try it.peek()) |e| : (try it.advance()) {
+        try std.testing.expectEqualSlices(u8, expect_keys[i], e.key);
+        try std.testing.expectEqualSlices(u8, expect_vals[i], value.payloadOf(e.value));
+        i += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), i);
+}
+
+test "LSM engine: seek() positions at the first key >= target across the merged view" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = SizeTieredEngine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try lsm.put("a", "1");
+    try lsm.flush();
+    try lsm.put("z", "OLDVALUE_OLDVALUE_12");
+    try lsm.flush();
+    try std.testing.expectEqual(@as(usize, 2), model.getAccessor().runCount());
+
+    try lsm.put("b", "2");
+    try lsm.put("m", "5");
+
+    var it = try lsm.seek("c");
+    defer it.deinit();
+
+    const expect_keys = [_][]const u8{ "m", "z" };
+    var i: usize = 0;
+    while (try it.peek()) |e| : (try it.advance()) {
+        try std.testing.expectEqualSlices(u8, expect_keys[i], e.key);
+        i += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), i);
+}
