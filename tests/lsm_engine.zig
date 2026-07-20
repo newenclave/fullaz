@@ -3,11 +3,13 @@ const fullaz = @import("fullaz");
 const models = fullaz.lsm.models;
 const strategy = fullaz.lsm.strategy;
 const flush_policy = fullaz.lsm.flush_policy;
+const value = fullaz.lsm.value;
 const Lsm = fullaz.lsm.Lsm;
 const SortedVector = fullaz.lsm.memtable.SortedVector;
 
 const MemoryModel = models.MemoryModel(SortedVector);
 const Engine = Lsm(MemoryModel, strategy.NaiveMergeAllStrategy, flush_policy.ThresholdFlushPolicy);
+const SizeTieredEngine = Lsm(MemoryModel, strategy.SizeTieredStrategy, flush_policy.ThresholdFlushPolicy);
 
 const never_flush = flush_policy.ThresholdFlushPolicy.init(null, null);
 
@@ -235,4 +237,63 @@ test "LSM engine: compact() merges overlapping runs, drops the tombstone, keeps 
         i += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), i);
+}
+
+test "LSM engine: SizeTieredStrategy only merges the qualifying contiguous tier, leaving an outlier run untouched and its tombstone preserved" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = SizeTieredEngine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    // Oldest, "big" run: one key with a long payload -> tier 2
+    // (growth_factor=4: byte_size = 1 + encodedLen(20) = 22, in [16,63)).
+    try lsm.put("z", "OLDVALUE_OLDVALUE_12");
+    try lsm.flush();
+
+    // Three small tier-0 runs (byte_size = 1 + encodedLen(1) = 3, in [1,4)).
+    try lsm.put("a", "1");
+    try lsm.flush();
+    try lsm.put("b", "2");
+    try lsm.flush();
+    try lsm.put("c", "3");
+    try lsm.flush();
+
+    // Fourth small run: a tombstone for "z" (byte_size = 1 + encodedLen(0)
+    // = 2, still tier 0). Newest-first order is now:
+    // [tombstone(z), c, b, a, big(z=OLDVALUE...)] -- four tier-0 runs
+    // followed by one tier-2 outlier. min_tier_runs=4, so this flush's
+    // auto-compact() merges exactly the four tier-0 runs.
+    try lsm.delete("z");
+    try lsm.flush();
+
+    const acc = model.getAccessor();
+    try std.testing.expectEqual(@as(usize, 2), acc.runCount());
+
+    try std.testing.expectEqualSlices(u8, "1", (try lsm.get("a")).?);
+    try std.testing.expectEqualSlices(u8, "2", (try lsm.get("b")).?);
+    try std.testing.expectEqualSlices(u8, "3", (try lsm.get("c")).?);
+    // "z" must stay hidden -- if the tombstone had been wrongly dropped,
+    // this would incorrectly resurface the old value still sitting in the
+    // untouched, older "big" run.
+    try std.testing.expectEqual(@as(?[]const u8, null), try lsm.get("z"));
+
+    // Confirm directly: the tombstone for "z" physically survived the
+    // merge (the merge span did not reach the oldest run, so it must be
+    // carried through verbatim, not dropped).
+    const merged_run = (try acc.loadRun(acc.runIdAt(0))).?;
+    defer acc.closeRun(merged_run);
+
+    var found_z_tombstone = false;
+    var it = try merged_run.iterator();
+    defer it.deinit();
+    while (try it.peek()) |e| : (try it.advance()) {
+        if (std.mem.eql(u8, e.key, "z")) {
+            try std.testing.expect(value.isTombstone(e.value));
+            found_z_tombstone = true;
+        }
+    }
+    try std.testing.expect(found_z_tombstone);
 }
