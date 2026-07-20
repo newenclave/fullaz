@@ -183,6 +183,56 @@ test "LSM engine: a newer run shadows an older run for the same key" {
     try lsm.put("a", "new");
     try lsm.flush();
 
-    try std.testing.expectEqual(@as(usize, 2), model.getAccessor().runCount());
+    // flush() now auto-compacts (M14); with NaiveMergeAllStrategy, two runs
+    // never survive side by side -- they merge back down to one immediately.
+    try std.testing.expectEqual(@as(usize, 1), model.getAccessor().runCount());
     try std.testing.expectEqualSlices(u8, "new", (try lsm.get("a")).?);
+}
+
+test "LSM engine: compact() merges overlapping runs, drops the tombstone, keeps ascending order" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try lsm.put("a", "1");
+    try lsm.put("b", "2");
+    try lsm.flush();
+    try std.testing.expectEqual(@as(usize, 1), model.getAccessor().runCount());
+
+    try lsm.put("b", "20");
+    try lsm.put("c", "3");
+    try lsm.flush();
+    // NaiveMergeAllStrategy auto-compacts on every flush that leaves >= 2 runs.
+    try std.testing.expectEqual(@as(usize, 1), model.getAccessor().runCount());
+
+    try lsm.delete("a");
+    try lsm.put("c", "30");
+    try lsm.flush();
+    try std.testing.expectEqual(@as(usize, 1), model.getAccessor().runCount());
+
+    try std.testing.expectEqual(@as(?[]const u8, null), try lsm.get("a"));
+    try std.testing.expectEqualSlices(u8, "20", (try lsm.get("b")).?);
+    try std.testing.expectEqualSlices(u8, "30", (try lsm.get("c")).?);
+
+    // Inspect the single surviving run directly: ascending, deduped, and
+    // the "a" tombstone is gone entirely (not just shadowed) since a
+    // NaiveMergeAllStrategy merge always reaches the oldest run.
+    const acc = model.getAccessor();
+    const run = (try acc.loadRun(acc.runIdAt(0))).?;
+    defer acc.closeRun(run);
+
+    var it = try run.iterator();
+    defer it.deinit();
+
+    const expect_keys = [_][]const u8{ "b", "c" };
+    var i: usize = 0;
+    while (try it.peek()) |e| : (try it.advance()) {
+        try std.testing.expectEqualSlices(u8, expect_keys[i], e.key);
+        i += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), i);
 }

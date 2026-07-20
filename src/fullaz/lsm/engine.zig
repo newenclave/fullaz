@@ -2,6 +2,7 @@ const std = @import("std");
 const models_iface = @import("models/interfaces.zig");
 const strategy_mod = @import("strategy.zig");
 const flush_policy_mod = @import("flush_policy.zig");
+const merge_cursor_mod = @import("merge_cursor.zig");
 const value = @import("value.zig");
 
 pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comptime FlushPolicyT: type) type {
@@ -19,17 +20,18 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
             std.mem.Allocator.Error;
 
         pub const Model = ModelT;
-        pub const Memtable = ModelT.MemtableType;
-        pub const KeyInType = ModelT.KeyInType;
-        pub const ValueInType = ModelT.ValueInType;
-        pub const ValueOutType = ModelT.ValueOutType;
-        pub const ValueEncodedType = ModelT.ValueEncodedType;
+        pub const Memtable = Model.MemtableType;
+        pub const KeyInType = Model.KeyInType;
+        pub const ValueInType = Model.ValueInType;
+        pub const ValueOutType = Model.ValueOutType;
+        pub const ValueEncodedType = Model.ValueEncodedType;
+        pub const RunType = Model.RunType;
 
-        model: *ModelT,
+        model: *Model,
         allocator: std.mem.Allocator,
         flush_policy: FlushPolicyT,
 
-        pub fn init(model: *ModelT, allocator: std.mem.Allocator, flush_policy: FlushPolicyT) Self {
+        pub fn init(model: *Model, allocator: std.mem.Allocator, flush_policy: FlushPolicyT) Self {
             return .{
                 .model = model,
                 .allocator = allocator,
@@ -122,6 +124,75 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
 
             try active_table.reset();
             try acc.publish(&.{}, new_id);
+            try self.compact();
+        }
+
+        // asks the Strategy what to merge next
+        // TODO: think about move all allocations to accessor...
+        // leave it for now like this.
+        pub fn compact(self: *Self) Error!void {
+            const acc = self.model.getAccessor();
+            const run_count = acc.runCount();
+
+            const RunInfo = strategy_mod.RunInfo(ModelT.RunIdType);
+
+            const run_infos = try self.allocator.alloc(RunInfo, run_count);
+            defer self.allocator.free(run_infos);
+
+            var i: usize = 0;
+            while (i < run_count) : (i += 1) {
+                const run_id = acc.runIdAt(i);
+                if (try acc.loadRun(run_id)) |*run| {
+                    defer acc.closeRun(run.*);
+                    run_infos[i] = .{
+                        .id = run_id,
+                        .byte_size = run.byteSize(),
+                        .count = run.count(),
+                    };
+                }
+            }
+
+            const ids = try Strategy.planAfterFlush(self.allocator, run_infos);
+            defer self.allocator.free(ids);
+
+            if (ids.len < 2) {
+                return;
+            }
+
+            var lo: usize = 0;
+            while ((lo < run_infos.len) and (run_infos[lo].id != ids[0])) : (lo += 1) {}
+            std.debug.assert(lo < run_infos.len);
+
+            for (ids, 0..) |id, k| {
+                std.debug.assert(run_infos[lo + k].id == id);
+            }
+            const reaches_oldest = (lo + ids.len == run_count);
+
+            const runs = try self.allocator.alloc(RunType, ids.len);
+            defer self.allocator.free(runs);
+            var opened: usize = 0;
+            defer {
+                for (runs[0..opened]) |*r| {
+                    acc.closeRun(r.*);
+                }
+            }
+
+            const cursors = try self.allocator.alloc(RunType.Iterator, ids.len);
+            defer self.allocator.free(cursors);
+
+            for (ids, 0..) |id, k| {
+                runs[k] = (try acc.loadRun(id)).?;
+                opened = k + 1;
+                cursors[k] = try runs[k].iterator();
+            }
+
+            const MergeCursor = merge_cursor_mod.MergeCursor(RunType.Iterator);
+
+            var merged = try MergeCursor.init(cursors, reaches_oldest);
+            defer merged.deinit();
+
+            const new_id = try acc.buildRun(&merged);
+            try acc.publish(ids, new_id);
         }
 
         fn decode(enc: ValueEncodedType) ?ValueOutType {

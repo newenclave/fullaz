@@ -10,7 +10,8 @@ pub fn RunInfo(comptime RunIdType: type) type {
     };
 }
 
-// strategy should return a list.
+// strategy should return a list. It's for now.
+// TODO: needs to be fixed and moved to accessor?
 // the caller is responsible for freeing the list.
 pub fn assertCompactionStrategy(comptime Strategy: type, comptime RunIdType: type) void {
     iface.requiresErrorDeclaration(Strategy, "Error");
