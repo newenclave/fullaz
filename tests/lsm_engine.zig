@@ -250,7 +250,7 @@ test "LSM engine: SizeTieredStrategy only merges the qualifying contiguous tier,
 
     // Oldest, "big" run: one key with a long payload -> tier 2
     // (growth_factor=4: byte_size = 1 + encodedLen(20) = 22, in [16,63)).
-    try lsm.put("z", "OLDVALUE_OLDVALUE_12");
+    try lsm.put("w", "OLDVALUE_OLDVALUE_12");
     try lsm.flush();
 
     // Three small tier-0 runs (byte_size = 1 + encodedLen(1) = 3, in [1,4)).
@@ -261,12 +261,12 @@ test "LSM engine: SizeTieredStrategy only merges the qualifying contiguous tier,
     try lsm.put("c", "3");
     try lsm.flush();
 
-    // Fourth small run: a tombstone for "z" (byte_size = 1 + encodedLen(0)
+    // Fourth small run: a tombstone for "w" (byte_size = 1 + encodedLen(0)
     // = 2, still tier 0). Newest-first order is now:
-    // [tombstone(z), c, b, a, big(z=OLDVALUE...)] -- four tier-0 runs
+    // [tombstone(w), c, b, a, big(w=OLDVALUE...)] -- four tier-0 runs
     // followed by one tier-2 outlier. min_tier_runs=4, so this flush's
     // auto-compact() merges exactly the four tier-0 runs.
-    try lsm.delete("z");
+    try lsm.delete("w");
     try lsm.flush();
 
     const acc = model.getAccessor();
@@ -275,27 +275,27 @@ test "LSM engine: SizeTieredStrategy only merges the qualifying contiguous tier,
     try std.testing.expectEqualSlices(u8, "1", (try lsm.get("a")).?);
     try std.testing.expectEqualSlices(u8, "2", (try lsm.get("b")).?);
     try std.testing.expectEqualSlices(u8, "3", (try lsm.get("c")).?);
-    // "z" must stay hidden -- if the tombstone had been wrongly dropped,
+    // "w" must stay hidden -- if the tombstone had been wrongly dropped,
     // this would incorrectly resurface the old value still sitting in the
     // untouched, older "big" run.
-    try std.testing.expectEqual(@as(?[]const u8, null), try lsm.get("z"));
+    try std.testing.expectEqual(@as(?[]const u8, null), try lsm.get("w"));
 
-    // Confirm directly: the tombstone for "z" physically survived the
+    // Confirm directly: the tombstone for "w" physically survived the
     // merge (the merge span did not reach the oldest run, so it must be
     // carried through verbatim, not dropped).
     const merged_run = (try acc.loadRun(acc.runIdAt(0))).?;
     defer acc.closeRun(merged_run);
 
-    var found_z_tombstone = false;
+    var found_w_tombstone = false;
     var it = try merged_run.iterator();
     defer it.deinit();
     while (try it.peek()) |e| : (try it.advance()) {
-        if (std.mem.eql(u8, e.key, "z")) {
+        if (std.mem.eql(u8, e.key, "w")) {
             try std.testing.expect(value.isTombstone(e.value));
-            found_z_tombstone = true;
+            found_w_tombstone = true;
         }
     }
-    try std.testing.expect(found_z_tombstone);
+    try std.testing.expect(found_w_tombstone);
 }
 
 test "LSM engine: Iterator satisfies the KvCursor contract" {
@@ -315,7 +315,7 @@ test "LSM engine: iterator() gives an ascending, deduped, tombstone-free view ac
     // merges them (a length-1 block never reaches min_tier_runs=4).
     try lsm.put("a", "1");
     try lsm.flush();
-    try lsm.put("z", "OLDVALUE_OLDVALUE_12");
+    try lsm.put("w", "OLDVALUE_OLDVALUE_12");
     try lsm.flush();
     try std.testing.expectEqual(@as(usize, 2), model.getAccessor().runCount());
 
@@ -328,7 +328,7 @@ test "LSM engine: iterator() gives an ascending, deduped, tombstone-free view ac
     var it = try lsm.iterator();
     defer it.deinit();
 
-    const expect_keys = [_][]const u8{ "b", "m", "z" };
+    const expect_keys = [_][]const u8{ "b", "m", "w" };
     const expect_vals = [_][]const u8{ "2", "5", "OLDVALUE_OLDVALUE_12" };
     var i: usize = 0;
     while (try it.peek()) |e| : (try it.advance()) {
@@ -350,7 +350,7 @@ test "LSM engine: seek() positions at the first key >= target across the merged 
 
     try lsm.put("a", "1");
     try lsm.flush();
-    try lsm.put("z", "OLDVALUE_OLDVALUE_12");
+    try lsm.put("w", "OLDVALUE_OLDVALUE_12");
     try lsm.flush();
     try std.testing.expectEqual(@as(usize, 2), model.getAccessor().runCount());
 
@@ -360,11 +360,106 @@ test "LSM engine: seek() positions at the first key >= target across the merged 
     var it = try lsm.seek("c");
     defer it.deinit();
 
-    const expect_keys = [_][]const u8{ "m", "z" };
+    const expect_keys = [_][]const u8{ "m", "w" };
     var i: usize = 0;
     while (try it.peek()) |e| : (try it.advance()) {
         try std.testing.expectEqualSlices(u8, expect_keys[i], e.key);
         i += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), i);
+}
+
+const SoakOp = union(enum) {
+    put: struct { key: []const u8, value: []const u8 },
+    delete: []const u8,
+    flush,
+};
+
+// Deliberately small single-entry-ish flushes: with SizeTieredStrategy this
+// naturally accumulates same-tier runs and triggers a real partial merge
+// partway through, not just at the very end.
+const soak_ops = [_]SoakOp{
+    .{ .put = .{ .key = "a", .value = "1" } },
+    .{ .put = .{ .key = "b", .value = "2" } },
+    .{ .put = .{ .key = "c", .value = "3" } },
+    .flush,
+    .{ .put = .{ .key = "a", .value = "10" } },
+    .{ .put = .{ .key = "d", .value = "4" } },
+    .flush,
+    .{ .delete = "b" },
+    .{ .put = .{ .key = "e", .value = "5" } },
+    .flush,
+    .{ .put = .{ .key = "c", .value = "30" } },
+    .{ .delete = "e" },
+    .flush,
+    .{ .put = .{ .key = "f", .value = "6" } },
+    .{ .put = .{ .key = "g", .value = "7" } },
+    .{ .put = .{ .key = "a", .value = "100" } },
+    .flush,
+    .{ .delete = "c" },
+    .flush,
+    .{ .put = .{ .key = "b", .value = "200" } },
+    .flush,
+};
+
+const soak_keys = [_][]const u8{ "a", "b", "c", "d", "e", "f", "g" };
+
+// Drives lsm through ops while keeping an independent oracle (plain
+// key -> current value map, absence = deleted-or-never-written) and
+// checks every tracked key against lsm.get() after every single op, not
+// just at the end.
+fn runSoak(lsm: anytype, allocator: std.mem.Allocator, ops: []const SoakOp, all_keys: []const []const u8) !void {
+    var oracle = std.StringHashMap([]const u8).init(allocator);
+    defer oracle.deinit();
+
+    for (ops) |op| {
+        switch (op) {
+            .put => |p| {
+                try lsm.put(p.key, p.value);
+                try oracle.put(p.key, p.value);
+            },
+            .delete => |k| {
+                try lsm.delete(k);
+                _ = oracle.remove(k);
+            },
+            .flush => {
+                try lsm.flush();
+            },
+        }
+
+        for (all_keys) |key| {
+            const expected = oracle.get(key);
+            const actual = try lsm.get(key);
+            if (expected) |v| {
+                try std.testing.expect(actual != null);
+                try std.testing.expectEqualSlices(u8, v, actual.?);
+            } else {
+                try std.testing.expectEqual(@as(?[]const u8, null), actual);
+            }
+        }
+    }
+}
+
+test "LSM engine: multi-round soak test with NaiveMergeAllStrategy" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try runSoak(&lsm, allocator, &soak_ops, &soak_keys);
+}
+
+test "LSM engine: multi-round soak test with SizeTieredStrategy" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = SizeTieredEngine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try runSoak(&lsm, allocator, &soak_ops, &soak_keys);
 }
