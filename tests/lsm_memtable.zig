@@ -2,10 +2,12 @@ const std = @import("std");
 const fullaz = @import("fullaz");
 const algorithm = fullaz.core.algorithm;
 const models = fullaz.lsm.models;
+const value = fullaz.lsm.value;
 const SortedVector = fullaz.lsm.memtable.SortedVector;
 const SortedVectorImpl = fullaz.lsm.memtable.SortedVectorImpl;
 
-const Entry = models.entry.Entry;
+const ValueCodec = value.Value(u64, .native);
+const Entry = models.entry.Entry(u64);
 
 test "LSM memtable: SortedVector satisfies the memtable contract" {
     comptime models.interfaces.assertMemtable(SortedVector);
@@ -42,13 +44,19 @@ test "LSM memtable: count and byteSize track entries" {
     try std.testing.expectEqual(@as(usize, 2), mt.count());
 }
 
+// put()/get() never look inside value -- they are pure opaque-byte storage,
+// so the tests above are free to use plain strings. iterator()/seek() do
+// decode an lsn out of value (via peek()), so from here on every stored
+// value must be a real Value(u64, .native)-encoded blob.
+
 test "LSM memtable: iterator yields entries in ascending key order" {
     var mt = try SortedVector.init(std.testing.allocator);
     defer mt.deinit();
 
-    try mt.put("c", "3");
-    try mt.put("a", "1");
-    try mt.put("b", "2");
+    var buf: [32]u8 = undefined;
+    try mt.put("c", ValueCodec.encodePut(&buf, "3", 0));
+    try mt.put("a", ValueCodec.encodePut(&buf, "1", 0));
+    try mt.put("b", ValueCodec.encodePut(&buf, "2", 0));
 
     var it = try mt.iterator();
     defer it.deinit();
@@ -65,9 +73,10 @@ test "LSM memtable: seek positions at first key >= target" {
     var mt = try SortedVector.init(std.testing.allocator);
     defer mt.deinit();
 
-    try mt.put("a", "1");
-    try mt.put("c", "3");
-    try mt.put("e", "5");
+    var buf: [32]u8 = undefined;
+    try mt.put("a", ValueCodec.encodePut(&buf, "1", 0));
+    try mt.put("c", ValueCodec.encodePut(&buf, "3", 0));
+    try mt.put("e", ValueCodec.encodePut(&buf, "5", 0));
 
     var it = try mt.seek("b");
     defer it.deinit();
@@ -97,14 +106,15 @@ test "LSM memtable: custom comparator context flows into ordering" {
             };
         }
     }.cmp;
-    const RevVector = SortedVectorImpl(revCmp, Ctx);
+    const RevVector = SortedVectorImpl(revCmp, Ctx, ValueCodec);
 
     var mt = try RevVector.initWithContext(std.testing.allocator, .{ .reverse = true });
     defer mt.deinit();
 
-    try mt.put("a", "1");
-    try mt.put("c", "3");
-    try mt.put("b", "2");
+    var buf: [32]u8 = undefined;
+    try mt.put("a", ValueCodec.encodePut(&buf, "1", 0));
+    try mt.put("c", ValueCodec.encodePut(&buf, "3", 0));
+    try mt.put("b", ValueCodec.encodePut(&buf, "2", 0));
 
     var it = try mt.iterator();
     defer it.deinit();
@@ -116,7 +126,7 @@ test "LSM memtable: custom comparator context flows into ordering" {
     }
     try std.testing.expectEqual(@as(usize, 3), i);
 
-    try std.testing.expectEqualSlices(u8, "2", (try mt.get("b")).?);
+    try std.testing.expectEqualSlices(u8, "2", ValueCodec.payloadOf((try mt.get("b")).?));
 }
 
 test "LSM memtable: pointer context lets the comparator mutate shared state" {
@@ -127,7 +137,7 @@ test "LSM memtable: pointer context lets the comparator mutate shared state" {
             return algorithm.cmpSlices(u8, a, b, algorithm.CmpNum(u8).asc, {}) catch unreachable;
         }
     }.cmp;
-    const StatVector = SortedVectorImpl(statCmp, *SortStat);
+    const StatVector = SortedVectorImpl(statCmp, *SortStat, ValueCodec);
 
     var stat = SortStat{};
     var mt = try StatVector.initWithContext(std.testing.allocator, &stat);

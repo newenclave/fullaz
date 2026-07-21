@@ -1,11 +1,10 @@
-// Borrowed key/value pair. value is the encoded [tag][payload] blob (value.zig),
+// Borrowed key/value/lsn view, decoded from the encoded:
+//  [tag][lsn][payload] blob (value.zig).
 
-pub fn EntryImpl(comptime mut: bool) type {
+pub fn Entry(comptime LsnT: type) type {
     return struct {
-        key: if (mut) []u8 else []const u8,
-        value: if (mut) []u8 else []const u8,
+        key: []const u8,
+        value: []const u8,
+        lsn: LsnT,
     };
 }
-
-pub const Entry = EntryImpl(false);
-pub const EntryMut = EntryImpl(true);

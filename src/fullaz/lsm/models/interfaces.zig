@@ -1,10 +1,12 @@
 const std = @import("std");
 const iface = @import("../../contracts/interfaces.zig");
-const Entry = @import("entry.zig").Entry;
+const entry = @import("entry.zig");
 
 pub fn assertKvCursor(comptime It: type) void {
     iface.requiresErrorDeclaration(It, "Error");
+    iface.requiresTypeDeclaration(It, "LsnType");
     const E = It.Error;
+    const Entry = entry.Entry(It.LsnType);
     iface.requiresFnSignature(It, "peek", fn (*const It) E!?Entry);
     iface.requiresFnSignature(It, "advance", fn (*It) E!void);
     iface.requiresFnSignature(It, "deinit", fn (*It) void);
@@ -17,6 +19,7 @@ pub fn assertMemtable(comptime M: type) void {
     iface.requiresTypeDeclaration(M, "KeyInType");
     iface.requiresTypeDeclaration(M, "ValueInType");
     iface.requiresTypeDeclaration(M, "ValueOutType");
+    iface.requiresTypeDeclaration(M, "LsnType");
 
     const E = M.Error;
     const It = M.Iterator;
@@ -35,9 +38,7 @@ pub fn assertMemtable(comptime M: type) void {
     assertKvCursor(It);
 }
 
-// An immutable, already-flushed run. No deinit on the run itself closing a
-// loaded run is the Accessor's job (loadRun/closeRun), same split bpt uses for
-// LeafType/InodeType.
+// An immutable, already-flushed run.
 pub fn assertRun(comptime Model: type) void {
     const R = Model.RunType;
     iface.requiresErrorDeclaration(R, "Error");
@@ -63,6 +64,8 @@ pub fn assertRunAccessor(comptime Model: type) void {
 
     iface.requiresFnSignature(A, "loadActiveMemtable", fn (*A) Model.MemtableType);
     iface.requiresFnSignature(A, "deinitActiveMemtable", fn (*A, *Model.MemtableType) void);
+
+    iface.requiresFnSignature(A, "nextLsn", fn (*A) Model.MemtableType.LsnType);
 
     iface.requiresFnSignature(A, "runCount", fn (*const A) usize);
     iface.requiresFnSignature(A, "runIdAt", fn (*const A, usize) Model.RunIdType);

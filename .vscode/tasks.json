@@ -9,7 +9,7 @@
                 "build",
                 "install-tests",
                 "-Doptimize=Debug",
-                "-Dtest-filter=SkipList paged: iterator remove test"
+                "-Dtest-filter=LSM engine: multi-round soak test with SizeTieredStrategy"
             ],
             "problemMatcher": [],
             "group": {

@@ -2,27 +2,18 @@ const std = @import("std");
 const fullaz = @import("fullaz");
 const value = fullaz.lsm.value;
 
-test "LSM value: put round-trips tag and payload" {
+test "LSM value: module-level tagOf/isTombstone read the tag byte regardless of LsnT" {
     var buf: [64]u8 = undefined;
-    const enc = value.encodePut(&buf, "hello");
-    try std.testing.expectEqual(value.Tag.put, value.tagOf(enc));
-    try std.testing.expect(!value.isTombstone(enc));
-    try std.testing.expectEqualSlices(u8, "hello", value.payloadOf(enc));
-    try std.testing.expectEqual(@as(usize, 6), enc.len);
-}
 
-test "LSM value: tombstone tag is set with empty payload" {
-    var buf: [64]u8 = undefined;
-    const enc = value.encodeTombstone(&buf);
-    try std.testing.expectEqual(value.Tag.tombstone, value.tagOf(enc));
-    try std.testing.expect(value.isTombstone(enc));
-    try std.testing.expectEqual(@as(usize, 0), value.payloadOf(enc).len);
-    try std.testing.expectEqual(@as(usize, 1), enc.len);
-}
+    const Value16 = value.Value(u16, .native);
+    const put_enc = Value16.encodePut(&buf, "hello", 1);
+    try std.testing.expectEqual(value.Tag.put, value.tagOf(put_enc));
+    try std.testing.expect(!value.isTombstone(put_enc));
 
-test "LSM value: encodedLen is payload plus tag byte" {
-    try std.testing.expectEqual(@as(usize, 1), value.encodedLen(0));
-    try std.testing.expectEqual(@as(usize, 11), value.encodedLen(10));
+    const Value64 = value.Value(u64, .big);
+    const tomb_enc = Value64.encodeTombstone(&buf, 1);
+    try std.testing.expectEqual(value.Tag.tombstone, value.tagOf(tomb_enc));
+    try std.testing.expect(value.isTombstone(tomb_enc));
 }
 
 test "LSM value: generic Value put round-trips tag, lsn and payload" {

@@ -7,6 +7,7 @@ const value = fullaz.lsm.value;
 const Lsm = fullaz.lsm.Lsm;
 const SortedVector = fullaz.lsm.memtable.SortedVector;
 
+const ValueCodec = value.Value(u64, .native);
 const MemoryModel = models.MemoryModel(SortedVector);
 const Engine = Lsm(MemoryModel, strategy.NaiveMergeAllStrategy, flush_policy.ThresholdFlushPolicy);
 const SizeTieredEngine = Lsm(MemoryModel, strategy.SizeTieredStrategy, flush_policy.ThresholdFlushPolicy);
@@ -123,7 +124,10 @@ test "LSM engine: byte-size threshold triggers an automatic flush" {
     var model = try MemoryModel.init(allocator);
     defer model.deinit();
 
-    var lsm = Engine.init(&model, allocator, flush_policy.ThresholdFlushPolicy.init(5, null));
+    // Each 1-byte-payload put is key(1) + encodedLen(1) = 1 + (1 + 9) = 11
+    // bytes (header = 1 tag byte + 8-byte u64 lsn). One put alone (11) must
+    // stay under the threshold; two puts together (22) must cross it.
+    var lsm = Engine.init(&model, allocator, flush_policy.ThresholdFlushPolicy.init(15, null));
     defer lsm.deinit();
 
     try lsm.put("a", "1");
@@ -248,12 +252,14 @@ test "LSM engine: SizeTieredStrategy only merges the qualifying contiguous tier,
     var lsm = SizeTieredEngine.init(&model, allocator, never_flush);
     defer lsm.deinit();
 
+    // encodedLen(n) = n + 9 (1 tag byte + 8-byte u64 lsn header).
+    //
     // Oldest, "big" run: one key with a long payload -> tier 2
-    // (growth_factor=4: byte_size = 1 + encodedLen(20) = 22, in [16,63)).
+    // (growth_factor=4: byte_size = 1 + encodedLen(20) = 1 + 29 = 30, in [16,64)).
     try lsm.put("w", "OLDVALUE_OLDVALUE_12");
     try lsm.flush();
 
-    // Three small tier-0 runs (byte_size = 1 + encodedLen(1) = 3, in [1,4)).
+    // Three small tier-1 runs (byte_size = 1 + encodedLen(1) = 1 + 10 = 11, in [4,16)).
     try lsm.put("a", "1");
     try lsm.flush();
     try lsm.put("b", "2");
@@ -262,10 +268,10 @@ test "LSM engine: SizeTieredStrategy only merges the qualifying contiguous tier,
     try lsm.flush();
 
     // Fourth small run: a tombstone for "w" (byte_size = 1 + encodedLen(0)
-    // = 2, still tier 0). Newest-first order is now:
-    // [tombstone(w), c, b, a, big(w=OLDVALUE...)] -- four tier-0 runs
+    // = 1 + 9 = 10, still tier 1). Newest-first order is now:
+    // [tombstone(w), c, b, a, big(w=OLDVALUE...)] -- four tier-1 runs
     // followed by one tier-2 outlier. min_tier_runs=4, so this flush's
-    // auto-compact() merges exactly the four tier-0 runs.
+    // auto-compact() merges exactly the four tier-1 runs.
     try lsm.delete("w");
     try lsm.flush();
 
@@ -333,7 +339,7 @@ test "LSM engine: iterator() gives an ascending, deduped, tombstone-free view ac
     var i: usize = 0;
     while (try it.peek()) |e| : (try it.advance()) {
         try std.testing.expectEqualSlices(u8, expect_keys[i], e.key);
-        try std.testing.expectEqualSlices(u8, expect_vals[i], value.payloadOf(e.value));
+        try std.testing.expectEqualSlices(u8, expect_vals[i], ValueCodec.payloadOf(e.value));
         i += 1;
     }
     try std.testing.expectEqual(@as(usize, 3), i);
@@ -367,6 +373,78 @@ test "LSM engine: seek() positions at the first key >= target across the merged 
         i += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), i);
+}
+
+test "LSM engine: lsn values strictly increase across sequential puts" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    // Keys chosen so key order matches write order, so walking the merged
+    // iterator also walks puts in the order they were written.
+    try lsm.put("a", "1");
+    try lsm.put("b", "2");
+    try lsm.put("c", "3");
+
+    var it = try lsm.iterator();
+    defer it.deinit();
+
+    var last_lsn: ?u64 = null;
+    var count: usize = 0;
+    while (try it.peek()) |e| : (try it.advance()) {
+        if (last_lsn) |prev| {
+            try std.testing.expect(e.lsn > prev);
+        }
+        last_lsn = e.lsn;
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), count);
+}
+
+test "LSM engine: overwriting a key produces a strictly larger lsn" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try lsm.put("a", "1");
+    var it1 = try lsm.iterator();
+    const first_lsn = (try it1.peek()).?.lsn;
+    it1.deinit();
+
+    try lsm.put("a", "2");
+    var it2 = try lsm.iterator();
+    defer it2.deinit();
+    const second_lsn = (try it2.peek()).?.lsn;
+
+    try std.testing.expect(second_lsn > first_lsn);
+}
+
+test "LSM engine: delete also consumes an lsn from the counter" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = Engine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try lsm.put("a", "1"); // lsn 0
+    try lsm.delete("a"); // lsn 1, tombstoned -> dropped by iterator()
+    try lsm.put("b", "2"); // lsn 2, if delete() really consumed lsn 1
+
+    var it = try lsm.iterator();
+    defer it.deinit();
+    const e = (try it.peek()).?;
+    try std.testing.expectEqualSlices(u8, "b", e.key);
+    try std.testing.expectEqual(@as(u64, 2), e.lsn);
 }
 
 const SoakOp = union(enum) {

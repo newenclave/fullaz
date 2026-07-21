@@ -1,9 +1,11 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
 const models = fullaz.lsm.models;
+const value = fullaz.lsm.value;
 const SortedVector = fullaz.lsm.memtable.SortedVector;
 
 const MemoryModel = models.MemoryModel(SortedVector);
+const ValueCodec = value.Value(u64, .native);
 
 test "LSM MemoryModel: RunType satisfies the run contract" {
     comptime models.interfaces.assertRun(MemoryModel);
@@ -31,6 +33,18 @@ test "LSM MemoryModel: satisfies the full model contract" {
     comptime models.interfaces.assertModel(MemoryModel);
 }
 
+test "LSM MemoryModel: nextLsn returns increasing values starting at 0" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    const acc = model.getAccessor();
+    try std.testing.expectEqual(@as(u64, 0), acc.nextLsn());
+    try std.testing.expectEqual(@as(u64, 1), acc.nextLsn());
+    try std.testing.expectEqual(@as(u64, 2), acc.nextLsn());
+}
+
 test "LSM MemoryModel: buildRun drains a cursor into a readable run" {
     const allocator = std.testing.allocator;
 
@@ -41,8 +55,9 @@ test "LSM MemoryModel: buildRun drains a cursor into a readable run" {
     var active_table = acc.loadActiveMemtable();
     defer acc.deinitActiveMemtable(&active_table);
 
-    try active_table.put("a", "1");
-    try active_table.put("b", "2");
+    var buf: [16]u8 = undefined;
+    try active_table.put("a", ValueCodec.encodePut(&buf, "1", 0));
+    try active_table.put("b", ValueCodec.encodePut(&buf, "2", 0));
 
     var it = try active_table.iterator();
     const run_id = try acc.buildRun(&it);
@@ -50,9 +65,36 @@ test "LSM MemoryModel: buildRun drains a cursor into a readable run" {
 
     const run = (try acc.loadRun(run_id)).?;
     try std.testing.expectEqual(@as(usize, 2), run.count());
-    try std.testing.expectEqualSlices(u8, "1", (try run.get("a")).?);
-    try std.testing.expectEqualSlices(u8, "2", (try run.get("b")).?);
+    try std.testing.expectEqualSlices(u8, "1", ValueCodec.payloadOf((try run.get("a")).?));
+    try std.testing.expectEqualSlices(u8, "2", ValueCodec.payloadOf((try run.get("b")).?));
     try std.testing.expectEqual(@as(?[]const u8, null), try run.get("missing"));
+    acc.closeRun(run);
+}
+
+test "LSM MemoryModel: buildRun captures min_lsn and max_lsn from the drained entries" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    const acc = model.getAccessor();
+    var active_table = acc.loadActiveMemtable();
+    defer acc.deinitActiveMemtable(&active_table);
+
+    // Insertion order is not lsn order -- min/max must come from the lsn
+    // values themselves, not from cursor position.
+    var buf: [16]u8 = undefined;
+    try active_table.put("a", ValueCodec.encodePut(&buf, "1", 42));
+    try active_table.put("b", ValueCodec.encodePut(&buf, "2", 7));
+    try active_table.put("c", ValueCodec.encodePut(&buf, "3", 99));
+
+    var it = try active_table.iterator();
+    const run_id = try acc.buildRun(&it);
+    it.deinit();
+
+    const run = (try acc.loadRun(run_id)).?;
+    try std.testing.expectEqual(@as(u64, 7), run.minLsn());
+    try std.testing.expectEqual(@as(u64, 99), run.maxLsn());
     acc.closeRun(run);
 }
 
@@ -70,7 +112,8 @@ test "LSM MemoryModel: Bloom gate never produces a false negative" {
     while (i < 200) : (i += 1) {
         var kbuf: [16]u8 = undefined;
         const key = try std.fmt.bufPrint(&kbuf, "key-{d}", .{i});
-        try active_table.put(key, key);
+        var vbuf: [24]u8 = undefined;
+        try active_table.put(key, ValueCodec.encodePut(&vbuf, key, 0));
     }
 
     var it = try active_table.iterator();
@@ -83,7 +126,7 @@ test "LSM MemoryModel: Bloom gate never produces a false negative" {
     while (i < 200) : (i += 1) {
         var kbuf: [16]u8 = undefined;
         const key = try std.fmt.bufPrint(&kbuf, "key-{d}", .{i});
-        try std.testing.expectEqualSlices(u8, key, (try run.get(key)).?);
+        try std.testing.expectEqualSlices(u8, key, ValueCodec.payloadOf((try run.get(key)).?));
     }
 
     i = 0;
@@ -106,7 +149,8 @@ test "LSM MemoryModel: publish with an empty span inserts the new run at the fro
     var active_table = acc.loadActiveMemtable();
     defer acc.deinitActiveMemtable(&active_table);
 
-    try active_table.put("a", "1");
+    var buf: [16]u8 = undefined;
+    try active_table.put("a", ValueCodec.encodePut(&buf, "1", 0));
     var it = try active_table.iterator();
     const run_id = try acc.buildRun(&it);
     it.deinit();
@@ -127,22 +171,24 @@ test "LSM MemoryModel: publish replaces a contiguous span and destroys the old r
     var active_table = acc.loadActiveMemtable();
     defer acc.deinitActiveMemtable(&active_table);
 
+    var buf: [16]u8 = undefined;
+
     // Three flushes: put one key, build a run from it, publish at the front.
-    try active_table.put("a", "1");
+    try active_table.put("a", ValueCodec.encodePut(&buf, "1", 0));
     var it0 = try active_table.iterator();
     const run0 = try acc.buildRun(&it0);
     it0.deinit();
     try active_table.reset();
     try acc.publish(&.{}, run0);
 
-    try active_table.put("b", "2");
+    try active_table.put("b", ValueCodec.encodePut(&buf, "2", 0));
     var it1 = try active_table.iterator();
     const run1 = try acc.buildRun(&it1);
     it1.deinit();
     try active_table.reset();
     try acc.publish(&.{}, run1);
 
-    try active_table.put("c", "3");
+    try active_table.put("c", ValueCodec.encodePut(&buf, "3", 0));
     var it2 = try active_table.iterator();
     const run2 = try acc.buildRun(&it2);
     it2.deinit();
@@ -158,8 +204,8 @@ test "LSM MemoryModel: publish replaces a contiguous span and destroys the old r
     // Merge the two newest runs (a contiguous span) into one new run.
     var merged = try SortedVector.init(allocator);
     defer merged.deinit();
-    try merged.put("b", "2");
-    try merged.put("c", "3");
+    try merged.put("b", ValueCodec.encodePut(&buf, "2", 0));
+    try merged.put("c", ValueCodec.encodePut(&buf, "3", 0));
     var merged_it = try merged.iterator();
     const new_run = try acc.buildRun(&merged_it);
     merged_it.deinit();
@@ -175,7 +221,7 @@ test "LSM MemoryModel: publish replaces a contiguous span and destroys the old r
     try std.testing.expectEqual(@as(?MemoryModel.RunType, null), try acc.loadRun(run1));
 
     const run = (try acc.loadRun(new_run)).?;
-    try std.testing.expectEqualSlices(u8, "2", (try run.get("b")).?);
-    try std.testing.expectEqualSlices(u8, "3", (try run.get("c")).?);
+    try std.testing.expectEqualSlices(u8, "2", ValueCodec.payloadOf((try run.get("b")).?));
+    try std.testing.expectEqualSlices(u8, "3", ValueCodec.payloadOf((try run.get("c")).?));
     acc.closeRun(run);
 }

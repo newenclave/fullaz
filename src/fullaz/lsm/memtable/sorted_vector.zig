@@ -1,17 +1,23 @@
 const std = @import("std");
 const algorithm = @import("../../core/algorithm.zig");
 const models_iface = @import("../models/interfaces.zig");
+const entry = @import("../models/entry.zig");
+const value = @import("../value.zig");
 
-const Entry = @import("../models/entry.zig").Entry;
-const EntryMut = @import("../models/entry.zig").EntryMut;
-
-const Rec = EntryMut;
+// Owned key/value storage slot. lsn is not cached here.
+const Rec = struct {
+    key: []u8,
+    value: []u8,
+};
 
 fn keyOrder(_: void, a: []const u8, b: []const u8) algorithm.Order {
     return algorithm.cmpSlices(u8, a, b, algorithm.CmpNum(u8).asc, {}) catch unreachable;
 }
 
-pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
+pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type, comptime ValueCodec: type) type {
+    const LsnT = ValueCodec.Lsn;
+    const Entry = entry.Entry(LsnT);
+
     const cmpRecKeyImpl = struct {
         fn cmp(ctx: CmpCtx, rec: Rec, key: []const u8) algorithm.Order {
             return keyCmp(ctx, rec.key, key);
@@ -27,10 +33,13 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
         pub const KeyInType = []const u8;
         pub const ValueInType = []const u8;
         pub const ValueOutType = []const u8;
+        pub const LsnType = LsnT;
+        pub const ValueCodecType = ValueCodec;
 
         pub const Iterator = struct {
             const ItSelf = @This();
             pub const Error = error{};
+            pub const LsnType = LsnT;
 
             recs: []const Rec,
             idx: usize,
@@ -40,7 +49,7 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
                     return null;
                 }
                 const r = self.recs[self.idx];
-                return Entry{ .key = r.key, .value = r.value };
+                return Entry{ .key = r.key, .value = r.value, .lsn = ValueCodec.lsnOf(r.value) };
             }
 
             pub fn advance(self: *ItSelf) ItSelf.Error!void {
@@ -86,10 +95,10 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
             self.bytes = 0;
         }
 
-        pub fn put(self: *Self, key: KeyInType, value: ValueInType) Error!void {
+        pub fn put(self: *Self, key: KeyInType, value_in: ValueInType) Error!void {
             const pos = self.position(key);
             if (pos < self.recs.items.len and keyCmp(self.cmp_ctx, self.recs.items[pos].key, key) == .eq) {
-                const new_val = try self.allocator.dupe(u8, value);
+                const new_val = try self.allocator.dupe(u8, value_in);
                 const rec = &self.recs.items[pos];
                 self.bytes -= rec.value.len;
                 self.allocator.free(rec.value);
@@ -99,7 +108,7 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
             }
             const k = try self.allocator.dupe(u8, key);
             errdefer self.allocator.free(k);
-            const v = try self.allocator.dupe(u8, value);
+            const v = try self.allocator.dupe(u8, value_in);
             errdefer self.allocator.free(v);
 
             try self.recs.insert(self.allocator, pos, .{ .key = k, .value = v });
@@ -149,4 +158,4 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type) type {
     };
 }
 
-pub const SortedVector = SortedVectorImpl(keyOrder, void);
+pub const SortedVector = SortedVectorImpl(keyOrder, void, value.Value(u64, .native));

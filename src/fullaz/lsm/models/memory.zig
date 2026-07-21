@@ -14,6 +14,7 @@ pub fn MemoryModel(comptime MemtableT: type) type {
     const RunId = usize;
     const BloomBits = core.bitset.BitSet(BloomWord, .native);
     const target_false_positive_rate: f64 = 0.01;
+    const LsnT = MemtableT.LsnType;
 
     const StoredRun = struct {
         const Self = @This();
@@ -22,6 +23,8 @@ pub fn MemoryModel(comptime MemtableT: type) type {
         bloom_buf: []u8,
         bloom_bits: BloomBits,
         bloom_k: usize,
+        min_lsn: LsnT,
+        max_lsn: LsnT,
 
         fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             self.table.deinit();
@@ -34,6 +37,7 @@ pub fn MemoryModel(comptime MemtableT: type) type {
         active: MemtableT,
         run_table: std.ArrayList(?*StoredRun),
         run_order: std.ArrayList(RunId),
+        next_lsn: LsnT,
     };
 
     const RunImpl = struct {
@@ -55,6 +59,14 @@ pub fn MemoryModel(comptime MemtableT: type) type {
 
         pub fn count(self: *const Self) usize {
             return self.stored.table.count();
+        }
+
+        pub fn minLsn(self: *const Self) LsnT {
+            return self.stored.min_lsn;
+        }
+
+        pub fn maxLsn(self: *const Self) LsnT {
+            return self.stored.max_lsn;
         }
 
         pub fn get(self: *const Self, key: []const u8) Error!?[]const u8 {
@@ -84,6 +96,8 @@ pub fn MemoryModel(comptime MemtableT: type) type {
         pub const KeyInType = MemtableT.KeyInType;
         pub const ValueInType = MemtableT.ValueInType;
         pub const ValueOutType = MemtableT.ValueOutType;
+        pub const LsnType = MemtableT.LsnType;
+        pub const ValueCodec = MemtableT.ValueCodecType;
 
         table: *MemtableT,
 
@@ -141,6 +155,7 @@ pub fn MemoryModel(comptime MemtableT: type) type {
                     .active = try MemtableT.init(allocator),
                     .run_table = try std.ArrayList(?*StoredRun).initCapacity(allocator, 2),
                     .run_order = try std.ArrayList(RunId).initCapacity(allocator, 2),
+                    .next_lsn = 0,
                 },
             };
         }
@@ -164,6 +179,12 @@ pub fn MemoryModel(comptime MemtableT: type) type {
         pub fn deinitActiveMemtable(self: *Self, t: *MemtableWrapper) void {
             _ = self;
             t.deinit();
+        }
+
+        pub fn nextLsn(self: *Self) LsnT {
+            const lsn = self.ctx.next_lsn;
+            self.ctx.next_lsn += 1;
+            return lsn;
         }
 
         pub fn runCount(self: *const Self) usize {
@@ -196,9 +217,27 @@ pub fn MemoryModel(comptime MemtableT: type) type {
             stored.table = try MemtableT.init(self.ctx.allocator);
             errdefer stored.table.deinit();
 
+            var min_lsn: LsnT = undefined;
+            var max_lsn: LsnT = undefined;
+            var seen_any = false;
+
             while (try cursor.peek()) |e| : (try cursor.advance()) {
                 try stored.table.put(e.key, e.value);
+                if (!seen_any) {
+                    min_lsn = e.lsn;
+                    max_lsn = e.lsn;
+                    seen_any = true;
+                } else {
+                    if (e.lsn < min_lsn) {
+                        min_lsn = e.lsn;
+                    }
+                    if (e.lsn > max_lsn) {
+                        max_lsn = e.lsn;
+                    }
+                }
             }
+            stored.min_lsn = min_lsn;
+            stored.max_lsn = max_lsn;
 
             var bloom = Bloom.init();
             defer bloom.deinit();

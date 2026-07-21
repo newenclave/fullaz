@@ -1,5 +1,5 @@
 const std = @import("std");
-const Entry = @import("models/entry.zig").Entry;
+const entry_mod = @import("models/entry.zig");
 const value = @import("value.zig");
 const algorithm = @import("../core/algorithm.zig");
 
@@ -11,10 +11,14 @@ fn keyOrder(_: void, a: []const u8, b: []const u8) !algorithm.Order {
 // choose the best candidate from a set of sorted sources, and skip duplicates.
 // it doesn't own the cursors
 pub fn MergeCursorImpl(comptime CursorT: type, comptime keyCmp: anytype, comptime CmpCtx: type) type {
+    const LsnT = CursorT.LsnType;
+    const Entry = entry_mod.Entry(LsnT);
+
     return struct {
         const Self = @This();
 
         pub const Error = CursorT.Error;
+        pub const LsnType = LsnT;
 
         cursors: []CursorT,
         drop_tombstones: bool,

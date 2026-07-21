@@ -4,7 +4,7 @@ const strategy_mod = @import("strategy.zig");
 const flush_policy_mod = @import("flush_policy.zig");
 const merge_cursor_mod = @import("merge_cursor.zig");
 const value = @import("value.zig");
-const Entry = @import("models/entry.zig").Entry;
+const entry_mod = @import("models/entry.zig");
 
 pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comptime FlushPolicyT: type) type {
     comptime models_iface.assertModel(ModelT);
@@ -17,6 +17,10 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
         Strategy.Error ||
         std.mem.Allocator.Error;
 
+    const ValueCodec = ModelT.MemtableType.ValueCodec;
+    const LsnT = ModelT.MemtableType.LsnType;
+    const Entry = entry_mod.Entry(LsnT);
+
     const MergeCursor = merge_cursor_mod.MergeCursor(ModelT.RunType.Iterator);
 
     const Winner = enum {
@@ -28,6 +32,7 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
     const IteratorImpl = struct {
         const IterSelf = @This();
         pub const Error = EngineError;
+        pub const LsnType = LsnT;
 
         mt_it: ModelT.MemtableType.Iterator,
         merged: MergeCursor,
@@ -135,9 +140,10 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
 
         pub fn put(self: *Self, key: KeyInType, payload: ValueInType) Error!void {
             const acc = self.model.getAccessor();
-            const buf = try self.allocator.alloc(u8, value.encodedLen(payload.len));
+            const lsn = acc.nextLsn();
+            const buf = try self.allocator.alloc(u8, ValueCodec.encodedLen(payload.len));
             defer self.allocator.free(buf);
-            const enc = value.encodePut(buf, payload);
+            const enc = ValueCodec.encodePut(buf, payload, lsn);
 
             {
                 var active_table = acc.loadActiveMemtable();
@@ -150,9 +156,10 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
 
         pub fn delete(self: *Self, key: KeyInType) Error!void {
             const acc = self.model.getAccessor();
+            const lsn = acc.nextLsn();
 
-            var buf: [1]u8 = undefined;
-            const enc = value.encodeTombstone(&buf);
+            var buf: [ValueCodec.encodedLen(0)]u8 = undefined;
+            const enc = ValueCodec.encodeTombstone(&buf, lsn);
 
             {
                 var active_table = acc.loadActiveMemtable();
@@ -340,10 +347,10 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
         }
 
         fn decode(enc: ValueEncodedType) ?ValueOutType {
-            if (value.isTombstone(enc)) {
+            if (ValueCodec.isTombstone(enc)) {
                 return null;
             }
-            return value.payloadOf(enc);
+            return ValueCodec.payloadOf(enc);
         }
     };
 }
