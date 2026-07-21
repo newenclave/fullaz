@@ -49,7 +49,12 @@ pub fn SortedVectorImpl(comptime keyCmp: anytype, comptime CmpCtx: type, comptim
                     return null;
                 }
                 const r = self.recs[self.idx];
-                return Entry{ .key = r.key, .value = r.value, .lsn = ValueCodec.lsnOf(r.value) };
+                return Entry{
+                    .key = r.key,
+                    .value = r.value,
+                    .payload = if (!value.isTombstone(r.value)) ValueCodec.payloadOf(r.value) else null,
+                    .lsn = ValueCodec.lsnOf(r.value),
+                };
             }
 
             pub fn advance(self: *ItSelf) ItSelf.Error!void {

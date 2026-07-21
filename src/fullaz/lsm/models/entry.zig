@@ -5,6 +5,7 @@ pub fn Entry(comptime LsnT: type) type {
     return struct {
         key: []const u8,
         value: []const u8,
+        payload: ?[]const u8 = null,
         lsn: LsnT,
     };
 }
