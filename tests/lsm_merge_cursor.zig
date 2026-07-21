@@ -46,18 +46,20 @@ test "LSM MergeCursor: newest-wins dedup across three sources" {
     var buf_bZ: [16]u8 = undefined;
     var buf_d4: [16]u8 = undefined;
 
+    // cursor0 is written newest (highest lsn), cursor2 oldest -- recency is
+    // now decided by these lsn values, not by cursor array position.
     const cursor0 = FakeCursor{ .entries = &.{
-        .{ .key = "a", .value = ValueCodec.encodePut(&buf_a1, "1", 0), .lsn = 0 },
-        .{ .key = "c", .value = ValueCodec.encodePut(&buf_c3, "3", 0), .lsn = 0 },
+        .{ .key = "a", .value = ValueCodec.encodePut(&buf_a1, "1", 100), .lsn = 100 },
+        .{ .key = "c", .value = ValueCodec.encodePut(&buf_c3, "3", 101), .lsn = 101 },
     } };
     const cursor1 = FakeCursor{ .entries = &.{
-        .{ .key = "a", .value = ValueCodec.encodePut(&buf_aX, "X", 0), .lsn = 0 },
-        .{ .key = "b", .value = ValueCodec.encodePut(&buf_b2, "2", 0), .lsn = 0 },
+        .{ .key = "a", .value = ValueCodec.encodePut(&buf_aX, "X", 50), .lsn = 50 },
+        .{ .key = "b", .value = ValueCodec.encodePut(&buf_b2, "2", 51), .lsn = 51 },
     } };
     const cursor2 = FakeCursor{ .entries = &.{
-        .{ .key = "a", .value = ValueCodec.encodePut(&buf_aY, "Y", 0), .lsn = 0 },
-        .{ .key = "b", .value = ValueCodec.encodePut(&buf_bZ, "Z", 0), .lsn = 0 },
-        .{ .key = "d", .value = ValueCodec.encodePut(&buf_d4, "4", 0), .lsn = 0 },
+        .{ .key = "a", .value = ValueCodec.encodePut(&buf_aY, "Y", 10), .lsn = 10 },
+        .{ .key = "b", .value = ValueCodec.encodePut(&buf_bZ, "Z", 11), .lsn = 11 },
+        .{ .key = "d", .value = ValueCodec.encodePut(&buf_d4, "4", 12), .lsn = 12 },
     } };
 
     var cursors = [_]FakeCursor{ cursor0, cursor1, cursor2 };
@@ -75,6 +77,38 @@ test "LSM MergeCursor: newest-wins dedup across three sources" {
     try std.testing.expectEqual(@as(usize, 4), i);
 }
 
+test "LSM MergeCursor: tie-break is decided by lsn, not cursor array position" {
+    var buf0: [16]u8 = undefined;
+    var buf1: [16]u8 = undefined;
+    var buf2: [16]u8 = undefined;
+
+    const oldest = FakeCursor{ .entries = &.{
+        .{ .key = "a", .value = ValueCodec.encodePut(&buf0, "old", 5), .lsn = 5 },
+    } };
+    const mid = FakeCursor{ .entries = &.{
+        .{ .key = "a", .value = ValueCodec.encodePut(&buf1, "mid", 10), .lsn = 10 },
+    } };
+    const newest = FakeCursor{ .entries = &.{
+        .{ .key = "a", .value = ValueCodec.encodePut(&buf2, "new", 20), .lsn = 20 },
+    } };
+
+    const arrangements = [_][3]FakeCursor{
+        .{ oldest, mid, newest },
+        .{ newest, oldest, mid },
+        .{ mid, newest, oldest },
+    };
+
+    for (arrangements) |arrangement| {
+        var cursors = arrangement;
+        var merged = try M.init(&cursors, false);
+        defer merged.deinit();
+
+        const e = (try merged.peek()).?;
+        try std.testing.expectEqualSlices(u8, "new", ValueCodec.payloadOf(e.value));
+        try std.testing.expectEqual(@as(u64, 20), e.lsn);
+    }
+}
+
 test "LSM MergeCursor: drop_tombstones consumes the shadowed key entirely" {
     var buf_a1: [16]u8 = undefined;
     var buf_b2: [16]u8 = undefined;
@@ -82,12 +116,12 @@ test "LSM MergeCursor: drop_tombstones consumes the shadowed key entirely" {
     var buf_btomb: [16]u8 = undefined;
 
     const newer = FakeCursor{ .entries = &.{
-        .{ .key = "b", .value = ValueCodec.encodeTombstone(&buf_btomb, 0), .lsn = 0 },
+        .{ .key = "b", .value = ValueCodec.encodeTombstone(&buf_btomb, 100), .lsn = 100 },
     } };
     const older = FakeCursor{ .entries = &.{
-        .{ .key = "a", .value = ValueCodec.encodePut(&buf_a1, "1", 0), .lsn = 0 },
-        .{ .key = "b", .value = ValueCodec.encodePut(&buf_b2, "2", 0), .lsn = 0 },
-        .{ .key = "c", .value = ValueCodec.encodePut(&buf_c3, "3", 0), .lsn = 0 },
+        .{ .key = "a", .value = ValueCodec.encodePut(&buf_a1, "1", 10), .lsn = 10 },
+        .{ .key = "b", .value = ValueCodec.encodePut(&buf_b2, "2", 11), .lsn = 11 },
+        .{ .key = "c", .value = ValueCodec.encodePut(&buf_c3, "3", 12), .lsn = 12 },
     } };
 
     var cursors = [_]FakeCursor{ newer, older };
@@ -110,12 +144,12 @@ test "LSM MergeCursor: without drop_tombstones the tombstone is carried through"
     var buf_btomb: [16]u8 = undefined;
 
     const newer = FakeCursor{ .entries = &.{
-        .{ .key = "b", .value = ValueCodec.encodeTombstone(&buf_btomb, 0), .lsn = 0 },
+        .{ .key = "b", .value = ValueCodec.encodeTombstone(&buf_btomb, 100), .lsn = 100 },
     } };
     const older = FakeCursor{ .entries = &.{
-        .{ .key = "a", .value = ValueCodec.encodePut(&buf_a1, "1", 0), .lsn = 0 },
-        .{ .key = "b", .value = ValueCodec.encodePut(&buf_b2, "2", 0), .lsn = 0 },
-        .{ .key = "c", .value = ValueCodec.encodePut(&buf_c3, "3", 0), .lsn = 0 },
+        .{ .key = "a", .value = ValueCodec.encodePut(&buf_a1, "1", 10), .lsn = 10 },
+        .{ .key = "b", .value = ValueCodec.encodePut(&buf_b2, "2", 11), .lsn = 11 },
+        .{ .key = "c", .value = ValueCodec.encodePut(&buf_c3, "3", 12), .lsn = 12 },
     } };
 
     var cursors = [_]FakeCursor{ newer, older };
@@ -168,7 +202,7 @@ test "LSM MergeCursor: an all-tombstone run does not overflow the stack" {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const key = try std.fmt.bufPrint(&keys[i], "key-{d:0>6}", .{i});
-        entries[i] = .{ .key = key, .value = ValueCodec.encodeTombstone(&bufs[i], 0), .lsn = 0 };
+        entries[i] = .{ .key = key, .value = ValueCodec.encodeTombstone(&bufs[i], @intCast(i)), .lsn = @intCast(i) };
     }
 
     const cursor = FakeCursor{ .entries = entries };

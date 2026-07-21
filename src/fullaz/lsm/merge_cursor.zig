@@ -9,6 +9,8 @@ fn keyOrder(_: void, a: []const u8, b: []const u8) !algorithm.Order {
 
 // a part of Merge Sort.
 // choose the best candidate from a set of sorted sources, and skip duplicates.
+// on a tied key the source with the larger lsn wins -- cursors may be
+// passed in any order.
 // it doesn't own the cursors
 pub fn MergeCursorImpl(comptime CursorT: type, comptime keyCmp: anytype, comptime CmpCtx: type) type {
     const LsnT = CursorT.LsnType;
@@ -66,16 +68,26 @@ pub fn MergeCursorImpl(comptime CursorT: type, comptime keyCmp: anytype, comptim
         // find a new best candidate.
         // we do not start from the begginning of the cursors,
         // because the cursors change after c.advance()
+        //
         fn normalize(self: *Self) Error!void {
             while (true) {
                 var best: ?usize = null;
                 var best_key: []const u8 = undefined;
+                var best_lsn: LsnT = undefined;
 
                 for (self.cursors, 0..) |*c, i| {
                     const e = (try c.peek()) orelse continue;
-                    if (best == null or try keyCmp(self.cmp_ctx, e.key, best_key) == .lt) {
+                    if (best == null) {
                         best = i;
                         best_key = e.key;
+                        best_lsn = e.lsn;
+                        continue;
+                    }
+                    const order = try keyCmp(self.cmp_ctx, e.key, best_key);
+                    if (order == .lt or (order == .eq and e.lsn > best_lsn)) {
+                        best = i;
+                        best_key = e.key;
+                        best_lsn = e.lsn;
                     }
                 }
 

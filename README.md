@@ -152,7 +152,7 @@ If something can be made simpler for learning purposes, it probably will be.
 - [X]  **LSM value/tombstone encoding, Bloom filter, sorted-vector memtable**
 - [X]  **In-memory LSM engine** (memtable + flat run list, pluggable compaction strategy + flush policy)
 - [ ]  **Paged LSM model** (`page/lsm.zig` on-page run format, page-cache-backed runs, WAL integration)
-- [ ]  **Per-record sequence numbers (LSN)** (removes the contiguity requirement on compaction strategies)
+- [ ]  **Per-record sequence numbers (LSN)** (removes the contiguity requirement on compaction strategies). In progress
 
 ## Status
 
