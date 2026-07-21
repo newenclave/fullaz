@@ -265,11 +265,13 @@ pub fn MemoryModel(comptime MemtableT: type) type {
             return run_id;
         }
 
+        // place the new_id into old_ids[0] position
         pub fn publish(self: *Self, old_ids: []const RunId, new_id: ?RunId) Error!void {
             const at = if (old_ids.len == 0) 0 else self.positionOf(old_ids[0]).?;
 
-            for (old_ids) |_| {
-                _ = self.ctx.run_order.orderedRemove(at);
+            for (old_ids) |old_id| {
+                const pos = self.positionOf(old_id).?;
+                _ = self.ctx.run_order.orderedRemove(pos);
             }
             for (old_ids) |old_id| {
                 self.destroyRunAt(old_id);

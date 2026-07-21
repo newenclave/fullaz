@@ -45,7 +45,7 @@ test "LSM SizeTieredStrategy satisfies the compaction-strategy contract" {
     comptime strategy.assertCompactionStrategy(strategy.SizeTieredStrategy(usize), usize);
 }
 
-test "LSM SizeTieredStrategy: a qualifying contiguous tier merges, the outlier is left alone" {
+test "LSM SizeTieredStrategy: a qualifying tier merges, the outlier is left alone" {
     const allocator = std.testing.allocator;
     const Strategy = strategy.SizeTieredStrategy(usize);
 
@@ -81,13 +81,14 @@ test "LSM SizeTieredStrategy: no tier has enough runs plans nothing" {
     try std.testing.expectEqual(@as(usize, 0), ids.len);
 }
 
-test "LSM SizeTieredStrategy: non-adjacent same-tier runs are not merged into one span" {
+test "LSM SizeTieredStrategy: non-adjacent same-tier runs are merged together (no adjacency requirement)" {
     const allocator = std.testing.allocator;
     const Strategy = strategy.SizeTieredStrategy(usize);
 
     // Two tier-1 blocks (sizes 5,6 and 7,8,9,10) separated by one tier-3
-    // run (size 100). The blocks must stay separate -- same tier value,
-    // but not adjacent -- and the longer (second) block wins.
+    // run (size 100). Adjacency is no longer required -- all six tier-1
+    // runs plan together, the tier-3 outlier is left alone. Ids are
+    // returned in their original relative order.
     const runs = [_]RunInfo{
         .{ .id = 6, .byte_size = 5, .count = 1 },
         .{ .id = 5, .byte_size = 6, .count = 1 },
@@ -100,5 +101,5 @@ test "LSM SizeTieredStrategy: non-adjacent same-tier runs are not merged into on
     const ids = try Strategy.planAfterFlush(allocator, &runs);
     defer allocator.free(ids);
 
-    try std.testing.expectEqualSlices(usize, &.{ 3, 2, 1, 0 }, ids);
+    try std.testing.expectEqualSlices(usize, &.{ 6, 5, 3, 2, 1, 0 }, ids);
 }

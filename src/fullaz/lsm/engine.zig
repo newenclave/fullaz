@@ -180,6 +180,9 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
             }
 
             const run_count = acc.runCount();
+            var best: ?ValueEncodedType = null;
+            var best_lsn: LsnT = undefined;
+
             var i: usize = 0;
             while (i < run_count) : (i += 1) {
                 const run_id = acc.runIdAt(i);
@@ -189,10 +192,17 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
                 defer acc.closeRun(run);
 
                 if (try run.get(key)) |enc| {
-                    return decode(enc);
+                    const lsn = ValueCodec.lsnOf(enc);
+                    if (best == null or lsn > best_lsn) {
+                        best = enc;
+                        best_lsn = lsn;
+                    }
                 }
             }
 
+            if (best) |enc| {
+                return decode(enc);
+            }
             return null;
         }
 
@@ -256,14 +266,7 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
                 return;
             }
 
-            var lo: usize = 0;
-            while ((lo < run_infos.len) and (run_infos[lo].id != ids[0])) : (lo += 1) {}
-            std.debug.assert(lo < run_infos.len);
-
-            for (ids, 0..) |id, k| {
-                std.debug.assert(run_infos[lo + k].id == id);
-            }
-            const reaches_oldest = (lo + ids.len == run_count);
+            const drop_tombstones = (ids.len == run_count);
 
             const runs = try self.allocator.alloc(RunType, ids.len);
             defer self.allocator.free(runs);
@@ -283,7 +286,7 @@ pub fn Lsm(comptime ModelT: type, comptime StrategyFactory: fn (type) type, comp
                 cursors[k] = try runs[k].iterator();
             }
 
-            var merged = try MergeCursor.init(cursors, reaches_oldest);
+            var merged = try MergeCursor.init(cursors, drop_tombstones);
             defer merged.deinit();
 
             const new_id = try acc.buildRun(&merged);

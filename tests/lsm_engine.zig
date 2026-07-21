@@ -304,6 +304,104 @@ test "LSM engine: SizeTieredStrategy only merges the qualifying contiguous tier,
     try std.testing.expect(found_w_tombstone);
 }
 
+test "LSM engine: SizeTieredStrategy merges same-tier runs even when a different-tier run sits between them" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    var lsm = SizeTieredEngine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    // Newest-first after four flushes: [c, z(outlier), b, a] -- three
+    // tier-1 runs (a,b,c) with the tier-2 outlier "z" sandwiched between
+    // b and c, not at either end. Before this fix, SizeTieredStrategy could
+    // only combine a maximal CONTIGUOUS same-tier block, so a/b (below the
+    // outlier) and c (above it) could never merge into one run together.
+    try lsm.put("a", "1");
+    try lsm.flush();
+    try lsm.put("b", "2");
+    try lsm.flush();
+    try lsm.put("z", "OLDVALUE_OLDVALUE_12");
+    try lsm.flush();
+    try lsm.put("c", "3");
+    try lsm.flush();
+
+    const acc = model.getAccessor();
+    try std.testing.expectEqual(@as(usize, 4), acc.runCount());
+
+    // Fourth tier-1 flush: min_tier_runs=4 is now reached across a
+    // non-contiguous set (a, b, c, d), skipping the tier-2 outlier "z".
+    try lsm.put("d", "4");
+    try lsm.flush();
+
+    try std.testing.expectEqual(@as(usize, 2), acc.runCount());
+
+    try std.testing.expectEqualSlices(u8, "1", (try lsm.get("a")).?);
+    try std.testing.expectEqualSlices(u8, "2", (try lsm.get("b")).?);
+    try std.testing.expectEqualSlices(u8, "3", (try lsm.get("c")).?);
+    try std.testing.expectEqualSlices(u8, "4", (try lsm.get("d")).?);
+    try std.testing.expectEqualSlices(u8, "OLDVALUE_OLDVALUE_12", (try lsm.get("z")).?);
+}
+
+test "LSM engine: get() finds the true newest value even when its run is not newest-first in run_order" {
+    const allocator = std.testing.allocator;
+
+    var model = try MemoryModel.init(allocator);
+    defer model.deinit();
+
+    // SizeTieredEngine, not Engine: NaiveMergeAllStrategy would auto-merge
+    // everything back together on every flush, undoing the setup below
+    // before this test gets to inspect it. Three runs, all a similar small
+    // size, never reach min_tier_runs=4, so nothing auto-compacts here.
+    var lsm = SizeTieredEngine.init(&model, allocator, never_flush);
+    defer lsm.deinit();
+
+    try lsm.put("k", "early");
+    try lsm.flush();
+
+    try lsm.put("k", "fresh");
+    try lsm.flush();
+
+    try lsm.put("filler", "x");
+    try lsm.flush();
+
+    const acc = model.getAccessor();
+    try std.testing.expectEqual(@as(usize, 3), acc.runCount());
+
+    // Newest-first right now: [filler, fresh(k), early(k)]. Simulate a
+    // non-contiguous compaction that merges "filler" and "early" directly,
+    // skipping "fresh" in between -- carrying early's STALE "k" straight
+    // through unchanged, exactly like a real merge would (nothing in the
+    // runs actually being merged shadows it).
+    const filler_id = acc.runIdAt(0);
+    const early_id = acc.runIdAt(2);
+
+    var merged_source = try SortedVector.init(allocator);
+    defer merged_source.deinit();
+    {
+        const filler_run = (try acc.loadRun(filler_id)).?;
+        defer acc.closeRun(filler_run);
+        try merged_source.put("filler", (try filler_run.get("filler")).?);
+
+        const early_run = (try acc.loadRun(early_id)).?;
+        defer acc.closeRun(early_run);
+        try merged_source.put("k", (try early_run.get("k")).?);
+    }
+    var it = try merged_source.iterator();
+    const merged_id = try acc.buildRun(&it);
+    it.deinit();
+
+    try acc.publish(&.{ filler_id, early_id }, merged_id);
+
+    // run_order is now [merged, fresh] -- "merged" sits BEFORE "fresh" even
+    // though it only holds the stale "k". get() must compare lsn, not
+    // position, to still find "fresh".
+    try std.testing.expectEqual(@as(usize, 2), acc.runCount());
+    try std.testing.expectEqualSlices(u8, "fresh", (try lsm.get("k")).?);
+    try std.testing.expectEqualSlices(u8, "x", (try lsm.get("filler")).?);
+}
+
 test "LSM engine: Iterator satisfies the KvCursor contract" {
     comptime models.interfaces.assertKvCursor(SizeTieredEngine.Iterator);
 }

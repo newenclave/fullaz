@@ -13,6 +13,10 @@ pub fn RunInfo(comptime RunIdType: type) type {
 // strategy should return a list. It's for now.
 // TODO: needs to be fixed and moved to accessor?
 // the caller is responsible for freeing the list.
+//
+// the returned ids may be any subset of runs (any combination, any order --
+// MergeCursor's tie-break is lsn-based, not position-based, and engine.compact()
+// opens each returned id directly rather than assuming a contiguous span).
 pub fn assertCompactionStrategy(comptime Strategy: type, comptime RunIdType: type) void {
     iface.requiresErrorDeclaration(Strategy, "Error");
     iface.requiresFnSignature(
@@ -47,33 +51,40 @@ pub fn SizeTieredStrategy(comptime RunIdType: type) type {
         pub const growth_factor: usize = 4;
         pub const min_tier_runs: usize = 4;
 
+        // Groups every run by tier, regardless of position, and returns the
+        // largest tier group (ids in their original relative order) once it
+        // reaches min_tier_runs. No adjacency requirement: a different-tier
+        // run sitting between two same-tier runs no longer blocks them from
+        // being merged together.
         pub fn planAfterFlush(allocator: std.mem.Allocator, runs: []const RunInfo(RunIdType)) Error![]RunIdType {
-            var best_start: usize = 0;
-            var best_len: usize = 0;
+            var best_tier: usize = 0;
+            var best_count: usize = 0;
 
-            var i: usize = 0;
-            while (i < runs.len) {
-                const tier = tierOf(runs[i].byte_size);
-                var j = i + 1;
-                while (j < runs.len and tierOf(runs[j].byte_size) == tier) {
-                    j += 1;
+            for (runs) |r| {
+                const tier = tierOf(r.byte_size);
+                var count: usize = 0;
+                for (runs) |r2| {
+                    if (tierOf(r2.byte_size) == tier) {
+                        count += 1;
+                    }
                 }
-
-                const len = j - i;
-                if (len > best_len) {
-                    best_len = len;
-                    best_start = i;
+                if (count > best_count) {
+                    best_count = count;
+                    best_tier = tier;
                 }
-                i = j;
             }
 
-            if (best_len < min_tier_runs) {
+            if (best_count < min_tier_runs) {
                 return &.{};
             }
 
-            const ids = try allocator.alloc(RunIdType, best_len);
-            for (runs[best_start .. best_start + best_len], 0..) |r, k| {
-                ids[k] = r.id;
+            const ids = try allocator.alloc(RunIdType, best_count);
+            var k: usize = 0;
+            for (runs) |r| {
+                if (tierOf(r.byte_size) == best_tier) {
+                    ids[k] = r.id;
+                    k += 1;
+                }
             }
             return ids;
         }
