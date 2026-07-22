@@ -152,29 +152,34 @@ pub fn upperBound(comptime T: type, items: []const T, key: anytype, cmp: anytype
     return lo;
 }
 
-pub fn commonPrefix(comptime T: type, a: []const T, b: []const T, cmp: anytype, ctx: anytype) !usize {
+pub fn commonPrefixLength(
+    comptime T: type,
+    a: []const T,
+    b: []const T,
+    cmp: anytype,
+    ctx: anytype,
+) !usize {
     const min_len = @min(a.len, b.len);
-    var i: usize = 0;
-    for (0..min_len) |j| {
-        const result = blk: {
-            const raw = cmp(ctx, a[j], b[j]);
-            if (@typeInfo(@TypeOf(raw)) == .error_union) {
-                break :blk try raw;
-            } else {
-                break :blk raw;
-            }
-        };
-        if (result != .eq) {
+
+    for (0..min_len) |i| {
+        const raw = cmp(ctx, a[i], b[i]);
+
+        const order = if (@typeInfo(@TypeOf(raw)) == .error_union)
+            try raw
+        else
+            raw;
+
+        if (order != .eq) {
             return i;
         }
-        i += 1;
     }
-    return i;
+
+    return min_len;
 }
 
-pub fn stringCommonPrefix(a: []const u8, b: []const u8) usize {
-    const cmp = struct {
-        fn call(al: u8, bl: u8) Order {
+pub fn stringCommonPrefixLength(a: []const u8, b: []const u8) usize {
+    const Cmp = struct {
+        pub fn call(_: void, al: u8, bl: u8) Order {
             if (al < bl) {
                 return .lt;
             }
@@ -184,5 +189,5 @@ pub fn stringCommonPrefix(a: []const u8, b: []const u8) usize {
             return .eq;
         }
     };
-    return commonPrefix(u8, a, b, cmp.call, null) catch unreachable;
+    return commonPrefixLength(u8, a, b, Cmp.call, {}) catch unreachable;
 }

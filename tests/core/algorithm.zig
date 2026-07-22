@@ -2,7 +2,7 @@ const algorithm = @import("fullaz").core.algorithm;
 const std = @import("std");
 const expect = std.testing.expect;
 
-test "Algorithm cmpNum function" {
+test "Algo: cmpNum function" {
     const a = 10;
     const b = 20;
     try expect(algorithm.cmpNum(void, a, b) == .lt);
@@ -10,7 +10,7 @@ test "Algorithm cmpNum function" {
     try expect(algorithm.cmpNum(void, a, a) == .eq);
 }
 
-test "Algorithm cmpNum function floats" {
+test "Algo: cmpNum function floats" {
     const a = 10.10;
     const b = 20.20;
     const nan = std.math.nan(@TypeOf(a));
@@ -22,7 +22,7 @@ test "Algorithm cmpNum function floats" {
     try expect(algorithm.cmpNum(void, nan, nan) == .eq);
 }
 
-test "Algorithm cmpSlices function" {
+test "Algo: cmpSlices function" {
     const slice1 = [_]u8{ 1, 2, 3, 4 };
     const slice2 = [_]u8{ 1, 2, 3, 5 };
     const slice3 = [_]u8{ 1, 2, 3, 4 };
@@ -32,7 +32,7 @@ test "Algorithm cmpSlices function" {
     try expect(try algorithm.cmpSlices(u8, slice1[0..], slice3[0..], algorithm.CmpNum(u8).asc, void) == .eq);
 }
 
-test "Algorithm cmpSlices function floats" {
+test "Algo: cmpSlices function floats" {
     const slice1 = [_]f32{ 1, 2, 3, 4 };
     const slice2 = [_]f32{ 1, 2, 3, 5 };
     const slice3 = [_]f32{ 1, 2, 3, 4 };
@@ -47,4 +47,24 @@ test "Algorithm cmpSlices function floats" {
     try expect(try algorithm.cmpSlices(f32, slicenan[0..], slice1[0..], cmp, void) == .unordered);
     try expect(try algorithm.cmpSlices(f32, slice1[0..], slicenan[0..], cmp, void) == .unordered);
     try expect(try algorithm.cmpSlices(f32, slicenan[0..], slicenan[0..], cmp, void) == .eq);
+}
+
+test "Algo: common prtefix length" {
+    const intCmp = algorithm.CmpNum(u8).asc;
+
+    const a = [_]u8{ 1, 2, 3, 4, 5 };
+    const b = [_]u8{ 1, 2, 3, 6, 7 };
+    const c = [_]u8{ 1, 2, 3, 4, 5 };
+
+    try expect(try algorithm.commonPrefixLength(u8, a[0..], b[0..], intCmp, void) == 3);
+    try expect(try algorithm.commonPrefixLength(u8, a[0..], c[0..], intCmp, void) == a.len);
+}
+
+test "Algo: common string prtefix length" {
+    const a = "hello world";
+    const b = "hello zig";
+    const c = "hello world";
+
+    try expect(algorithm.stringCommonPrefixLength(a[0..], b[0..]) == 6);
+    try expect(algorithm.stringCommonPrefixLength(a[0..], c[0..]) == a.len);
 }

@@ -9,7 +9,7 @@
                 "build",
                 "install-tests",
                 "-Doptimize=Debug",
-                "-Dtest-filter=SkipList paged: iterator remove test"
+                "-Dtest-filter=Keys: build and get chained prefixes"
             ],
             "problemMatcher": [],
             "group": {

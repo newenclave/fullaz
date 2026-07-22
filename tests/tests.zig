@@ -37,6 +37,8 @@ test {
     _ = @import("device/memory_block.zig");
     _ = @import("device/file_block.zig");
 
+    _ = @import("keys/prefix_block_add.zig");
+
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
     _ = @import("long_store.zig");
