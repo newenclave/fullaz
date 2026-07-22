@@ -5,6 +5,7 @@ test {
     _ = @import("core/bitset.zig");
     _ = @import("core/static_vector.zig");
     _ = @import("core/algorithm.zig");
+    _ = @import("core/bloom.zig");
 
     _ = @import("bpt/memory_model.zig");
     _ = @import("bpt/paged_model.zig");
