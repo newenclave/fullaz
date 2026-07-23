@@ -249,6 +249,8 @@ test "Keys: build and get chained prefixes" {
 
     const current = builder.current();
 
+    std.debug.print("Key bytes: {}\n", .{fullaz.keys.prefix_block.calculateDataSize(u8, "file", current)});
+
     try std.testing.expectEqual(@as(usize, 4), current.len);
     // const reader = Reader.impl(allocator, current, template);
     // defer reader.deinit();
@@ -256,7 +258,7 @@ test "Keys: build and get chained prefixes" {
     var reader = builder.reader();
     defer reader.deinit();
 
-    for (0..4) |i| {
+    for (0..reader.size()) |i| {
         var out: [256]u8 = undefined;
         const key = try reader.get(i, out[0..]);
         std.debug.print("key[{}]: {s}\n", .{ i, key });
@@ -275,11 +277,20 @@ test "Keys: build and get chained prefixes" {
 
     var itr = try reader.iterator();
     defer itr.deinit();
-    while (true) {
+    while (!itr.isDone()) {
         const out = itr.current();
         std.debug.print("itr key: {s}\n", .{out});
-        if (try itr.advance() == false) {
-            break;
-        }
+        _ = try itr.advance();
+    }
+
+    var itrFrom = try reader.iteratorFrom(2);
+    defer itrFrom.deinit();
+    std.debug.print(">>>> itrFrom key: {s}\n", .{itrFrom.current()});
+    try std.testing.expectEqualStrings("filesystem_cache", itrFrom.current());
+
+    while (!itrFrom.isDone()) {
+        const out = itrFrom.current();
+        std.debug.print("itrfrom key: {s}\n", .{out});
+        _ = try itrFrom.advance();
     }
 }

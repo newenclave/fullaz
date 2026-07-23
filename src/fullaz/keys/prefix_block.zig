@@ -7,8 +7,8 @@ pub fn PrefixInfo(comptime T: type) type {
         const Self = @This();
         const Error = std.mem.Allocator.Error;
         common: usize,
-        suffix: []T,
-        pub fn init(allocator: std.mem.Allocator, common: usize, suffix: []const T) Error!Self {
+        suffix: []const T,
+        pub fn initAlloc(allocator: std.mem.Allocator, common: usize, suffix: []const T) Error!Self {
             const value = try allocator.alloc(T, suffix.len);
             @memcpy(value, suffix);
             return Self{
@@ -17,7 +17,7 @@ pub fn PrefixInfo(comptime T: type) type {
             };
         }
 
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        pub fn deinitAlloc(self: *Self, allocator: std.mem.Allocator) void {
             allocator.free(self.suffix);
             self.* = undefined;
         }
@@ -27,13 +27,49 @@ pub fn PrefixInfo(comptime T: type) type {
 const ErrorSet = error{InvalidPrefix} ||
     errors.SpaceError || std.mem.Allocator.Error;
 
+pub fn calculateDataLength(
+    comptime T: type,
+    base: []const T,
+    prefix_infos: []const PrefixInfo(T),
+) usize {
+    var len = base.len;
+
+    for (prefix_infos) |info| {
+        len += info.suffix.len;
+    }
+    return len;
+}
+
+pub fn calculateDataSize(
+    comptime T: type,
+    base: []const T,
+    prefix_infos: []const PrefixInfo(T),
+) usize {
+    return calculateDataLength(T, base, prefix_infos) * @sizeOf(T);
+}
+
+fn maxKeyLength(
+    comptime T: type,
+    base: []const T,
+    prefix_infos: []const PrefixInfo(T),
+) usize {
+    var max = base.len;
+    for (prefix_infos) |*info| {
+        // if (info.common > std.math.maxInt(usize) - info.suffix.len) {
+        //     return Error.InvalidPrefix;
+        // }
+        max = @max(max, info.common + info.suffix.len);
+    }
+    return max;
+}
+
 pub fn buildValue(
     comptime T: type,
     prefix_info: PrefixInfo(T),
-    template: []const T,
+    base: []const T,
     output: []T,
 ) ErrorSet![]const T {
-    if (prefix_info.common > template.len) {
+    if (prefix_info.common > base.len) {
         return ErrorSet.InvalidPrefix;
     }
 
@@ -43,7 +79,7 @@ pub fn buildValue(
 
     @memcpy(
         output[0..prefix_info.common],
-        template[0..prefix_info.common],
+        base[0..prefix_info.common],
     );
 
     return updateValue(T, prefix_info, output);
@@ -165,6 +201,11 @@ pub fn PrefixBlockImpl(
                 return self.buffer[0..self.len];
             }
 
+            pub fn isDone(self: *const Itr) bool {
+                return (self.index == 0 and self.reader.context.block.len == 0) or
+                    (self.index >= self.reader.context.block.len);
+            }
+
             pub fn advance(self: *Itr) ItrError!bool {
                 if (self.index >= self.reader.context.block.len) {
                     return ItrError.EndOfIterator;
@@ -187,15 +228,15 @@ pub fn PrefixBlockImpl(
 
         pub fn init(
             allocator: std.mem.Allocator,
-            base: []const T,
+            init_base: []const T,
             block: []const PrefixInfoImpl,
         ) Self {
             return Self{
                 .context = .{
                     .allocator = allocator,
-                    .base = base,
+                    .base = init_base,
                     .block = block,
-                    .max_key = maxKey(base, block),
+                    .max_key = maxKeyLength(T, init_base, block),
                 },
             };
         }
@@ -212,9 +253,39 @@ pub fn PrefixBlockImpl(
             return Iterator.init(self, buffer, tmp_len);
         }
 
+        pub fn iteratorFrom(self: *const Self, pos: usize) Error!Iterator {
+            if (pos == 0) {
+                return self.iterator();
+            }
+
+            if (pos > self.context.block.len) {
+                return Error.OutOfBounds;
+            }
+
+            const len = self.context.max_key;
+            const buffer = try self.context.allocator.alloc(T, len);
+            errdefer self.context.allocator.free(buffer);
+
+            const tmp_len = self.context.base.len;
+            @memcpy(buffer[0..tmp_len], self.context.base);
+
+            const ready = try BuildStrategy.build(self.context.base, self.context.block[0..pos], buffer);
+            var res = Iterator.init(self, buffer, ready.len);
+            res.index = pos;
+            return res;
+        }
+
         pub fn iteratorDeinit(self: *const Self, itr: *Iterator) void {
             self.context.allocator.free(itr.buffer);
             itr.* = undefined;
+        }
+
+        pub fn size(self: *const Self) usize {
+            return self.context.block.len + 1;
+        }
+
+        pub fn base(self: *const Self) []const T {
+            return self.context.base;
         }
 
         pub fn get(self: *const Self, index: usize, output: []T) Error![]const T {
@@ -226,23 +297,12 @@ pub fn PrefixBlockImpl(
                 return Error.OutOfBounds;
             }
 
-            const tmp = try BuildStrategy.build(
+            _ = try BuildStrategy.build(
                 self.context.base,
-                self.context.block[0..index],
+                self.context.block[0 .. index - 1],
                 output,
             );
-            return tmp;
-        }
-
-        fn maxKey(base: []const T, block: []const PrefixInfoImpl) usize {
-            var max = base.len;
-            for (block) |*info| {
-                // if (info.common > std.math.maxInt(usize) - info.suffix.len) {
-                //     return Error.InvalidPrefix;
-                // }
-                max = @max(max, info.common + info.suffix.len);
-            }
-            return max;
+            return try updateValue(T, self.context.block[index - 1], output);
         }
     };
 
@@ -291,7 +351,7 @@ pub fn PrefixBlockImpl(
 
         fn freeCurrent(self: *Self) void {
             for (self.context.output[0..self.context.cur]) |*info| {
-                info.deinit(self.context.allocator);
+                info.deinitAlloc(self.context.allocator);
             }
         }
 
@@ -306,6 +366,10 @@ pub fn PrefixBlockImpl(
                 self.context.base,
                 self.context.output[0..self.context.cur],
             );
+        }
+
+        pub fn size(self: *const Self) usize {
+            return self.context.cur + 1;
         }
 
         pub fn add(self: *Self, next: []const T) Error!void {
@@ -328,7 +392,7 @@ pub fn PrefixBlockImpl(
                 self.context.ctx,
             );
             const suffix = next[common..];
-            self.context.output[self.context.cur] = try PrefixInfoImpl.init(
+            self.context.output[self.context.cur] = try PrefixInfoImpl.initAlloc(
                 self.context.allocator,
                 common,
                 suffix,
@@ -363,12 +427,12 @@ pub fn PrefixBlockImpl(
 
 const StrCmp = struct {
     pub fn cmp(_: void, a: u8, b: u8) algo.Order {
-        if (a == b) {
-            return algo.Order.eq;
-        } else if (a < b) {
-            return algo.Order.lt;
+        if (a < b) {
+            return .lt;
+        } else if (b < a) {
+            return .gt;
         } else {
-            return algo.Order.gt;
+            return .eq;
         }
     }
 };
