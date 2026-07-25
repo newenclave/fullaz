@@ -1,1 +1,1 @@
-pub const prefix_block = @import("prefix_block.zig");
+pub const front_coded_block = @import("front_coded_block.zig");

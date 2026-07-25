@@ -1,7 +1,7 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
 
-const StringPrefixBlock = fullaz.keys.prefix_block.StringPrefixBlock;
+const StringPrefixBlock = fullaz.keys.front_coded_block.StringFrontCodedBlock;
 
 test "Keys: build prefix" {
     const allocator = std.testing.allocator;
@@ -249,7 +249,7 @@ test "Keys: build and get chained prefixes" {
 
     const current = builder.current();
 
-    std.debug.print("Key bytes: {}\n", .{fullaz.keys.prefix_block.calculateDataSize(u8, "file", current)});
+    std.debug.print("Key bytes: {}\n", .{fullaz.keys.front_coded_block.calculateDataSize(u8, "file", current)});
 
     try std.testing.expectEqual(@as(usize, 4), current.len);
     // const reader = Reader.impl(allocator, current, template);

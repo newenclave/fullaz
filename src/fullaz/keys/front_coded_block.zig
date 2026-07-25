@@ -150,7 +150,7 @@ pub fn ChainedBuildStrategy(comptime T: type) type {
     };
 }
 
-pub fn PrefixBlockImpl(
+pub fn FrontCodedBlockImpl(
     comptime T: type,
     comptime BuildStrategy: type,
     comptime cmp: anytype,
@@ -437,4 +437,9 @@ const StrCmp = struct {
     }
 };
 
-pub const StringPrefixBlock = PrefixBlockImpl(u8, ChainedBuildStrategy(u8), StrCmp.cmp, void);
+pub const StringFrontCodedBlock = FrontCodedBlockImpl(
+    u8,
+    ChainedBuildStrategy(u8),
+    StrCmp.cmp,
+    void,
+);
