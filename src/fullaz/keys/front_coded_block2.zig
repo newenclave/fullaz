@@ -205,9 +205,13 @@ pub fn FrontCodedBlock2(
                 return Error.BufferTooSmall;
             }
 
-            return .{
+            const res = Self{
                 .block_view = block_view,
             };
+
+            try res.validate();
+
+            return res;
         }
 
         pub fn deinit(self: *Self) void {
@@ -220,6 +224,36 @@ pub fn FrontCodedBlock2(
 
         fn header(self: *const Self) *const BlockHeader {
             return @ptrCast(self.block_view.at(0, @sizeOf(BlockHeader)).ptr);
+        }
+
+        fn validate(self: *const Self) Error!void {
+            const hdr = self.header();
+            const used_bytes = hdr.used_bytes.get();
+
+            if (used_bytes < @sizeOf(BlockHeader)) {
+                return Error.BufferTooSmall;
+            }
+            if (used_bytes > self.block_view.len()) {
+                return Error.BufferTooSmall;
+            }
+
+            var entry_pos: usize = @sizeOf(BlockHeader);
+            var entry_index: usize = 0;
+            const entry_count = hdr.entry_count.get();
+
+            while (entry_index < entry_count) : (entry_index += 1) {
+                if (entry_pos >= used_bytes) {
+                    return Error.BufferTooSmall;
+                }
+
+                const entry_slice = self.block_view.at(entry_pos, used_bytes - entry_pos);
+                const entry = try EntryImpl.init(entry_slice);
+                entry_pos += entry.size();
+            }
+
+            if (entry_pos != used_bytes) {
+                return Error.BufferTooSmall;
+            }
         }
 
         pub fn entryCount(self: *const Self) usize {
@@ -268,7 +302,7 @@ pub fn FrontCodedBlock2(
             const hdr: *BlockHeader = res.headerMut();
             hdr.format();
             hdr.entry_count.set(0);
-            hdr.used_bytes.set(0);
+            hdr.used_bytes.set(@sizeOf(BlockHeader));
             hdr.max_key_len.set(0);
 
             return res;
@@ -302,7 +336,7 @@ pub fn FrontCodedBlock2(
                     return Error.BufferTooSmall;
                 }
             }
-            if (current_used.len + expected_len > self.block_writer.buf.len) {
+            if (self.block_writer.remaining() < expected_len) {
                 return Error.BufferTooSmall;
             }
             try self.block_writer.extend(expected_len);

@@ -92,6 +92,10 @@ fn entryHeaderAt(buf: []u8, offset: usize) *FrontCodedBlock.EntryHeader {
     return @ptrCast(buf[offset .. offset + ENTRY_HEADER_SIZE].ptr);
 }
 
+fn blockHeaderAt(buf: []u8) *FrontCodedBlock.Header {
+    return @ptrCast(buf[0..HEADER_SIZE].ptr);
+}
+
 test "Keys: FrontCodedBlock2 writes header metadata" {
     var buf = [_]u8{0} ** 1024;
     var scratch: [256]u8 = undefined;
@@ -324,4 +328,60 @@ test "Keys: FrontCodedBlock2 rejects block size overflow" {
 
     try std.testing.expect(!builder.canAdd(second_key[0..], "v"));
     try std.testing.expectError(error.BufferTooSmall, builder.add(second_key[0..], "v"));
+}
+
+test "Keys: FrontCodedBlock2 reader rejects used bytes smaller than header" {
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+
+    const hdr = blockHeaderAt(buf[0..]);
+    hdr.used_bytes.set(HEADER_SIZE - 1);
+
+    try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used())));
+}
+
+test "Keys: FrontCodedBlock2 reader rejects used bytes beyond view" {
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+
+    const hdr = blockHeaderAt(buf[0..]);
+    hdr.used_bytes.set(@intCast(builder.block_writer.used().len + 1));
+
+    try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used())));
+}
+
+test "Keys: FrontCodedBlock2 reader rejects truncated entry" {
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+
+    const hdr = blockHeaderAt(buf[0..]);
+    hdr.used_bytes.set(@intCast(builder.block_writer.used().len - 1));
+
+    try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used())));
+}
+
+test "Keys: FrontCodedBlock2 reader rejects entry count mismatch" {
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+
+    const hdr = blockHeaderAt(buf[0..]);
+    hdr.entry_count.set(2);
+
+    try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used())));
 }
