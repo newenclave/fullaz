@@ -81,10 +81,10 @@ pub fn FrontCodedBlock2(
             return @ptrCast(self.entry.ptr);
         }
 
-        pub fn updateKey(self: *const Self, scratch: BufferType) Error!ValueType {
+        pub fn updateKey(self: *const Self, scratch: BufferType, prev_len: usize) Error!ValueType {
             const cur_suffix = self.suffix();
             const cur_shared = self.shared();
-            if (cur_shared > scratch.len) {
+            if (cur_shared > prev_len) {
                 return Error.BufferTooSmall;
             }
             if ((cur_suffix.len + cur_shared) > scratch.len) {
@@ -106,9 +106,11 @@ pub fn FrontCodedBlock2(
 
         block_view: BlockView,
         current_pos: usize = 0,
+        // We can get it fron the header.
         entry_index: usize = 0,
         entry_count: usize = 0,
         used_bytes: usize = 0,
+        //
         scratch: BufferType,
         scratch_len: usize = 0,
 
@@ -138,7 +140,7 @@ pub fn FrontCodedBlock2(
             }
 
             const cur = try res.current();
-            const new_scratch = try cur.updateKey(res.scratch);
+            const new_scratch = try cur.updateKey(res.scratch, 0);
             res.scratch_len = new_scratch.len;
 
             return res;
@@ -182,7 +184,7 @@ pub fn FrontCodedBlock2(
             self.entry_index += 1;
             if (!self.done()) {
                 const cur = try self.current();
-                const ns = try cur.updateKey(self.scratch);
+                const ns = try cur.updateKey(self.scratch, self.scratch_len);
                 self.scratch_len = ns.len;
             }
         }

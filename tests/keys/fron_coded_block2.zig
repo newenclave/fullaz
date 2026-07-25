@@ -63,6 +63,10 @@ fn maxKeyLen(entries: []const TestEntry) usize {
     return max;
 }
 
+fn entryHeaderAt(buf: []u8, offset: usize) *FrontCodedBlock.EntryHeader {
+    return @ptrCast(buf[offset .. offset + ENTRY_HEADER_SIZE].ptr);
+}
+
 test "Keys: FrontCodedBlock2 writes header metadata" {
     var buf = [_]u8{0} ** 1024;
     var scratch: [256]u8 = undefined;
@@ -207,6 +211,48 @@ test "Keys: FrontCodedBlock2 iterator requires max-key scratch" {
     defer reader.deinit();
 
     var read_scratch = [_]u8{0} ** 5;
+    var itr = try reader.iterator(read_scratch[0..]);
+    defer itr.deinit();
+
+    try std.testing.expectEqualStrings("abc", itr.scratchKey());
+    try std.testing.expectError(error.BufferTooSmall, itr.next());
+}
+
+test "Keys: FrontCodedBlock2 rejects first entry with shared prefix" {
+    var buf = [_]u8{0} ** 256;
+    var builder_scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+
+    const first_hdr = entryHeaderAt(buf[0..], HEADER_SIZE);
+    first_hdr.shared_len.set(1);
+
+    var reader = try FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used()));
+    defer reader.deinit();
+
+    var read_scratch: [32]u8 = undefined;
+    try std.testing.expectError(error.BufferTooSmall, reader.iterator(read_scratch[0..]));
+}
+
+test "Keys: FrontCodedBlock2 rejects entry with shared prefix longer than previous key" {
+    var buf = [_]u8{0} ** 256;
+    var builder_scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+    try builder.add("abcd", "v1");
+
+    const second_offset = HEADER_SIZE + ENTRY_HEADER_SIZE + "abc".len + "v0".len;
+    const second_hdr = entryHeaderAt(buf[0..], second_offset);
+    second_hdr.shared_len.set("abc".len + 1);
+
+    var reader = try FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used()));
+    defer reader.deinit();
+
+    var read_scratch: [32]u8 = undefined;
     var itr = try reader.iterator(read_scratch[0..]);
     defer itr.deinit();
 
