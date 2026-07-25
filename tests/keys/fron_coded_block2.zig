@@ -54,6 +54,45 @@ const SmallBlockSizeFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
     void,
 );
 
+var counting_view_deinit_count: usize = 0;
+
+const CountingBlockView = struct {
+    const Self = @This();
+    items: []const u8,
+
+    pub fn init(items: []const u8) Self {
+        return .{ .items = items };
+    }
+
+    pub fn deinit(_: *Self) void {
+        counting_view_deinit_count += 1;
+    }
+
+    pub fn at(self: *const Self, index: usize, length: usize) []const u8 {
+        return self.items[index .. index + length];
+    }
+
+    pub fn slice(self: *const Self) []const u8 {
+        return self.items;
+    }
+
+    pub fn len(self: *const Self) usize {
+        return self.items.len;
+    }
+};
+
+const CountingViewFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
+    u8,
+    u16,
+    u32,
+    BlockWriter,
+    CountingBlockView,
+    std.builtin.Endian.little,
+    true,
+    StrCmp.cmp,
+    void,
+);
+
 const HEADER_SIZE = @sizeOf(FrontCodedBlock.Header);
 const ENTRY_HEADER_SIZE = @sizeOf(FrontCodedBlock.EntryHeader);
 
@@ -384,4 +423,26 @@ test "Keys: FrontCodedBlock2 reader rejects entry count mismatch" {
     hdr.entry_count.set(2);
 
     try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used())));
+}
+
+test "Keys: FrontCodedBlock2 iterator borrows reader view" {
+    counting_view_deinit_count = 0;
+
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+    var builder = try CountingViewFrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+
+    var reader = try builder.reader();
+
+    var read_scratch: [32]u8 = undefined;
+    var itr = try reader.iterator(read_scratch[0..]);
+    itr.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), counting_view_deinit_count);
+
+    reader.deinit();
+    try std.testing.expectEqual(@as(usize, 1), counting_view_deinit_count);
 }

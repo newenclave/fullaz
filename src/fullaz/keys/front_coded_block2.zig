@@ -4,9 +4,9 @@ const errors = @import("../core/errors.zig");
 const page = @import("../page/front_coded_block.zig");
 
 pub fn FrontCodedBlock2(
-    comptime CountT: type,
-    comptime IndexT: type,
-    comptime BlockSizeT: type,
+    comptime CountT: type, // countetr field
+    comptime IndexT: type, // index type for EntryHeader fields: shared_len, suffix_len, value_len and max_key_len from the header
+    comptime BlockSizeT: type, // used_bytes value from BlockHEader.
     comptime BlockWriterT: type,
     comptime BlockViewT: type,
     comptime endian: std.builtin.Endian,
@@ -105,7 +105,7 @@ pub fn FrontCodedBlock2(
 
         pub const Error = errors.SpaceError;
 
-        block_view: BlockView,
+        block_view: *const BlockView,
         current_pos: usize = 0,
         // We can get it fron the header.
         entry_index: usize = 0,
@@ -117,7 +117,7 @@ pub fn FrontCodedBlock2(
 
         // block_view is a full block with the header and all the entries.
         // scratch is a buffer that can be used to store the built entry's key.
-        pub fn init(block_view: BlockViewT, scratch: BufferType) Error!Self {
+        pub fn init(block_view: *const BlockViewT, scratch: BufferType) Error!Self {
             var res = Self{
                 .block_view = block_view,
                 .current_pos = @sizeOf(BlockHeader), // first entry starts after the header
@@ -148,7 +148,7 @@ pub fn FrontCodedBlock2(
         }
 
         pub fn deinit(self: *Self) void {
-            self.block_view.deinit();
+            self.* = undefined;
         }
 
         fn header(self: *const Self) *const BlockHeader {
@@ -219,7 +219,7 @@ pub fn FrontCodedBlock2(
         }
 
         pub fn iterator(self: *const Self, scratch: BufferType) Error!IteratorImpl {
-            return IteratorImpl.init(self.block_view, scratch);
+            return IteratorImpl.init(&self.block_view, scratch);
         }
 
         fn header(self: *const Self) *const BlockHeader {
