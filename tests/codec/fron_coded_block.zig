@@ -84,6 +84,8 @@ var counting_view_deinit_count: usize = 0;
 
 const CountingBlockView = struct {
     const Self = @This();
+    pub const Error = error{};
+
     items: []const u8,
 
     pub fn init(items: []const u8) Self {
@@ -94,7 +96,7 @@ const CountingBlockView = struct {
         counting_view_deinit_count += 1;
     }
 
-    pub fn at(self: *const Self, index: usize, length: usize) []const u8 {
+    pub fn at(self: *const Self, index: usize, length: usize) Error![]const u8 {
         return self.items[index .. index + length];
     }
 
@@ -102,7 +104,7 @@ const CountingBlockView = struct {
         return self.items;
     }
 
-    pub fn len(self: *const Self) usize {
+    pub fn len(self: *const Self) Error!usize {
         return self.items.len;
     }
 };
@@ -185,6 +187,82 @@ const NoBufWriterFrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
     void,
 );
 
+const FailingWriter = struct {
+    const Self = @This();
+    pub const Error = error{WriteFailed};
+
+    storage: []u8,
+
+    pub fn init(storage: []u8) Self {
+        return .{ .storage = storage };
+    }
+
+    pub fn extend(_: *Self, _: usize) Error!void {
+        return Error.WriteFailed;
+    }
+
+    pub fn used(_: *const Self) []const u8 {
+        return "";
+    }
+
+    pub fn at(self: *const Self, index: usize, len: usize) []const u8 {
+        return self.storage[index .. index + len];
+    }
+
+    pub fn atMut(self: *const Self, index: usize, len: usize) []u8 {
+        return self.storage[index .. index + len];
+    }
+
+    pub fn remaining(self: *const Self) usize {
+        return self.storage.len;
+    }
+};
+
+const FailingWriterFrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
+    u8,
+    u16,
+    u32,
+    FailingWriter,
+    BlockReader,
+    std.builtin.Endian.little,
+    true,
+    StrCmp.cmp,
+    void,
+);
+
+const FailingView = struct {
+    const Self = @This();
+    pub const Error = error{ReadFailed};
+
+    items: []const u8,
+
+    pub fn init(items: []const u8) Self {
+        return .{ .items = items };
+    }
+
+    pub fn deinit(_: *Self) void {}
+
+    pub fn at(self: *const Self, index: usize, length: usize) Error![]const u8 {
+        return self.items[index .. index + length];
+    }
+
+    pub fn len(_: *const Self) Error!usize {
+        return Error.ReadFailed;
+    }
+};
+
+const FailingViewFrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
+    u8,
+    u16,
+    u32,
+    BlockWriter,
+    FailingView,
+    std.builtin.Endian.little,
+    true,
+    StrCmp.cmp,
+    void,
+);
+
 const HEADER_SIZE = @sizeOf(FrontCodedBlock.Header);
 const ENTRY_HEADER_SIZE = @sizeOf(FrontCodedBlock.EntryHeader);
 
@@ -227,6 +305,36 @@ fn blockHeaderAt(buf: []u8) *FrontCodedBlock.Header {
     return @ptrCast(buf[0..HEADER_SIZE].ptr);
 }
 
+test "Codec: bounded buffer contracts match front-coded block usage" {
+    comptime {
+        codec.bounded_buffer.assertMemoryBlockWriter(BlockWriter);
+        codec.bounded_buffer.assertMemoryBlockWriter(NoBufFieldWriter);
+        codec.bounded_buffer.assertMemoryBlockWriter(FailingWriter);
+        codec.bounded_buffer.assertMemoryBlockView(BlockReader);
+        codec.bounded_buffer.assertMemoryBlockView(CountingBlockView);
+        codec.bounded_buffer.assertMemoryBlockView(FailingView);
+    }
+}
+
+test "Codec: FrontCodedBlock builder includes writer errors" {
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+
+    try std.testing.expectError(
+        error.WriteFailed,
+        FailingWriterFrontCodedBlock.Builder.init(FailingWriter.init(buf[0..]), scratch[0..]),
+    );
+}
+
+test "Codec: FrontCodedBlock reader includes view errors" {
+    var buf = [_]u8{0} ** 128;
+
+    try std.testing.expectError(
+        error.ReadFailed,
+        FailingViewFrontCodedBlock.Reader.init(FailingView.init(buf[0..])),
+    );
+}
+
 test "Codec: FrontCodedBlock writes header metadata" {
     var buf = [_]u8{0} ** 1024;
     var scratch: [256]u8 = undefined;
@@ -243,10 +351,10 @@ test "Codec: FrontCodedBlock writes header metadata" {
     var reader = try builder.reader();
     defer reader.deinit();
 
-    try std.testing.expectEqual(sample_entries.len, reader.entryCount());
-    try std.testing.expectEqual(expectedUsedBytes(sample_entries[0..]), reader.usedBytes());
-    try std.testing.expectEqual(maxKeyLen(sample_entries[0..]), reader.maxKeyLen());
-    try std.testing.expectEqual(reader.usedBytes(), builder.block_writer.used().len);
+    try std.testing.expectEqual(sample_entries.len, try reader.entryCount());
+    try std.testing.expectEqual(expectedUsedBytes(sample_entries[0..]), try reader.usedBytes());
+    try std.testing.expectEqual(maxKeyLen(sample_entries[0..]), try reader.maxKeyLen());
+    try std.testing.expectEqual(try reader.usedBytes(), builder.block_writer.used().len);
 }
 
 test "Codec: FrontCodedBlock supports empty block" {
@@ -258,9 +366,9 @@ test "Codec: FrontCodedBlock supports empty block" {
     var reader = try builder.reader();
     defer reader.deinit();
 
-    try std.testing.expectEqual(@as(usize, 0), reader.entryCount());
-    try std.testing.expectEqual(@as(usize, HEADER_SIZE), reader.usedBytes());
-    try std.testing.expectEqual(@as(usize, 0), reader.maxKeyLen());
+    try std.testing.expectEqual(@as(usize, 0), try reader.entryCount());
+    try std.testing.expectEqual(@as(usize, HEADER_SIZE), try reader.usedBytes());
+    try std.testing.expectEqual(@as(usize, 0), try reader.maxKeyLen());
 
     var read_scratch: [32]u8 = undefined;
     var itr = try reader.iterator(read_scratch[0..]);
@@ -394,7 +502,7 @@ test "Codec: FrontCodedBlock iterator ignores padding after used bytes" {
     var reader = try FrontCodedBlock.Reader.init(BlockReader.init(buf[0..]));
     defer reader.deinit();
 
-    try std.testing.expectEqual(used_bytes, reader.usedBytes());
+    try std.testing.expectEqual(used_bytes, try reader.usedBytes());
 
     var read_scratch: [256]u8 = undefined;
     var itr = try reader.iterator(read_scratch[0..]);

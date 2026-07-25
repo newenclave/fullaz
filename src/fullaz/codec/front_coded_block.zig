@@ -2,6 +2,7 @@ const std = @import("std");
 const algo = @import("../core/algorithm.zig");
 const errors = @import("../core/errors.zig");
 const page = @import("../page/front_coded_block.zig");
+const bounded_buffer = @import("bounded_buffer.zig");
 
 pub fn FrontCodedBlock(
     comptime CountT: type, // entry_count field
@@ -14,6 +15,11 @@ pub fn FrontCodedBlock(
     comptime cmp: anytype,
     comptime Ctx: type,
 ) type {
+    comptime {
+        bounded_buffer.assertMemoryBlockWriter(BlockWriterT);
+        bounded_buffer.assertMemoryBlockView(BlockViewT);
+    }
+
     const PageFrontCodedBlock = page.FrontCodedBlock(
         CountT,
         IndexT,
@@ -114,7 +120,7 @@ pub fn FrontCodedBlock(
         const Self = @This();
         pub const BlockView = BlockViewT;
 
-        pub const Error = errors.SpaceError;
+        pub const Error = errors.SpaceError || BlockView.Error;
 
         block_view: *const BlockView,
         current_pos: usize = 0,
@@ -133,7 +139,7 @@ pub fn FrontCodedBlock(
                 .scratch = scratch,
             };
 
-            const hdr = res.header();
+            const hdr = try res.header();
             res.entry_count = hdr.entry_count.get();
             res.used_bytes = hdr.used_bytes.get();
 
@@ -141,7 +147,7 @@ pub fn FrontCodedBlock(
                 return Error.BufferTooSmall;
             }
 
-            if (res.used_bytes > res.block_view.len()) {
+            if (res.used_bytes > try res.block_view.len()) {
                 return Error.BufferTooSmall;
             }
 
@@ -160,8 +166,8 @@ pub fn FrontCodedBlock(
             self.* = undefined;
         }
 
-        fn header(self: *const Self) *const BlockHeader {
-            return @ptrCast(self.block_view.at(0, @sizeOf(BlockHeader)).ptr);
+        fn header(self: *const Self) Error!*const BlockHeader {
+            return @ptrCast((try self.block_view.at(0, @sizeOf(BlockHeader))).ptr);
         }
 
         pub fn done(self: *const Self) bool {
@@ -184,7 +190,7 @@ pub fn FrontCodedBlock(
             if (self.current_pos >= self.used_bytes) {
                 return Error.BufferTooSmall;
             }
-            const entry_slice = self.block_view.at(self.current_pos, self.used_bytes - self.current_pos);
+            const entry_slice = try self.block_view.at(self.current_pos, self.used_bytes - self.current_pos);
             return EntryImpl.init(entry_slice);
         }
 
@@ -203,7 +209,7 @@ pub fn FrontCodedBlock(
     const ReaderImpl = struct {
         const Self = @This();
         pub const BlockView = BlockViewT;
-        pub const Error = errors.SpaceError;
+        pub const Error = errors.SpaceError || BlockView.Error;
         pub const FindError = Error || errors.OrderError;
 
         pub const Iterator = IteratorImpl;
@@ -211,7 +217,7 @@ pub fn FrontCodedBlock(
         block_view: BlockView,
 
         pub fn init(block_view: BlockView) Error!Self {
-            if (block_view.len() < @sizeOf(BlockHeader)) {
+            if (try block_view.len() < @sizeOf(BlockHeader)) {
                 return Error.BufferTooSmall;
             }
 
@@ -225,25 +231,27 @@ pub fn FrontCodedBlock(
         }
 
         pub fn deinit(self: *Self) void {
-            self.block_view.deinit();
+            if (@hasDecl(BlockView, "deinit")) {
+                self.block_view.deinit();
+            }
         }
 
         pub fn iterator(self: *const Self, scratch: BufferType) Error!IteratorImpl {
             return IteratorImpl.init(&self.block_view, scratch);
         }
 
-        fn header(self: *const Self) *const BlockHeader {
-            return @ptrCast(self.block_view.at(0, @sizeOf(BlockHeader)).ptr);
+        fn header(self: *const Self) Error!*const BlockHeader {
+            return @ptrCast((try self.block_view.at(0, @sizeOf(BlockHeader))).ptr);
         }
 
         fn validate(self: *const Self) Error!void {
-            const hdr = self.header();
+            const hdr = try self.header();
             const used_bytes = hdr.used_bytes.get();
 
             if (used_bytes < @sizeOf(BlockHeader)) {
                 return Error.BufferTooSmall;
             }
-            if (used_bytes > self.block_view.len()) {
+            if (used_bytes > try self.block_view.len()) {
                 return Error.BufferTooSmall;
             }
 
@@ -255,7 +263,7 @@ pub fn FrontCodedBlock(
                     return Error.BufferTooSmall;
                 }
 
-                const entry_slice = self.block_view.at(entry_pos, used_bytes - entry_pos);
+                const entry_slice = try self.block_view.at(entry_pos, used_bytes - entry_pos);
                 const entry = try EntryImpl.init(entry_slice);
                 entry_pos += try entry.size();
             }
@@ -265,14 +273,14 @@ pub fn FrontCodedBlock(
             }
         }
 
-        pub fn entryCount(self: *const Self) usize {
-            return self.header().entry_count.get();
+        pub fn entryCount(self: *const Self) Error!usize {
+            return (try self.header()).entry_count.get();
         }
-        pub fn usedBytes(self: *const Self) usize {
-            return self.header().used_bytes.get();
+        pub fn usedBytes(self: *const Self) Error!usize {
+            return (try self.header()).used_bytes.get();
         }
-        pub fn maxKeyLen(self: *const Self) usize {
-            return self.header().max_key_len.get();
+        pub fn maxKeyLen(self: *const Self) Error!usize {
+            return (try self.header()).max_key_len.get();
         }
 
         pub fn find(self: *const Self, key: KeyType, scratch: BufferType, cmp_fn: anytype, cmp_ctx: anytype) FindError!?IteratorImpl {
@@ -300,7 +308,7 @@ pub fn FrontCodedBlock(
     const BuilderImpl = struct {
         const Self = @This();
         pub const BlockWriter = BlockWriterT;
-        pub const Error = errors.SpaceError;
+        pub const Error = errors.SpaceError || BlockWriter.Error;
 
         block_writer: BlockWriter,
         scratch: BufferType,
@@ -488,7 +496,9 @@ pub fn FrontCodedBlock(
         }
 
         pub fn deinit(self: *Self) void {
-            self.block_writer.deinit();
+            if (@hasDecl(BlockWriter, "deinit")) {
+                self.block_writer.deinit();
+            }
         }
 
         fn header(self: *const Self) *const BlockHeader {
