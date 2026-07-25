@@ -93,6 +93,72 @@ const CountingViewFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
     void,
 );
 
+const NoBufFieldWriter = struct {
+    const Self = @This();
+    pub const Error = fullaz.core.errors.SpaceError;
+
+    storage: []u8,
+    len: usize = 0,
+
+    pub fn init(storage: []u8) Self {
+        return .{ .storage = storage };
+    }
+
+    pub fn deinit(_: *Self) void {}
+
+    pub fn append(self: *Self, items: []const u8) Error!void {
+        if (items.len > self.remaining()) {
+            return Error.BufferTooSmall;
+        }
+
+        @memcpy(self.storage[self.len..][0..items.len], items);
+        self.len += items.len;
+    }
+
+    pub fn extend(self: *Self, len: usize) Error!void {
+        if (len > self.remaining()) {
+            return Error.BufferTooSmall;
+        }
+        self.len += len;
+    }
+
+    pub fn used(self: *const Self) []const u8 {
+        return self.storage[0..self.len];
+    }
+
+    pub fn at(self: *const Self, index: usize, len: usize) []const u8 {
+        return self.storage[index .. index + len];
+    }
+
+    pub fn atMut(self: *const Self, index: usize, len: usize) []u8 {
+        return self.storage[index .. index + len];
+    }
+
+    pub fn remaining(self: *const Self) usize {
+        return self.storage.len - self.len;
+    }
+
+    pub fn reset(self: *Self) void {
+        self.len = 0;
+    }
+
+    pub fn view(self: *const Self) BlockReader {
+        return .init(self.used());
+    }
+};
+
+const NoBufWriterFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
+    u8,
+    u16,
+    u32,
+    NoBufFieldWriter,
+    BlockReader,
+    std.builtin.Endian.little,
+    true,
+    StrCmp.cmp,
+    void,
+);
+
 const HEADER_SIZE = @sizeOf(FrontCodedBlock.Header);
 const ENTRY_HEADER_SIZE = @sizeOf(FrontCodedBlock.EntryHeader);
 
@@ -445,6 +511,21 @@ test "Keys: FrontCodedBlock2 reader rejects entry count mismatch" {
     try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used())));
 }
 
+test "Keys: FrontCodedBlock2 reader rejects trailing bytes inside used bytes" {
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+
+    const used_bytes = builder.block_writer.used().len;
+    const hdr = blockHeaderAt(buf[0..]);
+    hdr.used_bytes.set(@intCast(used_bytes + 1));
+
+    try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(buf[0 .. used_bytes + 1])));
+}
+
 test "Keys: FrontCodedBlock2 iterator borrows reader view" {
     counting_view_deinit_count = 0;
 
@@ -465,4 +546,23 @@ test "Keys: FrontCodedBlock2 iterator borrows reader view" {
 
     reader.deinit();
     try std.testing.expectEqual(@as(usize, 1), counting_view_deinit_count);
+}
+
+test "Keys: FrontCodedBlock2 builder uses writer contract without buf field" {
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+    var builder = try NoBufWriterFrontCodedBlock.Builder.init(NoBufFieldWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+
+    var reader = try builder.reader();
+    defer reader.deinit();
+
+    var read_scratch: [32]u8 = undefined;
+    var itr = try reader.iterator(read_scratch[0..]);
+    defer itr.deinit();
+
+    try std.testing.expectEqualStrings("abc", itr.scratchKey());
+    try std.testing.expectEqualStrings("v0", try itr.value());
 }

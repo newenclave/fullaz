@@ -4,9 +4,9 @@ const errors = @import("../core/errors.zig");
 const page = @import("../page/front_coded_block.zig");
 
 pub fn FrontCodedBlock2(
-    comptime CountT: type, // countetr field
+    comptime CountT: type, // entry_count field
     comptime IndexT: type, // index type for EntryHeader fields: shared_len, suffix_len, value_len and max_key_len from the header
-    comptime BlockSizeT: type, // used_bytes value from BlockHEader.
+    comptime BlockSizeT: type, // used_bytes value from BlockHeader.
     comptime BlockWriterT: type,
     comptime BlockViewT: type,
     comptime endian: std.builtin.Endian,
@@ -44,7 +44,7 @@ pub fn FrontCodedBlock2(
                 .entry = entry,
             };
 
-            if (res.size() > entry.len) {
+            if ((try res.size()) > entry.len) {
                 return Error.BufferTooSmall;
             }
 
@@ -55,9 +55,20 @@ pub fn FrontCodedBlock2(
             _ = self;
         }
 
-        pub fn size(self: *const Self) usize {
+        pub fn size(self: *const Self) Error!usize {
             const hdr = self.entryHeader();
-            return @sizeOf(BlockEntryHeader) + hdr.suffix_len.get() + hdr.value_len.get();
+            const suffix_len: usize = hdr.suffix_len.get();
+            const value_len: usize = hdr.value_len.get();
+
+            if (suffix_len > std.math.maxInt(usize) - @sizeOf(BlockEntryHeader)) {
+                return Error.BufferTooSmall;
+            }
+            const key_end = @sizeOf(BlockEntryHeader) + suffix_len;
+            if (value_len > std.math.maxInt(usize) - key_end) {
+                return Error.BufferTooSmall;
+            }
+
+            return key_end + value_len;
         }
 
         pub fn shared(self: *const Self) IndexT {
@@ -88,7 +99,7 @@ pub fn FrontCodedBlock2(
             if (cur_shared > prev_len) {
                 return Error.BufferTooSmall;
             }
-            if ((cur_suffix.len + cur_shared) > scratch.len) {
+            if (cur_suffix.len > scratch.len - cur_shared) {
                 return Error.BufferTooSmall;
             }
             const new_len = cur_shared + cur_suffix.len;
@@ -107,11 +118,9 @@ pub fn FrontCodedBlock2(
 
         block_view: *const BlockView,
         current_pos: usize = 0,
-        // We can get it fron the header.
         entry_index: usize = 0,
         entry_count: usize = 0,
         used_bytes: usize = 0,
-        //
         scratch: BufferType,
         scratch_len: usize = 0,
 
@@ -181,7 +190,7 @@ pub fn FrontCodedBlock2(
 
         pub fn next(self: *Self) Error!void {
             const entry = try self.current();
-            self.current_pos += entry.size();
+            self.current_pos += try entry.size();
             self.entry_index += 1;
             if (!self.done()) {
                 const cur = try self.current();
@@ -238,17 +247,16 @@ pub fn FrontCodedBlock2(
             }
 
             var entry_pos: usize = @sizeOf(BlockHeader);
-            var entry_index: usize = 0;
             const entry_count = hdr.entry_count.get();
 
-            while (entry_index < entry_count) : (entry_index += 1) {
+            for (0..entry_count) |_| {
                 if (entry_pos >= used_bytes) {
                     return Error.BufferTooSmall;
                 }
 
                 const entry_slice = self.block_view.at(entry_pos, used_bytes - entry_pos);
                 const entry = try EntryImpl.init(entry_slice);
-                entry_pos += entry.size();
+                entry_pos += try entry.size();
             }
 
             if (entry_pos != used_bytes) {
@@ -264,13 +272,6 @@ pub fn FrontCodedBlock2(
         }
         pub fn maxKeyLen(self: *const Self) usize {
             return self.header().max_key_len.get();
-        }
-
-        pub fn firstEntry(self: *const Self) []const u8 {
-            const entry_ptr: *const BlockEntryHeader = @ptrCast(self.block_view.at(@sizeOf(BlockHeader), @sizeOf(BlockEntryHeader)).ptr);
-            const suffix_len = entry_ptr.suffix_len.get();
-            const value_len = entry_ptr.value_len.get();
-            return @ptrCast(self.block_view.at(@sizeOf(BlockHeader), @sizeOf(BlockEntryHeader) + suffix_len + value_len).ptr);
         }
     };
 
