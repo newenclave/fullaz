@@ -106,6 +106,9 @@ pub fn FrontCodedBlock2(
 
         block_view: BlockView,
         current_pos: usize = 0,
+        entry_index: usize = 0,
+        entry_count: usize = 0,
+        used_bytes: usize = 0,
         scratch: BufferType,
         scratch_len: usize = 0,
 
@@ -118,7 +121,23 @@ pub fn FrontCodedBlock2(
                 .scratch = scratch,
             };
 
-            var cur = try res.current();
+            const hdr = res.header();
+            res.entry_count = hdr.entry_count.get();
+            res.used_bytes = hdr.used_bytes.get();
+
+            if (res.used_bytes < @sizeOf(BlockHeader)) {
+                return Error.BufferTooSmall;
+            }
+
+            if (res.used_bytes > res.block_view.len()) {
+                return Error.BufferTooSmall;
+            }
+
+            if (res.entry_count == 0) {
+                return res;
+            }
+
+            const cur = try res.current();
             const new_scratch = try cur.updateKey(res.scratch);
             res.scratch_len = new_scratch.len;
 
@@ -134,7 +153,7 @@ pub fn FrontCodedBlock2(
         }
 
         pub fn done(self: *const Self) bool {
-            return self.current_pos >= self.block_view.len();
+            return self.entry_index >= self.entry_count;
         }
 
         pub fn scratchKey(self: *const Self) []const u8 {
@@ -150,13 +169,17 @@ pub fn FrontCodedBlock2(
             if (self.done()) {
                 return Error.BufferTooSmall;
             }
-            const entry_slice = self.block_view.at(self.current_pos, self.block_view.len() - self.current_pos);
+            if (self.current_pos >= self.used_bytes) {
+                return Error.BufferTooSmall;
+            }
+            const entry_slice = self.block_view.at(self.current_pos, self.used_bytes - self.current_pos);
             return EntryImpl.init(entry_slice);
         }
 
         pub fn next(self: *Self) Error!void {
             const entry = try self.current();
             self.current_pos += entry.size();
+            self.entry_index += 1;
             if (!self.done()) {
                 const cur = try self.current();
                 const ns = try cur.updateKey(self.scratch);
@@ -239,7 +262,7 @@ pub fn FrontCodedBlock2(
 
             try res.block_writer.extend(@sizeOf(BlockHeader));
 
-            var hdr: *BlockHeader = res.headerMut();
+            const hdr: *BlockHeader = res.headerMut();
             hdr.format();
             hdr.entry_count.set(0);
             hdr.used_bytes.set(0);
@@ -260,7 +283,7 @@ pub fn FrontCodedBlock2(
                 return Error.BufferTooSmall;
             }
             try self.block_writer.extend(expected_len);
-            var new_block = self.block_writer.atMut(current_used.len, expected_len);
+            const new_block = self.block_writer.atMut(current_used.len, expected_len);
 
             const entry_hdr: *BlockEntryHeader = @ptrCast(new_block[0..@sizeOf(BlockEntryHeader)].ptr);
             entry_hdr.format();
@@ -285,13 +308,13 @@ pub fn FrontCodedBlock2(
         }
 
         pub fn sizeAfterAdd(self: *const Self, key: KeyType, value: ValueType) usize {
-            const shared = try algo.commonPrefixLength(
+            const shared = algo.commonPrefixLength(
                 u8,
                 self.scratch[0..self.scratch_len],
                 key,
                 cmp,
                 self.ctx,
-            );
+            ) catch unreachable;
             const suffix = key[shared..];
             return self.block_writer.used().len + expectedBlockLen(suffix, value);
         }
@@ -302,13 +325,13 @@ pub fn FrontCodedBlock2(
             if (self.scratch.len < max_key_len) {
                 return false;
             }
-            const shared = try algo.commonPrefixLength(
+            const shared = algo.commonPrefixLength(
                 u8,
                 self.scratch[0..self.scratch_len],
                 key,
                 cmp,
                 self.ctx,
-            );
+            ) catch unreachable;
             const suffix = key[shared..];
             return self.block_writer.remaining() >= expectedBlockLen(suffix, value);
         }
@@ -320,23 +343,26 @@ pub fn FrontCodedBlock2(
                 return Error.BufferTooSmall;
             }
 
-            const shared = try algo.commonPrefixLength(
+            const shared = algo.commonPrefixLength(
                 u8,
                 self.scratch[0..self.scratch_len],
                 key,
                 cmp,
                 self.ctx,
-            );
+            ) catch unreachable;
 
             try appendEntry(self, @intCast(shared), key[shared..], value);
 
-            var hdr = self.headerMut();
+            const hdr = self.headerMut();
             const current_entries = hdr.entry_count.get();
             const used_bytes = self.block_writer.used().len;
 
             hdr.entry_count.set(@intCast(current_entries + 1));
             hdr.used_bytes.set(@intCast(used_bytes));
             hdr.max_key_len.set(@intCast(max_key_len));
+
+            @memcpy(self.scratch[0..key.len], key);
+            self.scratch_len = key.len;
         }
 
         pub fn reader(self: *const Self) Error!ReaderImpl {

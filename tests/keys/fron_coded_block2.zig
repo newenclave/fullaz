@@ -16,14 +16,14 @@ const StrCmp = struct {
 
 const keys = fullaz.keys;
 const BlockWriter = keys.memory_block.MemoryBlockWriter(u8);
-const BlockREader = keys.memory_block.MemoryBlockView(u8);
+const BlockReader = keys.memory_block.MemoryBlockView(u8);
 
 const FrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
     u8,
     u16,
     u32,
     BlockWriter,
-    BlockREader,
+    BlockReader,
     std.builtin.Endian.little,
     StrCmp.cmp,
     void,
@@ -32,59 +32,184 @@ const FrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
 const HEADER_SIZE = @sizeOf(FrontCodedBlock.Header);
 const ENTRY_HEADER_SIZE = @sizeOf(FrontCodedBlock.EntryHeader);
 
-// comptime CountT: type,
-// comptime IndexT: type,
-// comptime BlockSizeT: type,
-// comptime BlockWriterT: type,
-// comptime BlockViewT: type,
-// comptime endian: std.builtin.Endian,
-// comptime cmp: anytype,
-// comptime Ctx: type,
+const TestEntry = struct {
+    key: []const u8,
+    value: []const u8,
+};
 
-test "Keys: Writer block paged" {
+const sample_entries = [_]TestEntry{
+    .{ .key = "filesystem", .value = "v0" },
+    .{ .key = "filesystem_cache", .value = "v1" },
+    .{ .key = "filesystem_cache_entry", .value = "v2" },
+    .{ .key = "filesystem_cache_entry_low", .value = "v3" },
+};
+
+fn expectedUsedBytes(entries: []const TestEntry) usize {
+    var used: usize = HEADER_SIZE;
+    var prev: []const u8 = "";
+    for (entries) |entry| {
+        const shared = algo.commonPrefixLength(u8, prev, entry.key, StrCmp.cmp, {}) catch unreachable;
+        used += ENTRY_HEADER_SIZE + (entry.key.len - shared) + entry.value.len;
+        prev = entry.key;
+    }
+    return used;
+}
+
+fn maxKeyLen(entries: []const TestEntry) usize {
+    var max: usize = 0;
+    for (entries) |entry| {
+        max = @max(max, entry.key.len);
+    }
+    return max;
+}
+
+test "Keys: FrontCodedBlock2 writes header metadata" {
     var buf = [_]u8{0} ** 1024;
-    var writer = BlockWriter.init(buf[0..]);
-    defer writer.deinit();
-
     var scratch: [256]u8 = undefined;
-    var builder = try FrontCodedBlock.Builder.init(writer, scratch[0..]);
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
 
-    std.debug.print("Expected len: {}...", .{builder.sizeAfterAdd("filesystem", "filesystem")});
-    try builder.add("filesystem", "filesystem");
-    std.debug.print("real len: {}\n", .{builder.block_writer.used().len});
+    try std.testing.expectEqual(@as(usize, HEADER_SIZE), builder.block_writer.used().len);
 
-    std.debug.print("Expected len: {}...", .{builder.sizeAfterAdd("filesystem_cache", "filesystem_cache")});
-    try builder.add("filesystem_cache", "filesystem_cache");
-    std.debug.print("real len: {}\n", .{builder.block_writer.used().len});
-
-    std.debug.print("Expected len: {}...", .{builder.sizeAfterAdd("filesystem_cache_entry", "filesystem_cache_entry")});
-    try builder.add("filesystem_cache_entry", "filesystem_cache_entry");
-    std.debug.print("real len: {}\n", .{builder.block_writer.used().len});
-
-    std.debug.print("Expected len: {}...", .{builder.sizeAfterAdd("filesystem_cache_entry_low", "filesystem_cache_entry_low")});
-    try builder.add("filesystem_cache_entry_low", "filesystem_cache_entry_low");
-    std.debug.print("real len: {}\n", .{builder.block_writer.used().len});
+    for (sample_entries) |entry| {
+        try std.testing.expect(builder.canAdd(entry.key, entry.value));
+        try builder.add(entry.key, entry.value);
+    }
 
     var reader = try builder.reader();
     defer reader.deinit();
 
-    std.debug.print("total bytes written: {}\n", .{builder.block_writer.used().len});
+    try std.testing.expectEqual(sample_entries.len, reader.entryCount());
+    try std.testing.expectEqual(expectedUsedBytes(sample_entries[0..]), reader.usedBytes());
+    try std.testing.expectEqual(maxKeyLen(sample_entries[0..]), reader.maxKeyLen());
+    try std.testing.expectEqual(reader.usedBytes(), builder.block_writer.used().len);
+}
 
-    // try std.testing.expectEqual(@as(usize, 3), reader.entryCount());
-    // try std.testing.expectEqual(
-    //     @as(usize, 25 + HEADER_SIZE + ENTRY_HEADER_SIZE),
-    //     reader.usedBytes(),
-    // );
-    //try std.testing.expectEqual(@as(usize, 10), reader.maxKeyLen());
+test "Keys: FrontCodedBlock2 iterator rebuilds keys with caller scratch" {
+    var buf = [_]u8{0} ** 1024;
+    var builder_scratch: [256]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
+    defer builder.deinit();
 
-    var itr = try reader.iterator(scratch[0..]);
+    for (sample_entries) |entry| {
+        try builder.add(entry.key, entry.value);
+    }
+
+    var reader = try builder.reader();
+    defer reader.deinit();
+
+    var read_scratch: [256]u8 = undefined;
+    var itr = try reader.iterator(read_scratch[0..]);
     defer itr.deinit();
 
-    while (!itr.done()) {
-        const key = itr.scratchKey();
-        const value = try itr.value();
-        std.debug.print("itr key: '{s}'', value: '{s}'\n", .{ key, value });
+    var index: usize = 0;
+    while (!itr.done()) : (index += 1) {
+        try std.testing.expect(index < sample_entries.len);
+        try std.testing.expectEqualStrings(sample_entries[index].key, itr.scratchKey());
+        try std.testing.expectEqualStrings(sample_entries[index].value, try itr.value());
         try itr.next();
     }
+
+    try std.testing.expectEqual(sample_entries.len, index);
+}
+
+test "Keys: FrontCodedBlock2 iterator ignores padding after used bytes" {
+    var buf = [_]u8{0} ** 1024;
+    var builder_scratch: [256]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
+    defer builder.deinit();
+
+    for (sample_entries) |entry| {
+        try builder.add(entry.key, entry.value);
+    }
+
+    const used_bytes = builder.block_writer.used().len;
+    var reader = try FrontCodedBlock.Reader.init(BlockReader.init(buf[0..]));
+    defer reader.deinit();
+
+    try std.testing.expectEqual(used_bytes, reader.usedBytes());
+
+    var read_scratch: [256]u8 = undefined;
+    var itr = try reader.iterator(read_scratch[0..]);
+    defer itr.deinit();
+
+    var index: usize = 0;
+    while (!itr.done()) : (index += 1) {
+        try std.testing.expect(index < sample_entries.len);
+        try std.testing.expectEqualStrings(sample_entries[index].key, itr.scratchKey());
+        try std.testing.expectEqualStrings(sample_entries[index].value, try itr.value());
+        try itr.next();
+    }
+
+    try std.testing.expectEqual(sample_entries.len, index);
+}
+
+test "Keys: FrontCodedBlock2 stores shared prefix entries" {
+    var buf = [_]u8{0} ** 1024;
+    var scratch: [256]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    const first_size = builder.sizeAfterAdd("filesystem", "v0");
+    try builder.add("filesystem", "v0");
+    try std.testing.expectEqual(first_size, builder.block_writer.used().len);
+
+    const second_size = builder.sizeAfterAdd("filesystem_cache", "v1");
+    try builder.add("filesystem_cache", "v1");
+    try std.testing.expectEqual(second_size, builder.block_writer.used().len);
+
+    var reader = try builder.reader();
+    defer reader.deinit();
+
+    var read_scratch: [256]u8 = undefined;
+    var itr = try reader.iterator(read_scratch[0..]);
+    defer itr.deinit();
+
+    try std.testing.expectEqualStrings("filesystem", itr.scratchKey());
+    try itr.next();
+    try std.testing.expectEqualStrings("filesystem_cache", itr.scratchKey());
+
+    const expected_second_suffix_len = "_cache".len;
+    const expected_second_size = first_size + ENTRY_HEADER_SIZE + expected_second_suffix_len + "v1".len;
+    try std.testing.expectEqual(expected_second_size, second_size);
+}
+
+test "Keys: FrontCodedBlock2 rejects too-small block buffer" {
+    var buf = [_]u8{0} ** (HEADER_SIZE + ENTRY_HEADER_SIZE + 3);
+    var scratch: [16]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try std.testing.expect(!builder.canAdd("abcd", "v"));
+    try std.testing.expectError(error.BufferTooSmall, builder.add("abcd", "v"));
+}
+
+test "Keys: FrontCodedBlock2 rejects too-small scratch buffer" {
+    var buf = [_]u8{0} ** 128;
+    var scratch = [_]u8{0} ** 3;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try std.testing.expect(!builder.canAdd("abcd", "v"));
+    try std.testing.expectError(error.BufferTooSmall, builder.add("abcd", "v"));
+}
+
+test "Keys: FrontCodedBlock2 iterator requires max-key scratch" {
+    var buf = [_]u8{0} ** 256;
+    var builder_scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+    try builder.add("abcdef", "v1");
+
+    var reader = try builder.reader();
+    defer reader.deinit();
+
+    var read_scratch = [_]u8{0} ** 5;
+    var itr = try reader.iterator(read_scratch[0..]);
+    defer itr.deinit();
+
+    try std.testing.expectEqualStrings("abc", itr.scratchKey());
+    try std.testing.expectError(error.BufferTooSmall, itr.next());
 }
