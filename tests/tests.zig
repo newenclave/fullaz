@@ -39,6 +39,7 @@ test {
     _ = @import("device/file_block.zig");
 
     _ = @import("keys/front_coded_block_add.zig");
+    _ = @import("keys/fron_coded_block2.zig");
 
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
