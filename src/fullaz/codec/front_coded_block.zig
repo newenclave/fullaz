@@ -3,7 +3,7 @@ const algo = @import("../core/algorithm.zig");
 const errors = @import("../core/errors.zig");
 const page = @import("../page/front_coded_block.zig");
 
-pub fn FrontCodedBlock2(
+pub fn FrontCodedBlock(
     comptime CountT: type, // entry_count field
     comptime IndexT: type, // index type for EntryHeader fields: shared_len, suffix_len, value_len and max_key_len from the header
     comptime BlockSizeT: type, // used_bytes value from BlockHeader.
@@ -204,6 +204,7 @@ pub fn FrontCodedBlock2(
         const Self = @This();
         pub const BlockView = BlockViewT;
         pub const Error = errors.SpaceError;
+        pub const FindError = Error || errors.OrderError;
 
         pub const Iterator = IteratorImpl;
 
@@ -272,6 +273,27 @@ pub fn FrontCodedBlock2(
         }
         pub fn maxKeyLen(self: *const Self) usize {
             return self.header().max_key_len.get();
+        }
+
+        pub fn find(self: *const Self, key: KeyType, scratch: BufferType, cmp_fn: anytype, cmp_ctx: anytype) FindError!?IteratorImpl {
+            var itr = try self.iterator(scratch);
+            errdefer itr.deinit();
+
+            while (!itr.done()) {
+                const cur_key = itr.scratchKey();
+                switch (cmp_fn(cmp_ctx, cur_key, key)) {
+                    .lt => try itr.next(),
+                    .eq => return itr,
+                    .gt => {
+                        itr.deinit();
+                        return null;
+                    },
+                    .unordered => return FindError.Unordered,
+                }
+            }
+
+            itr.deinit();
+            return null;
         }
     };
 

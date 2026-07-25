@@ -14,11 +14,37 @@ const StrCmp = struct {
     }
 };
 
-const keys = fullaz.keys;
-const BlockWriter = keys.memory_block.MemoryBlockWriter(u8);
-const BlockReader = keys.memory_block.MemoryBlockView(u8);
+const StrSliceCmp = struct {
+    pub fn cmp(_: void, a: []const u8, b: []const u8) algo.Order {
+        const n = @min(a.len, b.len);
+        for (0..n) |i| {
+            const res = StrCmp.cmp({}, a[i], b[i]);
+            if (res != .eq) {
+                return res;
+            }
+        }
 
-const FrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
+        if (a.len < b.len) {
+            return .lt;
+        }
+        if (a.len > b.len) {
+            return .gt;
+        }
+        return .eq;
+    }
+};
+
+const UnorderedSliceCmp = struct {
+    pub fn cmp(_: void, _: []const u8, _: []const u8) algo.Order {
+        return .unordered;
+    }
+};
+
+const codec = fullaz.codec;
+const BlockWriter = codec.bounded_buffer.MemoryBlockWriter(u8);
+const BlockReader = codec.bounded_buffer.MemoryBlockView(u8);
+
+const FrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
     u8,
     u16,
     u32,
@@ -30,7 +56,7 @@ const FrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
     void,
 );
 
-const SmallIndexFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
+const SmallIndexFrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
     u8,
     u8,
     u32,
@@ -42,7 +68,7 @@ const SmallIndexFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
     void,
 );
 
-const SmallBlockSizeFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
+const SmallBlockSizeFrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
     u8,
     u16,
     u8,
@@ -81,7 +107,7 @@ const CountingBlockView = struct {
     }
 };
 
-const CountingViewFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
+const CountingViewFrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
     u8,
     u16,
     u32,
@@ -147,7 +173,7 @@ const NoBufFieldWriter = struct {
     }
 };
 
-const NoBufWriterFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
+const NoBufWriterFrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
     u8,
     u16,
     u32,
@@ -201,7 +227,7 @@ fn blockHeaderAt(buf: []u8) *FrontCodedBlock.Header {
     return @ptrCast(buf[0..HEADER_SIZE].ptr);
 }
 
-test "Keys: FrontCodedBlock2 writes header metadata" {
+test "Codec: FrontCodedBlock writes header metadata" {
     var buf = [_]u8{0} ** 1024;
     var scratch: [256]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -223,7 +249,7 @@ test "Keys: FrontCodedBlock2 writes header metadata" {
     try std.testing.expectEqual(reader.usedBytes(), builder.block_writer.used().len);
 }
 
-test "Keys: FrontCodedBlock2 supports empty block" {
+test "Codec: FrontCodedBlock supports empty block" {
     var buf = [_]u8{0} ** 128;
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -243,7 +269,7 @@ test "Keys: FrontCodedBlock2 supports empty block" {
     try std.testing.expect(itr.done());
 }
 
-test "Keys: FrontCodedBlock2 iterator rebuilds keys with caller scratch" {
+test "Codec: FrontCodedBlock iterator rebuilds keys with caller scratch" {
     var buf = [_]u8{0} ** 1024;
     var builder_scratch: [256]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
@@ -271,7 +297,90 @@ test "Keys: FrontCodedBlock2 iterator rebuilds keys with caller scratch" {
     try std.testing.expectEqual(sample_entries.len, index);
 }
 
-test "Keys: FrontCodedBlock2 iterator ignores padding after used bytes" {
+test "Codec: FrontCodedBlock find returns matching entries" {
+    var buf = [_]u8{0} ** 1024;
+    var builder_scratch: [256]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
+    defer builder.deinit();
+
+    for (sample_entries) |entry| {
+        try builder.add(entry.key, entry.value);
+    }
+
+    var reader = try builder.reader();
+    defer reader.deinit();
+
+    var first_scratch: [256]u8 = undefined;
+    var first = (try reader.find(sample_entries[0].key, first_scratch[0..], StrSliceCmp.cmp, {})).?;
+    defer first.deinit();
+    try std.testing.expectEqualStrings(sample_entries[0].key, first.scratchKey());
+    try std.testing.expectEqualStrings(sample_entries[0].value, try first.value());
+
+    var middle_scratch: [256]u8 = undefined;
+    var middle = (try reader.find(sample_entries[2].key, middle_scratch[0..], StrSliceCmp.cmp, {})).?;
+    defer middle.deinit();
+    try std.testing.expectEqualStrings(sample_entries[2].key, middle.scratchKey());
+    try std.testing.expectEqualStrings(sample_entries[2].value, try middle.value());
+
+    var last_scratch: [256]u8 = undefined;
+    var last = (try reader.find(sample_entries[3].key, last_scratch[0..], StrSliceCmp.cmp, {})).?;
+    defer last.deinit();
+    try std.testing.expectEqualStrings(sample_entries[3].key, last.scratchKey());
+    try std.testing.expectEqualStrings(sample_entries[3].value, try last.value());
+}
+
+test "Codec: FrontCodedBlock find returns null for missing keys" {
+    var buf = [_]u8{0} ** 1024;
+    var builder_scratch: [256]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
+    defer builder.deinit();
+
+    for (sample_entries) |entry| {
+        try builder.add(entry.key, entry.value);
+    }
+
+    var reader = try builder.reader();
+    defer reader.deinit();
+
+    var before_scratch: [256]u8 = undefined;
+    try std.testing.expectEqual(null, try reader.find("aaa", before_scratch[0..], StrSliceCmp.cmp, {}));
+
+    var between_scratch: [256]u8 = undefined;
+    try std.testing.expectEqual(null, try reader.find("filesystem_a", between_scratch[0..], StrSliceCmp.cmp, {}));
+
+    var after_scratch: [256]u8 = undefined;
+    try std.testing.expectEqual(null, try reader.find("z", after_scratch[0..], StrSliceCmp.cmp, {}));
+}
+
+test "Codec: FrontCodedBlock find handles empty block" {
+    var buf = [_]u8{0} ** 128;
+    var builder_scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
+    defer builder.deinit();
+
+    var reader = try builder.reader();
+    defer reader.deinit();
+
+    var read_scratch: [32]u8 = undefined;
+    try std.testing.expectEqual(null, try reader.find("abc", read_scratch[0..], StrSliceCmp.cmp, {}));
+}
+
+test "Codec: FrontCodedBlock find rejects unordered comparison" {
+    var buf = [_]u8{0} ** 128;
+    var builder_scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
+    defer builder.deinit();
+
+    try builder.add("abc", "v0");
+
+    var reader = try builder.reader();
+    defer reader.deinit();
+
+    var read_scratch: [32]u8 = undefined;
+    try std.testing.expectError(error.Unordered, reader.find("abc", read_scratch[0..], UnorderedSliceCmp.cmp, {}));
+}
+
+test "Codec: FrontCodedBlock iterator ignores padding after used bytes" {
     var buf = [_]u8{0} ** 1024;
     var builder_scratch: [256]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
@@ -302,7 +411,7 @@ test "Keys: FrontCodedBlock2 iterator ignores padding after used bytes" {
     try std.testing.expectEqual(sample_entries.len, index);
 }
 
-test "Keys: FrontCodedBlock2 stores shared prefix entries" {
+test "Codec: FrontCodedBlock stores shared prefix entries" {
     var buf = [_]u8{0} ** 1024;
     var scratch: [256]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -332,7 +441,7 @@ test "Keys: FrontCodedBlock2 stores shared prefix entries" {
     try std.testing.expectEqual(expected_second_size, second_size);
 }
 
-test "Keys: FrontCodedBlock2 rejects too-small block buffer" {
+test "Codec: FrontCodedBlock rejects too-small block buffer" {
     var buf = [_]u8{0} ** (HEADER_SIZE + ENTRY_HEADER_SIZE + 3);
     var scratch: [16]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -342,7 +451,7 @@ test "Keys: FrontCodedBlock2 rejects too-small block buffer" {
     try std.testing.expectError(error.BufferTooSmall, builder.add("abcd", "v"));
 }
 
-test "Keys: FrontCodedBlock2 rejects too-small scratch buffer" {
+test "Codec: FrontCodedBlock rejects too-small scratch buffer" {
     var buf = [_]u8{0} ** 128;
     var scratch = [_]u8{0} ** 3;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -352,7 +461,7 @@ test "Keys: FrontCodedBlock2 rejects too-small scratch buffer" {
     try std.testing.expectError(error.BufferTooSmall, builder.add("abcd", "v"));
 }
 
-test "Keys: FrontCodedBlock2 iterator requires max-key scratch" {
+test "Codec: FrontCodedBlock iterator requires max-key scratch" {
     var buf = [_]u8{0} ** 256;
     var builder_scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
@@ -372,7 +481,7 @@ test "Keys: FrontCodedBlock2 iterator requires max-key scratch" {
     try std.testing.expectError(error.BufferTooSmall, itr.next());
 }
 
-test "Keys: FrontCodedBlock2 rejects first entry with shared prefix" {
+test "Codec: FrontCodedBlock rejects first entry with shared prefix" {
     var buf = [_]u8{0} ** 256;
     var builder_scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
@@ -390,7 +499,7 @@ test "Keys: FrontCodedBlock2 rejects first entry with shared prefix" {
     try std.testing.expectError(error.BufferTooSmall, reader.iterator(read_scratch[0..]));
 }
 
-test "Keys: FrontCodedBlock2 rejects entry with shared prefix longer than previous key" {
+test "Codec: FrontCodedBlock rejects entry with shared prefix longer than previous key" {
     var buf = [_]u8{0} ** 256;
     var builder_scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
@@ -414,7 +523,7 @@ test "Keys: FrontCodedBlock2 rejects entry with shared prefix longer than previo
     try std.testing.expectError(error.BufferTooSmall, itr.next());
 }
 
-test "Keys: FrontCodedBlock2 rejects entry count overflow" {
+test "Codec: FrontCodedBlock rejects entry count overflow" {
     var buf = [_]u8{0} ** 2048;
     var scratch: [1]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -429,7 +538,7 @@ test "Keys: FrontCodedBlock2 rejects entry count overflow" {
     try std.testing.expectError(error.BufferTooSmall, builder.add("", ""));
 }
 
-test "Keys: FrontCodedBlock2 rejects index overflow" {
+test "Codec: FrontCodedBlock rejects index overflow" {
     var buf = [_]u8{0} ** 512;
     var scratch = [_]u8{0} ** 256;
     var key = [_]u8{'a'} ** 256;
@@ -440,7 +549,7 @@ test "Keys: FrontCodedBlock2 rejects index overflow" {
     try std.testing.expectError(error.BufferTooSmall, builder.add(key[0..], "v"));
 }
 
-test "Keys: FrontCodedBlock2 rejects block size overflow" {
+test "Codec: FrontCodedBlock rejects block size overflow" {
     var buf = [_]u8{0} ** 512;
     var scratch = [_]u8{0} ** 256;
     var first_key = [_]u8{'a'} ** 200;
@@ -455,7 +564,7 @@ test "Keys: FrontCodedBlock2 rejects block size overflow" {
     try std.testing.expectError(error.BufferTooSmall, builder.add(second_key[0..], "v"));
 }
 
-test "Keys: FrontCodedBlock2 reader rejects used bytes smaller than header" {
+test "Codec: FrontCodedBlock reader rejects used bytes smaller than header" {
     var buf = [_]u8{0} ** 128;
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -469,7 +578,7 @@ test "Keys: FrontCodedBlock2 reader rejects used bytes smaller than header" {
     try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used())));
 }
 
-test "Keys: FrontCodedBlock2 reader rejects used bytes beyond view" {
+test "Codec: FrontCodedBlock reader rejects used bytes beyond view" {
     var buf = [_]u8{0} ** 128;
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -483,7 +592,7 @@ test "Keys: FrontCodedBlock2 reader rejects used bytes beyond view" {
     try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used())));
 }
 
-test "Keys: FrontCodedBlock2 reader rejects truncated entry" {
+test "Codec: FrontCodedBlock reader rejects truncated entry" {
     var buf = [_]u8{0} ** 128;
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -497,7 +606,7 @@ test "Keys: FrontCodedBlock2 reader rejects truncated entry" {
     try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used())));
 }
 
-test "Keys: FrontCodedBlock2 reader rejects entry count mismatch" {
+test "Codec: FrontCodedBlock reader rejects entry count mismatch" {
     var buf = [_]u8{0} ** 128;
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -511,7 +620,7 @@ test "Keys: FrontCodedBlock2 reader rejects entry count mismatch" {
     try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(builder.block_writer.used())));
 }
 
-test "Keys: FrontCodedBlock2 reader rejects trailing bytes inside used bytes" {
+test "Codec: FrontCodedBlock reader rejects trailing bytes inside used bytes" {
     var buf = [_]u8{0} ** 128;
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
@@ -526,7 +635,7 @@ test "Keys: FrontCodedBlock2 reader rejects trailing bytes inside used bytes" {
     try std.testing.expectError(error.BufferTooSmall, FrontCodedBlock.Reader.init(BlockReader.init(buf[0 .. used_bytes + 1])));
 }
 
-test "Keys: FrontCodedBlock2 iterator borrows reader view" {
+test "Codec: FrontCodedBlock iterator borrows reader view" {
     counting_view_deinit_count = 0;
 
     var buf = [_]u8{0} ** 128;
@@ -548,7 +657,7 @@ test "Keys: FrontCodedBlock2 iterator borrows reader view" {
     try std.testing.expectEqual(@as(usize, 1), counting_view_deinit_count);
 }
 
-test "Keys: FrontCodedBlock2 builder uses writer contract without buf field" {
+test "Codec: FrontCodedBlock builder uses writer contract without buf field" {
     var buf = [_]u8{0} ** 128;
     var scratch: [32]u8 = undefined;
     var builder = try NoBufWriterFrontCodedBlock.Builder.init(NoBufFieldWriter.init(buf[0..]), scratch[0..]);
