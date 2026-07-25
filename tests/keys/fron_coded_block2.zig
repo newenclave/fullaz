@@ -157,6 +157,26 @@ test "Keys: FrontCodedBlock2 writes header metadata" {
     try std.testing.expectEqual(reader.usedBytes(), builder.block_writer.used().len);
 }
 
+test "Keys: FrontCodedBlock2 supports empty block" {
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    var reader = try builder.reader();
+    defer reader.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), reader.entryCount());
+    try std.testing.expectEqual(@as(usize, HEADER_SIZE), reader.usedBytes());
+    try std.testing.expectEqual(@as(usize, 0), reader.maxKeyLen());
+
+    var read_scratch: [32]u8 = undefined;
+    var itr = try reader.iterator(read_scratch[0..]);
+    defer itr.deinit();
+
+    try std.testing.expect(itr.done());
+}
+
 test "Keys: FrontCodedBlock2 iterator rebuilds keys with caller scratch" {
     var buf = [_]u8{0} ** 1024;
     var builder_scratch: [256]u8 = undefined;
