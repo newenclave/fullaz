@@ -10,6 +10,7 @@ pub fn FrontCodedBlock2(
     comptime BlockWriterT: type,
     comptime BlockViewT: type,
     comptime endian: std.builtin.Endian,
+    comptime check_limits: bool,
     comptime cmp: anytype,
     comptime Ctx: type,
 ) type {
@@ -273,14 +274,34 @@ pub fn FrontCodedBlock2(
             return res;
         }
 
-        fn appendEntry(self: *Self, shared: IndexT, suffix: KeyType, value: ValueType) Error!void {
+        fn appendEntry(self: *Self, shared: usize, suffix: KeyType, value: ValueType) Error!void {
             // std.debug.print(
             //     "appendEntry: shared = {}, suffix.len = {s}, value.len = {}\n",
             //     .{ shared, suffix, value.len },
             // );
 
+            if (check_limits) {
+                if (shared > std.math.maxInt(IndexT)) {
+                    return Error.BufferTooSmall;
+                }
+                if (suffix.len > std.math.maxInt(IndexT)) {
+                    return Error.BufferTooSmall;
+                }
+                if (value.len > std.math.maxInt(IndexT)) {
+                    return Error.BufferTooSmall;
+                }
+            }
+
             const current_used = self.block_writer.used();
             const expected_len = expectedBlockLen(suffix, value);
+            if (check_limits) {
+                if (expected_len > std.math.maxInt(usize) - current_used.len) {
+                    return Error.BufferTooSmall;
+                }
+                if (current_used.len + expected_len > std.math.maxInt(BlockSizeT)) {
+                    return Error.BufferTooSmall;
+                }
+            }
             if (current_used.len + expected_len > self.block_writer.buf.len) {
                 return Error.BufferTooSmall;
             }
@@ -327,6 +348,20 @@ pub fn FrontCodedBlock2(
             if (self.scratch.len < max_key_len) {
                 return false;
             }
+            if (check_limits) {
+                if (self.header().entry_count.get() == std.math.maxInt(CountT)) {
+                    return false;
+                }
+                if (max_key_len > std.math.maxInt(IndexT)) {
+                    return false;
+                }
+                if (key.len > std.math.maxInt(IndexT)) {
+                    return false;
+                }
+                if (value.len > std.math.maxInt(IndexT)) {
+                    return false;
+                }
+            }
             const shared = algo.commonPrefixLength(
                 u8,
                 self.scratch[0..self.scratch_len],
@@ -335,7 +370,17 @@ pub fn FrontCodedBlock2(
                 self.ctx,
             ) catch unreachable;
             const suffix = key[shared..];
-            return self.block_writer.remaining() >= expectedBlockLen(suffix, value);
+            const expected_len = expectedBlockLen(suffix, value);
+            const current_used = self.block_writer.used().len;
+            if (check_limits) {
+                if (expected_len > std.math.maxInt(usize) - current_used) {
+                    return false;
+                }
+                if (current_used + expected_len > std.math.maxInt(BlockSizeT)) {
+                    return false;
+                }
+            }
+            return self.block_writer.remaining() >= expected_len;
         }
 
         pub fn add(self: *Self, key: KeyType, value: ValueType) Error!void {
@@ -343,6 +388,20 @@ pub fn FrontCodedBlock2(
 
             if (self.scratch.len < max_key_len) {
                 return Error.BufferTooSmall;
+            }
+            if (check_limits) {
+                if (self.header().entry_count.get() == std.math.maxInt(CountT)) {
+                    return Error.BufferTooSmall;
+                }
+                if (max_key_len > std.math.maxInt(IndexT)) {
+                    return Error.BufferTooSmall;
+                }
+                if (key.len > std.math.maxInt(IndexT)) {
+                    return Error.BufferTooSmall;
+                }
+                if (value.len > std.math.maxInt(IndexT)) {
+                    return Error.BufferTooSmall;
+                }
             }
 
             const shared = algo.commonPrefixLength(
@@ -353,7 +412,7 @@ pub fn FrontCodedBlock2(
                 self.ctx,
             ) catch unreachable;
 
-            try appendEntry(self, @intCast(shared), key[shared..], value);
+            try appendEntry(self, shared, key[shared..], value);
 
             const hdr = self.headerMut();
             const current_entries = hdr.entry_count.get();

@@ -25,6 +25,31 @@ const FrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
     BlockWriter,
     BlockReader,
     std.builtin.Endian.little,
+    true,
+    StrCmp.cmp,
+    void,
+);
+
+const SmallIndexFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
+    u8,
+    u8,
+    u32,
+    BlockWriter,
+    BlockReader,
+    std.builtin.Endian.little,
+    true,
+    StrCmp.cmp,
+    void,
+);
+
+const SmallBlockSizeFrontCodedBlock = keys.front_coded_block2.FrontCodedBlock2(
+    u8,
+    u16,
+    u8,
+    BlockWriter,
+    BlockReader,
+    std.builtin.Endian.little,
+    true,
     StrCmp.cmp,
     void,
 );
@@ -258,4 +283,45 @@ test "Keys: FrontCodedBlock2 rejects entry with shared prefix longer than previo
 
     try std.testing.expectEqualStrings("abc", itr.scratchKey());
     try std.testing.expectError(error.BufferTooSmall, itr.next());
+}
+
+test "Keys: FrontCodedBlock2 rejects entry count overflow" {
+    var buf = [_]u8{0} ** 2048;
+    var scratch: [1]u8 = undefined;
+    var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    for (0..std.math.maxInt(u8)) |_| {
+        try std.testing.expect(builder.canAdd("", ""));
+        try builder.add("", "");
+    }
+
+    try std.testing.expect(!builder.canAdd("", ""));
+    try std.testing.expectError(error.BufferTooSmall, builder.add("", ""));
+}
+
+test "Keys: FrontCodedBlock2 rejects index overflow" {
+    var buf = [_]u8{0} ** 512;
+    var scratch = [_]u8{0} ** 256;
+    var key = [_]u8{'a'} ** 256;
+    var builder = try SmallIndexFrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try std.testing.expect(!builder.canAdd(key[0..], "v"));
+    try std.testing.expectError(error.BufferTooSmall, builder.add(key[0..], "v"));
+}
+
+test "Keys: FrontCodedBlock2 rejects block size overflow" {
+    var buf = [_]u8{0} ** 512;
+    var scratch = [_]u8{0} ** 256;
+    var first_key = [_]u8{'a'} ** 200;
+    var second_key = [_]u8{'b'} ** 200;
+    var builder = try SmallBlockSizeFrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try std.testing.expect(builder.canAdd(first_key[0..], "v"));
+    try builder.add(first_key[0..], "v");
+
+    try std.testing.expect(!builder.canAdd(second_key[0..], "v"));
+    try std.testing.expectError(error.BufferTooSmall, builder.add(second_key[0..], "v"));
 }
