@@ -11,11 +11,27 @@ pub fn assertBox(comptime BoxT: type) void {
 
     requiresFnSignature(BoxT, "merged", fn (*const BoxT, *const BoxT) BoxT);
     requiresFnSignature(BoxT, "overlaps", fn (*const BoxT, *const BoxT) bool);
+    requiresFnSignature(BoxT, "containsBox", fn (*const BoxT, *const BoxT) bool);
     requiresFnSignature(BoxT, "perimeter", fn (*const BoxT) Coord);
 }
 
+fn ExactConfig(comptime BoxT: type) type {
+    return struct {
+        pub fn makeTreeBox(exact: BoxT) BoxT {
+            return exact;
+        }
+    };
+}
+
 pub fn Tree(comptime BoxT: type, comptime ValueT: type) type {
-    comptime assertBox(BoxT);
+    return TreeImpl(BoxT, ValueT, ExactConfig(BoxT));
+}
+
+fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) type {
+    comptime {
+        assertBox(BoxT);
+        _ = ConfigT;
+    }
 
     const Box = BoxT;
     const Value = ValueT;
@@ -144,6 +160,10 @@ pub fn Tree(comptime BoxT: type, comptime ValueT: type) type {
             const current = try self.constNode(id);
             if (!current.isLeaf()) {
                 return Error.WrongNodeKind;
+            }
+            if (current.bbox.containsBox(&bbox)) {
+                (try self.node(id)).bbox = bbox;
+                return;
             }
 
             try self.detachLeaf(id);
@@ -468,6 +488,7 @@ pub fn Tree(comptime BoxT: type, comptime ValueT: type) type {
     };
 }
 
+//////////// Unit tests //////////////
 const TestBox = struct {
     pub const Coord = i64;
 
@@ -484,6 +505,10 @@ const TestBox = struct {
 
     pub fn overlaps(self: *const TestBox, other: *const TestBox) bool {
         return self.low < other.high and other.low < self.high;
+    }
+
+    pub fn containsBox(self: *const TestBox, other: *const TestBox) bool {
+        return other.low >= self.low and other.high <= self.high;
     }
 
     pub fn perimeter(self: *const TestBox) Coord {
@@ -804,6 +829,34 @@ test "aabb tree update keeps id and moves leaf out of query" {
     try std.testing.expectEqual(@as(usize, 0), ctx.values.items.len);
 
     try tree.query(TestBox.init(45, 46), &ctx, collectQuery);
+    try std.testing.expectEqual(@as(usize, 1), ctx.values.items.len);
+    try std.testing.expect(containsValue(ctx.values.items, 100));
+}
+
+test "aabb tree update inside current box does not reinsert leaf" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const id = try tree.insert(TestBox.init(0, 100), 100);
+    _ = try tree.insert(TestBox.init(200, 300), 200);
+    const old_root = tree.root.?;
+    const old_parent = (try tree.constNode(id)).parent.?;
+
+    try tree.update(id, TestBox.init(10, 20));
+
+    try std.testing.expectEqual(old_root, tree.root.?);
+    try std.testing.expectEqual(old_parent, (try tree.constNode(id)).parent.?);
+    try std.testing.expectEqual(TestBox.init(10, 20), try tree.getBox(id));
+
+    var ctx = QueryCtx.init();
+    defer ctx.deinit();
+
+    try tree.query(TestBox.init(50, 60), &ctx, collectQuery);
+    try std.testing.expectEqual(@as(usize, 0), ctx.values.items.len);
+
+    try tree.query(TestBox.init(15, 16), &ctx, collectQuery);
     try std.testing.expectEqual(@as(usize, 1), ctx.values.items.len);
     try std.testing.expect(containsValue(ctx.values.items, 100));
 }

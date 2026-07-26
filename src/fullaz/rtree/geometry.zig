@@ -67,6 +67,24 @@ pub fn BoundingBox(comptime CoordT: type, comptime DimV: usize) type {
             return true;
         }
 
+        pub fn containsBox(self: *const Self, other: *const Self) bool {
+            inline for (0..Dim) |i| {
+                if ((other.low[i] < self.low[i]) or (other.high[i] > self.high[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        pub fn expanded(self: *const Self, amount: Coord) Self {
+            var result = self.*;
+            inline for (0..Dim) |i| {
+                result.low[i] -= amount;
+                result.high[i] += amount;
+            }
+            return result;
+        }
+
         pub fn overlaps(self: *const Self, other: *const Self) bool {
             inline for (0..Dim) |i| {
                 if ((self.high[i] <= other.low[i]) or (other.high[i] <= self.low[i])) {
