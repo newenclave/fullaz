@@ -50,7 +50,7 @@ const FrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
     u32,
     BlockWriter,
     BlockReader,
-    std.builtin.Endian.little,
+    .little,
     true,
     StrCmp.cmp,
     void,
