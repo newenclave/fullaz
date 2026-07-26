@@ -174,17 +174,38 @@ fn runRandomStress(comptime TreeT: type, seed: u64) !void {
             objects.items[slot].live = false;
             live_count -= 1;
         } else {
-            try verifyStressQuery(&tree, objects.items, randomStressQuery(rnd), seen[0..objects.items.len], &ctx, &stack);
+            try verifyStressQuery(
+                &tree,
+                objects.items,
+                randomStressQuery(rnd),
+                seen[0..objects.items.len],
+                &ctx,
+                &stack,
+            );
         }
 
         try std.testing.expectEqual(live_count, tree.count());
         if (step % 37 == 0) {
-            try verifyStressQuery(&tree, objects.items, randomStressQuery(rnd), seen[0..objects.items.len], &ctx, &stack);
+            try verifyStressQuery(
+                &tree,
+                objects.items,
+                randomStressQuery(rnd),
+                seen[0..objects.items.len],
+                &ctx,
+                &stack,
+            );
         }
     }
 
     for (0..100) |_| {
-        try verifyStressQuery(&tree, objects.items, randomStressQuery(rnd), seen[0..objects.items.len], &ctx, &stack);
+        try verifyStressQuery(
+            &tree,
+            objects.items,
+            randomStressQuery(rnd),
+            seen[0..objects.items.len],
+            &ctx,
+            &stack,
+        );
     }
 }
 
@@ -487,10 +508,22 @@ test "aabb tree accessors reject invalid ids" {
     var tree = TestTree.init(std.testing.allocator);
     defer tree.deinit();
 
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getValue(.{ .index = 0, .generation = 0 }));
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getBox(.{ .index = 0, .generation = 0 }));
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getTreeBox(.{ .index = 0, .generation = 0 }));
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.setValue(.{ .index = 0, .generation = 0 }, 100));
+    try std.testing.expectError(
+        TestTree.Error.InvalidNode,
+        tree.getValue(.{ .index = 0, .generation = 0 }),
+    );
+    try std.testing.expectError(
+        TestTree.Error.InvalidNode,
+        tree.getBox(.{ .index = 0, .generation = 0 }),
+    );
+    try std.testing.expectError(
+        TestTree.Error.InvalidNode,
+        tree.getTreeBox(.{ .index = 0, .generation = 0 }),
+    );
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.setValue(
+        .{ .index = 0, .generation = 0 },
+        100,
+    ));
 }
 
 test "aabb tree clear empties tree and allows reuse" {
