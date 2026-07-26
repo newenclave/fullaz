@@ -1,6 +1,7 @@
 const BitSet = @import("fullaz").core.bitset.BitSet;
 const std = @import("std");
 const expect = std.testing.expect;
+const printer = @import("test_printer");
 
 test "create bitset" {
     var buffer: [8]u8 = undefined;
@@ -382,7 +383,7 @@ test "max_objects_by_words: large capacity scaling (u32)" {
 const SumVisitor = struct {
     sum: usize = 0,
     fn visit(self: *@This(), pos: usize) bool {
-        std.debug.print("{},", .{pos});
+        printer.print("{},", .{pos});
         self.sum += pos;
         return true;
     }

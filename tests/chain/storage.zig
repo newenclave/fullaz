@@ -2,6 +2,7 @@ const std = @import("std");
 const chain_store = @import("fullaz").storage.chain_store;
 const page_cache = @import("fullaz").storage.page_cache;
 const devices = @import("fullaz").device;
+const printer = @import("test_printer");
 
 const NoneStorageManager = struct {
     pub const Self = @This();
@@ -93,12 +94,12 @@ test "ChainStore handle: write page" {
     const test_data = "Hello, ChainStore!";
     var buffer_to_read = [_]u8{0} ** 1000;
     const writ_len_0 = try hdl.writePage(&page, 0, test_data);
-    std.debug.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_0, try hdl.totalSize() });
+    printer.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_0, try hdl.totalSize() });
     const writ_len_1 = try hdl.writePage(&page, 900, test_data);
-    std.debug.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_1, try hdl.totalSize() });
+    printer.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_1, try hdl.totalSize() });
     const read_len_0 = try hdl.readPage(&page, 0, &buffer_to_read);
 
-    std.debug.print("read: {any} size: {d}\n", .{ buffer_to_read[0..read_len_0], read_len_0 });
+    printer.print("read: {any} size: {d}\n", .{ buffer_to_read[0..read_len_0], read_len_0 });
 }
 
 test "ChainStore handle: write page handle" {
@@ -125,8 +126,8 @@ test "ChainStore handle: write page handle" {
     _ = try hdl.read(&buffer_to_read);
     const r = try hdl.read(&buffer_to_read);
 
-    std.debug.print("Handle size: {d}\n", .{try hdl.totalSize()});
-    std.debug.print("Read Data {d}: \"{s}\"\n", .{ r, buffer_to_read[0..r] });
+    printer.print("Handle size: {d}\n", .{try hdl.totalSize()});
+    printer.print("Read Data {d}: \"{s}\"\n", .{ r, buffer_to_read[0..r] });
 }
 
 test "ChainStore Handle. read/write across multiple pages" {

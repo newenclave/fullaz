@@ -4,6 +4,7 @@ const bpt = @import("fullaz").bpt;
 const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
 const dev = @import("fullaz").device;
 const assertIsStorageManager = @import("fullaz").bpt.models.interfaces.assertIsStorageManager;
+const printer = @import("test_printer");
 
 fn getRandomSeed() !u64 {
     const io = std.testing.io;
@@ -17,11 +18,11 @@ fn Printer(comptime name: []const u8) type {
         const Self = @This();
         scope_name: []const u8 = name,
         fn init() Self {
-            std.debug.print("{s}\n", .{name});
+            printer.print("{s}\n", .{name});
             return .{};
         }
         fn print(_: *const Self, comptime fmt: []const u8, argv: anytype) void {
-            std.debug.print("\t" ++ fmt, argv);
+            printer.print("\t" ++ fmt, argv);
         }
     };
 }
@@ -620,7 +621,7 @@ test "LeafImpl: updateValue triggers compaction when needed" {
     // Check the status - it should be .need_compact (space available after compaction)
     // or .enough (if there's a free slot that fits)
     const status = try leaf.canUpdateValueStatus(0, large_value[0..150]);
-    std.debug.print("Can update status before compact: {}\n", .{status});
+    printer.print("Can update status before compact: {}\n", .{status});
 
     // The update should succeed regardless (updateValue handles compaction internally)
     if (status != .not_enough) {
@@ -628,12 +629,12 @@ test "LeafImpl: updateValue triggers compaction when needed" {
         try std.testing.expectEqualStrings(large_value[0..150], try leaf.getValue(0));
     } else {
         // If truly not enough space, that's also valid - page is just too full
-        std.debug.print("Not enough space even after compaction - page is full\n", .{});
+        printer.print("Not enough space even after compaction - page is full\n", .{});
     }
 
     // If we got .need_compact, verify that a larger update triggers compaction
     if (status == .need_compact) {
-        std.debug.print("Successfully verified .need_compact condition!\n", .{});
+        printer.print("Successfully verified .need_compact condition!\n", .{});
         // The update already happened above and compaction was triggered internally
     }
 }

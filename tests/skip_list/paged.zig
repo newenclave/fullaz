@@ -1,6 +1,7 @@
 const std = @import("std");
 const skip_list = @import("fullaz").skip_list;
 const algorithm = @import("fullaz").core.algorithm;
+const printer = @import("test_printer");
 
 const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
 const device = @import("fullaz").device;
@@ -39,8 +40,8 @@ fn timestampPrint(comptime name: []const u8, params: anytype) void {
     const mins = (millis / (1000 * 60)) % 60;
     const seconds = (millis / 1000) % 60;
 
-    std.debug.print("{d:0>2}:{:0>2}:{:0>2}.{d:0>4} [{s}]: ", .{ hours, mins, seconds, @mod(millis, 1000), globalTag });
-    std.debug.print(name, params);
+    printer.print("{d:0>2}:{:0>2}:{:0>2}.{d:0>4} [{s}]: ", .{ hours, mins, seconds, @mod(millis, 1000), globalTag });
+    printer.print(name, params);
 }
 
 fn keyCmp(ctx: anytype, k1: []const u8, k2: []const u8) std.math.Order {
@@ -91,10 +92,10 @@ test "SkipList paged: page and view" {
     try view.formatPage(42, 1234, 64);
 
     const hdr = view.page_view.header();
-    std.debug.print("Subheader kind: {d}\n", .{hdr.kind.get()});
+    printer.print("Subheader kind: {d}\n", .{hdr.kind.get()});
     const slots = try view.slotsDir();
 
-    std.debug.print("Number of slots: {d}\n", .{slots.capacityFor(16)});
+    printer.print("Number of slots: {d}\n", .{slots.capacityFor(16)});
 }
 
 test "SkipList paged: create and load nodes" {
@@ -156,8 +157,8 @@ test "SkipList paged: create slot, work with the slot" {
     try std.testing.expectEqual(slot.body().len, ss.body().len);
     try std.testing.expect(keyCmp({}, slot.key, ss.key) == .eq);
 
-    std.debug.print("Can insert: {any}\n", .{try view.canInsert(0, slot.key, slot.value, slot.header().level)});
-    std.debug.print("Can insert: {any}\n", .{try view.canInsertSize(0, 4096)});
+    printer.print("Can insert: {any}\n", .{try view.canInsert(0, slot.key, slot.value, slot.header().level)});
+    printer.print("Can insert: {any}\n", .{try view.canInsertSize(0, 4096)});
 }
 
 test "SkipList paged: interfaces" {
@@ -186,7 +187,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     defer fsm_inst.deinit();
 
     const ts = getNowTimestamp();
-    std.debug.print("Test timestamp: {d}\n", .{ts});
+    printer.print("Test timestamp: {d}\n", .{ts});
 
     var prng: std.Random.DefaultPrng = .init(ts);
     const rand = prng.random();
@@ -222,7 +223,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     try std.testing.expect(std.mem.eql(u8, got_value, "BBBB"));
     {
         const lvl = try node.getLevel();
-        std.debug.print("Node level: {d}\n", .{lvl});
+        printer.print("Node level: {d}\n", .{lvl});
         try std.testing.expect(lvl >= 1 and lvl <= 4); // max_level = 4
     }
 
@@ -247,7 +248,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
 
 fn keyDumper(value: []const u8) void {
     const d: u32 = std.mem.readInt(u32, value[0..4], .big);
-    std.debug.print("{any}; ", .{d});
+    printer.print("{any}; ", .{d});
 }
 
 fn valueDumper(_: []const u8) void {
@@ -538,7 +539,9 @@ test "SkipList paged: iterator remove test" {
         }
     }
 
-    _ = try sl.dump(keyDumper, valueDumper);
+    if (printer.verbose) {
+        _ = try sl.dump(keyDumper, valueDumper);
+    }
 
     timestampPrint("Done removing the keys...\n", .{});
     //    try std.testing.expectEqual(count, half);
@@ -620,7 +623,7 @@ test "SkipList paged: randomized parity vs memory model" {
 
     // one seed drives the op stream; print it so any failure is reproducible.
     const op_seed = getNowTimestamp();
-    std.debug.print("parity op_seed = {d}\n", .{op_seed});
+    printer.print("parity op_seed = {d}\n", .{op_seed});
     var op_prng: std.Random.DefaultPrng = .init(op_seed);
     const op_rand = op_prng.random();
     var mem_prng: std.Random.DefaultPrng = .init(op_seed ^ 0xA5A5);

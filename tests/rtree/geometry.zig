@@ -41,6 +41,22 @@ test "BoundingBox: contains a point (half-open)" {
     try testing.expect(!b.contains(.{ 3, 3 }));
 }
 
+test "BoundingBox: containsBox checks full box containment" {
+    const b = box(0, 0, 10, 10);
+
+    try testing.expect(b.containsBox(&box(0, 0, 10, 10)));
+    try testing.expect(b.containsBox(&box(2, 2, 8, 8)));
+    try testing.expect(!b.containsBox(&box(-1, 2, 8, 8)));
+    try testing.expect(!b.containsBox(&box(2, 2, 11, 8)));
+    try testing.expect(!b.containsBox(&box(2, 2, 8, 11)));
+}
+
+test "BoundingBox: expanded grows all dimensions by amount" {
+    const b = box(1, 2, 3, 4).expanded(2);
+
+    try testing.expectEqual(box(-1, 0, 5, 6), b);
+}
+
 test "BoundingBox: enlargement = area added to include another box" {
     const a = box(0, 0, 2, 2); // area 4
     try testing.expectEqual(@as(i64, 5), a.enlargement(&box(1, 1, 3, 3))); // union area 9 - 4

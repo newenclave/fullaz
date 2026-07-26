@@ -1,6 +1,7 @@
 const std = @import("std");
 const wbpt = @import("fullaz").weighted_bpt;
 const algos = @import("fullaz").core.algorithm;
+const printer = @import("test_printer");
 
 const MemoryModel = wbpt.models.memory.Model;
 
@@ -43,7 +44,7 @@ test "WBpt: insertion weight into a list" {
     for (0..try leaf.size()) |i| {
         var val = try leaf.getValue(i);
         defer val.deinit();
-        std.debug.print("Leaf Value {}: {s}\n", .{ i, try val.get() });
+        printer.print("Leaf Value {}: {s}\n", .{ i, try val.get() });
     }
 }
 
@@ -87,20 +88,20 @@ test "WBpt: insertion" {
     for (0..try leaf.size()) |i| {
         var val = try leaf.getValue(i);
         defer val.deinit();
-        std.debug.print("Leaf Value {}: {s}\n", .{ i, try val.get() });
+        printer.print("Leaf Value {}: {s}\n", .{ i, try val.get() });
     }
-    tree.dump();
+    if (printer.verbose) tree.dump();
 
-    std.debug.print("total size: {}\n", .{try tree.totalWeight()});
+    printer.print("total size: {}\n", .{try tree.totalWeight()});
     var iter = try tree.iterator();
     defer iter.deinit();
     while (!iter.isEnd()) {
         var val = try iter.get();
         defer val.deinit();
-        std.debug.print("{s}", .{try val.get()});
+        printer.print("{s}", .{try val.get()});
         _ = try iter.next();
     }
-    std.debug.print("\n", .{});
+    printer.print("\n", .{});
 
     while (!iter.isBegin()) {
         _ = try iter.prev();
@@ -109,9 +110,9 @@ test "WBpt: insertion" {
         }
         var val = try iter.get();
         defer val.deinit();
-        std.debug.print("{s}", .{try val.get()});
+        printer.print("{s}", .{try val.get()});
     }
-    std.debug.print("\n", .{});
+    printer.print("\n", .{});
 }
 
 test "WBpt: findByWeight positional lookup" {
@@ -184,7 +185,7 @@ test "WBpt: stress test - random insertions" {
     //var prng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.nanoTimestamp())));
     const random = prng.random();
 
-    std.debug.print("\n=== Stress Test: {} Random Insertions ===\n", .{num_insertions});
+    printer.print("\n=== Stress Test: {} Random Insertions ===\n", .{num_insertions});
 
     // Track all insertions for verification
     const Insertion = struct {
@@ -222,11 +223,11 @@ test "WBpt: stress test - random insertions" {
         total_weight += value.len;
 
         if ((i + 1) % log_interval == 0) {
-            std.debug.print("Completed {} insertions, total_weight={}\n", .{ i + 1, total_weight });
+            printer.print("Completed {} insertions, total_weight={}\n", .{ i + 1, total_weight });
         }
     }
 
-    std.debug.print("\n=== Verification ===\n", .{});
+    printer.print("\n=== Verification ===\n", .{});
 
     // Reconstruct the string from the tree
     var tree_content = try std.ArrayList(u8).initCapacity(allocator, 0);
@@ -245,11 +246,11 @@ test "WBpt: stress test - random insertions" {
         _ = try iter.next();
     }
 
-    std.debug.print("Total insertions: {}\n", .{num_insertions});
-    std.debug.print("Expected total weight: {}\n", .{total_weight});
-    std.debug.print("Reconstructed weight: {}\n", .{reconstructed_weight});
-    std.debug.print("Tree string length: {}\n", .{tree_content.items.len});
-    std.debug.print("Total nodes allocated: {}\n", .{acc.values.items.len});
+    printer.print("Total insertions: {}\n", .{num_insertions});
+    printer.print("Expected total weight: {}\n", .{total_weight});
+    printer.print("Reconstructed weight: {}\n", .{reconstructed_weight});
+    printer.print("Tree string length: {}\n", .{tree_content.items.len});
+    printer.print("Total nodes allocated: {}\n", .{acc.values.items.len});
 
     // Verify weights match
     try std.testing.expectEqual(total_weight, reconstructed_weight);
@@ -263,18 +264,18 @@ test "WBpt: stress test - random insertions" {
         try expected.insertSlice(allocator, ins.pos, ins.value);
     }
 
-    std.debug.print("Expected string length: {}\n", .{expected.items.len});
+    printer.print("Expected string length: {}\n", .{expected.items.len});
 
     // Verify content matches
     try std.testing.expectEqualSlices(u8, expected.items, tree_content.items);
 
-    std.debug.print("SUCCESS: Tree content matches expected content!\n", .{});
+    printer.print("SUCCESS: Tree content matches expected content!\n", .{});
 
-    if (num_insertions <= maximum_insertion_to_dump) {
-        std.debug.print("\n=== Final Tree Structure ===\n", .{});
+    if (printer.verbose and num_insertions <= maximum_insertion_to_dump) {
+        printer.print("\n=== Final Tree Structure ===\n", .{});
         tree.dump();
     } else {
-        std.debug.print("\n(Tree dump skipped for large test)\n", .{});
+        printer.print("\n(Tree dump skipped for large test)\n", .{});
     }
 }
 

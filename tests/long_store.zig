@@ -2,6 +2,7 @@ const std = @import("std");
 const long_store = @import("fullaz").storage.long_store;
 const page_cache = @import("fullaz").storage.page_cache;
 const devices = @import("fullaz").device;
+const printer = @import("test_printer");
 
 const NoneStorageManager = struct {
     pub const Self = @This();
@@ -280,7 +281,7 @@ test "LongStore Handle. Create, open, load" {
     try std.testing.expect((try cursor.currentData()).len == 100);
 
     const max_data_size = try cursor.getMaximumDataSize();
-    std.debug.print("Max data size: {}\n", .{max_data_size});
+    printer.print("Max data size: {}\n", .{max_data_size});
     try cursor.setCurrentDataSize(max_data_size);
 
     try std.testing.expect((try cursor.currentDataSize()) == max_data_size);
@@ -361,16 +362,16 @@ test "LongStore Handle. write read" {
     const written3 = try hdl.write(&data);
     try std.testing.expect(written3 == data.len);
     const total_size = try hdl.totalSize();
-    std.debug.print("Total size: {}\n", .{total_size});
+    printer.print("Total size: {}\n", .{total_size});
     try std.testing.expect(total_size == (data.len * 2) + 2000);
 
     try hdl.setp(15999);
-    std.debug.print("Writing at pos {}\n", .{hdl.put_total_pos});
+    printer.print("Writing at pos {}\n", .{hdl.put_total_pos});
 
     var rdata: [7000]u8 = undefined;
     const read = try hdl.read(&rdata);
-    std.debug.print("read: {}\n", .{read});
-    std.debug.print("rdata: {any}\n", .{rdata[0]});
+    printer.print("read: {}\n", .{read});
+    printer.print("rdata: {any}\n", .{rdata[0]});
     try std.testing.expect(read == 7000);
     // try std.testing.expect(rdata[0] == 0);
 }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const Fixed = @import("fullaz").slots.Fixed;
 const testing = std.testing;
+const printer = @import("test_printer");
 
 const TestSlots = Fixed(u16, u16, .little, false);
 const TestSlotsConst = Fixed(u16, u16, .little, true);
@@ -13,7 +14,7 @@ test "Slots Fixed: init and format" {
     try slot.format(16);
     const hdr = slot.header();
 
-    std.debug.print("Header: one slot: {}, capacity: {}, bitmask words: {}", .{ hdr.one_slot_size.get(), hdr.capacity.get(), hdr.bitmask_words.get() });
+    printer.print("Header: one slot: {}, capacity: {}, bitmask words: {}", .{ hdr.one_slot_size.get(), hdr.capacity.get(), hdr.bitmask_words.get() });
 
     try testing.expectEqual(16, hdr.one_slot_size.get());
     try testing.expect(16 > hdr.capacity.get());
