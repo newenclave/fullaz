@@ -68,6 +68,7 @@ pub fn Tree(comptime BoxT: type, comptime ValueT: type) type {
             return self.leaf_count;
         }
 
+        /// Inserts a leaf box/value and returns a stable id for later updates/removal.
         pub fn insert(self: *Self, bbox: Box, value: Value) Error!NodeId {
             const leaf_id = try self.allocNode(.{
                 .bbox = bbox,
@@ -80,6 +81,7 @@ pub fn Tree(comptime BoxT: type, comptime ValueT: type) type {
             return leaf_id;
         }
 
+        /// Visits all values whose leaf boxes overlap bbox.
         pub fn query(self: *const Self, bbox: Box, ctx: anytype, cb: anytype) !void {
             const root_id = self.root orelse return;
 
@@ -104,15 +106,43 @@ pub fn Tree(comptime BoxT: type, comptime ValueT: type) type {
             }
         }
 
+        /// Removes a leaf id. The id becomes invalid after this call.
         pub fn remove(self: *Self, id: NodeId) Error!void {
             try self.detachLeaf(id);
             self.freeNode(id);
             self.leaf_count -= 1;
         }
 
+        /// Returns the value stored in a leaf id.
+        pub fn getValue(self: *const Self, id: NodeId) Error!Value {
+            const current = try self.constNodeAsLeaf(id);
+            return current.value.?;
+        }
+
+        /// Replaces the value stored in a leaf id.
+        pub fn setValue(self: *Self, id: NodeId, value: Value) Error!void {
+            const current = try self.nodeAsLeaf(id);
+            current.value = value;
+        }
+
+        /// Returns the current box stored in a leaf id.
+        pub fn getBox(self: *const Self, id: NodeId) Error!Box {
+            const current = try self.constNodeAsLeaf(id);
+            return current.bbox;
+        }
+
+        /// Removes all nodes while retaining allocated capacity.
+        pub fn clear(self: *Self) void {
+            self.nodes.clearRetainingCapacity();
+            self.free_list.clearRetainingCapacity();
+            self.root = null;
+            self.leaf_count = 0;
+        }
+
+        /// Updates a leaf box while preserving its id.
         pub fn update(self: *Self, id: NodeId, bbox: Box) Error!void {
-            const leaf = try self.constNode(id);
-            if (!leaf.isLeaf()) {
+            const current = try self.constNode(id);
+            if (!current.isLeaf()) {
                 return Error.WrongNodeKind;
             }
 
@@ -156,6 +186,22 @@ pub fn Tree(comptime BoxT: type, comptime ValueT: type) type {
                 return Error.InvalidNode;
             }
             return &self.nodes.items[id];
+        }
+
+        fn nodeAsLeaf(self: *Self, id: NodeId) Error!*Node {
+            const current = try self.node(id);
+            if (!current.isLeaf()) {
+                return Error.WrongNodeKind;
+            }
+            return current;
+        }
+
+        fn constNodeAsLeaf(self: *const Self, id: NodeId) Error!*const Node {
+            const current = try self.constNode(id);
+            if (!current.isLeaf()) {
+                return Error.WrongNodeKind;
+            }
+            return current;
         }
 
         fn insertLeaf(self: *Self, leaf_id: NodeId) Error!void {
@@ -825,4 +871,59 @@ test "aabb tree balancing preserves query correctness" {
     try std.testing.expectEqual(@as(usize, 2), ctx.values.items.len);
     try std.testing.expect(containsValue(ctx.values.items, 30));
     try std.testing.expect(containsValue(ctx.values.items, 31));
+}
+
+test "aabb tree accessors read and update leaf values" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const id = try tree.insert(TestBox.init(0, 10), 100);
+
+    try std.testing.expectEqual(@as(u64, 100), try tree.getValue(id));
+    try std.testing.expectEqual(TestBox.init(0, 10), try tree.getBox(id));
+
+    try tree.setValue(id, 200);
+    try std.testing.expectEqual(@as(u64, 200), try tree.getValue(id));
+}
+
+test "aabb tree accessors reject invalid and internal ids" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getValue(0));
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getBox(0));
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.setValue(0, 100));
+
+    _ = try tree.insert(TestBox.init(0, 10), 100);
+    _ = try tree.insert(TestBox.init(20, 30), 200);
+
+    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getValue(tree.root.?));
+    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getBox(tree.root.?));
+    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.setValue(tree.root.?, 300));
+}
+
+test "aabb tree clear empties tree and allows reuse" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const old_id = try tree.insert(TestBox.init(0, 10), 100);
+    _ = try tree.insert(TestBox.init(20, 30), 200);
+
+    tree.clear();
+
+    try std.testing.expect(tree.empty());
+    try std.testing.expectEqual(@as(usize, 0), tree.count());
+    try std.testing.expect(tree.root == null);
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getValue(old_id));
+
+    const new_id = try tree.insert(TestBox.init(40, 50), 300);
+    try std.testing.expectEqual(@as(TestTree.NodeId, 0), new_id);
+    try std.testing.expectEqual(@as(u64, 300), try tree.getValue(new_id));
+    try validateTree(&tree);
 }
