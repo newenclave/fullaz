@@ -278,8 +278,128 @@ pub fn Tree(comptime BoxT: type, comptime ValueT: type) type {
         fn refitAncestors(self: *Self, start_id: NodeId) Error!void {
             var maybe_id: ?NodeId = start_id;
             while (maybe_id) |id| {
+                const balanced_id = try self.balance(id);
+                maybe_id = (try self.constNode(balanced_id)).parent;
+            }
+        }
+
+        fn balance(self: *Self, id: NodeId) Error!NodeId {
+            const current = try self.constNode(id);
+            if (current.isLeaf()) {
+                return id;
+            }
+            if (current.height < 2) {
                 try self.refitNode(id);
-                maybe_id = (try self.constNode(id)).parent;
+                return id;
+            }
+
+            const left_id = current.left.?;
+            const right_id = current.right.?;
+            const left = try self.constNode(left_id);
+            const right = try self.constNode(right_id);
+            const factor = right.height - left.height;
+
+            if (factor > 1) {
+                return self.rotateRightHeavy(id, left_id, right_id);
+            }
+            if (factor < -1) {
+                return self.rotateLeftHeavy(id, left_id, right_id);
+            }
+
+            try self.refitNode(id);
+            return id;
+        }
+
+        fn rotateRightHeavy(self: *Self, a_id: NodeId, b_id: NodeId, c_id: NodeId) Error!NodeId {
+            const a = try self.constNode(a_id);
+            const old_parent_id = a.parent;
+            const c = try self.constNode(c_id);
+            const f_id = c.left.?;
+            const g_id = c.right.?;
+
+            const b_box = (try self.constNode(b_id)).bbox;
+            const f_box = (try self.constNode(f_id)).bbox;
+            const g_box = (try self.constNode(g_id)).bbox;
+            const f_cost = b_box.merged(&f_box).perimeter();
+            const g_cost = b_box.merged(&g_box).perimeter();
+
+            try self.replaceParentChild(old_parent_id, a_id, c_id);
+
+            {
+                const c_mut = try self.node(c_id);
+                c_mut.parent = old_parent_id;
+                c_mut.left = a_id;
+            }
+            (try self.node(a_id)).parent = c_id;
+
+            if (f_cost < g_cost) {
+                (try self.node(a_id)).right = f_id;
+                (try self.node(f_id)).parent = a_id;
+                (try self.node(c_id)).right = g_id;
+                (try self.node(g_id)).parent = c_id;
+            } else {
+                (try self.node(a_id)).right = g_id;
+                (try self.node(g_id)).parent = a_id;
+                (try self.node(c_id)).right = f_id;
+                (try self.node(f_id)).parent = c_id;
+            }
+
+            try self.refitNode(a_id);
+            try self.refitNode(c_id);
+            return c_id;
+        }
+
+        fn rotateLeftHeavy(self: *Self, a_id: NodeId, b_id: NodeId, c_id: NodeId) Error!NodeId {
+            const a = try self.constNode(a_id);
+            const old_parent_id = a.parent;
+            const b = try self.constNode(b_id);
+            const d_id = b.left.?;
+            const e_id = b.right.?;
+
+            const c_box = (try self.constNode(c_id)).bbox;
+            const d_box = (try self.constNode(d_id)).bbox;
+            const e_box = (try self.constNode(e_id)).bbox;
+            const d_cost = c_box.merged(&d_box).perimeter();
+            const e_cost = c_box.merged(&e_box).perimeter();
+
+            try self.replaceParentChild(old_parent_id, a_id, b_id);
+
+            {
+                const b_mut = try self.node(b_id);
+                b_mut.parent = old_parent_id;
+                b_mut.right = a_id;
+            }
+            (try self.node(a_id)).parent = b_id;
+
+            if (d_cost < e_cost) {
+                (try self.node(a_id)).left = d_id;
+                (try self.node(d_id)).parent = a_id;
+                (try self.node(b_id)).left = e_id;
+                (try self.node(e_id)).parent = b_id;
+            } else {
+                (try self.node(a_id)).left = e_id;
+                (try self.node(e_id)).parent = a_id;
+                (try self.node(b_id)).left = d_id;
+                (try self.node(d_id)).parent = b_id;
+            }
+
+            try self.refitNode(a_id);
+            try self.refitNode(b_id);
+            return b_id;
+        }
+
+        fn replaceParentChild(self: *Self, parent_id: ?NodeId, old_child_id: NodeId, new_child_id: NodeId) Error!void {
+            if (parent_id) |id| {
+                const parent = try self.node(id);
+                if (parent.left == old_child_id) {
+                    parent.left = new_child_id;
+                } else {
+                    std.debug.assert(parent.right == old_child_id);
+                    parent.right = new_child_id;
+                }
+            } else {
+                std.debug.assert(self.root == old_child_id);
+                self.root = new_child_id;
             }
         }
 
@@ -435,6 +555,45 @@ fn containsValue(values: []const u64, needle: u64) bool {
         }
     }
     return false;
+}
+
+const ValidationResult = struct {
+    bbox: TestBox,
+    height: i32,
+    leaves: usize,
+};
+
+fn validateSubtree(tree: *const Tree(TestBox, u64), id: Tree(TestBox, u64).NodeId, expected_parent: ?Tree(TestBox, u64).NodeId) !ValidationResult {
+    const current = try tree.constNode(id);
+    try std.testing.expectEqual(expected_parent, current.parent);
+
+    if (current.isLeaf()) {
+        try std.testing.expectEqual(@as(i32, 0), current.height);
+        return .{ .bbox = current.bbox, .height = 0, .leaves = 1 };
+    }
+
+    const left = try validateSubtree(tree, current.left.?, id);
+    const right = try validateSubtree(tree, current.right.?, id);
+    const expected_bbox = left.bbox.merged(&right.bbox);
+    const expected_height = @max(left.height, right.height) + 1;
+
+    try std.testing.expectEqual(expected_bbox, current.bbox);
+    try std.testing.expectEqual(expected_height, current.height);
+
+    return .{
+        .bbox = current.bbox,
+        .height = current.height,
+        .leaves = left.leaves + right.leaves,
+    };
+}
+
+fn validateTree(tree: *const Tree(TestBox, u64)) !void {
+    if (tree.root) |root_id| {
+        const result = try validateSubtree(tree, root_id, null);
+        try std.testing.expectEqual(tree.count(), result.leaves);
+    } else {
+        try std.testing.expectEqual(@as(usize, 0), tree.count());
+    }
 }
 
 test "aabb tree query on empty tree returns nothing" {
@@ -627,4 +786,43 @@ test "aabb tree update rejects internal node ids" {
     _ = try tree.insert(TestBox.init(20, 30), 200);
 
     try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.update(tree.root.?, TestBox.init(1, 2)));
+}
+
+test "aabb tree balancing keeps ordered inserts shallow" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    for (0..100) |i| {
+        const x: i64 = @intCast(i * 10);
+        _ = try tree.insert(TestBox.init(x, x + 1), @intCast(i));
+    }
+
+    try validateTree(&tree);
+
+    const root = try tree.constNode(tree.root.?);
+    try std.testing.expect(root.height < 32);
+}
+
+test "aabb tree balancing preserves query correctness" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    for (0..64) |i| {
+        const x: i64 = @intCast(i * 10);
+        _ = try tree.insert(TestBox.init(x, x + 4), @intCast(i));
+    }
+
+    try validateTree(&tree);
+
+    var ctx = QueryCtx.init();
+    defer ctx.deinit();
+
+    try tree.query(TestBox.init(300, 315), &ctx, collectQuery);
+    try std.testing.expectEqual(@as(usize, 2), ctx.values.items.len);
+    try std.testing.expect(containsValue(ctx.values.items, 30));
+    try std.testing.expect(containsValue(ctx.values.items, 31));
 }
