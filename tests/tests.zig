@@ -20,6 +20,8 @@ test {
     _ = @import("rtree/delete.zig");
     _ = @import("rtree/paged.zig");
 
+    _ = @import("aabb_tree/tree.zig");
+
     _ = @import("radix/memory_model.zig");
     _ = @import("radix/paged_model.zig");
 
