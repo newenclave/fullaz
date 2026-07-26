@@ -386,12 +386,19 @@ pub fn Paged(
             errdefer ph.deinit();
             const pid = try ph.pid();
             var view = NodeViewMut.init(try ph.getDataMut());
-            try view.formatPage(self.context.settings.node_page_kind, pid, 0);
+            try view.formatPage(
+                self.context.settings.node_page_kind,
+                pid,
+                @intCast(FsmT.page_metadata_size),
+            );
             return ph;
         }
 
         pub fn createPath(self: *Self) Error!PathImpl {
-            return PathImpl.init(self.context.allocator, self.context.settings.max_level);
+            return PathImpl.init(
+                self.context.allocator,
+                self.context.settings.max_level,
+            );
         }
 
         pub fn deinitPath(self: *Self, path: *PathImpl) void {

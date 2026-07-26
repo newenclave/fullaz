@@ -1,6 +1,7 @@
 const std = @import("std");
 const errors = @import("../../../../../core/errors.zig");
 const header = @import("../../../../../page/header.zig");
+const PageSlotRef = @import("../../../../../page/page_slot_ref.zig").PageSlotRef;
 const view_mod = @import("view.zig");
 
 pub const Settings = struct {
@@ -17,6 +18,7 @@ pub fn Paged(comptime PageCacheType: type, comptime SlabStorageManagerT: type, c
 
     const HeaderMut = header.View(PidT, u16, .little, false);
     const HeaderConst = header.View(PidT, u16, .little, true);
+    const FsmLocation = PageSlotRef(PidT, u16, .little);
 
     const Located = struct { slab_pid: PidT, slot: usize };
 
@@ -25,6 +27,7 @@ pub fn Paged(comptime PageCacheType: type, comptime SlabStorageManagerT: type, c
 
         pub const Pid = PidT;
         pub const Size = u16;
+        pub const page_metadata_size = @sizeOf(FsmLocation);
         pub const Error = PageCacheType.Error ||
             SlabStorageManagerT.Error ||
             View.Error ||
@@ -184,19 +187,27 @@ pub fn Paged(comptime PageCacheType: type, comptime SlabStorageManagerT: type, c
             var ph = try self.cache.fetch(data_pid);
             defer ph.deinit();
             var hv = HeaderMut.init(try ph.getDataMut());
-            const h = hv.headerMut();
-            h.fsm_index.page_id.set(slab_pid);
-            h.fsm_index.slot_id.set(@intCast(slot));
+            const metadata = hv.metadataMut();
+            if (metadata.len < page_metadata_size) {
+                return Error.BadData;
+            }
+            const loc: *FsmLocation = @ptrCast(metadata.ptr);
+            loc.page_id.set(slab_pid);
+            loc.slot_id.set(@intCast(slot));
         }
 
         fn readFsmIndex(self: *Self, data_pid: PidT) Error!Located {
             var ph = try self.cache.fetch(data_pid);
             defer ph.deinit();
             const hv = HeaderConst.init(try ph.getData());
-            const h = hv.header();
+            const metadata = hv.metadata();
+            if (metadata.len < page_metadata_size) {
+                return Error.BadData;
+            }
+            const loc: *const FsmLocation = @ptrCast(metadata.ptr);
             return .{
-                .slab_pid = h.fsm_index.page_id.get(),
-                .slot = @intCast(h.fsm_index.slot_id.get()),
+                .slab_pid = loc.page_id.get(),
+                .slot = @intCast(loc.slot_id.get()),
             };
         }
     };

@@ -80,11 +80,15 @@ const Device = dev.MemoryBlock(u32);
 const PageCache = PageCacheT(Device);
 const Model = fsm.models.paged.slab.Model(PageCache, NoneStorageManager, SizePolicy);
 const Map = fsm.Fsm2(Model);
+const HeaderView = fullaz.page.header.View(u32, u16, .little, false);
 
 fn makeDataPage(cache: *PageCache) !u32 {
     var ph = try cache.create();
     defer ph.deinit();
-    return try ph.pid();
+    const pid = try ph.pid();
+    var hv = HeaderView.init(try ph.getDataMut());
+    hv.formatPage(999, pid, 0, @intCast(Map.page_metadata_size));
+    return pid;
 }
 
 fn inSet(pids: []const u32, pid: u32) bool {
