@@ -1,5 +1,5 @@
 const std = @import("std");
-const helpers = @import("../contracts/interfaces.zig");
+const helpers = @import("../../contracts/interfaces.zig");
 
 fn assertChooseStrategy(comptime Strategy: type, comptime Key: type) void {
     helpers.requiresFnSignature(Strategy, "chooseSubtree", fn ([]const Key, Key, bool) usize);

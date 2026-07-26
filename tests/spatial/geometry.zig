@@ -1,6 +1,6 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
-const BoundingBox = fullaz.rtree.BoundingBox;
+const BoundingBox = fullaz.spatial.BoundingBox;
 
 const testing = std.testing;
 
@@ -73,6 +73,6 @@ test "BoundingBox: center" {
     try testing.expectEqual(BB.Point{ 1, 2 }, box(0, 0, 2, 4).center());
 }
 
-test "rtree contract: BoundingBox satisfies assertKey" {
-    comptime fullaz.rtree.models.interfaces.assertKey(BB);
+test "spatial BoundingBox satisfies rtree key contract" {
+    comptime fullaz.spatial.rtree.models.interfaces.assertKey(BB);
 }

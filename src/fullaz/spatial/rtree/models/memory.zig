@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const geometry = @import("../geometry.zig");
+const geometry = @import("../../geometry.zig");
 
 const IS_DEBUG = builtin.mode == .Debug;
 

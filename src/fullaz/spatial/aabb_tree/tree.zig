@@ -1,5 +1,5 @@
 const std = @import("std");
-const interfaces = @import("../contracts/interfaces.zig");
+const interfaces = @import("../../contracts/interfaces.zig");
 
 const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
@@ -620,7 +620,10 @@ const TestBox = struct {
     }
 
     pub fn merged(self: *const TestBox, other: *const TestBox) TestBox {
-        return .{ .low = @min(self.low, other.low), .high = @max(self.high, other.high) };
+        return .{
+            .low = @min(self.low, other.low),
+            .high = @max(self.high, other.high),
+        };
     }
 
     pub fn overlaps(self: *const TestBox, other: *const TestBox) bool {

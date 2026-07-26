@@ -1,6 +1,6 @@
 const std = @import("std");
-const contracts = @import("../../contracts/contracts.zig");
-const interfaces = @import("../../contracts/interfaces.zig");
+const contracts = @import("../../../contracts/contracts.zig");
+const interfaces = @import("../../../contracts/interfaces.zig");
 
 const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;

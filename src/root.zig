@@ -14,8 +14,6 @@ pub const storage = @import("fullaz/storage/storage.zig");
 
 pub const skip_list = @import("fullaz/skip_list/skip_list.zig");
 
-pub const rtree = @import("fullaz/rtree/rtree.zig");
-
-pub const aabb_tree = @import("fullaz/aabb_tree/aabb_tree.zig");
+pub const spatial = @import("fullaz/spatial/spatial.zig");
 
 pub const codec = @import("fullaz/codec/codec.zig");

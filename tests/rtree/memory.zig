@@ -1,6 +1,6 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
-const rtree = fullaz.rtree;
+const rtree = fullaz.spatial.rtree;
 const interfaces = rtree.models.interfaces;
 
 const testing = std.testing;

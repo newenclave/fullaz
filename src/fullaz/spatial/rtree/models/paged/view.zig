@@ -1,9 +1,9 @@
 const std = @import("std");
-const header = @import("../../../page/header.zig");
-const slots = @import("../../../slots/variadic.zig");
-const errors = @import("../../../core/errors.zig");
-const rtree_page = @import("../../../page/rtree.zig");
-const geometry = @import("../../geometry.zig");
+const header = @import("../../../../page/header.zig");
+const slots = @import("../../../../slots/variadic.zig");
+const errors = @import("../../../../core/errors.zig");
+const rtree_page = @import("../../../../page/rtree.zig");
+const geometry = @import("../../../geometry.zig");
 
 pub fn View(
     comptime PageIdT: type,

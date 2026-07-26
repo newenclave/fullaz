@@ -1,8 +1,8 @@
 const fullaz = @import("fullaz");
 const std = @import("std");
 
-const BoundingBox = fullaz.rtree.BoundingBox(i64, 2);
-const BoundingBoxTree = fullaz.aabb_tree.Tree(BoundingBox, u64);
+const BoundingBox = fullaz.spatial.BoundingBox(i64, 2);
+const BoundingBoxTree = fullaz.spatial.aabb_tree.Tree(BoundingBox, u64);
 
 const TestBox = struct {
     pub const Coord = i64;
@@ -35,8 +35,8 @@ const TestBox = struct {
     }
 };
 
-const TestTree = fullaz.aabb_tree.Tree(TestBox, u64);
-const TestFatTree = fullaz.aabb_tree.FatTree(TestBox, u64, 5);
+const TestTree = fullaz.spatial.aabb_tree.Tree(TestBox, u64);
+const TestFatTree = fullaz.spatial.aabb_tree.FatTree(TestBox, u64, 5);
 
 const QueryCtx = struct {
     values: std.ArrayList(u64) = .empty,
@@ -210,7 +210,7 @@ fn runRandomStress(comptime TreeT: type, seed: u64) !void {
 }
 
 test "aabb tree module imports" {
-    _ = fullaz.aabb_tree;
+    _ = fullaz.spatial.aabb_tree;
 }
 
 test "aabb tree initializes empty" {
@@ -222,11 +222,11 @@ test "aabb tree initializes empty" {
 }
 
 test "aabb tree box contract accepts rtree bounding box" {
-    comptime fullaz.aabb_tree.assertBox(BoundingBox);
+    comptime fullaz.spatial.aabb_tree.assertBox(BoundingBox);
 }
 
 test "aabb tree fat box contract accepts rtree bounding box" {
-    comptime fullaz.aabb_tree.assertFatBox(BoundingBox);
+    comptime fullaz.spatial.aabb_tree.assertFatBox(BoundingBox);
 }
 
 test "aabb tree query on empty tree returns nothing" {
@@ -613,5 +613,8 @@ test "aabb tree randomized operations match brute force oracle" {
 }
 
 test "aabb fat tree randomized operations match brute force oracle" {
-    try runRandomStress(fullaz.aabb_tree.FatTree(TestBox, u64, 7), 0xFA7_AABB_2026);
+    try runRandomStress(
+        fullaz.spatial.aabb_tree.FatTree(TestBox, u64, 7),
+        0xFA7_AABB_2026,
+    );
 }

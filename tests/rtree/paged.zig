@@ -1,6 +1,6 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
-const rtree = fullaz.rtree;
+const rtree = fullaz.spatial.rtree;
 const dev = fullaz.device;
 const PageCacheT = fullaz.storage.page_cache.PageCache;
 

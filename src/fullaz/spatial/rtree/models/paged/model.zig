@@ -1,8 +1,8 @@
 const std = @import("std");
 const rtree_view = @import("view.zig");
 const interfaces = @import("../interfaces.zig");
-const geometry = @import("../../geometry.zig");
-const errors = @import("../../../core/errors.zig");
+const geometry = @import("../../../geometry.zig");
+const errors = @import("../../../../core/errors.zig");
 
 pub const Settings = struct {
     leaf_page_kind: u16 = 0,

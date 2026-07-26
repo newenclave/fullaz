@@ -5,7 +5,7 @@ const superblock = @import("superblock.zig");
 const storage = @import("storage.zig");
 const starfield = @import("starfield.zig");
 
-const rtree = fullaz.rtree;
+const rtree = fullaz.spatial.rtree;
 const Star = starfield.Star;
 
 pub const Direction = enum { north, south, east, west };

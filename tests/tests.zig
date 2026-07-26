@@ -11,7 +11,7 @@ test {
     _ = @import("bpt/paged_model.zig");
     _ = @import("bpt/wbpt_memory_model.zig");
     _ = @import("bpt/wbpt_paged_model.zig");
-    _ = @import("rtree/geometry.zig");
+    _ = @import("spatial/geometry.zig");
     _ = @import("rtree/memory.zig");
     _ = @import("rtree/strategy.zig");
     _ = @import("rtree/tree.zig");

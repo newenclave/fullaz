@@ -1,6 +1,6 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
-const rtree = fullaz.rtree;
+const rtree = fullaz.spatial.rtree;
 const strategy = rtree.strategy;
 
 const testing = std.testing;
@@ -38,7 +38,7 @@ test "Linear chooseSubtree: least enlargement (same as quadratic Guttman)" {
 
 test "Linear splitEntries: separates two well-separated clusters" {
     const mbrs = [_]BB{
-        box(0, 0, 1, 1),     box(0, 0, 1, 1), // left cluster: idx 0,1
+        box(0, 0, 1, 1), box(0, 0, 1, 1), // left cluster: idx 0,1
         box(30, 0, 31, 1), box(30, 0, 31, 1), box(30, 0, 31, 1), // right cluster: idx 2,3,4
     };
     var assign = [_]u8{9} ** 5;
