@@ -110,6 +110,17 @@ pub fn Tree(comptime BoxT: type, comptime ValueT: type) type {
             self.leaf_count -= 1;
         }
 
+        pub fn update(self: *Self, id: NodeId, bbox: Box) Error!void {
+            const leaf = try self.constNode(id);
+            if (!leaf.isLeaf()) {
+                return Error.WrongNodeKind;
+            }
+
+            try self.detachLeaf(id);
+            (try self.node(id)).bbox = bbox;
+            try self.insertLeaf(id);
+        }
+
         fn allocNode(self: *Self, new_node: Node) Error!NodeId {
             var stored = new_node;
             stored.allocated = true;
@@ -545,4 +556,75 @@ test "aabb tree remove rejects internal node ids" {
 
     try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.remove(tree.root.?));
     try std.testing.expectEqual(@as(usize, 2), tree.count());
+}
+
+test "aabb tree update keeps id and moves leaf into query" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const id = try tree.insert(TestBox.init(0, 10), 100);
+    _ = try tree.insert(TestBox.init(20, 30), 200);
+
+    try tree.update(id, TestBox.init(22, 24));
+
+    try std.testing.expectEqual(@as(usize, 2), tree.count());
+    try std.testing.expectEqual(TestBox.init(22, 24), (try tree.constNode(id)).bbox);
+
+    var ctx = QueryCtx.init();
+    defer ctx.deinit();
+
+    try tree.query(TestBox.init(21, 25), &ctx, collectQuery);
+    try std.testing.expectEqual(@as(usize, 2), ctx.values.items.len);
+    try std.testing.expect(containsValue(ctx.values.items, 100));
+    try std.testing.expect(containsValue(ctx.values.items, 200));
+}
+
+test "aabb tree update keeps id and moves leaf out of query" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const id = try tree.insert(TestBox.init(0, 10), 100);
+    _ = try tree.insert(TestBox.init(20, 30), 200);
+
+    try tree.update(id, TestBox.init(40, 50));
+
+    var ctx = QueryCtx.init();
+    defer ctx.deinit();
+
+    try tree.query(TestBox.init(0, 10), &ctx, collectQuery);
+    try std.testing.expectEqual(@as(usize, 0), ctx.values.items.len);
+
+    try tree.query(TestBox.init(45, 46), &ctx, collectQuery);
+    try std.testing.expectEqual(@as(usize, 1), ctx.values.items.len);
+    try std.testing.expect(containsValue(ctx.values.items, 100));
+}
+
+test "aabb tree update works for root leaf" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const id = try tree.insert(TestBox.init(0, 10), 100);
+    try tree.update(id, TestBox.init(20, 30));
+
+    try std.testing.expectEqual(id, tree.root.?);
+    try std.testing.expectEqual(@as(usize, 1), tree.count());
+    try std.testing.expectEqual(TestBox.init(20, 30), (try tree.constNode(id)).bbox);
+}
+
+test "aabb tree update rejects internal node ids" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    _ = try tree.insert(TestBox.init(0, 10), 100);
+    _ = try tree.insert(TestBox.init(20, 30), 200);
+
+    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.update(tree.root.?, TestBox.init(1, 2)));
 }
