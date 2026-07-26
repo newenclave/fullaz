@@ -2,6 +2,7 @@ const std = @import("std");
 const radix_tree = @import("fullaz").radix_tree;
 const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
 const dev = @import("fullaz").device;
+const printer = @import("test_printer");
 
 const RadixModel = radix_tree.models.paged.Model;
 const View = radix_tree.models.paged.View;
@@ -18,8 +19,8 @@ test "RadixTree paged: leaf create/format" {
 
     try std.testing.expect(try leaf_view.slotSize() == 16);
 
-    std.debug.print("leaf slot size: {}\n", .{try leaf_view.slotSize()});
-    std.debug.print("leaf slot capacity: {}\n", .{try leaf_view.capacity()});
+    printer.print("leaf slot size: {}\n", .{try leaf_view.slotSize()});
+    printer.print("leaf slot capacity: {}\n", .{try leaf_view.capacity()});
 }
 
 test "RadixTree paged: inode create/format" {
@@ -31,8 +32,8 @@ test "RadixTree paged: inode create/format" {
     try inode_view.formatPage(0x5678, 0x9abc, 0);
     try inode_view.check();
 
-    std.debug.print("inode slot size: {}\n", .{try inode_view.slotSize()});
-    std.debug.print("inode slot capacity: {}\n", .{try inode_view.capacity()});
+    printer.print("inode slot size: {}\n", .{try inode_view.slotSize()});
+    printer.print("inode slot capacity: {}\n", .{try inode_view.capacity()});
 }
 
 const NoneStorageManager = struct {
@@ -110,22 +111,22 @@ test "RadixTree paged: model create leaf" {
     defer suite.model.accessor.deinitLeaf(&leaf_load);
 
     try leaf.set(0xc, "Hello!");
-    std.debug.print("leaf get: {} {s}\n", .{ try leaf.isSet(0xc), try leaf.get(0xc) });
+    printer.print("leaf get: {} {s}\n", .{ try leaf.isSet(0xc), try leaf.get(0xc) });
     try leaf.free(0xc);
-    std.debug.print("leaf get: {}\n", .{try leaf.isSet(0xc)});
+    printer.print("leaf get: {}\n", .{try leaf.isSet(0xc)});
     try leaf.setParent(0x1234);
-    std.debug.print("leaf parent: {any}\n", .{try leaf.getParent()});
+    printer.print("leaf parent: {any}\n", .{try leaf.getParent()});
     try leaf.setParentId(0x1234);
-    std.debug.print("leaf parentId: {x}\n", .{try leaf.getParentId()});
+    printer.print("leaf parentId: {x}\n", .{try leaf.getParentId()});
     try leaf.setParentQuotient(0x5678);
-    std.debug.print("leaf parentQuotient: {x}\n", .{try leaf.getParentQuotient()});
+    printer.print("leaf parentQuotient: {x}\n", .{try leaf.getParentQuotient()});
 
-    std.debug.print("leaf slots: {} {}\n", .{ try leaf.size(), leaf.calculateSlotCapacity(4096, 0) });
+    printer.print("leaf slots: {} {}\n", .{ try leaf.size(), leaf.calculateSlotCapacity(4096, 0) });
 
     try std.testing.expect(leaf.id() == 0);
     try std.testing.expect(leaf_load.id() == 0);
 
-    std.debug.print("LEAF Effective settings: leaf_base={}, inode_base={}\n", .{
+    printer.print("LEAF Effective settings: leaf_base={}, inode_base={}\n", .{
         suite.model.effectiveSettings().leaf_base,
         suite.model.effectiveSettings().inode_base,
     });
@@ -138,7 +139,7 @@ test "RadixTree paged: model create inode" {
     defer suite.deinit();
 
     var inode = try suite.model.accessor.createInode();
-    std.debug.print("inode slots: {} {}\n", .{ try inode.size(), inode.calculateSlotCapacity(4096, 0) });
+    printer.print("inode slots: {} {}\n", .{ try inode.size(), inode.calculateSlotCapacity(4096, 0) });
 
     defer suite.model.accessor.deinitInode(&inode);
     var inode_load = try suite.model.accessor.loadInode(inode.id());
@@ -154,7 +155,7 @@ test "RadixTree paged: model split key" {
     try suite.initInPlace();
     defer suite.deinit();
 
-    std.debug.print("Effective settings: leaf_base={}, inode_base={}\n", .{
+    printer.print("Effective settings: leaf_base={}, inode_base={}\n", .{
         suite.model.effectiveSettings().leaf_base,
         suite.model.effectiveSettings().inode_base,
     });
@@ -163,16 +164,16 @@ test "RadixTree paged: model split key" {
     var split_key_result = try suite.model.accessor.splitKey(key);
     defer suite.model.accessor.deinitSplitKey(&split_key_result);
 
-    std.debug.print("Split key result for {x} ({}):\n", .{ key, split_key_result.size() });
+    printer.print("Split key result for {x} ({}):\n", .{ key, split_key_result.size() });
     for (0..split_key_result.size()) |i| {
-        std.debug.print("digit {}: {x} {x}\n", .{ i, split_key_result.get(i).digit, split_key_result.get(i).quotient });
+        printer.print("digit {}: {x} {x}\n", .{ i, split_key_result.get(i).digit, split_key_result.get(i).quotient });
     }
 }
 
 const StdOut = struct {
     const Self = @This();
     pub fn print(_: *const Self, comptime fmt: []const u8, args: anytype) !void {
-        std.debug.print(fmt, args);
+        printer.print(fmt, args);
     }
 };
 
@@ -182,13 +183,13 @@ test "RadixTree paged: model create tree" {
     try suite.initInPlace();
     defer suite.deinit();
 
-    std.debug.print("Effective settings: leaf_base={}, inode_base={}\n", .{
+    printer.print("Effective settings: leaf_base={}, inode_base={}\n", .{
         suite.model.effectiveSettings().leaf_base,
         suite.model.effectiveSettings().inode_base,
     });
 
     try suite.tree.set(0x11223344, "Hello!");
-    std.debug.print("get from tree: {s}\n", .{(try suite.tree.get(0x11223344)).?});
+    printer.print("get from tree: {s}\n", .{(try suite.tree.get(0x11223344)).?});
 
     try suite.tree.set(0x12, "12345678");
     try suite.tree.set(0x0, "0");

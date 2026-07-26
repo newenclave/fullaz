@@ -1,5 +1,6 @@
 const std = @import("std");
 const skip_list = @import("fullaz").skip_list;
+const printer = @import("test_printer");
 
 const MemoryModel = skip_list.models.Memory;
 const SkipList = skip_list.List;
@@ -27,8 +28,8 @@ fn timestampPrint(comptime name: []const u8, params: anytype) void {
     const mins = (millis / (1000 * 60)) % 60;
     const seconds = (millis / 1000) % 60;
 
-    std.debug.print("{d:0>2}:{:0>2}:{:0>2}.{d:0>4} [{s}]: ", .{ hours, mins, seconds, @mod(millis, 1000), globalTag });
-    std.debug.print(name, params);
+    printer.print("{d:0>2}:{:0>2}:{:0>2}.{d:0>4} [{s}]: ", .{ hours, mins, seconds, @mod(millis, 1000), globalTag });
+    printer.print(name, params);
 }
 
 fn keyCmp(_: anytype, k1: anytype, k2: @TypeOf(k1)) std.math.Order {
@@ -42,7 +43,7 @@ fn keyCmp(_: anytype, k1: anytype, k2: @TypeOf(k1)) std.math.Order {
 }
 
 fn keyDumper(value: *const u32) void {
-    std.debug.print("{d}; ", .{value.*});
+    printer.print("{d}; ", .{value.*});
 }
 
 fn valueDumper(_: *const u32) void {
@@ -103,7 +104,7 @@ test "SkipList: random levels generation" {
 
     for (0..try model.getMaxLevel()) |i| {
         if (map.get(i)) |v| {
-            std.debug.print("Level {d}: {d}\n", .{ i, v });
+            printer.print("Level {d}: {d}\n", .{ i, v });
         }
     }
 }
@@ -213,7 +214,9 @@ test "SkipList: iterator remove test" {
         }
     }
 
-    _ = try sl.dump(keyDumper, valueDumper);
+    if (printer.verbose) {
+        _ = try sl.dump(keyDumper, valueDumper);
+    }
 
     timestampPrint("Done removing the keys...\n", .{});
     try std.testing.expectEqual(count, half);

@@ -1,6 +1,7 @@
 const std = @import("std");
 const Variadic = @import("fullaz").slots.Variadic;
 const testing = std.testing;
+const printer = @import("test_printer");
 
 const TestVariadic = Variadic(u16, .little, false);
 const TestVariadicConst = Variadic(u16, .little, true);
@@ -489,13 +490,13 @@ test "Slot Variadic: remove, compact, and update to use exact available space" {
     const available = try slots.availableAfterCompact();
 
     const res = try slots.canUpdate(idx_to_remove, data2.len + available);
-    std.debug.print("Can update status before compact: {any}\n", .{res});
+    printer.print("Can update status before compact: {any}\n", .{res});
 
     try testing.expect(res == .need_compact);
 
     try slots.free(idx_to_remove);
 
-    std.debug.print("Available after compact: {}\n", .{available});
+    printer.print("Available after compact: {}\n", .{available});
 
     try slots.compactInPlace();
 
@@ -503,7 +504,7 @@ test "Slot Variadic: remove, compact, and update to use exact available space" {
     const old_len = data2.len;
     const new_len = old_len + available;
 
-    std.debug.print("Old length: {}, New length: {}, Available: {}\n", .{ old_len, new_len, available });
+    printer.print("Old length: {}, New length: {}, Available: {}\n", .{ old_len, new_len, available });
 
     // Update the removed slot with new data
     const update_buf = try slots.resizeGet(idx_to_remove, new_len);

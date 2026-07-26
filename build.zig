@@ -15,6 +15,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const verbose_tests = b.option(bool, "verbose-tests", "Enable debug output in tests") orelse false;
+    const test_options = b.addOptions();
+    test_options.addOption(bool, "verbose_tests", verbose_tests);
+
+    const test_printer = b.createModule(.{
+        .root_source_file = b.path("tests/printer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_printer.addOptions("build_options", test_options);
+
     const exe = b.addExecutable(.{
         .name = "fullaz",
         .root_module = b.createModule(.{
@@ -41,8 +52,17 @@ pub fn build(b: *std.Build) void {
     const mod_tests = b.addTest(.{
         .root_module = unit_tests,
     });
+    if (verbose_tests) {
+        const test_runner_path = b.graph.zig_lib_directory.join(b.allocator, &.{ "compiler", "test_runner.zig" }) catch @panic("OOM resolving test runner path");
+        mod_tests.test_runner = .{
+            .path = .{ .cwd_relative = test_runner_path },
+            .mode = .simple,
+        };
+    }
 
     mod_tests.root_module.addImport("fullaz", mod);
+    mod_tests.root_module.addOptions("build_options", test_options);
+    mod_tests.root_module.addImport("test_printer", test_printer);
 
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
     if (test_filter) |filter| {

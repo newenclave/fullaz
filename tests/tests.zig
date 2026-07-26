@@ -44,7 +44,7 @@ test {
 
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
-    //_ = @import("long_store.zig");
+    _ = @import("long_store.zig");
     _ = @import("free_list.zig");
     _ = @import("wal.zig");
 }

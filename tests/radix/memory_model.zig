@@ -1,12 +1,13 @@
 const std = @import("std");
 const radix_tree = @import("fullaz").radix_tree;
+const printer = @import("test_printer");
 
 const Model = radix_tree.models.memory.Model;
 
 const StdOut = struct {
     const Self = @This();
     pub fn print(_: *const Self, comptime fmt: []const u8, args: anytype) !void {
-        std.debug.print(fmt, args);
+        printer.print(fmt, args);
     }
 };
 
