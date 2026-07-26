@@ -19,3 +19,7 @@ test "aabb tree initializes empty" {
 test "aabb tree box contract accepts rtree bounding box" {
     comptime fullaz.aabb_tree.assertBox(Box);
 }
+
+test "aabb tree fat box contract accepts rtree bounding box" {
+    comptime fullaz.aabb_tree.assertFatBox(Box);
+}

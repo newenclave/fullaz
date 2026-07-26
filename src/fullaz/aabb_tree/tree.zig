@@ -15,10 +15,28 @@ pub fn assertBox(comptime BoxT: type) void {
     requiresFnSignature(BoxT, "perimeter", fn (*const BoxT) Coord);
 }
 
+pub fn assertFatBox(comptime BoxT: type) void {
+    assertBox(BoxT);
+
+    requiresFnSignature(BoxT, "expanded", fn (*const BoxT, BoxT.Coord) BoxT);
+}
+
 fn ExactConfig(comptime BoxT: type) type {
     return struct {
+        pub const loose_updates = false;
+
         pub fn makeTreeBox(exact: BoxT) BoxT {
             return exact;
+        }
+    };
+}
+
+fn FatConfig(comptime BoxT: type, comptime margin: BoxT.Coord) type {
+    return struct {
+        pub const loose_updates = true;
+
+        pub fn makeTreeBox(exact: BoxT) BoxT {
+            return exact.expanded(margin);
         }
     };
 }
@@ -27,10 +45,14 @@ pub fn Tree(comptime BoxT: type, comptime ValueT: type) type {
     return TreeImpl(BoxT, ValueT, ExactConfig(BoxT));
 }
 
+pub fn FatTree(comptime BoxT: type, comptime ValueT: type, comptime margin: BoxT.Coord) type {
+    comptime assertFatBox(BoxT);
+    return TreeImpl(BoxT, ValueT, FatConfig(BoxT, margin));
+}
+
 fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) type {
     comptime {
         assertBox(BoxT);
-        _ = ConfigT;
     }
 
     const Box = BoxT;
@@ -39,17 +61,27 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
     return struct {
         const Self = @This();
 
-        pub const NodeId = usize;
+        pub const NodeId = struct {
+            index: usize,
+            generation: u64,
+
+            fn eql(self: NodeId, other: NodeId) bool {
+                return self.index == other.index and self.generation == other.generation;
+            }
+        };
+        pub const QueryStack = std.ArrayList(NodeId);
         pub const Error = error{ InvalidNode, WrongNodeKind } || std.mem.Allocator.Error;
 
         const Node = struct {
             bbox: Box,
+            exact_bbox: Box,
             parent: ?NodeId = null,
             left: ?NodeId = null,
             right: ?NodeId = null,
             height: i32 = 0,
             value: ?Value = null,
             allocated: bool = true,
+            generation: u64 = 0,
 
             fn isLeaf(self: *const Node) bool {
                 std.debug.assert((self.left == null) == (self.right == null));
@@ -59,7 +91,7 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
 
         allocator: std.mem.Allocator,
         nodes: std.ArrayList(Node),
-        free_list: std.ArrayList(NodeId),
+        free_list: std.ArrayList(usize),
         root: ?NodeId = null,
         leaf_count: usize = 0,
 
@@ -87,7 +119,8 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
         /// Inserts a leaf box/value and returns a stable id for later updates/removal.
         pub fn insert(self: *Self, bbox: Box, value: Value) Error!NodeId {
             const leaf_id = try self.allocNode(.{
-                .bbox = bbox,
+                .bbox = ConfigT.makeTreeBox(bbox),
+                .exact_bbox = bbox,
                 .value = value,
             });
             errdefer self.freeNode(leaf_id);
@@ -99,12 +132,59 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
 
         /// Visits all values whose leaf boxes overlap bbox.
         pub fn query(self: *const Self, bbox: Box, ctx: anytype, cb: anytype) !void {
-            const root_id = self.root orelse return;
-
-            var stack: std.ArrayList(NodeId) = .empty;
+            var stack: QueryStack = .empty;
             defer stack.deinit(self.allocator);
 
-            try stack.append(self.allocator, root_id);
+            try self.queryWithStack(bbox, self.allocator, &stack, ctx, cb);
+        }
+
+        /// Visits all values whose leaf boxes overlap bbox, using caller-provided scratch storage.
+        pub fn queryWithStack(
+            self: *const Self,
+            bbox: Box,
+            stack_allocator: std.mem.Allocator,
+            stack: *QueryStack,
+            ctx: anytype,
+            cb: anytype,
+        ) !void {
+            try self.queryImpl(bbox, stack_allocator, stack, ctx, cb, false);
+        }
+
+        /// Visits all values whose leaf boxes overlap bbox and includes each leaf id.
+        pub fn queryIds(self: *const Self, bbox: Box, ctx: anytype, cb: anytype) !void {
+            var stack: QueryStack = .empty;
+            defer stack.deinit(self.allocator);
+
+            try self.queryIdsWithStack(bbox, self.allocator, &stack, ctx, cb);
+        }
+
+        /// Visits matching leaf ids/values, using caller-provided scratch storage.
+        pub fn queryIdsWithStack(
+            self: *const Self,
+            bbox: Box,
+            stack_allocator: std.mem.Allocator,
+            stack: *QueryStack,
+            ctx: anytype,
+            cb: anytype,
+        ) !void {
+            try self.queryImpl(bbox, stack_allocator, stack, ctx, cb, true);
+        }
+
+        fn queryImpl(
+            self: *const Self,
+            bbox: Box,
+            stack_allocator: std.mem.Allocator,
+            stack: *QueryStack,
+            ctx: anytype,
+            cb: anytype,
+            comptime include_ids: bool,
+        ) !void {
+            stack.clearRetainingCapacity();
+            defer stack.clearRetainingCapacity();
+
+            const root_id = self.root orelse return;
+
+            try stack.append(stack_allocator, root_id);
             while (stack.items.len > 0) {
                 const id = stack.pop().?;
                 const current = try self.constNode(id);
@@ -114,10 +194,16 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
                 }
 
                 if (current.isLeaf()) {
-                    try cb(ctx, current.bbox, current.value.?);
+                    if (current.exact_bbox.overlaps(&bbox)) {
+                        if (include_ids) {
+                            try cb(ctx, id, current.exact_bbox, current.value.?);
+                        } else {
+                            try cb(ctx, current.exact_bbox, current.value.?);
+                        }
+                    }
                 } else {
-                    try stack.append(self.allocator, current.left.?);
-                    try stack.append(self.allocator, current.right.?);
+                    try stack.append(stack_allocator, current.left.?);
+                    try stack.append(stack_allocator, current.right.?);
                 }
             }
         }
@@ -144,13 +230,25 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
         /// Returns the current box stored in a leaf id.
         pub fn getBox(self: *const Self, id: NodeId) Error!Box {
             const current = try self.constNodeAsLeaf(id);
+            return current.exact_bbox;
+        }
+
+        /// Returns the tree box used internally for traversal.
+        pub fn getTreeBox(self: *const Self, id: NodeId) Error!Box {
+            const current = try self.constNodeAsLeaf(id);
             return current.bbox;
         }
 
         /// Removes all nodes while retaining allocated capacity.
         pub fn clear(self: *Self) void {
-            self.nodes.clearRetainingCapacity();
             self.free_list.clearRetainingCapacity();
+            for (self.nodes.items, 0..) |*current, index| {
+                if (current.allocated) {
+                    current.generation +%= 1;
+                }
+                current.allocated = false;
+                self.free_list.appendAssumeCapacity(index);
+            }
             self.root = null;
             self.leaf_count = 0;
         }
@@ -162,12 +260,22 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
                 return Error.WrongNodeKind;
             }
             if (current.bbox.containsBox(&bbox)) {
-                (try self.node(id)).bbox = bbox;
+                const parent_id = current.parent;
+                const updated = try self.node(id);
+                updated.exact_bbox = bbox;
+                if (!ConfigT.loose_updates) {
+                    updated.bbox = ConfigT.makeTreeBox(bbox);
+                    if (parent_id) |pid| {
+                        try self.refitAncestors(pid);
+                    }
+                }
                 return;
             }
 
             try self.detachLeaf(id);
-            (try self.node(id)).bbox = bbox;
+            const updated = try self.node(id);
+            updated.bbox = ConfigT.makeTreeBox(bbox);
+            updated.exact_bbox = bbox;
             try self.insertLeaf(id);
         }
 
@@ -176,36 +284,47 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
             stored.allocated = true;
 
             if (self.free_list.items.len > 0) {
-                const id = self.free_list.pop().?;
-                self.nodes.items[id] = stored;
-                return id;
+                const index = self.free_list.pop().?;
+                stored.generation = self.nodes.items[index].generation;
+                self.nodes.items[index] = stored;
+                return .{ .index = index, .generation = stored.generation };
             }
 
             try self.free_list.ensureTotalCapacity(self.allocator, self.nodes.items.len + 1);
             try self.nodes.append(self.allocator, stored);
-            return self.nodes.items.len - 1;
+            return .{ .index = self.nodes.items.len - 1, .generation = stored.generation };
         }
 
         fn freeNode(self: *Self, id: NodeId) void {
-            std.debug.assert(id < self.nodes.items.len);
-            std.debug.assert(self.nodes.items[id].allocated);
+            std.debug.assert(id.index < self.nodes.items.len);
+            std.debug.assert(self.nodes.items[id.index].allocated);
+            std.debug.assert(self.nodes.items[id.index].generation == id.generation);
 
-            self.nodes.items[id].allocated = false;
-            self.free_list.appendAssumeCapacity(id);
+            self.nodes.items[id.index].allocated = false;
+            self.nodes.items[id.index].generation +%= 1;
+            self.free_list.appendAssumeCapacity(id.index);
         }
 
         fn node(self: *Self, id: NodeId) Error!*Node {
-            if (id >= self.nodes.items.len or !self.nodes.items[id].allocated) {
+            if (id.index >= self.nodes.items.len) {
                 return Error.InvalidNode;
             }
-            return &self.nodes.items[id];
+            const current = &self.nodes.items[id.index];
+            if (!current.allocated or current.generation != id.generation) {
+                return Error.InvalidNode;
+            }
+            return current;
         }
 
         fn constNode(self: *const Self, id: NodeId) Error!*const Node {
-            if (id >= self.nodes.items.len or !self.nodes.items[id].allocated) {
+            if (id.index >= self.nodes.items.len) {
                 return Error.InvalidNode;
             }
-            return &self.nodes.items[id];
+            const current = &self.nodes.items[id.index];
+            if (!current.allocated or current.generation != id.generation) {
+                return Error.InvalidNode;
+            }
+            return current;
         }
 
         fn nodeAsLeaf(self: *Self, id: NodeId) Error!*Node {
@@ -242,6 +361,7 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
 
             const parent_id = try self.allocNode(.{
                 .bbox = parent_bbox,
+                .exact_bbox = parent_bbox,
                 .parent = old_parent_id,
                 .left = sibling_id,
                 .right = leaf_id,
@@ -253,15 +373,15 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
 
             if (old_parent_id) |grand_parent_id| {
                 const grand_parent = try self.node(grand_parent_id);
-                if (grand_parent.left == sibling_id) {
+                if (grand_parent.left != null and grand_parent.left.?.eql(sibling_id)) {
                     grand_parent.left = parent_id;
                 } else {
-                    std.debug.assert(grand_parent.right == sibling_id);
+                    std.debug.assert(grand_parent.right != null and grand_parent.right.?.eql(sibling_id));
                     grand_parent.right = parent_id;
                 }
                 try self.refitAncestors(grand_parent_id);
             } else {
-                std.debug.assert(old_root == sibling_id);
+                std.debug.assert(old_root.eql(sibling_id));
                 self.root = parent_id;
             }
         }
@@ -273,7 +393,7 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
             }
 
             const parent_id = leaf.parent orelse {
-                std.debug.assert(self.root == leaf_id);
+                std.debug.assert(self.root != null and self.root.?.eql(leaf_id));
                 self.root = null;
                 return;
             };
@@ -281,19 +401,19 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
             const parent = try self.constNode(parent_id);
             std.debug.assert(!parent.isLeaf());
 
-            const sibling_id = if (parent.left == leaf_id)
+            const sibling_id = if (parent.left != null and parent.left.?.eql(leaf_id))
                 parent.right.?
-            else if (parent.right == leaf_id)
+            else if (parent.right != null and parent.right.?.eql(leaf_id))
                 parent.left.?
             else
                 return Error.InvalidNode;
 
             if (parent.parent) |grand_parent_id| {
                 const grand_parent = try self.node(grand_parent_id);
-                if (grand_parent.left == parent_id) {
+                if (grand_parent.left != null and grand_parent.left.?.eql(parent_id)) {
                     grand_parent.left = sibling_id;
                 } else {
-                    std.debug.assert(grand_parent.right == parent_id);
+                    std.debug.assert(grand_parent.right != null and grand_parent.right.?.eql(parent_id));
                     grand_parent.right = sibling_id;
                 }
                 (try self.node(sibling_id)).parent = grand_parent_id;
@@ -457,14 +577,14 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
         fn replaceParentChild(self: *Self, parent_id: ?NodeId, old_child_id: NodeId, new_child_id: NodeId) Error!void {
             if (parent_id) |id| {
                 const parent = try self.node(id);
-                if (parent.left == old_child_id) {
+                if (parent.left != null and parent.left.?.eql(old_child_id)) {
                     parent.left = new_child_id;
                 } else {
-                    std.debug.assert(parent.right == old_child_id);
+                    std.debug.assert(parent.right != null and parent.right.?.eql(old_child_id));
                     parent.right = new_child_id;
                 }
             } else {
-                std.debug.assert(self.root == old_child_id);
+                std.debug.assert(self.root != null and self.root.?.eql(old_child_id));
                 self.root = new_child_id;
             }
         }
@@ -514,6 +634,10 @@ const TestBox = struct {
     pub fn perimeter(self: *const TestBox) Coord {
         return self.high - self.low;
     }
+
+    pub fn expanded(self: *const TestBox, amount: Coord) TestBox {
+        return .{ .low = self.low - amount, .high = self.high + amount };
+    }
 };
 
 test "aabb tree node storage reuses freed ids" {
@@ -522,17 +646,20 @@ test "aabb tree node storage reuses freed ids" {
     var tree = TestTree.init(std.testing.allocator);
     defer tree.deinit();
 
-    const first = try tree.allocNode(.{ .bbox = TestBox.init(0, 1), .value = 1 });
-    const second = try tree.allocNode(.{ .bbox = TestBox.init(1, 2), .value = 2 });
+    const first = try tree.allocNode(.{ .bbox = TestBox.init(0, 1), .exact_bbox = TestBox.init(0, 1), .value = 1 });
+    const second = try tree.allocNode(.{ .bbox = TestBox.init(1, 2), .exact_bbox = TestBox.init(1, 2), .value = 2 });
 
-    try std.testing.expectEqual(@as(TestTree.NodeId, 0), first);
-    try std.testing.expectEqual(@as(TestTree.NodeId, 1), second);
+    try std.testing.expectEqual(@as(usize, 0), first.index);
+    try std.testing.expectEqual(@as(u64, 0), first.generation);
+    try std.testing.expectEqual(@as(usize, 1), second.index);
+    try std.testing.expectEqual(@as(u64, 0), second.generation);
 
     tree.freeNode(first);
     try std.testing.expectError(TestTree.Error.InvalidNode, tree.constNode(first));
 
-    const reused = try tree.allocNode(.{ .bbox = TestBox.init(2, 3), .value = 3 });
-    try std.testing.expectEqual(first, reused);
+    const reused = try tree.allocNode(.{ .bbox = TestBox.init(2, 3), .exact_bbox = TestBox.init(2, 3), .value = 3 });
+    try std.testing.expectEqual(first.index, reused.index);
+    try std.testing.expect(reused.generation != first.generation);
     try std.testing.expectEqual(@as(u64, 3), (try tree.constNode(reused)).value.?);
 }
 
@@ -542,11 +669,12 @@ test "aabb tree node storage rejects invalid ids" {
     var tree = TestTree.init(std.testing.allocator);
     defer tree.deinit();
 
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.node(0));
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.node(.{ .index = 0, .generation = 0 }));
 
-    const id = try tree.allocNode(.{ .bbox = TestBox.init(0, 1), .value = 1 });
-    try std.testing.expectEqual(@as(TestTree.NodeId, 0), id);
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.node(1));
+    const id = try tree.allocNode(.{ .bbox = TestBox.init(0, 1), .exact_bbox = TestBox.init(0, 1), .value = 1 });
+    try std.testing.expectEqual(@as(usize, 0), id.index);
+    try std.testing.expectEqual(@as(u64, 0), id.generation);
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.node(.{ .index = 1, .generation = 0 }));
 }
 
 test "aabb tree insert creates a root leaf" {
@@ -634,7 +762,7 @@ const ValidationResult = struct {
     leaves: usize,
 };
 
-fn validateSubtree(tree: *const Tree(TestBox, u64), id: Tree(TestBox, u64).NodeId, expected_parent: ?Tree(TestBox, u64).NodeId) !ValidationResult {
+fn validateSubtree(comptime Id: type, tree: anytype, id: Id, expected_parent: ?Id) !ValidationResult {
     const current = try tree.constNode(id);
     try std.testing.expectEqual(expected_parent, current.parent);
 
@@ -643,8 +771,8 @@ fn validateSubtree(tree: *const Tree(TestBox, u64), id: Tree(TestBox, u64).NodeI
         return .{ .bbox = current.bbox, .height = 0, .leaves = 1 };
     }
 
-    const left = try validateSubtree(tree, current.left.?, id);
-    const right = try validateSubtree(tree, current.right.?, id);
+    const left = try validateSubtree(Id, tree, current.left.?, id);
+    const right = try validateSubtree(Id, tree, current.right.?, id);
     const expected_bbox = left.bbox.merged(&right.bbox);
     const expected_height = @max(left.height, right.height) + 1;
 
@@ -658,12 +786,144 @@ fn validateSubtree(tree: *const Tree(TestBox, u64), id: Tree(TestBox, u64).NodeI
     };
 }
 
-fn validateTree(tree: *const Tree(TestBox, u64)) !void {
+fn validateTree(tree: anytype) !void {
     if (tree.root) |root_id| {
-        const result = try validateSubtree(tree, root_id, null);
+        const Id = @TypeOf(root_id);
+        const result = try validateSubtree(Id, tree, root_id, null);
         try std.testing.expectEqual(tree.count(), result.leaves);
     } else {
         try std.testing.expectEqual(@as(usize, 0), tree.count());
+    }
+}
+
+fn randomStressBox(rnd: std.Random) TestBox {
+    const low = rnd.intRangeAtMost(i64, -500, 500);
+    const width = rnd.intRangeAtMost(i64, 1, 80);
+    return TestBox.init(low, low + width);
+}
+
+fn randomStressQuery(rnd: std.Random) TestBox {
+    const low = rnd.intRangeAtMost(i64, -550, 550);
+    const width = rnd.intRangeAtMost(i64, 1, 160);
+    return TestBox.init(low, low + width);
+}
+
+fn verifyStressQuery(
+    tree: anytype,
+    objects: anytype,
+    query: TestBox,
+    seen: []bool,
+    ctx: *QueryCtx,
+    stack: anytype,
+) !void {
+    @memset(seen, false);
+    ctx.values.clearRetainingCapacity();
+
+    try tree.queryWithStack(query, std.testing.allocator, stack, ctx, collectQuery);
+
+    for (ctx.values.items) |value| {
+        const index: usize = @intCast(value);
+        try std.testing.expect(index < objects.len);
+        try std.testing.expect(!seen[index]);
+        seen[index] = true;
+    }
+
+    var expected_count: usize = 0;
+    for (objects, 0..) |object, index| {
+        const expected = object.live and object.bbox.overlaps(&query);
+        if (expected) {
+            expected_count += 1;
+        }
+        try std.testing.expectEqual(expected, seen[index]);
+    }
+    try std.testing.expectEqual(expected_count, ctx.values.items.len);
+}
+
+fn runRandomStress(comptime TestTree: type, seed: u64) !void {
+    const allocator = std.testing.allocator;
+    const max_objects = 128;
+    const operations = 1200;
+
+    const Object = struct {
+        id: TestTree.NodeId,
+        bbox: TestBox,
+        live: bool,
+    };
+
+    var tree = TestTree.init(allocator);
+    defer tree.deinit();
+
+    var objects: std.ArrayList(Object) = .empty;
+    defer objects.deinit(allocator);
+    try objects.ensureTotalCapacity(allocator, max_objects);
+
+    var ctx = QueryCtx.init();
+    defer ctx.deinit();
+
+    var stack: TestTree.QueryStack = .empty;
+    defer stack.deinit(allocator);
+    try stack.ensureTotalCapacity(allocator, 64);
+
+    var seen: [max_objects]bool = undefined;
+    var live_count: usize = 0;
+
+    var prng = std.Random.DefaultPrng.init(seed);
+    const rnd = prng.random();
+
+    for (0..operations) |step| {
+        const action = rnd.intRangeLessThan(u8, 0, 100);
+        const can_insert = live_count < max_objects;
+
+        if (can_insert and (live_count == 0 or action < 35)) {
+            var slot = objects.items.len;
+            for (objects.items, 0..) |object, index| {
+                if (!object.live) {
+                    slot = index;
+                    break;
+                }
+            }
+
+            const bbox = randomStressBox(rnd);
+            const id = try tree.insert(bbox, @intCast(slot));
+            if (slot == objects.items.len) {
+                try objects.append(allocator, .{ .id = id, .bbox = bbox, .live = true });
+            } else {
+                objects.items[slot] = .{ .id = id, .bbox = bbox, .live = true };
+            }
+            live_count += 1;
+        } else if (live_count > 0 and action < 60) {
+            var slot = rnd.intRangeLessThan(usize, 0, objects.items.len);
+            while (!objects.items[slot].live) {
+                slot = rnd.intRangeLessThan(usize, 0, objects.items.len);
+            }
+
+            const bbox = randomStressBox(rnd);
+            try tree.update(objects.items[slot].id, bbox);
+            objects.items[slot].bbox = bbox;
+        } else if (live_count > 0 and action < 75) {
+            var slot = rnd.intRangeLessThan(usize, 0, objects.items.len);
+            while (!objects.items[slot].live) {
+                slot = rnd.intRangeLessThan(usize, 0, objects.items.len);
+            }
+
+            try tree.remove(objects.items[slot].id);
+            try std.testing.expectError(TestTree.Error.InvalidNode, tree.getValue(objects.items[slot].id));
+            objects.items[slot].live = false;
+            live_count -= 1;
+        } else {
+            try verifyStressQuery(&tree, objects.items, randomStressQuery(rnd), seen[0..objects.items.len], &ctx, &stack);
+        }
+
+        try std.testing.expectEqual(live_count, tree.count());
+        if (step % 37 == 0) {
+            try validateTree(&tree);
+            try verifyStressQuery(&tree, objects.items, randomStressQuery(rnd), seen[0..objects.items.len], &ctx, &stack);
+        }
+    }
+
+    try validateTree(&tree);
+    for (0..100) |_| {
+        try verifyStressQuery(&tree, objects.items, randomStressQuery(rnd), seen[0..objects.items.len], &ctx, &stack);
     }
 }
 
@@ -699,6 +959,87 @@ test "aabb tree query returns matching leaves" {
     try std.testing.expect(containsValue(ctx.values.items, 300));
 }
 
+test "aabb tree queryWithStack uses caller scratch stack" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    _ = try tree.insert(TestBox.init(0, 10), 100);
+    _ = try tree.insert(TestBox.init(20, 30), 200);
+    _ = try tree.insert(TestBox.init(25, 40), 300);
+
+    var stack: TestTree.QueryStack = .empty;
+    defer stack.deinit(std.testing.allocator);
+    try stack.ensureTotalCapacity(std.testing.allocator, 8);
+    const capacity = stack.capacity;
+
+    var ctx = QueryCtx.init();
+    defer ctx.deinit();
+
+    try tree.queryWithStack(TestBox.init(24, 26), std.testing.allocator, &stack, &ctx, collectQuery);
+    try std.testing.expectEqual(@as(usize, 0), stack.items.len);
+    try std.testing.expectEqual(capacity, stack.capacity);
+    try std.testing.expectEqual(@as(usize, 2), ctx.values.items.len);
+    try std.testing.expect(containsValue(ctx.values.items, 200));
+    try std.testing.expect(containsValue(ctx.values.items, 300));
+}
+
+test "aabb tree queryIds returns matching leaf ids" {
+    const TestTree = Tree(TestBox, u64);
+
+    const IdQueryCtx = struct {
+        ids: std.ArrayList(TestTree.NodeId) = .empty,
+        values: std.ArrayList(u64) = .empty,
+
+        fn deinit(self: *@This()) void {
+            self.values.deinit(std.testing.allocator);
+            self.ids.deinit(std.testing.allocator);
+        }
+
+        fn collect(self: *@This(), id: TestTree.NodeId, _: TestBox, value: u64) !void {
+            try self.ids.append(std.testing.allocator, id);
+            try self.values.append(std.testing.allocator, value);
+        }
+    };
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    _ = try tree.insert(TestBox.init(0, 10), 100);
+    const second = try tree.insert(TestBox.init(20, 30), 200);
+    const third = try tree.insert(TestBox.init(25, 40), 300);
+
+    var ctx = IdQueryCtx{};
+    defer ctx.deinit();
+
+    try tree.queryIds(TestBox.init(24, 26), &ctx, IdQueryCtx.collect);
+    try std.testing.expectEqual(@as(usize, 2), ctx.ids.items.len);
+    try std.testing.expectEqual(@as(usize, 2), ctx.values.items.len);
+    try std.testing.expect(containsValue(ctx.values.items, 200));
+    try std.testing.expect(containsValue(ctx.values.items, 300));
+
+    var saw_second = false;
+    var saw_third = false;
+    for (ctx.ids.items) |id| {
+        saw_second = saw_second or (id.index == second.index and id.generation == second.generation);
+        saw_third = saw_third or (id.index == third.index and id.generation == third.generation);
+    }
+    try std.testing.expect(saw_second);
+    try std.testing.expect(saw_third);
+
+    ctx.ids.clearRetainingCapacity();
+    ctx.values.clearRetainingCapacity();
+
+    var stack: TestTree.QueryStack = .empty;
+    defer stack.deinit(std.testing.allocator);
+
+    try tree.queryIdsWithStack(TestBox.init(21, 22), std.testing.allocator, &stack, &ctx, IdQueryCtx.collect);
+    try std.testing.expectEqual(@as(usize, 1), ctx.ids.items.len);
+    try std.testing.expectEqual(second, ctx.ids.items[0]);
+    try std.testing.expectEqual(@as(u64, 200), ctx.values.items[0]);
+}
+
 test "aabb tree query skips non-overlapping leaves" {
     const TestTree = Tree(TestBox, u64);
 
@@ -728,6 +1069,23 @@ test "aabb tree remove only leaf empties tree" {
     try std.testing.expectEqual(@as(usize, 0), tree.count());
     try std.testing.expect(tree.root == null);
     try std.testing.expectError(TestTree.Error.InvalidNode, tree.constNode(id));
+}
+
+test "aabb tree removed id stays invalid after slot reuse" {
+    const TestTree = Tree(TestBox, u64);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const old_id = try tree.insert(TestBox.init(0, 10), 100);
+    try tree.remove(old_id);
+
+    const new_id = try tree.insert(TestBox.init(20, 30), 200);
+
+    try std.testing.expectEqual(old_id.index, new_id.index);
+    try std.testing.expect(new_id.generation != old_id.generation);
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getValue(old_id));
+    try std.testing.expectEqual(@as(u64, 200), try tree.getValue(new_id));
 }
 
 test "aabb tree remove promotes sibling to root" {
@@ -833,7 +1191,7 @@ test "aabb tree update keeps id and moves leaf out of query" {
     try std.testing.expect(containsValue(ctx.values.items, 100));
 }
 
-test "aabb tree update inside current box does not reinsert leaf" {
+test "aabb tree update inside current box refits without reinserting leaf" {
     const TestTree = Tree(TestBox, u64);
 
     var tree = TestTree.init(std.testing.allocator);
@@ -849,6 +1207,9 @@ test "aabb tree update inside current box does not reinsert leaf" {
     try std.testing.expectEqual(old_root, tree.root.?);
     try std.testing.expectEqual(old_parent, (try tree.constNode(id)).parent.?);
     try std.testing.expectEqual(TestBox.init(10, 20), try tree.getBox(id));
+    try std.testing.expectEqual(TestBox.init(10, 20), (try tree.constNode(id)).bbox);
+    try std.testing.expectEqual(TestBox.init(10, 300), (try tree.constNode(tree.root.?)).bbox);
+    try validateTree(&tree);
 
     var ctx = QueryCtx.init();
     defer ctx.deinit();
@@ -936,6 +1297,7 @@ test "aabb tree accessors read and update leaf values" {
 
     try std.testing.expectEqual(@as(u64, 100), try tree.getValue(id));
     try std.testing.expectEqual(TestBox.init(0, 10), try tree.getBox(id));
+    try std.testing.expectEqual(TestBox.init(0, 10), try tree.getTreeBox(id));
 
     try tree.setValue(id, 200);
     try std.testing.expectEqual(@as(u64, 200), try tree.getValue(id));
@@ -947,15 +1309,17 @@ test "aabb tree accessors reject invalid and internal ids" {
     var tree = TestTree.init(std.testing.allocator);
     defer tree.deinit();
 
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getValue(0));
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getBox(0));
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.setValue(0, 100));
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getValue(.{ .index = 0, .generation = 0 }));
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getBox(.{ .index = 0, .generation = 0 }));
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getTreeBox(.{ .index = 0, .generation = 0 }));
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.setValue(.{ .index = 0, .generation = 0 }, 100));
 
     _ = try tree.insert(TestBox.init(0, 10), 100);
     _ = try tree.insert(TestBox.init(20, 30), 200);
 
     try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getValue(tree.root.?));
     try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getBox(tree.root.?));
+    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getTreeBox(tree.root.?));
     try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.setValue(tree.root.?, 300));
 }
 
@@ -976,7 +1340,89 @@ test "aabb tree clear empties tree and allows reuse" {
     try std.testing.expectError(TestTree.Error.InvalidNode, tree.getValue(old_id));
 
     const new_id = try tree.insert(TestBox.init(40, 50), 300);
-    try std.testing.expectEqual(@as(TestTree.NodeId, 0), new_id);
+    try std.testing.expectEqual(@as(usize, 0), new_id.index);
+    try std.testing.expect(new_id.generation != old_id.generation);
+    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getValue(old_id));
     try std.testing.expectEqual(@as(u64, 300), try tree.getValue(new_id));
     try validateTree(&tree);
+}
+
+test "aabb fat tree stores expanded tree box and returns exact box" {
+    const TestTree = FatTree(TestBox, u64, 5);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const id = try tree.insert(TestBox.init(10, 20), 100);
+
+    const leaf = try tree.constNode(id);
+    try std.testing.expectEqual(TestBox.init(5, 25), leaf.bbox);
+    try std.testing.expectEqual(TestBox.init(10, 20), leaf.exact_bbox);
+    try std.testing.expectEqual(TestBox.init(10, 20), try tree.getBox(id));
+    try std.testing.expectEqual(TestBox.init(5, 25), try tree.getTreeBox(id));
+}
+
+test "aabb fat tree query filters fat-only overlaps" {
+    const TestTree = FatTree(TestBox, u64, 5);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    _ = try tree.insert(TestBox.init(10, 20), 100);
+
+    var ctx = QueryCtx.init();
+    defer ctx.deinit();
+
+    try tree.query(TestBox.init(6, 9), &ctx, collectQuery);
+    try std.testing.expectEqual(@as(usize, 0), ctx.values.items.len);
+
+    try tree.query(TestBox.init(12, 14), &ctx, collectQuery);
+    try std.testing.expectEqual(@as(usize, 1), ctx.values.items.len);
+    try std.testing.expect(containsValue(ctx.values.items, 100));
+}
+
+test "aabb fat tree update inside fat box keeps leaf attached" {
+    const TestTree = FatTree(TestBox, u64, 5);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const id = try tree.insert(TestBox.init(10, 20), 100);
+    _ = try tree.insert(TestBox.init(100, 110), 200);
+    const old_parent = (try tree.constNode(id)).parent.?;
+    const old_tree_box = (try tree.constNode(id)).bbox;
+
+    try tree.update(id, TestBox.init(12, 22));
+
+    const leaf = try tree.constNode(id);
+    try std.testing.expectEqual(old_parent, leaf.parent.?);
+    try std.testing.expectEqual(old_tree_box, leaf.bbox);
+    try std.testing.expectEqual(TestBox.init(12, 22), leaf.exact_bbox);
+    try std.testing.expectEqual(TestBox.init(12, 22), try tree.getBox(id));
+}
+
+test "aabb fat tree update outside fat box reinserts with expanded tree box" {
+    const TestTree = FatTree(TestBox, u64, 5);
+
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const id = try tree.insert(TestBox.init(10, 20), 100);
+    _ = try tree.insert(TestBox.init(100, 110), 200);
+
+    try tree.update(id, TestBox.init(40, 50));
+
+    const leaf = try tree.constNode(id);
+    try std.testing.expectEqual(TestBox.init(35, 55), leaf.bbox);
+    try std.testing.expectEqual(TestBox.init(40, 50), leaf.exact_bbox);
+    try std.testing.expectEqual(TestBox.init(40, 50), try tree.getBox(id));
+    try validateTree(&tree);
+}
+
+test "aabb tree randomized operations match brute force oracle" {
+    try runRandomStress(Tree(TestBox, u64), 0xAABB_7EEE_2026);
+}
+
+test "aabb fat tree randomized operations match brute force oracle" {
+    try runRandomStress(FatTree(TestBox, u64, 7), 0xFA7_AABB_2026);
 }
