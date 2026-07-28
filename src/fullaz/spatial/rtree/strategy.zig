@@ -176,7 +176,7 @@ pub fn GuttmanStrategy(comptime Key: type) type {
 // Guttman linear split
 pub fn LinearStrategy(comptime Key: type) type {
     const Coord = Key.Coord;
-    const dims = Key.Dim;
+    const dims = Key.dimention;
 
     return struct {
         pub const wants_reinsert = false;
@@ -311,7 +311,7 @@ pub fn LinearStrategy(comptime Key: type) type {
 pub fn RStarStrategy(comptime Key: type) type {
     const Coord = Key.Coord;
     const Point = Key.Point;
-    const dims = Key.Dim;
+    const dims = Key.dimention;
     const split_cap = 512;
 
     return struct {
