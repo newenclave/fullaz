@@ -9,5 +9,5 @@ test "OrthTree: create" {
 test "OrthTree: memory model" {
     const Model = orthtree.models.memory.Model(u32, 2);
     const tree = orthtree.TreeImpl(Model).init(&Model);
-    _ = tree;
+    _ = tree.model.getAccessor();
 }
