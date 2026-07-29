@@ -2,15 +2,17 @@ const std = @import("std");
 const errors = @import("../../core/errors.zig");
 const interfaces = @import("models/interfaces.zig");
 
-pub const VisitorResult = enum { descend, skip_children };
+pub const VisitorResult = enum {
+    descend,
+    skip_children,
+};
 
 pub fn TreeImpl(comptime ModelT: type) type {
     comptime {
         interfaces.assertModel(ModelT);
     }
 
-    const ErrorSet = ModelT.Error ||
-        error{InvalidId};
+    const ErrorSet = ModelT.Error;
 
     return struct {
         const Self = @This();
@@ -20,7 +22,8 @@ pub fn TreeImpl(comptime ModelT: type) type {
         pub const NodeId = Model.NodeId;
         pub const Node = Model.Node;
         pub const Box = Model.Box;
-        pub const Value = Model.Value;
+        pub const Value = Model.ValueIn;
+        pub const ValueBorrow = Model.ValueBorrow;
         pub const dimension = Box.dimension;
         pub const child_count = 1 << dimension;
 
@@ -88,6 +91,20 @@ pub fn TreeImpl(comptime ModelT: type) type {
                 defer acc.deinitNode(&root_node);
                 try self.queryNode(&root_node, qbox, callback, ctx);
             }
+        }
+
+        pub fn remove(self: *Self, qbox: Box, comptime predicate: anytype, ctx: anytype) Error!bool {
+            const acc = self.getAccessor();
+            if (acc.getRoot()) |root_id| {
+                var root_node = try acc.loadNode(root_id);
+                defer acc.deinitNode(&root_node);
+                if (try self.removeFromNode(&root_node, qbox, predicate, ctx)) |va| {
+                    defer self.model.deinitBorrowValue(va.value);
+                    try self.model.decrementEntriesCount();
+                    return true;
+                }
+            }
+            return false;
         }
 
         pub fn visitNodes(self: *Self, comptime callback: anytype, ctx: anytype) Error!void {
@@ -306,12 +323,69 @@ pub fn TreeImpl(comptime ModelT: type) type {
             }
         }
 
+        const RemoveResult = struct {
+            bbox: Box,
+            value: ValueBorrow,
+        };
+
+        fn removeFromNode(self: *Self, node: *Node, qbox: Box, comptime callback: anytype, ctx: anytype) Error!?RemoveResult {
+            if (!node.bounds().overlaps(&qbox)) {
+                return null;
+            }
+            const entries_count = node.size();
+            for (0..entries_count) |i| {
+                const entry = try node.getEntry(i);
+                if (entry.getBox().overlaps(&qbox)) {
+                    if (try callback(ctx, entry.getBox(), entry.getData())) {
+                        const removed_value = try node.removeEntry(i);
+                        errdefer self.model.deinitBorrowValue(removed_value);
+                        try self.onRemove(
+                            node,
+                            entry.getBox(),
+                            self.model.valueBorrowAsIn(removed_value),
+                        );
+                        return RemoveResult{
+                            .bbox = entry.getBox(),
+                            .value = removed_value,
+                        };
+                    }
+                }
+            }
+
+            if (node.isLeaf()) {
+                return null;
+            }
+
+            inline for (0..child_count) |i| {
+                if (node.getChild(i)) |child_id| {
+                    var child_node = try self.getAccessor().loadNode(child_id);
+                    defer self.getAccessor().deinitNode(&child_node);
+                    if (try self.removeFromNode(&child_node, qbox, callback, ctx)) |result| {
+                        errdefer self.model.deinitBorrowValue(result.value);
+                        try self.onRemove(node, result.bbox, self.model.valueBorrowAsIn(result.value));
+                        return result;
+                    }
+                }
+            }
+            return null;
+        }
+
         fn onInsert(self: *Self, node: *Node, box: Box, value: Value) Error!void {
-            try self.model.onInsert(node, box, value);
+            if (@hasDecl(Model, "onInsert")) {
+                try self.model.onInsert(node, box, value);
+            }
+        }
+
+        fn onRemove(self: *Self, node: *Node, box: Box, value: Value) Error!void {
+            if (@hasDecl(Model, "onRemove")) {
+                try self.model.onRemove(node, box, value);
+            }
         }
 
         fn onGrow(self: *Self, node: *Node, new_root: *Node) Error!void {
-            try self.model.onGrow(node, new_root);
+            if (@hasDecl(Model, "onGrow")) {
+                try self.model.onGrow(node, new_root);
+            }
         }
     };
 }

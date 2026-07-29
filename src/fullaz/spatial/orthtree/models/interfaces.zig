@@ -5,12 +5,12 @@ const interfaces = @import("../../../contracts/interfaces.zig");
 const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
-const requiresValueDeclaration = interfaces.requiresValueDeclaration;
+const requiresField = interfaces.requiresField;
 
 pub fn assertBox(comptime K: type) void {
     requiresTypeDeclaration(K, "Coord");
     requiresTypeDeclaration(K, "Point");
-    requiresValueDeclaration(K, "dimension");
+    requiresField(K, "dimension");
 
     const Coord = K.Coord;
     const Point = K.Point;

@@ -25,6 +25,11 @@ fn MassTrait(comptime Coord: type, comptime dimension: usize, comptime Value: ty
         pub fn onGrow(self: *Self, old: *const Self) Error!void {
             self.mass = old.mass;
         }
+
+        pub fn onRemove(self: *Self, box: anytype, value: Value) Error!void {
+            _ = box;
+            self.mass -= value;
+        }
     };
 }
 
@@ -329,6 +334,73 @@ fn expectVisitNodes(comptime Coord: type) !void {
     try std.testing.expectEqual(@as(usize, 1), prune_visit.count);
 }
 
+fn expectRemove(comptime Coord: type) !void {
+    const Model = orthtree.models.MemoryImpl(Coord, 2, u32, MassTrait);
+    const TreeType = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+    const RemoveContext = struct {
+        target: TreeType.ValueBorrow,
+        calls: usize = 0,
+
+        fn predicate(ctx: *@This(), _: Box, value: TreeType.ValueBorrow) !bool {
+            ctx.calls += 1;
+            return value == ctx.target;
+        }
+    };
+    const QueryContext = struct {
+        values: [2]u32 = undefined,
+        len: usize = 0,
+
+        fn collect(ctx: *@This(), _: Box, value: TreeType.ValueBorrow) !void {
+            ctx.values[ctx.len] = value;
+            ctx.len += 1;
+        }
+    };
+
+    var model = try Model.init(std.testing.allocator, 1);
+    defer model.deinit();
+
+    var tree = TreeType.init(&model);
+    const acc = model.getAccessor();
+    try tree.insert(Box.create(.{ 0, 0 }, .{ 10, 10 }), 5);
+    try tree.insert(Box.create(.{ 1, 1 }, .{ 2, 2 }), 7);
+    try tree.insert(Box.create(.{ 6, 6 }, .{ 7, 7 }), 11);
+
+    var remove_ctx = RemoveContext{ .target = 7 };
+    const removed = try tree.remove(
+        Box.create(.{ 0, 0 }, .{ 3, 3 }),
+        RemoveContext.predicate,
+        &remove_ctx,
+    );
+    try std.testing.expect(removed);
+    try std.testing.expect(remove_ctx.calls >= 2);
+    try std.testing.expectEqual(@as(usize, 2), try model.getEntriesCount());
+
+    var root = try acc.loadNode(acc.getRoot().?);
+    defer acc.deinitNode(&root);
+    try std.testing.expectEqual(@as(u32, 16), root.getTrait().mass);
+
+    var child = try acc.loadNode(root.getChild(0).?);
+    defer acc.deinitNode(&child);
+    try std.testing.expectEqual(@as(usize, 0), child.size());
+    try std.testing.expectEqual(@as(u32, 0), child.getTrait().mass);
+
+    var query_ctx = QueryContext{};
+    try tree.query(Box.create(.{ 0, 0 }, .{ 10, 10 }), QueryContext.collect, &query_ctx);
+    try std.testing.expectEqual(@as(usize, 2), query_ctx.len);
+    try std.testing.expect(query_ctx.values[0] == 5 or query_ctx.values[1] == 5);
+    try std.testing.expect(query_ctx.values[0] == 11 or query_ctx.values[1] == 11);
+
+    var missing_ctx = RemoveContext{ .target = 99 };
+    const missing = try tree.remove(
+        Box.create(.{ 0, 0 }, .{ 10, 10 }),
+        RemoveContext.predicate,
+        &missing_ctx,
+    );
+    try std.testing.expect(!missing);
+    try std.testing.expectEqual(@as(usize, 2), try model.getEntriesCount());
+}
+
 test "OrthTree: create" {
     _ = fulla.spatial.orthtree;
 }
@@ -416,4 +488,12 @@ test "OrthTree: visit nodes for u32 coordinates" {
 
 test "OrthTree: visit nodes for f32 coordinates" {
     try expectVisitNodes(f32);
+}
+
+test "OrthTree: remove for u32 coordinates" {
+    try expectRemove(u32);
+}
+
+test "OrthTree: remove for f32 coordinates" {
+    try expectRemove(f32);
 }

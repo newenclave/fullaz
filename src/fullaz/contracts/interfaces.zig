@@ -27,9 +27,9 @@ pub fn requiresErrorType(comptime T: type) void {
     }
 }
 
-pub fn requiresValueDeclaration(comptime T: type, comptime name: []const u8) void {
+pub fn requiresField(comptime T: type, comptime name: []const u8) void {
     if (!@hasDecl(T, name)) {
-        @compileError("Missing value declaration: " ++ @typeName(T) ++ "." ++ name);
+        @compileError("Missing field: " ++ @typeName(T) ++ "." ++ name);
     }
 }
 

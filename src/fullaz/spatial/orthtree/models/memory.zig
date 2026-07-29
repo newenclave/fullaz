@@ -3,30 +3,7 @@ const errors = @import("../../../core/errors.zig");
 
 const BoundingBox = @import("../../geometry.zig").BoundingBox;
 
-pub fn EmptyTrait(comptime T: type, comptime dimention: usize, comptime ValueT: type) type {
-    return struct {
-        const Self = @This();
-        pub const Error = error{};
-        pub const EntryData = void;
-        pub const Box = BoundingBox(T, dimention);
-        pub const Value = ValueT;
-
-        pub fn init() Self {
-            return .{};
-        }
-
-        pub fn onInsert(self: *Self, box: Box, value: ValueT) Self.Error!void {
-            _ = self;
-            _ = box;
-            _ = value;
-        }
-
-        pub fn onGrow(self: *Self, old: *const Self) Self.Error!void {
-            _ = self;
-            _ = old;
-        }
-    };
-}
+const EmptyTrait = @import("traits.zig").Empty;
 
 pub fn Memory(comptime T: type, comptime dimention: usize, comptime ValueT: type) type {
     return MemoryImpl(T, dimention, ValueT, EmptyTrait);
@@ -221,6 +198,13 @@ pub fn MemoryImpl(
             try self.node.entries.append(self.node.ctx.allocator, entry);
         }
 
+        pub fn removeEntry(self: *Self, index: usize) ErrorSet!ValueT {
+            if (index >= self.node.entries.items.len) {
+                return ErrorSet.OutOfBounds;
+            }
+            return self.node.entries.orderedRemove(index).data;
+        }
+
         pub fn setChild(self: *Self, index: usize, child_id: Id) ErrorSet!void {
             if ((index >= child_count) or (self.node.children == null)) {
                 return ErrorSet.OutOfBounds;
@@ -351,7 +335,9 @@ pub fn MemoryImpl(
         pub const Accessor = AccessorImpl;
 
         pub const Box = BoundingBoxT;
-        pub const Value = ValueT;
+        pub const ValueIn = ValueT;
+        pub const ValueOut = ValueT;
+        pub const ValueBorrow = ValueT;
         pub const Error = ErrorSet;
         pub const Trait = TraitType;
 
@@ -397,7 +383,17 @@ pub fn MemoryImpl(
             return self.accessor.ctx.entries_count;
         }
 
-        pub fn onInsert(self: *Self, node: *Node, box: Box, value: Value) ErrorSet!void {
+        pub fn valueBorrowAsIn(self: *Self, value: ValueBorrow) ValueIn {
+            _ = self;
+            return value;
+        }
+
+        pub fn deinitBorrowValue(self: *Self, value: ValueBorrow) void {
+            _ = self;
+            _ = value;
+        }
+
+        pub fn onInsert(self: *Self, node: *Node, box: Box, value: ValueIn) ErrorSet!void {
             _ = self;
             try node.node.trait.onInsert(box, value);
         }
@@ -407,11 +403,9 @@ pub fn MemoryImpl(
             try new_node.node.trait.onGrow(&node.node.trait);
         }
 
-        pub fn onRemove(self: *Self, node: *Node, box: Box, value: Value) ErrorSet!void {
+        pub fn onRemove(self: *Self, node: *Node, box: Box, value: ValueIn) ErrorSet!void {
             _ = self;
-            _ = box;
-            _ = value;
-            _ = node;
+            try node.node.trait.onRemove(box, value);
         }
     };
 }

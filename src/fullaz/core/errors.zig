@@ -39,6 +39,7 @@ pub const CacheError = error{
 
 pub const IndexError = error{
     OutOfBounds,
+    InvalidIndex,
 };
 
 pub const BufferError = error{
