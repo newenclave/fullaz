@@ -299,7 +299,13 @@ pub fn TreeImpl(comptime ModelT: type) type {
             }
         }
 
-        pub fn queryNode(self: *const Self, node: *const Node, qbox: Box, comptime callback: anytype, ctx: anytype) Error!void {
+        pub fn queryNode(
+            self: *const Self,
+            node: *const Node,
+            qbox: Box,
+            comptime callback: anytype,
+            ctx: anytype,
+        ) Error!void {
             if (!node.bounds().overlaps(&qbox)) {
                 return;
             }
@@ -371,7 +377,12 @@ pub fn TreeImpl(comptime ModelT: type) type {
                 if (node.getChild(i)) |child_id| {
                     var child_node = try self.getAccessor().loadNode(child_id);
                     defer self.getAccessor().deinitNode(&child_node);
-                    try self.traverseNode(&child_node, on_node, on_entry, ctx);
+                    try self.traverseNode(
+                        &child_node,
+                        on_node,
+                        on_entry,
+                        ctx,
+                    );
                 }
             }
         }
@@ -381,7 +392,13 @@ pub fn TreeImpl(comptime ModelT: type) type {
             value: ValueBorrow,
         };
 
-        fn removeFromNode(self: *Self, node: *Node, qbox: Box, comptime callback: anytype, ctx: anytype) Error!?RemoveResult {
+        fn removeFromNode(
+            self: *Self,
+            node: *Node,
+            qbox: Box,
+            comptime callback: anytype,
+            ctx: anytype,
+        ) Error!?RemoveResult {
             if (!node.bounds().overlaps(&qbox)) {
                 return null;
             }
@@ -415,7 +432,11 @@ pub fn TreeImpl(comptime ModelT: type) type {
                     defer self.getAccessor().deinitNode(&child_node);
                     if (try self.removeFromNode(&child_node, qbox, callback, ctx)) |result| {
                         errdefer self.model.deinitBorrowValue(result.value);
-                        try self.onRemove(node, result.bbox, self.model.valueBorrowAsIn(result.value));
+                        try self.onRemove(
+                            node,
+                            result.bbox,
+                            self.model.valueBorrowAsIn(result.value),
+                        );
                         return result;
                     }
                 }
