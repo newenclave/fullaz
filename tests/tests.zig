@@ -42,6 +42,9 @@ test {
 
     _ = @import("codec/fron_coded_block.zig");
 
+    _ = @import("spatial/geometry.zig");
+    _ = @import("spatial/orthtree/orthtree.zig");
+
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
     _ = @import("long_store.zig");
