@@ -2,8 +2,34 @@ const std = @import("std");
 const fulla = @import("fullaz");
 const orthtree = fulla.spatial.orthtree;
 
+fn MassTrait(comptime Coord: type, comptime dimension: usize, comptime Value: type) type {
+    _ = Coord;
+    _ = dimension;
+
+    return struct {
+        const Self = @This();
+        pub const Error = error{};
+
+        mass: Value = 0,
+        visits: usize = 0,
+
+        pub fn init() Self {
+            return .{};
+        }
+
+        pub fn onInsert(self: *Self, box: anytype, value: Value) Error!void {
+            _ = box;
+            self.mass += value;
+        }
+
+        pub fn onGrow(self: *Self, old: *const Self) Error!void {
+            self.mass = old.mass;
+        }
+    };
+}
+
 fn expectChildBounds(comptime Coord: type) !void {
-    const Model = orthtree.models.Memory(Coord, 2);
+    const Model = orthtree.models.Memory(Coord, 2, u32);
     const TreeType = orthtree.tree.TreeImpl(Model);
     const Box = Model.Box;
 
@@ -21,7 +47,7 @@ fn expectChildBounds(comptime Coord: type) !void {
 }
 
 fn expectChildIndexFor(comptime Coord: type) !void {
-    const Model = orthtree.models.Memory(Coord, 2);
+    const Model = orthtree.models.Memory(Coord, 2, u32);
     const TreeType = orthtree.tree.TreeImpl(Model);
     const Box = Model.Box;
 
@@ -40,7 +66,7 @@ fn expectChildIndexFor(comptime Coord: type) !void {
 }
 
 fn expectSplitNode(comptime Coord: type) !void {
-    const Model = orthtree.models.Memory(Coord, 2);
+    const Model = orthtree.models.Memory(Coord, 2, u32);
     const TreeType = orthtree.tree.TreeImpl(Model);
     const Box = Model.Box;
 
@@ -86,7 +112,7 @@ fn expectSplitNode(comptime Coord: type) !void {
 }
 
 fn expectInsert(comptime Coord: type) !void {
-    const Model = orthtree.models.Memory(Coord, 2);
+    const Model = orthtree.models.Memory(Coord, 2, u32);
     const TreeType = orthtree.tree.TreeImpl(Model);
     const Box = Model.Box;
 
@@ -117,7 +143,7 @@ fn expectInsert(comptime Coord: type) !void {
 }
 
 fn expectInsertGrowsRoot(comptime Coord: type) !void {
-    const Model = orthtree.models.Memory(Coord, 2);
+    const Model = orthtree.models.Memory(Coord, 2, u32);
     const TreeType = orthtree.tree.TreeImpl(Model);
     const Box = Model.Box;
 
@@ -152,20 +178,20 @@ fn expectInsertGrowsRoot(comptime Coord: type) !void {
 }
 
 fn expectQuery(comptime Coord: type) !void {
-    const Model = orthtree.models.Memory(Coord, 2);
+    const Model = orthtree.models.Memory(Coord, 2, u32);
     const TreeType = orthtree.tree.TreeImpl(Model);
     const Box = Model.Box;
     const QueryContext = struct {
-        values: [3]Coord = undefined,
+        values: [3]u32 = undefined,
         len: usize = 0,
 
-        fn callback(ctx: *@This(), entry_box: Box, value: Coord) !void {
+        fn callback(ctx: *@This(), entry_box: Box, value: u32) !void {
             _ = entry_box;
             ctx.values[ctx.len] = value;
             ctx.len += 1;
         }
 
-        fn contains(ctx: *const @This(), value: Coord) bool {
+        fn contains(ctx: *const @This(), value: u32) bool {
             for (ctx.values[0..ctx.len]) |result| {
                 if (result == value) {
                     return true;
@@ -200,12 +226,115 @@ fn expectQuery(comptime Coord: type) !void {
     try std.testing.expectEqual(@as(usize, 0), empty_results.len);
 }
 
+fn expectInsertHooks(comptime Coord: type) !void {
+    const Model = orthtree.models.MemoryImpl(Coord, 2, u32, MassTrait);
+    const TreeType = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+
+    var model = try Model.init(std.testing.allocator, 1);
+    defer model.deinit();
+
+    var tree = TreeType.init(&model);
+    const acc = model.getAccessor();
+    try tree.insert(Box.create(.{ 0, 0 }, .{ 10, 10 }), 5);
+    try tree.insert(Box.create(.{ 1, 1 }, .{ 2, 2 }), 7);
+
+    var root = try acc.loadNode(acc.getRoot().?);
+    defer acc.deinitNode(&root);
+    try std.testing.expectEqual(@as(u32, 12), root.getTrait().mass);
+
+    var child = try acc.loadNode(root.getChild(0).?);
+    defer acc.deinitNode(&child);
+    try std.testing.expectEqual(@as(u32, 7), child.getTrait().mass);
+
+    var growth_model = try Model.init(std.testing.allocator, 8);
+    defer growth_model.deinit();
+
+    var growth_tree = TreeType.init(&growth_model);
+    const growth_acc = growth_model.getAccessor();
+    try growth_tree.insert(Box.create(.{ 0, 0 }, .{ 2, 2 }), 5);
+    try growth_tree.insert(Box.create(.{ 3, 3 }, .{ 4, 4 }), 7);
+
+    var grown_root = try growth_acc.loadNode(growth_acc.getRoot().?);
+    defer growth_acc.deinitNode(&grown_root);
+    try std.testing.expectEqual(@as(u32, 12), grown_root.getTrait().mass);
+
+    var old_root = try growth_acc.loadNode(grown_root.getChild(0).?);
+    defer growth_acc.deinitNode(&old_root);
+    try std.testing.expectEqual(@as(u32, 5), old_root.getTrait().mass);
+}
+
+fn expectVisitNodes(comptime Coord: type) !void {
+    const Model = orthtree.models.MemoryImpl(Coord, 2, u32, MassTrait);
+    const TreeType = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+    const Trait = MassTrait(Coord, 2, u32);
+    const VisitContext = struct {
+        root_bounds: Box,
+        count: usize = 0,
+        mass_sum: u32 = 0,
+        saw_root: bool = false,
+
+        fn visit(ctx: *@This(), _: usize, bounds: Box, trait: *Trait) !orthtree.tree.VisitorResult {
+            ctx.count += 1;
+            ctx.mass_sum += trait.mass;
+            trait.visits += 1;
+            if (std.meta.eql(bounds, ctx.root_bounds)) {
+                ctx.saw_root = true;
+            }
+            return .descend;
+        }
+
+        fn skip(ctx: *@This(), _: usize, _: Box, _: *Trait) !orthtree.tree.VisitorResult {
+            ctx.count += 1;
+            return .skip_children;
+        }
+    };
+
+    var empty_model = try Model.init(std.testing.allocator, 8);
+    defer empty_model.deinit();
+    var empty_tree = TreeType.init(&empty_model);
+    var empty_visit = VisitContext{ .root_bounds = Box.create(.{ 0, 0 }, .{ 0, 0 }) };
+    try empty_tree.visitNodes(VisitContext.visit, &empty_visit);
+    try std.testing.expectEqual(@as(usize, 0), empty_visit.count);
+
+    var model = try Model.init(std.testing.allocator, 8);
+    defer model.deinit();
+
+    var tree = TreeType.init(&model);
+    const acc = model.getAccessor();
+    try tree.insert(Box.create(.{ 0, 0 }, .{ 2, 2 }), 5);
+    try tree.insert(Box.create(.{ 3, 3 }, .{ 4, 4 }), 7);
+
+    const root_bounds = Box.create(.{ 0, 0 }, .{ 4, 4 });
+    var visit = VisitContext{ .root_bounds = root_bounds };
+    try tree.visitNodes(VisitContext.visit, &visit);
+    try std.testing.expectEqual(@as(usize, 5), visit.count);
+    try std.testing.expectEqual(@as(u32, 24), visit.mass_sum);
+    try std.testing.expect(visit.saw_root);
+
+    var root = try acc.loadNode(acc.getRoot().?);
+    defer acc.deinitNode(&root);
+    try std.testing.expect(std.meta.eql(root_bounds, root.bounds()));
+    try std.testing.expectEqual(@as(usize, 1), root.getTrait().visits);
+    inline for (0..TreeType.child_count) |i| {
+        var child = try acc.loadNode(root.getChild(i).?);
+        defer acc.deinitNode(&child);
+        try std.testing.expect(std.meta.eql(TreeType.childBounds(&root_bounds, i), child.bounds()));
+        try std.testing.expectEqual(@as(usize, 1), child.getTrait().visits);
+    }
+
+    var prune_visit = VisitContext{ .root_bounds = root_bounds };
+    try tree.visitNodes(VisitContext.skip, &prune_visit);
+    try std.testing.expectEqual(@as(usize, 1), prune_visit.count);
+}
+
 test "OrthTree: create" {
     _ = fulla.spatial.orthtree;
 }
 
 test "OrthTree: memory model" {
-    const Model = orthtree.models.Memory(u32, 2);
+    const Model = orthtree.models.Memory(u32, 2, u32);
     const TreeType = orthtree.tree.TreeImpl(Model);
     const Box = Model.Box;
 
@@ -271,4 +400,20 @@ test "OrthTree: query for u32" {
 
 test "OrthTree: query for f32" {
     try expectQuery(f32);
+}
+
+test "OrthTree: insert hooks for u32 coordinates" {
+    try expectInsertHooks(u32);
+}
+
+test "OrthTree: insert hooks for f32 coordinates" {
+    try expectInsertHooks(f32);
+}
+
+test "OrthTree: visit nodes for u32 coordinates" {
+    try expectVisitNodes(u32);
+}
+
+test "OrthTree: visit nodes for f32 coordinates" {
+    try expectVisitNodes(f32);
 }

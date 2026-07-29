@@ -2,6 +2,8 @@ const std = @import("std");
 const errors = @import("../../core/errors.zig");
 const interfaces = @import("models/interfaces.zig");
 
+pub const VisitorResult = enum { descend, skip_children };
+
 pub fn TreeImpl(comptime ModelT: type) type {
     comptime {
         interfaces.assertModel(ModelT);
@@ -88,6 +90,15 @@ pub fn TreeImpl(comptime ModelT: type) type {
             }
         }
 
+        pub fn visitNodes(self: *Self, comptime callback: anytype, ctx: anytype) Error!void {
+            const acc = self.getAccessor();
+            if (acc.getRoot()) |root_id| {
+                var root_node = try acc.loadNode(root_id);
+                defer acc.deinitNode(&root_node);
+                try self.visitNode(&root_node, callback, ctx);
+            }
+        }
+
         // -------------- helpers -------------- //
         pub fn childBounds(parent: *const Box, child_index: usize) Box {
             if (child_index >= child_count) {
@@ -139,9 +150,11 @@ pub fn TreeImpl(comptime ModelT: type) type {
                     var next_node = try self.getAccessor().loadNode(node.getChild(child_id).?);
                     defer self.getAccessor().deinitNode(&next_node);
                     try self.insertIntoNode(&next_node, child_box, value);
+                    try self.onInsert(node, child_box, value);
                     return;
                 } else {
                     try node.addEntry(child_box, value);
+                    try self.onInsert(node, child_box, value);
                 }
                 return;
             }
@@ -154,6 +167,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
                 return;
             }
             try node.addEntry(child_box, value);
+            try self.onInsert(node, child_box, value);
         }
 
         pub fn splitNode(self: *Self, node: *Node) Error!void {
@@ -235,11 +249,14 @@ pub fn TreeImpl(comptime ModelT: type) type {
                             try child_node.setParent(new_root_node.id());
                         }
                     }
+                    var old_root_node = try acc.loadNode(old_root_id);
+                    defer acc.deinitNode(&old_root_node);
                     try rnode.setParent(new_root_node.id());
                     acc.setRoot(new_root_node.id());
                     rnode = try acc.loadNode(new_root_node.id());
                     defer acc.deinitNode(&rnode);
                     expanded_bounds = rnode.bounds();
+                    try self.onGrow(&old_root_node, &new_root_node);
                 }
             }
         }
@@ -268,6 +285,33 @@ pub fn TreeImpl(comptime ModelT: type) type {
                     try self.queryNode(&child_node, qbox, callback, ctx);
                 }
             }
+        }
+
+        pub fn visitNode(self: *Self, node: *Node, comptime callback: anytype, ctx: anytype) Error!void {
+            switch (try callback(ctx, node.id(), node.bounds(), node.getTraitMut())) {
+                .skip_children => return,
+                .descend => {},
+            }
+
+            if (node.isLeaf()) {
+                return;
+            }
+
+            inline for (0..child_count) |i| {
+                if (node.getChild(i)) |child_id| {
+                    var child_node = try self.getAccessor().loadNode(child_id);
+                    defer self.getAccessor().deinitNode(&child_node);
+                    try self.visitNode(&child_node, callback, ctx);
+                }
+            }
+        }
+
+        fn onInsert(self: *Self, node: *Node, box: Box, value: Value) Error!void {
+            try self.model.onInsert(node, box, value);
+        }
+
+        fn onGrow(self: *Self, node: *Node, new_root: *Node) Error!void {
+            try self.model.onGrow(node, new_root);
         }
     };
 }

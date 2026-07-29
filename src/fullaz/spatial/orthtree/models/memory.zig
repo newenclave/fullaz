@@ -3,11 +3,51 @@ const errors = @import("../../../core/errors.zig");
 
 const BoundingBox = @import("../../geometry.zig").BoundingBox;
 
-pub fn Memory(comptime T: type, comptime dimention: usize) type {
+pub fn EmptyTrait(comptime T: type, comptime dimention: usize, comptime ValueT: type) type {
+    return struct {
+        const Self = @This();
+        pub const Error = error{};
+        pub const EntryData = void;
+        pub const Box = BoundingBox(T, dimention);
+        pub const Value = ValueT;
+
+        pub fn init() Self {
+            return .{};
+        }
+
+        pub fn onInsert(self: *Self, box: Box, value: ValueT) Self.Error!void {
+            _ = self;
+            _ = box;
+            _ = value;
+        }
+
+        pub fn onGrow(self: *Self, old: *const Self) Self.Error!void {
+            _ = self;
+            _ = old;
+        }
+    };
+}
+
+pub fn Memory(comptime T: type, comptime dimention: usize, comptime ValueT: type) type {
+    return MemoryImpl(T, dimention, ValueT, EmptyTrait);
+}
+
+pub fn MemoryImpl(
+    comptime T: type,
+    comptime dimention: usize,
+    comptime ValueT: type,
+    comptime TraitT: fn (
+        comptime T: type,
+        comptime dimention: usize,
+        comptime ValueT: type,
+    ) type,
+) type {
+    const TraitType = TraitT(T, dimention, ValueT);
     const BoundingBoxT = BoundingBox(T, dimention);
     const child_count = 1 << dimention;
 
     const ErrorSet = std.mem.Allocator.Error ||
+        TraitType.Error ||
         errors.IndexError ||
         errors.SpaceError ||
         error{ AlreadyInitialized, InvalidId };
@@ -15,7 +55,7 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
     const EntryImpl = struct {
         const Self = @This();
         pub const Box = BoundingBoxT;
-        pub const Value = T;
+        pub const Value = ValueT;
 
         bbox: Box,
         data: Value,
@@ -23,7 +63,7 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
         pub fn getBox(self: *const Self) BoundingBoxT {
             return self.bbox;
         }
-        pub fn getData(self: *const Self) T {
+        pub fn getData(self: *const Self) ValueT {
             return self.data;
         }
     };
@@ -35,6 +75,8 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
         allocator: std.mem.Allocator,
         max_leaf_entries: usize,
         entries_count: usize = 0,
+        level: usize = 0,
+        trait: TraitType,
     };
 
     const NodeImpl = struct {
@@ -46,6 +88,7 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
         entries: EntryList,
         children: ?Children = null,
         parent: ?IdType = null,
+        trait: TraitType,
         ctx: *Context,
 
         fn init(bounds: Box, ctx: *Context) ErrorSet!Self {
@@ -54,6 +97,7 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
                 .entries = try EntryList.initCapacity(ctx.allocator, 1),
                 .children = null,
                 .parent = null,
+                .trait = ctx.trait,
                 .ctx = ctx,
             };
         }
@@ -64,6 +108,7 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
             self.entries = try EntryList.initCapacity(ctx.allocator, 1);
             self.children = null;
             self.parent = null;
+            self.trait = ctx.trait;
         }
 
         fn initChildren(self: *Self) ErrorSet!void {
@@ -86,7 +131,7 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
     const NodeWrapper = struct {
         const Self = @This();
         pub const Box = BoundingBoxT;
-        pub const Value = T;
+        pub const Value = ValueT;
         pub const Id = IdType;
 
         node: *NodeImpl,
@@ -141,7 +186,7 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
             _ = self.node.entries.orderedRemove(index);
         }
 
-        pub fn canInsertEntry(self: *const Self, box: Box, value: Value) bool {
+        pub fn canInsertEntry(self: *const Self, box: Box, value: ValueT) bool {
             _ = box;
             _ = value;
             return self.node.entries.items.len < self.node.ctx.max_leaf_entries;
@@ -152,7 +197,23 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
             return true; // TODO: need to calculate minimum bounding box
         }
 
-        pub fn addEntry(self: *Self, box: Box, value: Value) ErrorSet!void {
+        pub fn setLevel(self: *Self, level: usize) void {
+            self.node.level = level;
+        }
+
+        pub fn getLevel(self: *const Self) usize {
+            return self.node.level;
+        }
+
+        pub fn getTrait(self: *const Self) *const TraitType {
+            return &self.node.trait;
+        }
+
+        pub fn getTraitMut(self: *Self) *TraitType {
+            return &self.node.trait;
+        }
+
+        pub fn addEntry(self: *Self, box: Box, value: ValueT) ErrorSet!void {
             const entry = EntryImpl{
                 .bbox = box,
                 .data = value,
@@ -193,9 +254,10 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
         nodes: NodeList,
         root_id: ?IdType = null,
 
-        pub fn init(allocator: std.mem.Allocator, max_leaf_entries: usize) ErrorSet!Self {
+        pub fn init(allocator: std.mem.Allocator, trait: TraitType, max_leaf_entries: usize) ErrorSet!Self {
             const ctx = Context{
                 .allocator = allocator,
+                .trait = trait,
                 .max_leaf_entries = max_leaf_entries,
                 .entries_count = 0,
             };
@@ -289,14 +351,29 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
         pub const Accessor = AccessorImpl;
 
         pub const Box = BoundingBoxT;
-        pub const Value = T;
+        pub const Value = ValueT;
         pub const Error = ErrorSet;
+        pub const Trait = TraitType;
 
         accessor: Accessor,
 
         pub fn init(allocator: std.mem.Allocator, max_leaf_entries: usize) ErrorSet!Self {
             return Self{
-                .accessor = try Accessor.init(allocator, max_leaf_entries),
+                .accessor = try Accessor.init(
+                    allocator,
+                    Trait.init(),
+                    max_leaf_entries,
+                ),
+            };
+        }
+
+        pub fn initWithTrait(allocator: std.mem.Allocator, trait: Trait, max_leaf_entries: usize) ErrorSet!Self {
+            return Self{
+                .accessor = try Accessor.init(
+                    allocator,
+                    trait,
+                    max_leaf_entries,
+                ),
             };
         }
 
@@ -318,6 +395,23 @@ pub fn Memory(comptime T: type, comptime dimention: usize) type {
 
         pub fn getEntriesCount(self: *Self) ErrorSet!usize {
             return self.accessor.ctx.entries_count;
+        }
+
+        pub fn onInsert(self: *Self, node: *Node, box: Box, value: Value) ErrorSet!void {
+            _ = self;
+            try node.node.trait.onInsert(box, value);
+        }
+
+        pub fn onGrow(self: *Self, node: *Node, new_node: *Node) ErrorSet!void {
+            _ = self;
+            try new_node.node.trait.onGrow(&node.node.trait);
+        }
+
+        pub fn onRemove(self: *Self, node: *Node, box: Box, value: Value) ErrorSet!void {
+            _ = self;
+            _ = box;
+            _ = value;
+            _ = node;
         }
     };
 }
