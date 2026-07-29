@@ -7,6 +7,12 @@ pub const VisitorResult = enum {
     skip_children,
 };
 
+pub const TraverseDecision = enum {
+    descend,
+    accept,
+    skip,
+};
+
 pub fn TreeImpl(comptime ModelT: type) type {
     comptime {
         interfaces.assertModel(ModelT);
@@ -113,6 +119,20 @@ pub fn TreeImpl(comptime ModelT: type) type {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
                 try self.visitNode(&root_node, callback, ctx);
+            }
+        }
+
+        pub fn traverse(
+            self: *const Self,
+            comptime on_node: anytype,
+            comptime on_entry: anytype,
+            ctx: anytype,
+        ) Error!void {
+            const acc = self.getAccessor();
+            if (acc.getRoot()) |root_id| {
+                var root_node = try acc.loadNode(root_id);
+                defer acc.deinitNode(&root_node);
+                try self.traverseNode(&root_node, on_node, on_entry, ctx);
             }
         }
 
@@ -320,6 +340,38 @@ pub fn TreeImpl(comptime ModelT: type) type {
                     var child_node = try self.getAccessor().loadNode(child_id);
                     defer self.getAccessor().deinitNode(&child_node);
                     try self.visitNode(&child_node, callback, ctx);
+                }
+            }
+        }
+
+        fn traverseNode(
+            self: *const Self,
+            node: *Node,
+            comptime on_node: anytype,
+            comptime on_entry: anytype,
+            ctx: anytype,
+        ) Error!void {
+            switch (try on_node(ctx, node.id(), node.bounds(), node.getTrait(), node.isLeaf())) {
+                .accept => return,
+                .skip => return,
+                .descend => {},
+            }
+
+            const entries_count = node.size();
+            for (0..entries_count) |i| {
+                const entry = try node.getEntry(i);
+                try on_entry(ctx, entry.getBox(), entry.getData());
+            }
+
+            if (node.isLeaf()) {
+                return;
+            }
+
+            inline for (0..child_count) |i| {
+                if (node.getChild(i)) |child_id| {
+                    var child_node = try self.getAccessor().loadNode(child_id);
+                    defer self.getAccessor().deinitNode(&child_node);
+                    try self.traverseNode(&child_node, on_node, on_entry, ctx);
                 }
             }
         }

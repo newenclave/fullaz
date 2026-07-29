@@ -334,6 +334,61 @@ fn expectVisitNodes(comptime Coord: type) !void {
     try std.testing.expectEqual(@as(usize, 1), prune_visit.count);
 }
 
+fn expectTraverse(comptime Coord: type) !void {
+    const Model = orthtree.models.MemoryImpl(Coord, 2, u32, MassTrait);
+    const TreeType = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+    const Trait = MassTrait(Coord, 2, u32);
+    const TraverseContext = struct {
+        accept_root: bool = false,
+        node_count: usize = 0,
+        entry_count: usize = 0,
+        accepted_mass: u32 = 0,
+        entry_mass: u32 = 0,
+
+        fn onNode(
+            ctx: *@This(),
+            _: usize,
+            _: Box,
+            trait: *const Trait,
+            _: bool,
+        ) !orthtree.tree.TraverseDecision {
+            ctx.node_count += 1;
+            if (ctx.accept_root) {
+                ctx.accepted_mass += trait.mass;
+                return .accept;
+            }
+            return .descend;
+        }
+
+        fn onEntry(ctx: *@This(), _: Box, value: u32) !void {
+            ctx.entry_count += 1;
+            ctx.entry_mass += value;
+        }
+    };
+
+    var model = try Model.init(std.testing.allocator, 1);
+    defer model.deinit();
+
+    var tree = TreeType.init(&model);
+    try tree.initRootBounds(Box.create(.{ 0, 0 }, .{ 4, 4 }));
+    try tree.insert(Box.create(.{ 0, 0 }, .{ 1, 1 }), 5);
+    try tree.insert(Box.create(.{ 3, 3 }, .{ 4, 4 }), 7);
+
+    var accepted = TraverseContext{ .accept_root = true };
+    try tree.traverse(TraverseContext.onNode, TraverseContext.onEntry, &accepted);
+    try std.testing.expectEqual(@as(usize, 1), accepted.node_count);
+    try std.testing.expectEqual(@as(u32, 12), accepted.accepted_mass);
+    try std.testing.expectEqual(@as(usize, 0), accepted.entry_count);
+    try std.testing.expectEqual(@as(u32, 0), accepted.entry_mass);
+
+    var descended = TraverseContext{};
+    try tree.traverse(TraverseContext.onNode, TraverseContext.onEntry, &descended);
+    try std.testing.expectEqual(@as(usize, 5), descended.node_count);
+    try std.testing.expectEqual(@as(usize, 2), descended.entry_count);
+    try std.testing.expectEqual(@as(u32, 12), descended.entry_mass);
+}
+
 fn expectRemove(comptime Coord: type) !void {
     const Model = orthtree.models.MemoryImpl(Coord, 2, u32, MassTrait);
     const TreeType = orthtree.tree.TreeImpl(Model);
@@ -488,6 +543,14 @@ test "OrthTree: visit nodes for u32 coordinates" {
 
 test "OrthTree: visit nodes for f32 coordinates" {
     try expectVisitNodes(f32);
+}
+
+test "OrthTree: traverse for u32 coordinates" {
+    try expectTraverse(u32);
+}
+
+test "OrthTree: traverse for f32 coordinates" {
+    try expectTraverse(f32);
 }
 
 test "OrthTree: remove for u32 coordinates" {
