@@ -4,6 +4,7 @@ const testing = std.testing;
 const page = @import("fullaz").page;
 const bpt_view = @import("fullaz").bpt.models.paged;
 const header = page.header;
+const PackedInt = @import("fullaz").core.packed_int.PackedInt;
 
 const algorithm = @import("fullaz").core.algorithm;
 
@@ -28,6 +29,85 @@ test "Header.View: init creates valid view" {
     _ = view.header();
 }
 
+test "Header.View: additional field" {
+    var buffer: [256]u8 = undefined;
+    @memset(&buffer, 0);
+
+    const Additional = [5]u8;
+
+    const HeaderView = header.ViewImpl(u32, u16, Additional, .little, false);
+    var view = HeaderView.init(&buffer);
+    view.formatPage(42, 123, 8, 16); // kind=42, page_id=123, subhdr_len=8, metadata_len=16
+    //const hdr = view.header();
+    //const add = view.additional();
+    //std.debug.print("Add non void ptr = {any}\n", .{add});
+
+    try testing.expect(HeaderView.header_size - HeaderView.common_size == @sizeOf(Additional));
+}
+
+test "Header.View: common reader uses stored extended header size" {
+    const Additional = extern struct {
+        fsm_page_id: PackedInt(u32, .little),
+        fsm_slot_id: PackedInt(u16, .little),
+    };
+    const ExtendedView = header.ViewImpl(u32, u16, Additional, .little, false);
+    const CommonView = header.View(u32, u16, .little, true);
+
+    var buffer: [256]u8 = undefined;
+    @memset(&buffer, 0);
+
+    var extended = ExtendedView.init(&buffer);
+    extended.formatPage(42, 123, 8, 16);
+    extended.additionalMut().fsm_page_id.set(77);
+    extended.additionalMut().fsm_slot_id.set(3);
+
+    const subheader = extended.subheaderMut();
+    subheader[0] = 0xAA;
+    subheader[7] = 0xBB;
+    const metadata = extended.metadataMut();
+    metadata[0] = 0xCC;
+    metadata[15] = 0xDD;
+
+    const common = CommonView.init(&buffer);
+    try testing.expectEqual(@as(u8, 1), common.header().version.get());
+    try testing.expectEqual(@as(u8, @intCast(ExtendedView.header_size)), common.headerSize());
+    try testing.expectEqual(ExtendedView.header_size, common.headerSize());
+    try testing.expectEqualSlices(u8, &.{ 0xAA, 0, 0, 0, 0, 0, 0, 0xBB }, common.subheader());
+    try testing.expectEqual(@as(usize, 16), common.metadata().len);
+    try testing.expectEqual(@as(u8, 0xCC), common.metadata()[0]);
+    try testing.expectEqual(@as(u8, 0xDD), common.metadata()[15]);
+    try testing.expectEqual(@as(usize, 256 - ExtendedView.header_size - 8 - 16), common.data().len);
+}
+
+test "Header.HeaderImpl keeps version and header size types distinct" {
+    const HeaderT = header.HeaderImpl(u32, u16, u16, u8, void, .little);
+
+    comptime {
+        if (@TypeOf(@as(HeaderT, undefined).version) != PackedInt(u8, .little)) {
+            @compileError("version must use VersionT");
+        }
+        if (@TypeOf(@as(HeaderT, undefined).header_size) != PackedInt(u16, .little)) {
+            @compileError("header_size must use HeaderSizeT");
+        }
+    }
+}
+
+test "Header.View: void field" {
+    var buffer: [256]u8 = undefined;
+    @memset(&buffer, 0);
+
+    const Additional = void;
+
+    const HeaderView = header.ViewImpl(u32, u16, Additional, .little, false);
+    var view = HeaderView.init(&buffer);
+    view.formatPage(42, 123, 8, 16); // kind=42, page_id=123, subhdr_len=8, metadata_len=16
+    //const hdr = view.header();
+    //const add = view.additional();
+    //std.debug.print("Add void ptr = {any}\n", .{add});
+
+    try testing.expect(HeaderView.header_size - HeaderView.common_size == @sizeOf(Additional));
+}
+
 test "Header.View: formatPage sets header fields correctly" {
     var buffer: [256]u8 = undefined;
     @memset(&buffer, 0);
@@ -43,6 +123,8 @@ test "Header.View: formatPage sets header fields correctly" {
     try testing.expectEqual(@as(u16, 8), hdr.subheader_size.get());
     try testing.expectEqual(@as(u16, 16), hdr.metadata_size.get());
     try testing.expectEqual(@as(u16, 256), hdr.page_end.get());
+    try testing.expectEqual(@as(u8, 1), hdr.version.get());
+    try testing.expectEqual(@as(u8, @intCast(HeaderView.header_size)), view.headerSize());
 }
 
 test "Header.View: subheader returns correct slice" {
@@ -116,7 +198,7 @@ test "Header.View: data returns slice after all headers" {
 
     view.formatPage(1, 0, 8, 16);
 
-    const hdr_size = HeaderView.pageHeaderSize();
+    const hdr_size = HeaderView.header_size;
     const all_headers = view.allHeadersSize();
     try testing.expectEqual(hdr_size + 8 + 16, all_headers);
 
