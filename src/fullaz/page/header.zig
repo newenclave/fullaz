@@ -1,7 +1,19 @@
 const std = @import("std");
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
 
-pub fn Header(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian) type {
+pub fn Header(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime Endian: std.builtin.Endian,
+) type {
+    return HeaderImpl(PageIdT, IndexT, Endian);
+}
+
+pub fn HeaderImpl(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime Endian: std.builtin.Endian,
+) type {
     const PageIdType = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const UInt16 = PackedInt(u16, Endian);
