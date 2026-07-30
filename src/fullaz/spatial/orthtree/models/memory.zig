@@ -32,15 +32,21 @@ pub fn MemoryImpl(
     const EntryImpl = struct {
         const Self = @This();
         pub const Box = BoundingBoxT;
-        pub const Value = ValueT;
+        pub const ValueOut = ValueT;
+        pub const ValueBorrow = ValueT;
 
         bbox: Box,
-        data: Value,
+        data: ValueT,
 
-        pub fn getBox(self: *const Self) BoundingBoxT {
+        pub fn box(self: *const Self) BoundingBoxT {
             return self.bbox;
         }
-        pub fn getData(self: *const Self) ValueT {
+
+        pub fn value(self: *const Self) ValueOut {
+            return self.data;
+        }
+
+        pub fn valueBorrow(self: *const Self) ValueBorrow {
             return self.data;
         }
     };
@@ -56,13 +62,181 @@ pub fn MemoryImpl(
         trait: TraitType,
     };
 
+    const EntriesStorage = struct {
+        const Self = @This();
+        pub const Entry = EntryImpl;
+        allocator: std.mem.Allocator,
+        list: EntryList,
+
+        pub const ReadIterator = struct {
+            const Itr = @This();
+            list: *const EntryList,
+            index: usize,
+
+            pub fn init(list: *const EntryList) Itr {
+                return Itr{
+                    .list = list,
+                    .index = 0,
+                };
+            }
+
+            pub fn deinit(self: *Itr) void {
+                _ = self;
+            }
+
+            pub fn next(self: *Itr) ?EntryImpl {
+                if (self.index >= self.list.items.len) {
+                    return null;
+                }
+                const entry = self.list.items[self.index];
+                self.index += 1;
+                return entry;
+            }
+
+            pub fn done(self: *Itr) bool {
+                return self.index >= self.list.items.len;
+            }
+
+            pub fn get(self: *const Itr) ?EntryImpl {
+                if (self.index >= self.list.items.len) {
+                    return null;
+                }
+                return self.list.items[self.index];
+            }
+        };
+
+        pub const Cursor = struct {
+            const CursorSelf = @This();
+
+            storage: *Self,
+            next_index: usize = 0,
+            current_index: ?usize = null,
+
+            pub fn init(storage: *Self) CursorSelf {
+                return .{ .storage = storage };
+            }
+
+            pub fn deinit(self: *CursorSelf) void {
+                _ = self;
+            }
+
+            pub fn next(self: *CursorSelf) ?EntryImpl {
+                if (self.next_index >= self.storage.list.items.len) {
+                    self.current_index = null;
+                    return null;
+                }
+                self.current_index = self.next_index;
+                self.next_index += 1;
+                return self.storage.list.items[self.current_index.?];
+            }
+
+            pub fn removeCurrent(self: *CursorSelf) ErrorSet!ValueT {
+                const index = self.current_index orelse return ErrorSet.OutOfBounds;
+                const entry = self.storage.list.orderedRemove(index);
+                self.next_index = index;
+                self.current_index = null;
+                return entry.data;
+            }
+
+            pub fn moveCurrentTo(self: *CursorSelf, target: *Self) ErrorSet!EntryImpl {
+                const index = self.current_index orelse return ErrorSet.OutOfBounds;
+                const entry = self.storage.list.items[index];
+                try target.append(entry);
+                _ = self.storage.list.orderedRemove(index);
+                self.next_index = index;
+                self.current_index = null;
+                return entry;
+            }
+        };
+
+        fn init(allocator: std.mem.Allocator) ErrorSet!Self {
+            return Self{
+                .allocator = allocator,
+                .list = try EntryList.initCapacity(
+                    allocator,
+                    1,
+                ),
+            };
+        }
+
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.list.deinit(allocator);
+        }
+
+        pub fn readIterator(self: *const Self) ReadIterator {
+            return ReadIterator.init(&self.list);
+        }
+
+        pub fn cursor(self: *Self) Cursor {
+            return Cursor.init(self);
+        }
+
+        fn append(self: *Self, entry: EntryImpl) ErrorSet!void {
+            try self.list.append(self.allocator, entry);
+        }
+    };
+
+    const EntriesWrapper = struct {
+        const Self = @This();
+        pub const Entry = EntryImpl;
+        storage: *const EntriesStorage,
+        pub const Iterator = EntriesStorage.ReadIterator;
+
+        pub fn init(storage: *const EntriesStorage) Self {
+            return Self{
+                .storage = storage,
+            };
+        }
+
+        pub fn size(self: *const Self) usize {
+            return self.storage.list.items.len;
+        }
+
+        pub fn iterator(self: *const Self) Iterator {
+            return self.storage.readIterator();
+        }
+
+        pub fn get(self: *const Self, index: usize) ?EntryImpl {
+            if (index >= self.storage.list.items.len) {
+                return null;
+            }
+            return self.storage.list.items[index];
+        }
+    };
+
+    const EntriesMutWrapper = struct {
+        const Self = @This();
+        storage: *EntriesStorage,
+        pub const Cursor = EntriesStorage.Cursor;
+
+        pub fn init(storage: *EntriesStorage) Self {
+            return .{ .storage = storage };
+        }
+
+        pub fn cursor(self: *Self) Cursor {
+            return self.storage.cursor();
+        }
+
+        pub fn moveCurrentTo(self: *Self, entry_cursor: *Cursor, target: *Self) ErrorSet!EntryImpl {
+            _ = self;
+            return entry_cursor.moveCurrentTo(target.storage);
+        }
+
+        pub fn removeCurrent(self: *Self, entry_cursor: *Cursor) ErrorSet!ValueT {
+            _ = self;
+            return entry_cursor.removeCurrent();
+        }
+    };
+
     const NodeImpl = struct {
         const Self = @This();
         const Children = []IdType;
         pub const Box = BoundingBoxT;
+        pub const Entries = EntriesWrapper;
+        pub const Entry = EntryImpl;
 
         bounds: Box,
-        entries: EntryList,
+        entries: EntriesStorage,
         children: ?Children = null,
         parent: ?IdType = null,
         trait: TraitType,
@@ -71,7 +245,7 @@ pub fn MemoryImpl(
         fn init(bounds: Box, ctx: *Context) ErrorSet!Self {
             return Self{
                 .bounds = bounds,
-                .entries = try EntryList.initCapacity(ctx.allocator, 1),
+                .entries = try EntriesStorage.init(ctx.allocator),
                 .children = null,
                 .parent = null,
                 .trait = ctx.trait,
@@ -82,7 +256,7 @@ pub fn MemoryImpl(
         fn initInPlace(self: *Self, bounds: Box, ctx: *Context) ErrorSet!void {
             self.ctx = ctx;
             self.bounds = bounds;
-            self.entries = try EntryList.initCapacity(ctx.allocator, 1);
+            self.entries = try EntriesStorage.init(ctx.allocator);
             self.children = null;
             self.parent = null;
             self.trait = ctx.trait;
@@ -123,7 +297,7 @@ pub fn MemoryImpl(
 
         // entries count
         pub fn size(self: *const Self) usize {
-            return self.node.entries.items.len;
+            return self.node.entries.list.items.len;
         }
 
         pub fn isLeaf(self: *const Self) bool {
@@ -143,11 +317,24 @@ pub fn MemoryImpl(
             return null;
         }
 
+        pub fn entries(self: *const Self) ErrorSet!EntriesWrapper {
+            return EntriesWrapper.init(&self.node.entries);
+        }
+
+        pub fn entriesMut(self: *Self) ErrorSet!EntriesMutWrapper {
+            return EntriesMutWrapper.init(&self.node.entries);
+        }
+
+        pub fn deinitEntries(self: *const Self, ent: anytype) void {
+            _ = self;
+            _ = ent;
+        }
+
         pub fn getEntry(self: *const Self, index: usize) ErrorSet!EntryImpl {
-            if (index >= self.node.entries.items.len) {
+            if (index >= self.node.entries.list.items.len) {
                 return ErrorSet.OutOfBounds;
             }
-            return self.node.entries.items[index];
+            return self.node.entries.list.items[index];
         }
 
         pub fn beforeSplit(self: *Self) ErrorSet!void {
@@ -155,18 +342,18 @@ pub fn MemoryImpl(
         }
 
         pub fn moveEntryTo(self: *Self, index: usize, target: *Self) ErrorSet!void {
-            if (index >= self.node.entries.items.len) {
+            if (index >= self.node.entries.list.items.len) {
                 return ErrorSet.OutOfBounds;
             }
-            const entry = self.node.entries.items[index];
-            try target.node.entries.append(target.node.ctx.allocator, entry);
-            _ = self.node.entries.orderedRemove(index);
+            const entry = self.node.entries.list.items[index];
+            try target.node.entries.append(entry);
+            _ = self.node.entries.list.orderedRemove(index);
         }
 
         pub fn canInsertEntry(self: *const Self, box: Box, value: ValueT) bool {
             _ = box;
             _ = value;
-            return self.node.entries.items.len < self.node.ctx.max_leaf_entries;
+            return self.node.entries.list.items.len < self.node.ctx.max_leaf_entries;
         }
 
         pub fn canSplit(self: *const Self) bool {
@@ -195,14 +382,14 @@ pub fn MemoryImpl(
                 .bbox = box,
                 .data = value,
             };
-            try self.node.entries.append(self.node.ctx.allocator, entry);
+            try self.node.entries.append(entry);
         }
 
         pub fn removeEntry(self: *Self, index: usize) ErrorSet!ValueT {
-            if (index >= self.node.entries.items.len) {
+            if (index >= self.node.entries.list.items.len) {
                 return ErrorSet.OutOfBounds;
             }
-            return self.node.entries.orderedRemove(index).data;
+            return self.node.entries.list.orderedRemove(index).data;
         }
 
         pub fn setChild(self: *Self, index: usize, child_id: Id) ErrorSet!void {
@@ -401,6 +588,12 @@ pub fn MemoryImpl(
         pub fn onGrow(self: *Self, node: *Node, new_node: *Node) ErrorSet!void {
             _ = self;
             try new_node.node.trait.onGrow(&node.node.trait);
+        }
+
+        pub fn onAdopt(self: *Self, src: *Node, target: *Node, box: Box, value: ValueIn) ErrorSet!void {
+            _ = self;
+            _ = src;
+            try target.node.trait.onAdopt(box, value);
         }
 
         pub fn onRemove(self: *Self, node: *Node, box: Box, value: ValueIn) ErrorSet!void {

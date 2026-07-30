@@ -26,6 +26,11 @@ fn MassTrait(comptime Coord: type, comptime dimension: usize, comptime Value: ty
             self.mass = old.mass;
         }
 
+        pub fn onAdopt(self: *Self, box: anytype, value: Value) Error!void {
+            _ = box;
+            self.mass += value;
+        }
+
         pub fn onRemove(self: *Self, box: anytype, value: Value) Error!void {
             _ = box;
             self.mass -= value;
@@ -101,7 +106,7 @@ fn expectSplitNode(comptime Coord: type) !void {
     defer acc.deinitNode(&parent);
     try std.testing.expect(!parent.isLeaf());
     try std.testing.expectEqual(@as(usize, 1), parent.size());
-    try std.testing.expect(std.meta.eql(entries[4], (try parent.getEntry(0)).getBox()));
+    try std.testing.expect(std.meta.eql(entries[4], (try parent.getEntry(0)).box()));
 
     inline for (0..TreeType.child_count) |i| {
         const child_id = parent.getChild(i).?;
@@ -112,7 +117,43 @@ fn expectSplitNode(comptime Coord: type) !void {
         try std.testing.expectEqual(parent_id, (try child.getParent()).?);
         try std.testing.expect(std.meta.eql(TreeType.childBounds(&parent_bounds, i), child.bounds()));
         try std.testing.expectEqual(@as(usize, 1), child.size());
-        try std.testing.expect(std.meta.eql(entries[i], (try child.getEntry(0)).getBox()));
+        try std.testing.expect(std.meta.eql(entries[i], (try child.getEntry(0)).box()));
+    }
+}
+
+fn expectSplitAdoptsEntries(comptime Coord: type) !void {
+    const Model = orthtree.models.MemoryImpl(Coord, 2, u32, MassTrait);
+    const TreeType = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+
+    var model = try Model.init(std.testing.allocator, 8);
+    defer model.deinit();
+
+    var tree = TreeType.init(&model);
+    const acc = model.getAccessor();
+    var parent = try acc.createNode(Box.create(.{ 0, 0 }, .{ 10, 10 }));
+    defer acc.deinitNode(&parent);
+    const entries = [_]Box{
+        Box.create(.{ 1, 1 }, .{ 2, 2 }),
+        Box.create(.{ 6, 1 }, .{ 7, 2 }),
+        Box.create(.{ 1, 6 }, .{ 2, 7 }),
+        Box.create(.{ 6, 6 }, .{ 7, 7 }),
+    };
+
+    inline for (entries, 0..) |entry_box, i| {
+        const value: u32 = @intCast(i + 1);
+        try parent.addEntry(entry_box, value);
+        try model.onInsert(&parent, entry_box, value);
+    }
+    try tree.splitNode(&parent);
+
+    try std.testing.expectEqual(@as(u32, 10), parent.getTrait().mass);
+    try std.testing.expectEqual(@as(usize, 0), parent.size());
+    inline for (0..TreeType.child_count) |i| {
+        var child = try acc.loadNode(parent.getChild(i).?);
+        defer acc.deinitNode(&child);
+        try std.testing.expectEqual(@as(u32, @intCast(i + 1)), child.getTrait().mass);
+        try std.testing.expectEqual(@as(usize, 1), child.size());
     }
 }
 
@@ -137,14 +178,14 @@ fn expectInsert(comptime Coord: type) !void {
     defer acc.deinitNode(&root);
     try std.testing.expect(!root.isLeaf());
     try std.testing.expectEqual(@as(usize, 1), root.size());
-    try std.testing.expect(std.meta.eql(first, (try root.getEntry(0)).getBox()));
+    try std.testing.expect(std.meta.eql(first, (try root.getEntry(0)).box()));
 
     const child_id = root.getChild(0).?;
     var child = try acc.loadNode(child_id);
     defer acc.deinitNode(&child);
     try std.testing.expectEqual(root_id, (try child.getParent()).?);
     try std.testing.expectEqual(@as(usize, 1), child.size());
-    try std.testing.expect(std.meta.eql(second, (try child.getEntry(0)).getBox()));
+    try std.testing.expect(std.meta.eql(second, (try child.getEntry(0)).box()));
 }
 
 fn expectInsertGrowsRoot(comptime Coord: type) !void {
@@ -174,12 +215,12 @@ fn expectInsertGrowsRoot(comptime Coord: type) !void {
     defer acc.deinitNode(&old_root);
     try std.testing.expectEqual(root_id, (try old_root.getParent()).?);
     try std.testing.expectEqual(@as(usize, 1), old_root.size());
-    try std.testing.expect(std.meta.eql(first, (try old_root.getEntry(0)).getBox()));
+    try std.testing.expect(std.meta.eql(first, (try old_root.getEntry(0)).box()));
 
     var new_entry_child = try acc.loadNode(root.getChild(3).?);
     defer acc.deinitNode(&new_entry_child);
     try std.testing.expectEqual(@as(usize, 1), new_entry_child.size());
-    try std.testing.expect(std.meta.eql(second, (try new_entry_child.getEntry(0)).getBox()));
+    try std.testing.expect(std.meta.eql(second, (try new_entry_child.getEntry(0)).box()));
 }
 
 fn expectQuery(comptime Coord: type) !void {
@@ -341,6 +382,7 @@ fn expectTraverse(comptime Coord: type) !void {
     const Trait = MassTrait(Coord, 2, u32);
     const TraverseContext = struct {
         accept_root: bool = false,
+        skip_root: bool = false,
         node_count: usize = 0,
         entry_count: usize = 0,
         accepted_mass: u32 = 0,
@@ -358,6 +400,9 @@ fn expectTraverse(comptime Coord: type) !void {
                 ctx.accepted_mass += trait.mass;
                 return .accept;
             }
+            if (ctx.skip_root) {
+                return .skip;
+            }
             return .descend;
         }
 
@@ -366,6 +411,14 @@ fn expectTraverse(comptime Coord: type) !void {
             ctx.entry_mass += value;
         }
     };
+
+    var empty_model = try Model.init(std.testing.allocator, 1);
+    defer empty_model.deinit();
+    var empty_tree = TreeType.init(&empty_model);
+    var empty = TraverseContext{};
+    try empty_tree.traverse(TraverseContext.onNode, TraverseContext.onEntry, &empty);
+    try std.testing.expectEqual(@as(usize, 0), empty.node_count);
+    try std.testing.expectEqual(@as(usize, 0), empty.entry_count);
 
     var model = try Model.init(std.testing.allocator, 1);
     defer model.deinit();
@@ -387,6 +440,51 @@ fn expectTraverse(comptime Coord: type) !void {
     try std.testing.expectEqual(@as(usize, 5), descended.node_count);
     try std.testing.expectEqual(@as(usize, 2), descended.entry_count);
     try std.testing.expectEqual(@as(u32, 12), descended.entry_mass);
+
+    var skipped = TraverseContext{ .skip_root = true };
+    try tree.traverse(TraverseContext.onNode, TraverseContext.onEntry, &skipped);
+    try std.testing.expectEqual(@as(usize, 1), skipped.node_count);
+    try std.testing.expectEqual(@as(usize, 0), skipped.entry_count);
+    try std.testing.expectEqual(@as(u32, 0), skipped.entry_mass);
+}
+
+fn expectEntryCursor(comptime Coord: type) !void {
+    const Model = orthtree.models.Memory(Coord, 2, u32);
+    const Box = Model.Box;
+
+    var model = try Model.init(std.testing.allocator, 8);
+    defer model.deinit();
+
+    const acc = model.getAccessor();
+    var source = try acc.createNode(Box.create(.{ 0, 0 }, .{ 10, 10 }));
+    defer acc.deinitNode(&source);
+    var target = try acc.createNode(Box.create(.{ 0, 0 }, .{ 10, 10 }));
+    defer acc.deinitNode(&target);
+
+    try source.addEntry(Box.create(.{ 1, 1 }, .{ 2, 2 }), 1);
+    try source.addEntry(Box.create(.{ 3, 3 }, .{ 4, 4 }), 2);
+    try source.addEntry(Box.create(.{ 5, 5 }, .{ 6, 6 }), 3);
+
+    var source_entries = try source.entriesMut();
+    defer source.deinitEntries(&source_entries);
+    var cursor = source_entries.cursor();
+    defer cursor.deinit();
+
+    try std.testing.expectEqual(@as(u32, 1), cursor.next().?.value());
+    try std.testing.expectEqual(@as(u32, 1), try source_entries.removeCurrent(&cursor));
+
+    try std.testing.expectEqual(@as(u32, 2), cursor.next().?.value());
+    var target_entries = try target.entriesMut();
+    defer target.deinitEntries(&target_entries);
+    const moved = try source_entries.moveCurrentTo(&cursor, &target_entries);
+    try std.testing.expectEqual(@as(u32, 2), moved.value());
+
+    try std.testing.expectEqual(@as(u32, 3), cursor.next().?.value());
+    try std.testing.expect(cursor.next() == null);
+    try std.testing.expectEqual(@as(usize, 1), source.size());
+    try std.testing.expectEqual(@as(usize, 1), target.size());
+    try std.testing.expectEqual(@as(u32, 3), (try source.getEntry(0)).value());
+    try std.testing.expectEqual(@as(u32, 2), (try target.getEntry(0)).value());
 }
 
 fn expectRemove(comptime Coord: type) !void {
@@ -505,6 +603,14 @@ test "OrthTree: split node for f32" {
     try expectSplitNode(f32);
 }
 
+test "OrthTree: split adopts entries for u32 coordinates" {
+    try expectSplitAdoptsEntries(u32);
+}
+
+test "OrthTree: split adopts entries for f32 coordinates" {
+    try expectSplitAdoptsEntries(f32);
+}
+
 test "OrthTree: insert for u32" {
     try expectInsert(u32);
 }
@@ -551,6 +657,14 @@ test "OrthTree: traverse for u32 coordinates" {
 
 test "OrthTree: traverse for f32 coordinates" {
     try expectTraverse(f32);
+}
+
+test "OrthTree: entry cursor for u32 coordinates" {
+    try expectEntryCursor(u32);
+}
+
+test "OrthTree: entry cursor for f32 coordinates" {
+    try expectEntryCursor(f32);
 }
 
 test "OrthTree: remove for u32 coordinates" {

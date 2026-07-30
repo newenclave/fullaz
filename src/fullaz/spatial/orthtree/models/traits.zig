@@ -25,6 +25,12 @@ pub fn Empty(comptime T: type, comptime dimention: usize, comptime ValueT: type)
             _ = old;
         }
 
+        pub fn onAdopt(self: *Self, box: Box, value: ValueT) Self.Error!void {
+            _ = self;
+            _ = box;
+            _ = value;
+        }
+
         pub fn onRemove(self: *Self, box: Box, value: ValueT) Self.Error!void {
             _ = self;
             _ = box;

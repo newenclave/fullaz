@@ -40,13 +40,16 @@ pub fn assertNode(comptime N: type) void {
 
 pub fn assertEntry(comptime E: type) void {
     requiresTypeDeclaration(E, "Box");
-    requiresTypeDeclaration(E, "Value");
+    requiresTypeDeclaration(E, "ValueOut");
+    requiresTypeDeclaration(E, "ValueBorrow");
 
     const Box = E.Box;
-    const Value = E.Value;
+    const ValueOut = E.ValueOut;
+    const ValueBorrow = E.ValueBorrow;
 
-    requiresFnSignature(E, "getBox", fn (*const E) Box);
-    requiresFnSignature(E, "getData", fn (*const E) Value);
+    requiresFnSignature(E, "box", fn (*const E) Box);
+    requiresFnSignature(E, "value", fn (*const E) ValueOut);
+    requiresFnSignature(E, "valueBorrow", fn (*const E) ValueBorrow);
 }
 
 pub fn assertAccessor(comptime A: type) void {
