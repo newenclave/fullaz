@@ -2,7 +2,13 @@ const std = @import("std");
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
 const PageViewType = @import("header.zig").View;
 
-pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Subheader: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+pub fn View(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime Subheader: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
     return struct {
         const Self = @This();
         const DataType = if (read_only) []const u8 else []u8;
@@ -29,7 +35,12 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Subheader: t
         }
 
         pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) void {
-            self.page_view.formatPage(kind, page_id, @as(IndexT, @intCast(@sizeOf(Subheader))), metadata_len);
+            self.page_view.formatPage(
+                kind,
+                page_id,
+                @as(IndexT, @intCast(@sizeOf(Subheader))),
+                metadata_len,
+            );
         }
 
         pub fn subheader(self: *const Self) *const Subheader {

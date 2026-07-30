@@ -1,7 +1,12 @@
 const errors = @import("../../core/errors.zig");
 
 // TODO: This is a very temporary implementation. Link must not contain the data size.
-pub fn LinkView(comptime PageId: type, comptime Index: type, comptime LinkHeader: type, comptime read_only: bool) type {
+pub fn LinkView(
+    comptime PageId: type,
+    comptime Index: type,
+    comptime LinkHeader: type,
+    comptime read_only: bool,
+) type {
     const FldPtr = if (read_only) *const LinkHeader else *LinkHeader;
     return struct {
         const Self = @This();

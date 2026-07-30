@@ -4,7 +4,22 @@ const errors = core.errors;
 
 const PackedInt = core.packed_int.PackedInt;
 
+pub const AvailableStatusEnum = enum {
+    enough,
+    need_compact,
+    not_enough,
+};
+
 pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+    return VariadicImpl(T, Endian, read_only, 1);
+}
+
+pub fn VariadicImpl(
+    comptime T: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+    comptime align_value: T,
+) type {
     const IndexType = PackedInt(T, Endian);
     const Magic = PackedInt(u16, Endian);
 
@@ -48,11 +63,7 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
 
         pub const Error = errors.SlotsError;
 
-        pub const AvailableStatus = enum {
-            enough,
-            need_compact,
-            not_enough,
-        };
+        pub const AvailableStatus = AvailableStatusEnum;
 
         body: BufferType,
 
@@ -72,7 +83,11 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
             var header = self.headerMut();
             header.entry_count.set(0);
             header.free_begin.set(@intCast(@sizeOf(Header)));
-            header.free_end.set(@intCast(self.body.len));
+            if (align_value > 1) {
+                header.free_end.set(core.memory.alignDown(T, @intCast(self.body.len), align_value));
+            } else {
+                header.free_end.set(@intCast(self.body.len));
+            }
             header.freed.set(0);
         }
 
@@ -443,7 +458,15 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         pub fn fixLength(_: Self, len: T) T {
-            return if (len < @sizeOf(FreedEntry)) @sizeOf(FreedEntry) else len;
+            if (align_value > 1) {
+                return core.memory.alignUp(
+                    T,
+                    if (len < @sizeOf(FreedEntry)) @sizeOf(FreedEntry) else len,
+                    align_value,
+                );
+            } else {
+                return if (len < @sizeOf(FreedEntry)) @sizeOf(FreedEntry) else len;
+            }
         }
 
         pub fn headerConst(self: *const Self) *const Header {
@@ -660,7 +683,9 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
         }
 
         fn popFreeSlot(self: *Self, fs: *const FreedEntry) void {
-            if (read_only) @compileError("Cannot pop free slot from const buffer");
+            if (read_only) {
+                @compileError("Cannot pop free slot from const buffer");
+            }
             var hdr = self.headerMut();
             const prev = fs.prev.get();
             const next = fs.next.get();
@@ -688,7 +713,10 @@ pub fn Variadic(comptime T: type, comptime Endian: std.builtin.Endian, comptime 
                 const current_ptr: *const FreedEntry = @ptrCast(&self.body[@intCast(current_offset)]);
                 const current_len = current_ptr.length.get();
                 if (current_len >= fixed_len) {
-                    return .{ .ptr = current_ptr, .offset = current_offset };
+                    return .{
+                        .ptr = current_ptr,
+                        .offset = current_offset,
+                    };
                 }
                 current_offset = current_ptr.next.get();
             }

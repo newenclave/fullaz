@@ -21,3 +21,11 @@ pub fn sliceAligned(comptime T: type, buf: []u8, n: usize) ?[]T {
     const p_t: [*]T = @ptrCast(@alignCast(p_aligned));
     return p_t[0..n];
 }
+
+pub fn alignUp(comptime T: type, value: T, al: T) T {
+    return (value + (al - 1)) & ~(al - 1);
+}
+
+pub fn alignDown(comptime T: type, value: T, al: T) T {
+    return value & ~(al - 1);
+}

@@ -10,7 +10,13 @@ const conracts = @import("../../contracts/contracts.zig");
 
 const LinkImpl = @import("../links/link_view.zig").LinkView;
 
-pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+pub fn View(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime SizeT: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
     const SubheadersType = headers.ChainStore(PageIdT, IndexT, SizeT, Endian);
     const PageId = PageIdT;
     const Index = IndexT;
