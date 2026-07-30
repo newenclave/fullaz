@@ -15,8 +15,8 @@ pub fn LinkedSubheader(
 
     const SubheaderImpl = extern struct {
         const Self = @This();
-        fwd: PageIdPacked,
         back: PageIdPacked,
+        fwd: PageIdPacked,
         subheader: SubheaderType,
 
         pub fn format(self: *Self) void {
@@ -38,12 +38,14 @@ pub fn View(
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
-    const LinkedSubheaderType = LinkedSubheader(PageIdT, Subheader, Endian);
+    const LinkedSubheaderType = LinkedSubheader(PageIdT, Subheader, Endian).Subheader;
 
     return struct {
         const Self = @This();
 
         const DataType = if (read_only) []const u8 else []u8;
+
+        pub const has_subheader = (@TypeOf(Subheader) != void);
 
         pub const PageView = PageViewType(PageIdT, IndexT, Endian, read_only);
         pub const linked_subheader_size = @sizeOf(LinkedSubheaderType);
@@ -120,11 +122,17 @@ pub fn View(
         }
 
         pub fn subheader(self: *const Self) *const Subheader {
+            if (!Self.has_subheader) {
+                @compileError("Subheader type is void, cannot get subheader");
+            }
             const linked = self.linkedSubheader();
             return &linked.subheader;
         }
 
         pub fn subheaderMut(self: *Self) *Subheader {
+            if (!Self.has_subheader) {
+                @compileError("Subheader type is void, cannot get subheader");
+            }
             if (read_only) {
                 @compileError("Cannot get mutable subheader from a read-only page");
             }
