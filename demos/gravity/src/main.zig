@@ -146,13 +146,13 @@ fn render(
     }
 
     const bounds = simulation.tree.bounds().?;
-    try out.print("Barnes-Hut galaxy | {s} | step {d} | bodies {d} | nodes {d}\x1b[K\n", .{
+    try out.print("Barnes-Hut galaxy | {s} | step {d} | bodies {d} | nodes {d}\x1b[K\r\n", .{
         if (running) "RUNNING" else "PAUSED",
         step,
         bodies.len,
         try simulation.nodeCount(),
     });
-    try out.print("theta={d:.3} dt={d:.4} root=[{d:.1},{d:.1}]-[{d:.1},{d:.1}]\x1b[K\n", .{
+    try out.print("theta={d:.3} dt={d:.4} root=[{d:.1},{d:.1}]-[{d:.1},{d:.1}]\x1b[K\r\n", .{
         config.theta,
         config.time_step,
         bounds.low[0],
@@ -163,7 +163,7 @@ fn render(
     try out.writeAll("Space run/pause | n step | g jump | q quit");
     if (jump_input.len > 0) try out.print(" | jump steps: {s}", .{jump_input});
     if (status.len > 0) try out.print(" | {s}", .{status});
-    try out.writeAll("\x1b[K\n");
+    try out.writeAll("\x1b[K\r\n");
 
     for (0..height) |row| {
         for (0..width) |column| {
@@ -178,7 +178,7 @@ fn render(
             try out.writeAll(glyph(density[index], central[index]));
             if (central[index] or density[index] != 0) try out.writeAll("\x1b[0m");
         }
-        if (row + 1 < height) try out.writeByte('\n');
+        if (row + 1 < height) try out.writeAll("\r\n");
     }
     try out.flush();
 }

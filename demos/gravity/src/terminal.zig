@@ -69,7 +69,7 @@ pub fn home(writer: *Io.Writer) Io.Writer.Error!void {
 }
 
 pub fn restore(writer: *Io.Writer) void {
-    writer.writeAll("\x1b[0m\x1b[?25h\n") catch {};
+    writer.writeAll("\x1b[0m\x1b[?25h\r\n") catch {};
     writer.flush() catch {};
 }
 
@@ -90,8 +90,8 @@ pub fn pollByte() ?u8 {
 
     var fds = [_]std.posix.pollfd{.{
         .fd = Io.File.stdin().handle,
-        .events = .{ .IN = true },
-        .revents = .{},
+        .events = std.posix.POLL.IN,
+        .revents = 0,
     }};
     const count = std.posix.poll(&fds, 0) catch return null;
     if (count == 0) return null;
