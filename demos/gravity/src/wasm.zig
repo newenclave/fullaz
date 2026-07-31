@@ -93,7 +93,13 @@ fn refreshRegions() void {
     const Context = struct {
         target: gravity.Body,
 
-        fn onNode(ctx: *@This(), _: usize, bounds: gravity.Box, trait: *const gravity.Trait, _: bool) !fullaz.spatial.orthtree.tree.TraverseDecision {
+        fn onNode(
+            ctx: *@This(),
+            _: usize,
+            bounds: gravity.Box,
+            trait: *const gravity.Trait,
+            _: bool,
+        ) !fullaz.spatial.orthtree.tree.TraverseDecision {
             const data = trait.data;
             if (data.total_mass == 0) return .descend;
 
