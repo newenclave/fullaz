@@ -22,6 +22,7 @@ pub fn MemoryImpl(
     const TraitType = TraitT(T, dimention, ValueT);
     const BoundingBoxT = BoundingBox(T, dimention);
     const child_count = 1 << dimention;
+    const max_tree_depth = 32;
 
     const ErrorSet = std.mem.Allocator.Error ||
         TraitType.Error ||
@@ -239,6 +240,7 @@ pub fn MemoryImpl(
         entries: EntriesStorage,
         children: ?Children = null,
         parent: ?IdType = null,
+        level: usize = 0,
         trait: TraitType,
         ctx: *Context,
 
@@ -259,6 +261,7 @@ pub fn MemoryImpl(
             self.entries = try EntriesStorage.init(ctx.allocator);
             self.children = null;
             self.parent = null;
+            self.level = 0;
             self.trait = ctx.trait;
         }
 
@@ -357,8 +360,7 @@ pub fn MemoryImpl(
         }
 
         pub fn canSplit(self: *const Self) bool {
-            _ = self;
-            return true; // TODO: need to calculate minimum bounding box
+            return self.node.level < max_tree_depth;
         }
 
         pub fn setLevel(self: *Self, level: usize) void {

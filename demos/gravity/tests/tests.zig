@@ -103,3 +103,13 @@ test "gravity: default galaxy builds an orthtree" {
     try std.testing.expectEqual(@as(usize, 301), try simulation.model.getEntriesCount());
     try std.testing.expect(try simulation.nodeCount() > 1);
 }
+
+test "gravity: ten thousand bodies advance twenty steps" {
+    var bodies = try gravity.makeGalaxy(std.testing.allocator, .{ .body_count = 10_000 });
+    defer bodies.deinit(std.testing.allocator);
+    var simulation = try gravity.Simulation.init(std.testing.allocator, bodies.items);
+    defer simulation.deinit();
+
+    for (0..20) |_| try simulation.advance(bodies.items, .{ .time_step = 0.002 });
+    try std.testing.expectEqual(@as(usize, 10_001), try simulation.model.getEntriesCount());
+}

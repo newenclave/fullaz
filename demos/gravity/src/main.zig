@@ -8,7 +8,7 @@ const Io = std.Io;
 const Options = struct {
     body_count: usize = 300,
     theta: f64 = 0.5,
-    time_step: f64 = 0.01,
+    time_step: f64 = 0.002,
     seed: u64 = 42,
     central_mass: f64 = 100_000_000.0,
 };

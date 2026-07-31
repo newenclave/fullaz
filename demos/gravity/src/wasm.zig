@@ -9,7 +9,7 @@ pub const panic = std.debug.FullPanic(struct {
 }.f);
 
 const allocator = std.heap.wasm_allocator;
-const max_bodies = 1_001;
+const max_bodies = 100_001;
 const max_regions = 512;
 
 var bodies: std.ArrayList(gravity.Body) = .empty;

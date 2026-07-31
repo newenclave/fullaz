@@ -148,7 +148,12 @@ pub fn directAcceleration(bodies: []const Body, target: Body, config: Config) Po
     var result: Point = .{ 0, 0 };
     for (bodies) |source| {
         if (source.id == target.id) continue;
-        const acceleration = accelerationFromMass(target, source.position, source.mass, config);
+        const acceleration = accelerationFromMass(
+            target,
+            source.position,
+            source.mass,
+            config,
+        );
         result[0] += acceleration[0];
         result[1] += acceleration[1];
     }
@@ -173,7 +178,12 @@ pub fn barnesHutAcceleration(tree: *const Tree, target: Body, config: Config) !P
             const target_bounds = bodyBounds(ctx.target);
 
             if (!bounds.containsBox(&target_bounds) and distance != 0 and width / distance < ctx.config.theta) {
-                const acceleration = accelerationFromMass(ctx.target, center, data.total_mass, ctx.config);
+                const acceleration = accelerationFromMass(
+                    ctx.target,
+                    center,
+                    data.total_mass,
+                    ctx.config,
+                );
                 ctx.acceleration[0] += acceleration[0];
                 ctx.acceleration[1] += acceleration[1];
                 return .accept;
@@ -183,7 +193,12 @@ pub fn barnesHutAcceleration(tree: *const Tree, target: Body, config: Config) !P
 
         fn onEntry(ctx: *@This(), _: Box, body: Body) !void {
             if (body.id == ctx.target.id) return;
-            const acceleration = accelerationFromMass(ctx.target, body.position, body.mass, ctx.config);
+            const acceleration = accelerationFromMass(
+                ctx.target,
+                body.position,
+                body.mass,
+                ctx.config,
+            );
             ctx.acceleration[0] += acceleration[0];
             ctx.acceleration[1] += acceleration[1];
         }
@@ -230,7 +245,7 @@ pub const Simulation = struct {
         errdefer new_model.deinit();
 
         var new_tree = Tree.init(new_model);
-        try new_tree.initRootBounds(initial_bounds);
+        try new_tree.initRootBounds(try boundsForBodies(bodies));
         for (bodies) |body| try new_tree.insert(bodyBounds(body), body);
 
         const old_model = self.model;
@@ -271,7 +286,32 @@ pub const Simulation = struct {
     }
 
     fn populate(self: *Self, bodies: []const Body) !void {
-        try self.tree.initRootBounds(initial_bounds);
+        try self.tree.initRootBounds(try boundsForBodies(bodies));
         for (bodies) |body| try self.tree.insert(bodyBounds(body), body);
+    }
+
+    fn boundsForBodies(bodies: []const Body) !Box {
+        if (bodies.len == 0) return initial_bounds;
+
+        var low = bodies[0].position;
+        var high = low;
+        inline for (0..2) |axis| {
+            if (!std.math.isFinite(low[axis])) return error.InvalidId;
+        }
+        for (bodies[1..]) |body| {
+            inline for (0..2) |axis| {
+                if (!std.math.isFinite(body.position[axis])) return error.InvalidId;
+                low[axis] = @min(low[axis], body.position[axis]);
+                high[axis] = @max(high[axis], body.position[axis]);
+            }
+        }
+
+        const span = @max(@max(high[0] - low[0], high[1] - low[1]), 20.0);
+        const padding = span * 0.1;
+        const center: Point = .{ (low[0] + high[0]) / 2, (low[1] + high[1]) / 2 };
+        return Box.create(
+            .{ center[0] - span / 2 - padding, center[1] - span / 2 - padding },
+            .{ center[0] + span / 2 + padding, center[1] + span / 2 + padding },
+        );
     }
 };

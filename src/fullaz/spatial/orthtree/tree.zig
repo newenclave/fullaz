@@ -226,6 +226,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
                 var child_node = try acc.loadNode(child_id);
                 defer acc.deinitNode(&child_node);
                 try child_node.setParent(parent_id);
+                child_node.setLevel(node.getLevel() + 1);
             }
 
             var entries = try node.entriesMut();
