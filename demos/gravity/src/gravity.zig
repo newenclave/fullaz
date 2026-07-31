@@ -22,6 +22,7 @@ pub const Config = struct {
 pub const GalaxyOptions = struct {
     body_count: usize = 300,
     seed: u64 = 42,
+    central_mass: f64 = 100_000_000.0,
 };
 
 pub const MassData = struct {
@@ -98,7 +99,7 @@ pub fn makeGalaxy(allocator: std.mem.Allocator, options: GalaxyOptions) !std.Arr
 
     try bodies.append(allocator, .{
         .position = .{ 0, 0 },
-        .mass = 100_000_000.0,
+        .mass = options.central_mass,
         .id = 0,
     });
 
@@ -119,7 +120,7 @@ pub fn makeGalaxy(allocator: std.mem.Allocator, options: GalaxyOptions) !std.Arr
             1.40 + random.float(f64) * 3.60
         else
             8.0 + random.float(f64) * 12.0;
-        const speed = @sqrt(100_000_000.0 / radius) * velocity_factor;
+        const speed = @sqrt(options.central_mass / radius) * velocity_factor;
         try bodies.append(allocator, .{
             .position = .{ @cos(angle) * radius, @sin(angle) * radius },
             .velocity = .{ -@sin(angle) * speed, @cos(angle) * speed },

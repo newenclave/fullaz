@@ -10,14 +10,30 @@
   canvas { display: block; width: 100vw; height: 100vh; }
   #hud { position: fixed; inset: 16px auto auto 16px; white-space: pre; pointer-events: none; text-shadow: 0 2px 8px #000; }
   #hud b { color: #83d8ff; }
-  #controls { position: fixed; inset: auto 16px 16px 16px; display: flex; align-items: center; gap: 10px; }
+  #controls { position: fixed; inset: auto 16px 16px 16px; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px;
+    padding: 10px 12px; background: rgba(8, 13, 23, .88); border: 1px solid #263a55; border-radius: 9px; backdrop-filter: blur(8px); }
   button, input { color: inherit; font: inherit; }
   button { background: #162033; border: 1px solid #314866; border-radius: 5px; padding: 6px 11px; cursor: pointer; }
   button:hover { border-color: #83d8ff; }
-  input { width: 72px; background: #0f1726; border: 1px solid #314866; border-radius: 4px; padding: 5px; }
-  .hint { color: #72819a; margin-left: auto; }
+  input:not([type="checkbox"]):not([type="range"]) { width: 78px; background: #0f1726; border: 1px solid #314866; border-radius: 4px; padding: 5px; }
+  #central-mass { width: 116px; }
+  .actions { display: flex; gap: 7px; }
+  .field { display: grid; gap: 3px; color: #9aabc2; font-size: 11px; white-space: nowrap; }
+  .field > span { color: #7f94b0; }
+  .speed-row { display: flex; align-items: center; gap: 7px; height: 29px; }
+  #speed { width: 94px; accent-color: #248cff; }
+  output { min-width: 38px; color: #dbeafe; }
+  .toggles { display: flex; gap: 12px; padding: 6px 0 5px; color: #b8c8dc; white-space: nowrap; }
+  .toggles label { display: flex; align-items: center; gap: 6px; }
+  .toggles input { margin: 0; accent-color: #248cff; }
+  .hint { flex: 1 1 240px; min-width: 180px; padding-bottom: 5px; color: #72819a; }
   #legend { position: fixed; inset: 16px 16px auto auto; display: grid; gap: 4px; color: #9aabc2; }
   .star { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; vertical-align: -1px; }
+  @media (max-width: 900px) {
+    #controls { inset: auto 8px 8px 8px; gap: 8px 10px; }
+    .hint { display: none; }
+    #legend { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -30,17 +46,23 @@
   <span><i class="star" style="background:#ff6b4a"></i>supergiant</span>
 </div>
 <div id="controls">
-  <button id="toggle">pause</button><button id="step">step</button><button id="reset">new galaxy</button>
-  <label>bodies <input id="bodies" type="number" min="1" max="1000" value="300"></label>
-  <label>theta <input id="theta" type="number" min="0.01" step="0.05" value="0.5"></label>
-  <label>speed <input id="speed" type="range" min="0" max="20" step="0.5" value="5"><output id="speed-value">5.0/s</output></label>
-  <label><input id="regions" type="checkbox" checked> aggregate regions</label>
+  <div class="actions"><button id="toggle">pause</button><button id="step">step</button><button id="reset">new galaxy</button></div>
+  <label class="field"><span>bodies</span><input id="bodies" type="number" min="1" max="1000" value="300"></label>
+  <label class="field"><span>central mass</span><input id="central-mass" type="number" min="1" step="1000000" value="100000000"></label>
+  <label class="field"><span>theta</span><input id="theta" type="number" min="0.01" step="0.05" value="0.5"></label>
+  <label class="field"><span>speed</span><span class="speed-row"><input id="speed" type="range" min="0" max="20" step="0.5" value="5"><output id="speed-value">5.0/s</output></span></label>
+  <div class="toggles">
+    <label><input id="lock-camera" type="checkbox" checked> lock central star</label>
+    <label><input id="regions" type="checkbox" checked> aggregate regions</label>
+  </div>
   <span class="hint">Space pause/run · N step · amber: aggregates for body #1</span>
 </div>
 <script>
 const canvas = document.querySelector("canvas"), ctx = canvas.getContext("2d"), hud = document.querySelector("#hud");
 const toggle = document.querySelector("#toggle"), bodiesInput = document.querySelector("#bodies"), thetaInput = document.querySelector("#theta");
+const centralMassInput = document.querySelector("#central-mass");
 const speedInput = document.querySelector("#speed"), speedValue = document.querySelector("#speed-value"), regionsInput = document.querySelector("#regions");
+const lockCameraInput = document.querySelector("#lock-camera");
 let wasm, running = true, seed = 42, last = 0, accumulator = 0, dpr = 1, failure = "";
 
 function speed() { return Number(speedInput.value); }
@@ -56,9 +78,11 @@ addEventListener("resize", resize);
 function reset() {
   seed = (Math.random() * 4294967296) >>> 0;
   const count = Math.min(1000, Math.max(1, Number(bodiesInput.value) || 300));
+  const centralMass = Math.max(1, Number(centralMassInput.value) || 100000000);
   try {
-    wasm.exports.init(seed, count);
+    wasm.exports.init(seed, count, centralMass);
     wasm.exports.setTheta(Math.max(0.01, Number(thetaInput.value) || 0.5));
+    wasm.exports.setCameraLocked(lockCameraInput.checked);
     failure = "";
     accumulator = 0;
     setRunning(true);
@@ -124,6 +148,7 @@ function draw(now) {
     `aggregates    ${ex.regionsCount()} for body #1\n` +
     `theta         ${Number(thetaInput.value).toFixed(2)}\n` +
     `speed         ${speed().toFixed(1)} steps/s\n` +
+    `central mass  ${centralMassInput.value}\n` +
     `root          [${ex.rootLowX().toFixed(0)}, ${ex.rootLowY().toFixed(0)}] - [${ex.rootHighX().toFixed(0)}, ${ex.rootHighY().toFixed(0)}]\n` +
     `seed          ${seed}` + (failure ? `\nerror         ${failure}` : "");
 }
@@ -134,6 +159,7 @@ document.querySelector("#step").onclick = () => advance(1);
 document.querySelector("#reset").onclick = reset;
 thetaInput.onchange = () => wasm.exports.setTheta(Math.max(.01, Number(thetaInput.value) || .5));
 speedInput.oninput = updateSpeedLabel;
+lockCameraInput.onchange = () => wasm.exports.setCameraLocked(lockCameraInput.checked);
 addEventListener("keydown", event => {
   if (event.key === " ") { event.preventDefault(); setRunning(!running); }
   if (event.key.toLowerCase() === "n") advance(1);

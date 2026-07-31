@@ -17,6 +17,7 @@ var simulation: gravity.Simulation = undefined;
 var ready = false;
 var config = gravity.Config{};
 var steps: u32 = 0;
+var lock_camera_to_center = false;
 
 // Each body occupies four f32s: normalized x and y, relative mass, and whether
 // it is the central mass. The browser reads the buffer from linear memory.
@@ -48,11 +49,23 @@ fn refreshParticles() void {
         high[0] = @max(high[0], body.position[0]);
         high[1] = @max(high[1], body.position[1]);
     }
-    inline for (0..2) |axis| {
-        const span = @max(high[axis] - low[axis], 20.0);
-        const padding = span * 0.1;
-        low[axis] -= padding;
-        high[axis] += padding;
+    if (lock_camera_to_center) {
+        const center = bodies.items[0].position;
+        var radius: f64 = 10;
+        for (bodies.items) |body| {
+            radius = @max(radius, @abs(body.position[0] - center[0]));
+            radius = @max(radius, @abs(body.position[1] - center[1]));
+        }
+        radius *= 1.1;
+        low = .{ center[0] - radius, center[1] - radius };
+        high = .{ center[0] + radius, center[1] + radius };
+    } else {
+        inline for (0..2) |axis| {
+            const span = @max(high[axis] - low[axis], 20.0);
+            const padding = span * 0.1;
+            low[axis] -= padding;
+            high[axis] += padding;
+        }
     }
     camera_low = low;
     camera_high = high;
@@ -114,10 +127,15 @@ fn refreshRegions() void {
     simulation.tree.traverse(Context.onNode, Context.onEntry, &context) catch @trap();
 }
 
-export fn init(seed: u32, orbiting_body_count: u32) void {
+export fn init(seed: u32, orbiting_body_count: u32, central_mass: f64) void {
     teardown();
     const count = @min(@as(usize, orbiting_body_count), max_bodies - 1);
-    bodies = gravity.makeGalaxy(allocator, .{ .body_count = count, .seed = seed }) catch @trap();
+    const mass = if (std.math.isFinite(central_mass) and central_mass > 0) central_mass else 100_000_000.0;
+    bodies = gravity.makeGalaxy(allocator, .{
+        .body_count = count,
+        .seed = seed,
+        .central_mass = mass,
+    }) catch @trap();
     simulation = gravity.Simulation.init(allocator, bodies.items) catch @trap();
     // The terminal example uses dt=0.01 at 60 Hz. Browsers redraw much more
     // smoothly, so a smaller step keeps orbits readable at the web cadence.
@@ -145,6 +163,12 @@ export fn setTheta(theta: f64) void {
 
 export fn setTimeStep(time_step: f64) void {
     if (std.math.isFinite(time_step) and time_step > 0) config.time_step = time_step;
+}
+
+export fn setCameraLocked(locked: bool) void {
+    lock_camera_to_center = locked;
+    refreshParticles();
+    refreshRegions();
 }
 
 export fn particlesPtr() usize {

@@ -10,6 +10,7 @@ const Options = struct {
     theta: f64 = 0.5,
     time_step: f64 = 0.01,
     seed: u64 = 42,
+    central_mass: f64 = 100_000_000.0,
 };
 
 const ParseResult = union(enum) {
@@ -18,7 +19,7 @@ const ParseResult = union(enum) {
     invalid,
 };
 
-const usage = "usage: gravity [--bodies N] [--theta X] [--dt X] [--seed N]\n";
+const usage = "usage: gravity [--bodies N] [--theta X] [--dt X] [--seed N] [--central-mass X]\n";
 
 fn parsePositiveFloat(text: []const u8) ?f64 {
     const value = std.fmt.parseFloat(f64, text) catch return null;
@@ -57,6 +58,11 @@ fn parseArgs(init: std.process.Init, allocator: std.mem.Allocator, err: *Io.Writ
         } else if (std.mem.eql(u8, option, "--seed")) {
             options.seed = std.fmt.parseInt(u64, value, 10) catch {
                 try err.writeAll("--seed must be an unsigned integer\n");
+                return .invalid;
+            };
+        } else if (std.mem.eql(u8, option, "--central-mass")) {
+            options.central_mass = parsePositiveFloat(value) orelse {
+                try err.writeAll("--central-mass must be a positive finite number\n");
                 return .invalid;
             };
         } else {
@@ -186,7 +192,11 @@ fn run(init: std.process.Init, out: *Io.Writer, options: Options) !void {
         return;
     }
 
-    var bodies = try gravity.makeGalaxy(allocator, .{ .body_count = options.body_count, .seed = options.seed });
+    var bodies = try gravity.makeGalaxy(allocator, .{
+        .body_count = options.body_count,
+        .seed = options.seed,
+        .central_mass = options.central_mass,
+    });
     defer bodies.deinit(allocator);
     var simulation = try gravity.Simulation.init(allocator, bodies.items);
     defer simulation.deinit();
