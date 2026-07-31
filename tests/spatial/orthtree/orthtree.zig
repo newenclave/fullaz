@@ -223,6 +223,26 @@ fn expectInsertGrowsRoot(comptime Coord: type) !void {
     try std.testing.expect(std.meta.eql(second, (try new_entry_child.getEntry(0)).box()));
 }
 
+fn expectInsertGrowsRootAlongSingleAxis(comptime Coord: type) !void {
+    const Model = orthtree.models.Memory(Coord, 2, u32);
+    const TreeType = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+
+    var model = try Model.init(std.testing.allocator, 8);
+    defer model.deinit();
+
+    var tree = TreeType.init(&model);
+    const acc = model.getAccessor();
+    try tree.insert(Box.create(.{ 0, 0 }, .{ 2, 2 }), 1);
+    try tree.insert(Box.create(.{ 3, 1 }, .{ 4, 2 }), 2);
+
+    var root = try acc.loadNode(acc.getRoot().?);
+    defer acc.deinitNode(&root);
+    try std.testing.expect(std.meta.eql(Box.create(.{ 0, 0 }, .{ 4, 4 }), root.bounds()));
+
+    try std.testing.expectEqual(@as(usize, 2), try model.getEntriesCount());
+}
+
 fn expectQuery(comptime Coord: type) !void {
     const Model = orthtree.models.Memory(Coord, 2, u32);
     const TreeType = orthtree.tree.TreeImpl(Model);
@@ -625,6 +645,14 @@ test "OrthTree: insert grows root for u32" {
 
 test "OrthTree: insert grows root for f32" {
     try expectInsertGrowsRoot(f32);
+}
+
+test "OrthTree: insert grows root along one axis for u32" {
+    try expectInsertGrowsRootAlongSingleAxis(u32);
+}
+
+test "OrthTree: insert grows root along one axis for f32" {
+    try expectInsertGrowsRootAlongSingleAxis(f32);
 }
 
 test "OrthTree: query for u32" {

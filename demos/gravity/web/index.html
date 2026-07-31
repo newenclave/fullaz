@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fullaz · gravity</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #06080e; color: #c9d7ed;
+    font: 13px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; inset: 16px auto auto 16px; white-space: pre; pointer-events: none; text-shadow: 0 2px 8px #000; }
+  #hud b { color: #83d8ff; }
+  #controls { position: fixed; inset: auto 16px 16px 16px; display: flex; align-items: center; gap: 10px; }
+  button, input { color: inherit; font: inherit; }
+  button { background: #162033; border: 1px solid #314866; border-radius: 5px; padding: 6px 11px; cursor: pointer; }
+  button:hover { border-color: #83d8ff; }
+  input { width: 72px; background: #0f1726; border: 1px solid #314866; border-radius: 4px; padding: 5px; }
+  .hint { color: #72819a; margin-left: auto; }
+  #legend { position: fixed; inset: 16px 16px auto auto; display: grid; gap: 4px; color: #9aabc2; }
+  .star { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; vertical-align: -1px; }
+</style>
+</head>
+<body>
+<canvas id="space"></canvas>
+<div id="hud"></div>
+<div id="legend">
+  <span><i class="star" style="background:#e76f51"></i>red dwarf</span>
+  <span><i class="star" style="background:#ffd166"></i>yellow dwarf</span>
+  <span><i class="star" style="background:#9dd9f3"></i>blue giant</span>
+  <span><i class="star" style="background:#ff6b4a"></i>supergiant</span>
+</div>
+<div id="controls">
+  <button id="toggle">pause</button><button id="step">step</button><button id="reset">new galaxy</button>
+  <label>bodies <input id="bodies" type="number" min="1" max="1000" value="300"></label>
+  <label>theta <input id="theta" type="number" min="0.01" step="0.05" value="0.5"></label>
+  <label>speed <input id="speed" type="range" min="0" max="20" step="0.5" value="5"><output id="speed-value">5.0/s</output></label>
+  <label><input id="regions" type="checkbox" checked> aggregate regions</label>
+  <span class="hint">Space pause/run · N step · amber: aggregates for body #1</span>
+</div>
+<script>
+const canvas = document.querySelector("canvas"), ctx = canvas.getContext("2d"), hud = document.querySelector("#hud");
+const toggle = document.querySelector("#toggle"), bodiesInput = document.querySelector("#bodies"), thetaInput = document.querySelector("#theta");
+const speedInput = document.querySelector("#speed"), speedValue = document.querySelector("#speed-value"), regionsInput = document.querySelector("#regions");
+let wasm, running = true, seed = 42, last = 0, accumulator = 0, dpr = 1, failure = "";
+
+function speed() { return Number(speedInput.value); }
+function updateSpeedLabel() { speedValue.value = `${speed().toFixed(1)}/s`; }
+
+function resize() {
+  dpr = devicePixelRatio || 1;
+  canvas.width = innerWidth * dpr;
+  canvas.height = innerHeight * dpr;
+}
+addEventListener("resize", resize);
+
+function reset() {
+  seed = (Math.random() * 4294967296) >>> 0;
+  const count = Math.min(1000, Math.max(1, Number(bodiesInput.value) || 300));
+  try {
+    wasm.exports.init(seed, count);
+    wasm.exports.setTheta(Math.max(0.01, Number(thetaInput.value) || 0.5));
+    failure = "";
+    accumulator = 0;
+    setRunning(true);
+  } catch (error) {
+    failure = `WASM reset failed: ${error}`;
+    setRunning(false);
+  }
+}
+
+function advance(count) {
+  try {
+    wasm.exports.advance(count);
+  } catch (error) {
+    failure = `WASM step failed: ${error}`;
+    setRunning(false);
+  }
+}
+
+function draw(now) {
+  requestAnimationFrame(draw);
+  if (!wasm) return;
+  const dt = Math.min(now - last, 100); last = now;
+  if (running) {
+    accumulator += dt;
+    const stepIntervalMs = speed() > 0 ? 1000 / speed() : Infinity;
+    const count = Math.min(1, Math.floor(accumulator / stepIntervalMs));
+    if (count) { advance(count); accumulator -= count * stepIntervalMs; }
+  }
+
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = "#06080e"; ctx.fillRect(0, 0, W, H);
+  const ex = wasm.exports, count = ex.particlesCount();
+  if (regionsInput.checked) {
+    const regions = new Float32Array(ex.memory.buffer, ex.regionsPtr(), ex.regionsCount() * 4);
+    ctx.fillStyle = "rgba(255, 184, 108, 0.08)";
+    ctx.strokeStyle = "rgba(255, 184, 108, 0.55)";
+    ctx.lineWidth = dpr;
+    for (let i = 0; i < regions.length; i += 4) {
+      const x = regions[i] * W, y = (1 - regions[i + 3]) * H;
+      const width = (regions[i + 2] - regions[i]) * W;
+      const height = (regions[i + 3] - regions[i + 1]) * H;
+      ctx.fillRect(x, y, width, height);
+      ctx.strokeRect(x, y, width, height);
+    }
+  }
+  const p = new Float32Array(ex.memory.buffer, ex.particlesPtr(), count * 4);
+  for (let i = 0; i < count; i++) {
+    const x = p[i * 4] * W, y = (1 - p[i * 4 + 1]) * H;
+    const mass = p[i * 4 + 2];
+    const central = p[i * 4 + 3] === 1;
+    const target = p[i * 4 + 3] === 2;
+    ctx.fillStyle = central ? "#ffce7a" : target ? "#f5a9e6" : mass < .9 ? "#e76f51" : mass < 1.2 ? "#ffd166" : mass < 2.3 ? "#9dd9f3" : "#ff6b4a";
+    ctx.globalAlpha = central ? 1 : .72;
+    const radius = central ? 5.0 * dpr : (1.05 + mass * 0.80 + (target ? 0.9 : 0)) * dpr;
+    ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  hud.innerHTML = `<b>fullaz · gravity</b>  <span style="color:#72819a">wasm · 2D orthtree</span>\n\n` +
+    `state         ${running ? "RUNNING" : "PAUSED"}\n` +
+    `step          ${ex.stepCount()}\n` +
+    `bodies        ${ex.bodyCount()}\n` +
+    `tree nodes    ${ex.nodeCount()}\n` +
+    `aggregates    ${ex.regionsCount()} for body #1\n` +
+    `theta         ${Number(thetaInput.value).toFixed(2)}\n` +
+    `speed         ${speed().toFixed(1)} steps/s\n` +
+    `root          [${ex.rootLowX().toFixed(0)}, ${ex.rootLowY().toFixed(0)}] - [${ex.rootHighX().toFixed(0)}, ${ex.rootHighY().toFixed(0)}]\n` +
+    `seed          ${seed}` + (failure ? `\nerror         ${failure}` : "");
+}
+
+function setRunning(value) { running = value; toggle.textContent = running ? "pause" : "run"; }
+toggle.onclick = () => setRunning(!running);
+document.querySelector("#step").onclick = () => advance(1);
+document.querySelector("#reset").onclick = reset;
+thetaInput.onchange = () => wasm.exports.setTheta(Math.max(.01, Number(thetaInput.value) || .5));
+speedInput.oninput = updateSpeedLabel;
+addEventListener("keydown", event => {
+  if (event.key === " ") { event.preventDefault(); setRunning(!running); }
+  if (event.key.toLowerCase() === "n") advance(1);
+});
+
+(async () => {
+  resize();
+  const bytes = await (await fetch("gravity.wasm")).arrayBuffer();
+  wasm = (await WebAssembly.instantiate(bytes, {})).instance;
+  reset();
+  requestAnimationFrame(time => { last = time; draw(time); });
+})();
+</script>
+</body>
+</html>

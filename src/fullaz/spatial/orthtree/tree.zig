@@ -261,9 +261,13 @@ pub fn TreeImpl(comptime ModelT: type) type {
                         if (extend <= 0) {
                             return ErrorSet.InvalidId;
                         }
+                        // A new root divides every axis in half. Expand every
+                        // axis so the old root occupies exactly one child;
+                        // expanding only the overflowing axis leaves it
+                        // straddling the new root's center on the others.
                         if (box.low[axis] < low[axis]) {
                             low[axis] -= extend;
-                        } else if (box.high[axis] > high[axis]) {
+                        } else {
                             high[axis] += extend;
                         }
                     }

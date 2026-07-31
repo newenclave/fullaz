@@ -207,6 +207,54 @@ pub fn build(b: *std.Build) void {
     const test_galaxy_step = b.step("test-galaxy", "Run galaxy tests");
     test_galaxy_step.dependOn(&run_galaxy_tests.step);
 
+    // --- gravity: interactive Barnes-Hut orthtree demo ---
+    const gravity_mod = b.addModule("gravity", .{
+        .root_source_file = b.path("demos/gravity/src/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "fullaz", .module = mod },
+        },
+    });
+
+    const gravity_exe = b.addExecutable(.{
+        .name = "gravity",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("demos/gravity/src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "fullaz", .module = mod },
+                .{ .name = "zigline", .module = zigline_mod },
+                .{ .name = "gravity", .module = gravity_mod },
+            },
+        }),
+    });
+    b.installArtifact(gravity_exe);
+
+    const run_gravity_step = b.step("run-gravity", "Run the Barnes-Hut gravity demo");
+    const run_gravity_cmd = b.addRunArtifact(gravity_exe);
+    run_gravity_step.dependOn(&run_gravity_cmd.step);
+    run_gravity_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_gravity_cmd.addArgs(args);
+
+    const gravity_tests_mod = b.addModule("gravity_tests", .{
+        .root_source_file = b.path("demos/gravity/tests/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const gravity_tests = b.addTest(.{ .root_module = gravity_tests_mod });
+    gravity_tests.root_module.addImport("fullaz", mod);
+    gravity_tests.root_module.addImport("gravity", gravity_mod);
+    if (test_filter) |filter| {
+        const owned = b.allocator.dupe(u8, filter) catch @panic("OOM duping gravity test-filter");
+        const filters = b.allocator.alloc([]const u8, 1) catch @panic("OOM alloc gravity filters");
+        filters[0] = owned;
+        gravity_tests.filters = filters;
+    }
+    const run_gravity_tests = b.addRunArtifact(gravity_tests);
+    const test_gravity_step = b.step("test-gravity", "Run gravity demo tests");
+    test_gravity_step.dependOn(&run_gravity_tests.step);
+
     // --- galaxy WASM build: runs in a browser (wasm32-freestanding) ---
     // Fresh module instances targeting wasm (the ones above are pinned to the
     // host). The engine + MemoryBlock storage are I/O-free, so they compile for
@@ -248,4 +296,36 @@ pub fn build(b: *std.Build) void {
     wasm_step.dependOn(&install_wasm.step);
     const install_html = b.addInstallFile(b.path("demos/galaxy/web/index.html"), "web/index.html");
     wasm_step.dependOn(&install_html.step);
+
+    // --- gravity WASM build: browser-driven Barnes-Hut animation ---
+    const gravity_wasm_mod = b.createModule(.{
+        .root_source_file = b.path("demos/gravity/src/root.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+        .imports = &.{
+            .{ .name = "fullaz", .module = fullaz_wasm },
+        },
+    });
+    const gravity_wasm = b.addExecutable(.{
+        .name = "gravity",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("demos/gravity/src/wasm.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{
+                .{ .name = "fullaz", .module = fullaz_wasm },
+                .{ .name = "gravity", .module = gravity_wasm_mod },
+            },
+        }),
+    });
+    gravity_wasm.entry = .disabled;
+    gravity_wasm.rdynamic = true;
+
+    const gravity_wasm_step = b.step("wasm-gravity", "Build the gravity WASM demo into zig-out/web-gravity");
+    const install_gravity_wasm = b.addInstallArtifact(gravity_wasm, .{
+        .dest_dir = .{ .override = .{ .custom = "web-gravity" } },
+    });
+    gravity_wasm_step.dependOn(&install_gravity_wasm.step);
+    const install_gravity_html = b.addInstallFile(b.path("demos/gravity/web/index.html"), "web-gravity/index.html");
+    gravity_wasm_step.dependOn(&install_gravity_html.step);
 }
