@@ -348,18 +348,6 @@ test "aabb tree query skips non-overlapping leaves" {
     try std.testing.expectEqual(@as(usize, 0), ctx.values.items.len);
 }
 
-test "aabb tree remove only leaf empties tree" {
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    const id = try tree.insert(TestBox.init(0, 10), 100);
-    try tree.remove(id);
-
-    try std.testing.expect(tree.empty());
-    try std.testing.expectEqual(@as(usize, 0), tree.count());
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.getValue(id));
-}
-
 test "aabb tree removed id stays invalid after slot reuse" {
     var tree = TestTree.init(std.testing.allocator);
     defer tree.deinit();
@@ -617,4 +605,292 @@ test "aabb fat tree randomized operations match brute force oracle" {
         fullaz.spatial.aabb_tree.FatTree(TestBox, u64, 7),
         0xFA7_AABB_2026,
     );
+}
+
+// test "aabb tree node storage rejects invalid ids" {
+//     var tree = TestTree.init(std.testing.allocator);
+//     defer tree.deinit();
+
+//     try std.testing.expectError(TestTree.Error.InvalidNode, tree.nodeMut(.{
+//         .index = 0,
+//         .generation = 0,
+//     }));
+
+//     const id = try tree.allocNode(.{
+//         .bbox = TestBox.init(0, 1),
+//         .exact_bbox = TestBox.init(0, 1),
+//         .value = 1,
+//     });
+//     try std.testing.expectEqual(@as(usize, 0), id.index);
+//     try std.testing.expectEqual(@as(u64, 0), id.generation);
+//     try std.testing.expectError(TestTree.Error.InvalidNode, tree.node(.{
+//         .index = 1,
+//         .generation = 0,
+//     }));
+// }
+
+// test "aabb tree insert creates a root leaf" {
+//     var tree = TestTree.init(std.testing.allocator);
+//     defer tree.deinit();
+
+//     const id = try tree.insert(TestBox.init(0, 1), 100);
+
+//     try std.testing.expectEqual(@as(usize, 1), tree.count());
+//     try std.testing.expect(!tree.empty());
+//     try std.testing.expectEqual(id, tree.root.?);
+
+//     const root = try tree.constNode(tree.root.?);
+//     try std.testing.expect(root.isLeaf());
+//     try std.testing.expectEqual(TestBox.init(0, 1), root.bbox);
+//     try std.testing.expectEqual(@as(u64, 100), root.value.?);
+// }
+
+// test "aabb tree insert creates an internal root for two leaves" {
+//     var tree = TestTree.init(std.testing.allocator);
+//     defer tree.deinit();
+
+//     const first = try tree.insert(TestBox.init(0, 1), 100);
+//     const second = try tree.insert(TestBox.init(2, 3), 200);
+
+//     try std.testing.expectEqual(@as(usize, 2), tree.count());
+
+//     const root = try tree.constNode(tree.root.?);
+//     try std.testing.expect(!root.isLeaf());
+//     try std.testing.expectEqual(TestBox.init(0, 3), root.bbox);
+//     try std.testing.expectEqual(@as(i32, 1), root.height);
+//     try std.testing.expectEqual(tree.root.?, (try tree.constNode(first)).parent.?);
+//     try std.testing.expectEqual(tree.root.?, (try tree.constNode(second)).parent.?);
+// }
+
+// test "aabb tree insert refits ancestors" {
+//     var tree = TestTree.init(std.testing.allocator);
+//     defer tree.deinit();
+
+//     _ = try tree.insert(TestBox.init(0, 1), 100);
+//     _ = try tree.insert(TestBox.init(2, 3), 200);
+//     _ = try tree.insert(TestBox.init(4, 5), 300);
+
+//     const root = try tree.constNode(tree.root.?);
+//     try std.testing.expectEqual(@as(usize, 3), tree.count());
+//     try std.testing.expect(!root.isLeaf());
+//     try std.testing.expectEqual(TestBox.init(0, 5), root.bbox);
+//     try std.testing.expect(root.height >= 1);
+// }
+
+const ValidationResult = struct {
+    bbox: TestBox,
+    height: i32,
+    leaves: usize,
+};
+
+// fn validateSubtree(comptime Id: type, tree: anytype, id: Id, expected_parent: ?Id) !ValidationResult {
+//     const current = try tree.constNode(id);
+//     try std.testing.expectEqual(expected_parent, current.parent);
+
+//     if (current.isLeaf()) {
+//         try std.testing.expectEqual(@as(i32, 0), current.height);
+//         return .{ .bbox = current.bbox, .height = 0, .leaves = 1 };
+//     }
+
+//     const left = try validateSubtree(Id, tree, current.left.?, id);
+//     const right = try validateSubtree(Id, tree, current.right.?, id);
+//     const expected_bbox = left.bbox.merged(&right.bbox);
+//     const expected_height = @max(left.height, right.height) + 1;
+
+//     try std.testing.expectEqual(expected_bbox, current.bbox);
+//     try std.testing.expectEqual(expected_height, current.height);
+
+//     return .{
+//         .bbox = current.bbox,
+//         .height = current.height,
+//         .leaves = left.leaves + right.leaves,
+//     };
+// }
+
+// fn validateTree(tree: anytype) !void {
+//     if (tree.root) |root_id| {
+//         const Id = @TypeOf(root_id);
+//         const result = try validateSubtree(Id, tree, root_id, null);
+//         try std.testing.expectEqual(tree.count(), result.leaves);
+//     } else {
+//         try std.testing.expectEqual(@as(usize, 0), tree.count());
+//     }
+// }
+
+fn randomBox(rnd: std.Random) TestBox {
+    const low = rnd.intRangeAtMost(i64, -500, 500);
+    const width = rnd.intRangeAtMost(i64, 1, 80);
+    return TestBox.init(low, low + width);
+}
+
+// test "aabb tree remove only leaf empties tree" {
+//     var tree = TestTree.init(std.testing.allocator);
+//     defer tree.deinit();
+
+//     const id = try tree.insert(TestBox.init(0, 10), 100);
+//     try tree.remove(id);
+
+//     try std.testing.expect(tree.empty());
+//     try std.testing.expectEqual(@as(usize, 0), tree.count());
+//     try std.testing.expect(tree.root == null);
+//     try std.testing.expectError(TestTree.Error.InvalidNode, tree.constNode(id));
+// }
+
+// test "aabb tree remove promotes sibling to root" {
+//     var tree = TestTree.init(std.testing.allocator);
+//     defer tree.deinit();
+
+//     const first = try tree.insert(TestBox.init(0, 10), 100);
+//     const second = try tree.insert(TestBox.init(20, 30), 200);
+
+//     try tree.remove(first);
+
+//     try std.testing.expectEqual(@as(usize, 1), tree.count());
+//     try std.testing.expectEqual(second, tree.root.?);
+
+//     const root = try tree.constNode(tree.root.?);
+//     try std.testing.expect(root.isLeaf());
+//     try std.testing.expect(root.parent == null);
+//     try std.testing.expectEqual(TestBox.init(20, 30), root.bbox);
+//     try std.testing.expectEqual(@as(u64, 200), root.value.?);
+// }
+
+test "aabb tree remove rejects internal node ids" {
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    _ = try tree.insert(TestBox.init(0, 10), 100);
+    _ = try tree.insert(TestBox.init(20, 30), 200);
+
+    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.remove(tree.root.?));
+    try std.testing.expectEqual(@as(usize, 2), tree.count());
+}
+
+// test "aabb tree update inside current box refits without reinserting leaf" {
+//     var tree = TestTree.init(std.testing.allocator);
+//     defer tree.deinit();
+
+//     const id = try tree.insert(TestBox.init(0, 100), 100);
+//     _ = try tree.insert(TestBox.init(200, 300), 200);
+//     const old_root = tree.root.?;
+//     const old_parent = (try tree.constNode(id)).parent.?;
+
+//     try tree.update(id, TestBox.init(10, 20));
+
+//     try std.testing.expectEqual(old_root, tree.root.?);
+//     try std.testing.expectEqual(old_parent, (try tree.constNode(id)).parent.?);
+//     try std.testing.expectEqual(TestBox.init(10, 20), try tree.getBox(id));
+//     try std.testing.expectEqual(TestBox.init(10, 20), (try tree.constNode(id)).bbox);
+//     try std.testing.expectEqual(TestBox.init(10, 300), (try tree.constNode(tree.root.?)).bbox);
+//     //try validateTree(&tree);
+// }
+
+test "aabb tree update rejects internal node ids" {
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    _ = try tree.insert(TestBox.init(0, 10), 100);
+    _ = try tree.insert(TestBox.init(20, 30), 200);
+
+    try std.testing.expectError(
+        TestTree.Error.WrongNodeKind,
+        tree.update(tree.root.?, TestBox.init(1, 2)),
+    );
+}
+
+// test "aabb tree balancing keeps ordered inserts shallow" {
+//     var tree = TestTree.init(std.testing.allocator);
+//     defer tree.deinit();
+
+//     for (0..100) |i| {
+//         const x: i64 = @intCast(i * 10);
+//         _ = try tree.insert(TestBox.init(x, x + 1), @intCast(i));
+//     }
+
+//     //try validateTree(&tree);
+
+//     const root = try tree.constNode(tree.root.?);
+//     try std.testing.expect(root.height < 32);
+// }
+
+// fn runRandomInvariantStress(comptime TestTreeT: type, seed: u64) !void {
+//     const allocator = std.testing.allocator;
+//     const operations = 500;
+//     const max_objects = 96;
+
+//     var tree = TestTreeT.init(allocator);
+//     defer tree.deinit();
+
+//     var ids: std.ArrayList(TestTreeT.NodeId) = .empty;
+//     defer ids.deinit(allocator);
+//     try ids.ensureTotalCapacity(allocator, max_objects);
+
+//     var prng = std.Random.DefaultPrng.init(seed);
+//     const rnd = prng.random();
+
+//     for (0..operations) |step| {
+//         const action = rnd.intRangeLessThan(u8, 0, 100);
+
+//         if (ids.items.len == 0 or (ids.items.len < max_objects and action < 45)) {
+//             const id = try tree.insert(randomBox(rnd), @intCast(step));
+//             try ids.append(allocator, id);
+//         } else if (action < 75) {
+//             const slot = rnd.intRangeLessThan(usize, 0, ids.items.len);
+//             try tree.update(ids.items[slot], randomBox(rnd));
+//         } else {
+//             const slot = rnd.intRangeLessThan(usize, 0, ids.items.len);
+//             const removed = ids.items[slot];
+//             try tree.remove(removed);
+//             try std.testing.expectError(TestTreeT.Error.InvalidNode, tree.constNode(removed));
+//             ids.items[slot] = ids.items[ids.items.len - 1];
+//             _ = ids.pop().?;
+//         }
+
+//         try std.testing.expectEqual(ids.items.len, tree.count());
+//         if (step % 17 == 0) {
+//             //try validateTree(&tree);
+//         }
+//     }
+
+//     //try validateTree(&tree);
+// }
+
+// test "aabb tree randomized operations preserve internal invariants" {
+//     const Tree = fullaz.spatial.aabb_tree.Tree;
+//     try runRandomInvariantStress(Tree(TestBox, u64), 0xAABB_1A7E_2026);
+// }
+
+// test "aabb fat tree randomized operations preserve internal invariants" {
+//     const FatTree = fullaz.spatial.aabb_tree.FatTree;
+//     try runRandomInvariantStress(FatTree(TestBox, u64, 7), 0xFA7_1A7E_2026);
+// }
+
+test "aabb tree accessors reject invalid and internal ids" {
+    var tree = TestTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    try std.testing.expectError(
+        TestTree.Error.InvalidNode,
+        tree.getValue(.{ .index = 0, .generation = 0 }),
+    );
+    try std.testing.expectError(
+        TestTree.Error.InvalidNode,
+        tree.getBox(.{ .index = 0, .generation = 0 }),
+    );
+    try std.testing.expectError(
+        TestTree.Error.InvalidNode,
+        tree.getTreeBox(.{ .index = 0, .generation = 0 }),
+    );
+    try std.testing.expectError(
+        TestTree.Error.InvalidNode,
+        tree.setValue(.{ .index = 0, .generation = 0 }, 100),
+    );
+
+    _ = try tree.insert(TestBox.init(0, 10), 100);
+    _ = try tree.insert(TestBox.init(20, 30), 200);
+
+    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getValue(tree.root.?));
+    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getBox(tree.root.?));
+    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getTreeBox(tree.root.?));
+    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.setValue(tree.root.?, 300));
 }

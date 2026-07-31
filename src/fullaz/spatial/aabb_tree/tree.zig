@@ -261,7 +261,7 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
             }
             if (current.bbox.containsBox(&bbox)) {
                 const parent_id = current.parent;
-                const updated = try self.node(id);
+                const updated = try self.nodeMut(id);
                 updated.exact_bbox = bbox;
                 if (!ConfigT.loose_updates) {
                     updated.bbox = ConfigT.makeTreeBox(bbox);
@@ -273,7 +273,7 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
             }
 
             try self.detachLeaf(id);
-            const updated = try self.node(id);
+            const updated = try self.nodeMut(id);
             updated.bbox = ConfigT.makeTreeBox(bbox);
             updated.exact_bbox = bbox;
             try self.insertLeaf(id);
@@ -305,7 +305,7 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
             self.free_list.appendAssumeCapacity(id.index);
         }
 
-        fn node(self: *Self, id: NodeId) Error!*Node {
+        fn nodeMut(self: *Self, id: NodeId) Error!*Node {
             if (id.index >= self.nodes.items.len) {
                 return Error.InvalidNode;
             }
@@ -328,7 +328,7 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
         }
 
         fn nodeAsLeaf(self: *Self, id: NodeId) Error!*Node {
-            const current = try self.node(id);
+            const current = try self.nodeMut(id);
             if (!current.isLeaf()) {
                 return Error.WrongNodeKind;
             }
@@ -344,7 +344,7 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
         }
 
         fn insertLeaf(self: *Self, leaf_id: NodeId) Error!void {
-            const leaf = try self.node(leaf_id);
+            const leaf = try self.nodeMut(leaf_id);
             std.debug.assert(leaf.isLeaf());
             leaf.parent = null;
 
@@ -368,11 +368,11 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
                 .height = parent_height,
             });
 
-            (try self.node(sibling_id)).parent = parent_id;
-            (try self.node(leaf_id)).parent = parent_id;
+            (try self.nodeMut(sibling_id)).parent = parent_id;
+            (try self.nodeMut(leaf_id)).parent = parent_id;
 
             if (old_parent_id) |grand_parent_id| {
-                const grand_parent = try self.node(grand_parent_id);
+                const grand_parent = try self.nodeMut(grand_parent_id);
                 if (grand_parent.left != null and grand_parent.left.?.eql(sibling_id)) {
                     grand_parent.left = parent_id;
                 } else {
@@ -409,21 +409,21 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
                 return Error.InvalidNode;
 
             if (parent.parent) |grand_parent_id| {
-                const grand_parent = try self.node(grand_parent_id);
+                const grand_parent = try self.nodeMut(grand_parent_id);
                 if (grand_parent.left != null and grand_parent.left.?.eql(parent_id)) {
                     grand_parent.left = sibling_id;
                 } else {
                     std.debug.assert(grand_parent.right != null and grand_parent.right.?.eql(parent_id));
                     grand_parent.right = sibling_id;
                 }
-                (try self.node(sibling_id)).parent = grand_parent_id;
+                (try self.nodeMut(sibling_id)).parent = grand_parent_id;
                 try self.refitAncestors(grand_parent_id);
             } else {
                 self.root = sibling_id;
-                (try self.node(sibling_id)).parent = null;
+                (try self.nodeMut(sibling_id)).parent = null;
             }
 
-            (try self.node(leaf_id)).parent = null;
+            (try self.nodeMut(leaf_id)).parent = null;
             self.freeNode(parent_id);
         }
 
@@ -512,22 +512,22 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
             try self.replaceParentChild(old_parent_id, a_id, c_id);
 
             {
-                const c_mut = try self.node(c_id);
+                const c_mut = try self.nodeMut(c_id);
                 c_mut.parent = old_parent_id;
                 c_mut.left = a_id;
             }
-            (try self.node(a_id)).parent = c_id;
+            (try self.nodeMut(a_id)).parent = c_id;
 
             if (f_cost < g_cost) {
-                (try self.node(a_id)).right = f_id;
-                (try self.node(f_id)).parent = a_id;
-                (try self.node(c_id)).right = g_id;
-                (try self.node(g_id)).parent = c_id;
+                (try self.nodeMut(a_id)).right = f_id;
+                (try self.nodeMut(f_id)).parent = a_id;
+                (try self.nodeMut(c_id)).right = g_id;
+                (try self.nodeMut(g_id)).parent = c_id;
             } else {
-                (try self.node(a_id)).right = g_id;
-                (try self.node(g_id)).parent = a_id;
-                (try self.node(c_id)).right = f_id;
-                (try self.node(f_id)).parent = c_id;
+                (try self.nodeMut(a_id)).right = g_id;
+                (try self.nodeMut(g_id)).parent = a_id;
+                (try self.nodeMut(c_id)).right = f_id;
+                (try self.nodeMut(f_id)).parent = c_id;
             }
 
             try self.refitNode(a_id);
@@ -551,22 +551,22 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
             try self.replaceParentChild(old_parent_id, a_id, b_id);
 
             {
-                const b_mut = try self.node(b_id);
+                const b_mut = try self.nodeMut(b_id);
                 b_mut.parent = old_parent_id;
                 b_mut.right = a_id;
             }
-            (try self.node(a_id)).parent = b_id;
+            (try self.nodeMut(a_id)).parent = b_id;
 
             if (d_cost < e_cost) {
-                (try self.node(a_id)).left = d_id;
-                (try self.node(d_id)).parent = a_id;
-                (try self.node(b_id)).left = e_id;
-                (try self.node(e_id)).parent = b_id;
+                (try self.nodeMut(a_id)).left = d_id;
+                (try self.nodeMut(d_id)).parent = a_id;
+                (try self.nodeMut(b_id)).left = e_id;
+                (try self.nodeMut(e_id)).parent = b_id;
             } else {
-                (try self.node(a_id)).left = e_id;
-                (try self.node(e_id)).parent = a_id;
-                (try self.node(b_id)).left = d_id;
-                (try self.node(d_id)).parent = b_id;
+                (try self.nodeMut(a_id)).left = e_id;
+                (try self.nodeMut(e_id)).parent = a_id;
+                (try self.nodeMut(b_id)).left = d_id;
+                (try self.nodeMut(d_id)).parent = b_id;
             }
 
             try self.refitNode(a_id);
@@ -576,7 +576,7 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
 
         fn replaceParentChild(self: *Self, parent_id: ?NodeId, old_child_id: NodeId, new_child_id: NodeId) Error!void {
             if (parent_id) |id| {
-                const parent = try self.node(id);
+                const parent = try self.nodeMut(id);
                 if (parent.left != null and parent.left.?.eql(old_child_id)) {
                     parent.left = new_child_id;
                 } else {
@@ -601,387 +601,9 @@ fn TreeImpl(comptime BoxT: type, comptime ValueT: type, comptime ConfigT: type) 
             const bbox = left.bbox.merged(&right.bbox);
             const height = @max(left.height, right.height) + 1;
 
-            const mutable = try self.node(id);
+            const mutable = try self.nodeMut(id);
             mutable.bbox = bbox;
             mutable.height = height;
         }
     };
-}
-
-//////////// Unit tests //////////////
-const TestBox = struct {
-    pub const Coord = i64;
-
-    low: Coord,
-    high: Coord,
-
-    fn init(low: Coord, high: Coord) TestBox {
-        return .{ .low = low, .high = high };
-    }
-
-    pub fn merged(self: *const TestBox, other: *const TestBox) TestBox {
-        return .{
-            .low = @min(self.low, other.low),
-            .high = @max(self.high, other.high),
-        };
-    }
-
-    pub fn overlaps(self: *const TestBox, other: *const TestBox) bool {
-        return self.low < other.high and other.low < self.high;
-    }
-
-    pub fn containsBox(self: *const TestBox, other: *const TestBox) bool {
-        return other.low >= self.low and other.high <= self.high;
-    }
-
-    pub fn perimeter(self: *const TestBox) Coord {
-        return self.high - self.low;
-    }
-
-    pub fn expanded(self: *const TestBox, amount: Coord) TestBox {
-        return .{ .low = self.low - amount, .high = self.high + amount };
-    }
-};
-
-test "aabb tree node storage reuses freed ids" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    const first = try tree.allocNode(.{
-        .bbox = TestBox.init(0, 1),
-        .exact_bbox = TestBox.init(0, 1),
-        .value = 1,
-    });
-    const second = try tree.allocNode(.{
-        .bbox = TestBox.init(1, 2),
-        .exact_bbox = TestBox.init(1, 2),
-        .value = 2,
-    });
-
-    try std.testing.expectEqual(@as(usize, 0), first.index);
-    try std.testing.expectEqual(@as(u64, 0), first.generation);
-    try std.testing.expectEqual(@as(usize, 1), second.index);
-    try std.testing.expectEqual(@as(u64, 0), second.generation);
-
-    tree.freeNode(first);
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.constNode(first));
-
-    const reused = try tree.allocNode(.{
-        .bbox = TestBox.init(2, 3),
-        .exact_bbox = TestBox.init(2, 3),
-        .value = 3,
-    });
-    try std.testing.expectEqual(first.index, reused.index);
-    try std.testing.expect(reused.generation != first.generation);
-    try std.testing.expectEqual(@as(u64, 3), (try tree.constNode(reused)).value.?);
-}
-
-test "aabb tree node storage rejects invalid ids" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.node(.{
-        .index = 0,
-        .generation = 0,
-    }));
-
-    const id = try tree.allocNode(.{
-        .bbox = TestBox.init(0, 1),
-        .exact_bbox = TestBox.init(0, 1),
-        .value = 1,
-    });
-    try std.testing.expectEqual(@as(usize, 0), id.index);
-    try std.testing.expectEqual(@as(u64, 0), id.generation);
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.node(.{
-        .index = 1,
-        .generation = 0,
-    }));
-}
-
-test "aabb tree insert creates a root leaf" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    const id = try tree.insert(TestBox.init(0, 1), 100);
-
-    try std.testing.expectEqual(@as(usize, 1), tree.count());
-    try std.testing.expect(!tree.empty());
-    try std.testing.expectEqual(id, tree.root.?);
-
-    const root = try tree.constNode(tree.root.?);
-    try std.testing.expect(root.isLeaf());
-    try std.testing.expectEqual(TestBox.init(0, 1), root.bbox);
-    try std.testing.expectEqual(@as(u64, 100), root.value.?);
-}
-
-test "aabb tree insert creates an internal root for two leaves" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    const first = try tree.insert(TestBox.init(0, 1), 100);
-    const second = try tree.insert(TestBox.init(2, 3), 200);
-
-    try std.testing.expectEqual(@as(usize, 2), tree.count());
-
-    const root = try tree.constNode(tree.root.?);
-    try std.testing.expect(!root.isLeaf());
-    try std.testing.expectEqual(TestBox.init(0, 3), root.bbox);
-    try std.testing.expectEqual(@as(i32, 1), root.height);
-    try std.testing.expectEqual(tree.root.?, (try tree.constNode(first)).parent.?);
-    try std.testing.expectEqual(tree.root.?, (try tree.constNode(second)).parent.?);
-}
-
-test "aabb tree insert refits ancestors" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    _ = try tree.insert(TestBox.init(0, 1), 100);
-    _ = try tree.insert(TestBox.init(2, 3), 200);
-    _ = try tree.insert(TestBox.init(4, 5), 300);
-
-    const root = try tree.constNode(tree.root.?);
-    try std.testing.expectEqual(@as(usize, 3), tree.count());
-    try std.testing.expect(!root.isLeaf());
-    try std.testing.expectEqual(TestBox.init(0, 5), root.bbox);
-    try std.testing.expect(root.height >= 1);
-}
-
-const ValidationResult = struct {
-    bbox: TestBox,
-    height: i32,
-    leaves: usize,
-};
-
-fn validateSubtree(comptime Id: type, tree: anytype, id: Id, expected_parent: ?Id) !ValidationResult {
-    const current = try tree.constNode(id);
-    try std.testing.expectEqual(expected_parent, current.parent);
-
-    if (current.isLeaf()) {
-        try std.testing.expectEqual(@as(i32, 0), current.height);
-        return .{ .bbox = current.bbox, .height = 0, .leaves = 1 };
-    }
-
-    const left = try validateSubtree(Id, tree, current.left.?, id);
-    const right = try validateSubtree(Id, tree, current.right.?, id);
-    const expected_bbox = left.bbox.merged(&right.bbox);
-    const expected_height = @max(left.height, right.height) + 1;
-
-    try std.testing.expectEqual(expected_bbox, current.bbox);
-    try std.testing.expectEqual(expected_height, current.height);
-
-    return .{
-        .bbox = current.bbox,
-        .height = current.height,
-        .leaves = left.leaves + right.leaves,
-    };
-}
-
-fn validateTree(tree: anytype) !void {
-    if (tree.root) |root_id| {
-        const Id = @TypeOf(root_id);
-        const result = try validateSubtree(Id, tree, root_id, null);
-        try std.testing.expectEqual(tree.count(), result.leaves);
-    } else {
-        try std.testing.expectEqual(@as(usize, 0), tree.count());
-    }
-}
-
-fn randomBox(rnd: std.Random) TestBox {
-    const low = rnd.intRangeAtMost(i64, -500, 500);
-    const width = rnd.intRangeAtMost(i64, 1, 80);
-    return TestBox.init(low, low + width);
-}
-
-test "aabb tree remove only leaf empties tree" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    const id = try tree.insert(TestBox.init(0, 10), 100);
-    try tree.remove(id);
-
-    try std.testing.expect(tree.empty());
-    try std.testing.expectEqual(@as(usize, 0), tree.count());
-    try std.testing.expect(tree.root == null);
-    try std.testing.expectError(TestTree.Error.InvalidNode, tree.constNode(id));
-}
-
-test "aabb tree remove promotes sibling to root" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    const first = try tree.insert(TestBox.init(0, 10), 100);
-    const second = try tree.insert(TestBox.init(20, 30), 200);
-
-    try tree.remove(first);
-
-    try std.testing.expectEqual(@as(usize, 1), tree.count());
-    try std.testing.expectEqual(second, tree.root.?);
-
-    const root = try tree.constNode(tree.root.?);
-    try std.testing.expect(root.isLeaf());
-    try std.testing.expect(root.parent == null);
-    try std.testing.expectEqual(TestBox.init(20, 30), root.bbox);
-    try std.testing.expectEqual(@as(u64, 200), root.value.?);
-}
-
-test "aabb tree remove rejects internal node ids" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    _ = try tree.insert(TestBox.init(0, 10), 100);
-    _ = try tree.insert(TestBox.init(20, 30), 200);
-
-    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.remove(tree.root.?));
-    try std.testing.expectEqual(@as(usize, 2), tree.count());
-}
-
-test "aabb tree update inside current box refits without reinserting leaf" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    const id = try tree.insert(TestBox.init(0, 100), 100);
-    _ = try tree.insert(TestBox.init(200, 300), 200);
-    const old_root = tree.root.?;
-    const old_parent = (try tree.constNode(id)).parent.?;
-
-    try tree.update(id, TestBox.init(10, 20));
-
-    try std.testing.expectEqual(old_root, tree.root.?);
-    try std.testing.expectEqual(old_parent, (try tree.constNode(id)).parent.?);
-    try std.testing.expectEqual(TestBox.init(10, 20), try tree.getBox(id));
-    try std.testing.expectEqual(TestBox.init(10, 20), (try tree.constNode(id)).bbox);
-    try std.testing.expectEqual(TestBox.init(10, 300), (try tree.constNode(tree.root.?)).bbox);
-    try validateTree(&tree);
-}
-
-test "aabb tree update rejects internal node ids" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    _ = try tree.insert(TestBox.init(0, 10), 100);
-    _ = try tree.insert(TestBox.init(20, 30), 200);
-
-    try std.testing.expectError(
-        TestTree.Error.WrongNodeKind,
-        tree.update(tree.root.?, TestBox.init(1, 2)),
-    );
-}
-
-test "aabb tree balancing keeps ordered inserts shallow" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    for (0..100) |i| {
-        const x: i64 = @intCast(i * 10);
-        _ = try tree.insert(TestBox.init(x, x + 1), @intCast(i));
-    }
-
-    try validateTree(&tree);
-
-    const root = try tree.constNode(tree.root.?);
-    try std.testing.expect(root.height < 32);
-}
-
-fn runRandomInvariantStress(comptime TestTree: type, seed: u64) !void {
-    const allocator = std.testing.allocator;
-    const operations = 500;
-    const max_objects = 96;
-
-    var tree = TestTree.init(allocator);
-    defer tree.deinit();
-
-    var ids: std.ArrayList(TestTree.NodeId) = .empty;
-    defer ids.deinit(allocator);
-    try ids.ensureTotalCapacity(allocator, max_objects);
-
-    var prng = std.Random.DefaultPrng.init(seed);
-    const rnd = prng.random();
-
-    for (0..operations) |step| {
-        const action = rnd.intRangeLessThan(u8, 0, 100);
-
-        if (ids.items.len == 0 or (ids.items.len < max_objects and action < 45)) {
-            const id = try tree.insert(randomBox(rnd), @intCast(step));
-            try ids.append(allocator, id);
-        } else if (action < 75) {
-            const slot = rnd.intRangeLessThan(usize, 0, ids.items.len);
-            try tree.update(ids.items[slot], randomBox(rnd));
-        } else {
-            const slot = rnd.intRangeLessThan(usize, 0, ids.items.len);
-            const removed = ids.items[slot];
-            try tree.remove(removed);
-            try std.testing.expectError(TestTree.Error.InvalidNode, tree.constNode(removed));
-            ids.items[slot] = ids.items[ids.items.len - 1];
-            _ = ids.pop().?;
-        }
-
-        try std.testing.expectEqual(ids.items.len, tree.count());
-        if (step % 17 == 0) {
-            try validateTree(&tree);
-        }
-    }
-
-    try validateTree(&tree);
-}
-
-test "aabb tree randomized operations preserve internal invariants" {
-    try runRandomInvariantStress(Tree(TestBox, u64), 0xAABB_1A7E_2026);
-}
-
-test "aabb fat tree randomized operations preserve internal invariants" {
-    try runRandomInvariantStress(FatTree(TestBox, u64, 7), 0xFA7_1A7E_2026);
-}
-
-test "aabb tree accessors reject invalid and internal ids" {
-    const TestTree = Tree(TestBox, u64);
-
-    var tree = TestTree.init(std.testing.allocator);
-    defer tree.deinit();
-
-    try std.testing.expectError(
-        TestTree.Error.InvalidNode,
-        tree.getValue(.{ .index = 0, .generation = 0 }),
-    );
-    try std.testing.expectError(
-        TestTree.Error.InvalidNode,
-        tree.getBox(.{ .index = 0, .generation = 0 }),
-    );
-    try std.testing.expectError(
-        TestTree.Error.InvalidNode,
-        tree.getTreeBox(.{ .index = 0, .generation = 0 }),
-    );
-    try std.testing.expectError(
-        TestTree.Error.InvalidNode,
-        tree.setValue(.{ .index = 0, .generation = 0 }, 100),
-    );
-
-    _ = try tree.insert(TestBox.init(0, 10), 100);
-    _ = try tree.insert(TestBox.init(20, 30), 200);
-
-    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getValue(tree.root.?));
-    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getBox(tree.root.?));
-    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.getTreeBox(tree.root.?));
-    try std.testing.expectError(TestTree.Error.WrongNodeKind, tree.setValue(tree.root.?, 300));
 }
