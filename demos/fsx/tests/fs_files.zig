@@ -5,6 +5,7 @@ const fullaz = @import("fullaz");
 const fs = fsx.fs;
 const inode = fsx.inode;
 const constants = fsx.constants;
+const superblock = fsx.superblock;
 
 const PageCacheT = fullaz.storage.page_cache.PageCache;
 const MemoryBlock = fullaz.device.MemoryBlock;
@@ -12,6 +13,43 @@ const MemoryBlock = fullaz.device.MemoryBlock;
 const Device = MemoryBlock(u32);
 const PageCache = PageCacheT(Device);
 const FsT = fs.Fs(PageCache, fsx.path.Default);
+
+fn expectFileIndexLeafKind(format_version: u16, expected_kind: u16) !void {
+    const allocator = std.testing.allocator;
+    var device = try Device.init(allocator, constants.default_block_size);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 64);
+    defer cache.deinit();
+
+    var f = try FsT.format(&cache, constants.default_block_size);
+    if (format_version != constants.version) {
+        var ph = try cache.fetch(constants.superblock_pid);
+        defer ph.deinit();
+        var sb = superblock.View(false).init(try ph.getDataMut());
+        sb.headerMut().version.set(format_version);
+        try cache.flush(constants.superblock_pid);
+        f = try FsT.open(&cache, constants.default_block_size);
+    }
+
+    try f.touch("/f");
+    const data = [_]u8{0x5a} ** 10_000;
+    _ = try f.write("/f", &data);
+
+    const roots = switch ((try f.resolve("/f")).?) {
+        .file => |file_roots| file_roots,
+        .dir => unreachable,
+    };
+    const index_root = roots.index.?;
+    var ph = try cache.fetch(index_root);
+    defer ph.deinit();
+    const page = fullaz.page.header.View(u32, u16, .little, true).init(try ph.getData());
+    try std.testing.expectEqual(expected_kind, page.header().kind.get());
+
+    var read_back: [10_000]u8 = undefined;
+    const read = try f.read("/f", &read_back);
+    try std.testing.expectEqual(data.len, read);
+    try std.testing.expectEqualSlices(u8, &data, &read_back);
+}
 
 const Collector = struct {
     count: usize = 0,
@@ -162,6 +200,14 @@ test "Fs write: appends across calls" {
     var buf: [16]u8 = undefined;
     const r = try f.read("/f", &buf);
     try std.testing.expectEqualSlices(u8, "abcdef", buf[0..r]);
+}
+
+test "Fs v2 writes declared file-index page kinds" {
+    try expectFileIndexLeafKind(constants.version, constants.PageKind.file_index_leaf);
+}
+
+test "Fs v1 remains readable and writes legacy file-index page kinds" {
+    try expectFileIndexLeafKind(constants.legacy_version, 0);
 }
 
 test "Fs write: large file spanning many chunks round-trips" {

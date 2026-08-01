@@ -9,6 +9,8 @@ const weighted_index = @import("weighted_index.zig");
 
 pub const Settings = struct {
     chunk_page_kind: u16 = 0x21,
+    index_leaf_page_kind: u16 = 0,
+    index_inode_page_kind: u16 = 1,
 };
 
 pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type, comptime Endian: std.builtin.Endian) type {
@@ -20,9 +22,22 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type, compt
     return Indexed(PageCacheType, StorageManager, NoIndexImpl, Endian);
 }
 
-pub fn HandleWeighted(comptime PageCacheType: type, comptime StorageManager: type, comptime Endian: std.builtin.Endian) type {
-    const IndexImpl = weighted_index.WeightedIndex(PageCacheType, StorageManager, Endian);
-    return Indexed(PageCacheType, StorageManager, IndexImpl, Endian);
+pub fn HandleWeighted(
+    comptime PageCacheType: type,
+    comptime StorageManager: type,
+    comptime Endian: std.builtin.Endian,
+) type {
+    const IndexImpl = weighted_index.WeightedIndex(
+        PageCacheType,
+        StorageManager,
+        Endian,
+    );
+    return Indexed(
+        PageCacheType,
+        StorageManager,
+        IndexImpl,
+        Endian,
+    );
 }
 
 pub fn Indexed(

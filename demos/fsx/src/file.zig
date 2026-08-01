@@ -49,16 +49,15 @@ pub fn File(comptime PageCacheType: type) type {
     };
 
     const Chain = chain_store.HandleWeighted(PageCacheType, FileSM, constants.endian);
-    const chain_settings: chain_store.Settings = .{ .chunk_page_kind = constants.PageKind.file_chunk };
-
     return struct {
         const Self = @This();
 
         cache: *PageCacheType,
         roots: FileRoots,
+        settings: chain_store.Settings,
 
-        pub fn init(cache: *PageCacheType, roots: FileRoots) Self {
-            return .{ .cache = cache, .roots = roots };
+        pub fn init(cache: *PageCacheType, roots: FileRoots, settings: chain_store.Settings) Self {
+            return .{ .cache = cache, .roots = roots, .settings = settings };
         }
 
         pub fn getRoots(self: *const Self) FileRoots {
@@ -71,7 +70,7 @@ pub fn File(comptime PageCacheType: type) type {
 
         pub fn append(self: *Self, bytes: []const u8) !usize {
             var sm = FileSM{ .cache = self.cache, .roots = self.roots };
-            var handle = Chain.init(self.cache, &sm, chain_settings);
+            var handle = Chain.init(self.cache, &sm, self.settings);
             defer handle.deinit();
 
             if (sm.roots.first == null) {
@@ -86,7 +85,7 @@ pub fn File(comptime PageCacheType: type) type {
 
         pub fn read(self: *Self, buf: []u8) !usize {
             var sm = FileSM{ .cache = self.cache, .roots = self.roots };
-            var handle = Chain.init(self.cache, &sm, chain_settings);
+            var handle = Chain.init(self.cache, &sm, self.settings);
             defer handle.deinit();
 
             if (sm.roots.first == null) {
@@ -99,7 +98,7 @@ pub fn File(comptime PageCacheType: type) type {
         // TODO: chain_store.Handle has a bug. So it should be fixed as well here.
         pub fn destroy(self: *Self) !void {
             var sm = FileSM{ .cache = self.cache, .roots = self.roots };
-            var handle = Chain.init(self.cache, &sm, chain_settings);
+            var handle = Chain.init(self.cache, &sm, self.settings);
             defer handle.deinit();
 
             if (sm.roots.first != null) {

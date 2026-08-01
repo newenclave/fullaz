@@ -69,12 +69,16 @@ pub fn View(comptime read_only: bool) type {
             if (h.magic.get() != constants.magic) {
                 return Error.BadMagic;
             }
-            if (h.version.get() != constants.version) {
+            if (!constants.isSupportedVersion(h.version.get())) {
                 return Error.BadVersion;
             }
             if (h.block_size.get() != block_size) {
                 return Error.BadBlockSize;
             }
+        }
+
+        pub fn getVersion(self: *const Self) u16 {
+            return self.header().version.get();
         }
 
         pub fn getRootDirRoot(self: *const Self) ?PageId {

@@ -6,7 +6,8 @@ pub const PageId = u32;
 pub const Size = u32;
 
 pub const magic: u32 = 0x31585346; // "FSX1" in little-endian
-pub const version: u16 = 1;
+pub const legacy_version: u16 = 1;
+pub const version: u16 = 2;
 
 pub const default_block_size: usize = 4096;
 
@@ -27,3 +28,15 @@ pub const PageKind = struct {
     pub const file_index_inode: u16 = 0x31;
     pub const freed: u16 = std.math.maxInt(u16);
 };
+
+pub fn isSupportedVersion(format_version: u16) bool {
+    return format_version == legacy_version or format_version == version;
+}
+
+pub fn fileIndexLeafKind(format_version: u16) u16 {
+    return if (format_version == legacy_version) 0 else PageKind.file_index_leaf;
+}
+
+pub fn fileIndexInodeKind(format_version: u16) u16 {
+    return if (format_version == legacy_version) 1 else PageKind.file_index_inode;
+}

@@ -124,6 +124,7 @@ pub fn WeightedIndex(
     };
 
     const Model = wbpt.models.paged.PagedModel(PageCacheType, IdxMgr, SizeT, Policy);
+    const ModelSettings = wbpt.models.paged.Settings;
     const Tree = wbpt.WeightedBpt(Model);
 
     return struct {
@@ -138,17 +139,26 @@ pub fn WeightedIndex(
 
         cache: *PageCacheType,
         sm: *StorageManager,
+        settings: ModelSettings,
 
         pub fn init(cache: *PageCacheType, mgr: *StorageManager, settings: anytype) Self {
-            _ = settings;
-            return .{ .cache = cache, .sm = mgr };
+            var model_settings: ModelSettings = .{};
+            if (@hasField(@TypeOf(settings), "index_leaf_page_kind")) {
+                model_settings.leaf_page_kind = settings.index_leaf_page_kind;
+            }
+            if (@hasField(@TypeOf(settings), "index_inode_page_kind")) {
+                model_settings.inode_page_kind = settings.index_inode_page_kind;
+            }
+            return .{ .cache = cache, .sm = mgr, .settings = model_settings };
         }
 
         pub fn deinit(_: *Self) void {}
 
         pub fn locate(self: *const Self, offset: Size) Error!?LocatedRes {
-            var idx_mgr = IdxMgr{ .sm = self.sm };
-            var model = Model.init(self.cache, &idx_mgr, .{});
+            var idx_mgr = IdxMgr{
+                .sm = self.sm,
+            };
+            var model = Model.init(self.cache, &idx_mgr, self.settings);
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
@@ -168,8 +178,10 @@ pub fn WeightedIndex(
         }
 
         pub fn onSeal(self: *Self, page_id: PageId, size: Size) Error!void {
-            var idx_mgr = IdxMgr{ .sm = self.sm };
-            var model = Model.init(self.cache, &idx_mgr, .{});
+            var idx_mgr = IdxMgr{
+                .sm = self.sm,
+            };
+            var model = Model.init(self.cache, &idx_mgr, self.settings);
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
@@ -182,8 +194,10 @@ pub fn WeightedIndex(
         }
 
         pub fn onUnseal(self: *Self) Error!void {
-            var idx_mgr = IdxMgr{ .sm = self.sm };
-            var model = Model.init(self.cache, &idx_mgr, .{});
+            var idx_mgr = IdxMgr{
+                .sm = self.sm,
+            };
+            var model = Model.init(self.cache, &idx_mgr, self.settings);
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
@@ -193,8 +207,10 @@ pub fn WeightedIndex(
         }
 
         pub fn clear(self: *Self) Error!void {
-            var idx_mgr = IdxMgr{ .sm = self.sm };
-            var model = Model.init(self.cache, &idx_mgr, .{});
+            var idx_mgr = IdxMgr{
+                .sm = self.sm,
+            };
+            var model = Model.init(self.cache, &idx_mgr, self.settings);
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
             while (try tree.totalWeight() > 0) {

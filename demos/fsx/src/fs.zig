@@ -1,3 +1,4 @@
+const fullaz = @import("fullaz");
 const constants = @import("constants.zig");
 const superblock = @import("superblock.zig");
 const inode = @import("inode.zig");
@@ -34,6 +35,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
 
         cache: Cache,
         block_size: u32,
+        format_version: u16,
 
         pub fn format(cache: *PageCacheType, block_size: u32) !Self {
             var ph = try cache.create();
@@ -45,7 +47,11 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
             var sb = superblock.View(false).init(try ph.getDataMut());
             sb.format(block_size);
             try cache.flush(constants.superblock_pid);
-            return .{ .cache = try Cache.init(cache), .block_size = block_size };
+            return .{
+                .cache = try Cache.init(cache),
+                .block_size = block_size,
+                .format_version = constants.version,
+            };
         }
 
         pub fn open(cache: *PageCacheType, block_size: u32) !Self {
@@ -53,7 +59,19 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
             defer ph.deinit();
             const sb = superblock.View(true).init(try ph.getData());
             try sb.validate(block_size);
-            return .{ .cache = try Cache.init(cache), .block_size = block_size };
+            return .{
+                .cache = try Cache.init(cache),
+                .block_size = block_size,
+                .format_version = sb.getVersion(),
+            };
+        }
+
+        fn fileSettings(self: *const Self) fullaz.storage.chain_store.Settings {
+            return .{
+                .chunk_page_kind = constants.PageKind.file_chunk,
+                .index_leaf_page_kind = constants.fileIndexLeafKind(self.format_version),
+                .index_inode_page_kind = constants.fileIndexInodeKind(self.format_version),
+            };
         }
 
         pub fn getRootDirRoot(self: *Self) !?PageId {
@@ -181,7 +199,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
                         return Error.IsADirectory;
                     },
                 };
-                var f = FileT.init(&self.cache, froots);
+                var f = FileT.init(&self.cache, froots, self.fileSettings());
                 written = try f.append(bytes);
                 _ = try parent.update(comps[p], Inode{ .file = f.getRoots() });
                 roots[p] = parent.getRoot();
@@ -198,7 +216,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
                     return Error.IsADirectory;
                 },
             };
-            var f = FileT.init(&self.cache, froots);
+            var f = FileT.init(&self.cache, froots, self.fileSettings());
             return try f.read(buf);
         }
 
@@ -244,7 +262,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
                         return Error.IsADirectory;
                     },
                 };
-                var f = FileT.init(&self.cache, froots);
+                var f = FileT.init(&self.cache, froots, self.fileSettings());
                 try f.destroy();
                 _ = try parent.remove(comps[p]);
                 roots[p] = parent.getRoot();
