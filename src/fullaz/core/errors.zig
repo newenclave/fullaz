@@ -35,6 +35,7 @@ pub const CacheError = error{
     NoFreeFrames,
     BatchActive,
     BatchTooLarge,
+    PageBusy,
 };
 
 pub const IndexError = error{

@@ -38,6 +38,27 @@ fn MassTrait(comptime Coord: type, comptime dimension: usize, comptime Value: ty
     };
 }
 
+fn FailingRemoveTrait(comptime Coord: type, comptime dimension: usize, comptime Value: type) type {
+    _ = Coord;
+    _ = dimension;
+
+    return struct {
+        const Self = @This();
+        pub const Error = error{RemoveFailed};
+
+        pub fn init() Self {
+            return .{};
+        }
+
+        pub fn onInsert(_: *Self, _: anytype, _: Value) Error!void {}
+        pub fn onGrow(_: *Self, _: *const Self) Error!void {}
+        pub fn onAdopt(_: *Self, _: anytype, _: Value) Error!void {}
+        pub fn onRemove(_: *Self, _: anytype, _: Value) Error!void {
+            return error.RemoveFailed;
+        }
+    };
+}
+
 fn expectChildBounds(comptime Coord: type) !void {
     const Model = orthtree.models.Memory(Coord, 2, u32);
     const TreeType = orthtree.tree.TreeImpl(Model);
@@ -574,6 +595,34 @@ fn expectRemove(comptime Coord: type) !void {
     try std.testing.expectEqual(@as(usize, 2), try model.getEntriesCount());
 }
 
+fn expectRemoveHookError(comptime Coord: type) !void {
+    const Model = orthtree.models.MemoryImpl(Coord, 2, u32, FailingRemoveTrait);
+    const TreeType = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+    const RemoveContext = struct {
+        fn predicate(_: *@This(), _: Box, _: u32) !bool {
+            return true;
+        }
+    };
+
+    var model = try Model.init(std.testing.allocator, 8);
+    defer model.deinit();
+    var tree = TreeType.init(&model);
+    try tree.insert(Box.create(.{ 0, 0 }, .{ 1, 1 }), 1);
+
+    var context = RemoveContext{};
+    try std.testing.expectError(
+        error.RemoveFailed,
+        tree.remove(Box.create(.{ 0, 0 }, .{ 1, 1 }), RemoveContext.predicate, &context),
+    );
+    try std.testing.expectEqual(@as(usize, 0), try model.getEntriesCount());
+
+    const acc = model.getAccessor();
+    var root = try acc.loadNode(acc.getRoot().?);
+    defer acc.deinitNode(&root);
+    try std.testing.expectEqual(@as(usize, 0), root.size());
+}
+
 test "OrthTree: create" {
     _ = fulla.spatial.orthtree;
 }
@@ -701,4 +750,12 @@ test "OrthTree: remove for u32 coordinates" {
 
 test "OrthTree: remove for f32 coordinates" {
     try expectRemove(f32);
+}
+
+test "OrthTree: remove hook error for u32 coordinates" {
+    try expectRemoveHookError(u32);
+}
+
+test "OrthTree: remove hook error for f32 coordinates" {
+    try expectRemoveHookError(f32);
 }

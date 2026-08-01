@@ -8,12 +8,16 @@ const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
 pub fn requiresHandle(comptime T: type) void {
     requiresErrorDeclaration(T, "Error");
     requiresTypeDeclaration(T, "Pid");
+    requiresTypeDeclaration(T, "LayoutLock");
     const Error = T.Error;
     const Pid = T.Pid;
+    const LayoutLock = T.LayoutLock;
     requiresFnSignature(T, "markDirty", fn (*T) Error!void);
     requiresFnSignature(T, "pid", fn (*const T) Error!Pid);
     requiresFnSignature(T, "getData", fn (*const T) Error![]const u8);
     requiresFnSignature(T, "getDataMut", fn (*T) Error![]u8);
+    requiresFnSignature(T, "isLayoutLocked", fn (*const T) Error!bool);
+    requiresFnSignature(T, "lockLayout", fn (*const T) Error!LayoutLock);
     requiresFnSignature(T, "clone", fn (*const T) Error!T);
     requiresFnSignature(T, "take", fn (*T) Error!T);
 }

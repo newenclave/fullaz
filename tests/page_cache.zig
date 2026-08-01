@@ -269,6 +269,53 @@ test "PageCache: clone increases ref_count" {
     try testing.expectEqual(handle.frame, cloned.frame);
 }
 
+test "PageCache: layout lock is exclusive and pins the frame" {
+    const allocator = testing.allocator;
+    var device = try MemoryDevice(u32).init(allocator, 256);
+    defer device.deinit();
+    _ = try device.appendBlock();
+
+    var cache = try PageCache(MemoryDevice(u32)).init(&device, allocator, 1);
+    defer cache.deinit();
+
+    var handle = try cache.fetch(0);
+    var lock = try handle.lockLayout();
+    defer lock.deinit();
+
+    try testing.expect(try handle.isLayoutLocked());
+    try testing.expectEqual(@as(usize, 2), handle.frame.?.ref_count);
+
+    var second = try handle.clone();
+    defer second.deinit();
+    try testing.expectError(error.PageBusy, second.lockLayout());
+
+    handle.deinit();
+    try testing.expectEqual(@as(usize, 0), cache.availableFrames());
+    try testing.expectEqual(@as(usize, 256), (try lock.getData()).len);
+}
+
+test "PageCache: layout lock release allows another lock" {
+    const allocator = testing.allocator;
+    var device = try MemoryDevice(u32).init(allocator, 256);
+    defer device.deinit();
+    _ = try device.appendBlock();
+
+    var cache = try PageCache(MemoryDevice(u32)).init(&device, allocator, 1);
+    defer cache.deinit();
+
+    var handle = try cache.fetch(0);
+    defer handle.deinit();
+    {
+        var lock = try handle.lockLayout();
+        try testing.expect(try handle.isLayoutLocked());
+        lock.deinit();
+    }
+    try testing.expect(!(try handle.isLayoutLocked()));
+
+    var lock = try handle.lockLayout();
+    defer lock.deinit();
+}
+
 test "PageCache: flushAll writes all dirty pages" {
     const allocator = testing.allocator;
     var device = try MemoryDevice(u32).init(allocator, 256);

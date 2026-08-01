@@ -572,12 +572,17 @@ pub fn MemoryImpl(
             return self.accessor.ctx.entries_count;
         }
 
-        pub fn valueBorrowAsIn(self: *Self, value: ValueBorrow) ValueIn {
+        pub fn valueBorrowAsIn(self: *Self, value: *const ValueBorrow) ValueIn {
             _ = self;
-            return value;
+            return value.*;
         }
 
-        pub fn deinitBorrowValue(self: *Self, value: ValueBorrow) void {
+        pub fn finalizeBorrowValue(self: *Self, value: *ValueBorrow) ErrorSet!void {
+            _ = self;
+            _ = value;
+        }
+
+        pub fn deinitBorrowValue(self: *Self, value: *ValueBorrow) void {
             _ = self;
             _ = value;
         }

@@ -25,7 +25,12 @@ pub fn HandleWeighted(comptime PageCacheType: type, comptime StorageManager: typ
     return Indexed(PageCacheType, StorageManager, IndexImpl, Endian);
 }
 
-pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comptime IndexT: type, comptime Endian: std.builtin.Endian) type {
+pub fn Indexed(
+    comptime PageCacheType: type,
+    comptime StorageManager: type,
+    comptime IndexT: type,
+    comptime Endian: std.builtin.Endian,
+) type {
     comptime {
         interfaces.page_cache.requiresPageCache(PageCacheType);
         requiresStorageManager(StorageManager);
@@ -61,7 +66,8 @@ pub fn Indexed(comptime PageCacheType: type, comptime StorageManager: type, comp
         const LinkType = ViewTypes.Link;
         const LinkTypeConst = ViewTypesConst.Link;
 
-        const Error = errors.PageError;
+        const Error = errors.PageError ||
+            PageCacheType.Error;
 
         handle: PageHandle,
         fn init(ph: PageHandle) Self {

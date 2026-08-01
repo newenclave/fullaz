@@ -289,6 +289,96 @@ test "Slot Variadic: removeShrink" {
     try verifyData(&slots, 1, "Third"); // Shifted down
 }
 
+test "Slot Variadic: removeIf filters by flags and preserves survivor order" {
+    const Context = struct {
+        seen: [4]usize = undefined,
+        seen_len: usize = 0,
+
+        fn isTombstone(ctx: *@This(), slot_id: usize, flags: u16, data: []const u8) bool {
+            ctx.seen[ctx.seen_len] = slot_id;
+            ctx.seen_len += 1;
+            return flags & 1 != 0 and data.len != 0;
+        }
+    };
+
+    var buffer: [256]u8 = undefined;
+    var slots = try TestVariadicAligned4.init(&buffer);
+    slots.formatHeader();
+
+    _ = try slots.insert("zero");
+    _ = try slots.insert("one");
+    _ = try slots.insert("two");
+    _ = try slots.insert("three");
+    _ = try slots.insert("four");
+    try slots.setFlags(1, 1);
+    try slots.setFlags(3, 3);
+    try slots.setFlags(4, 2);
+    try slots.free(2);
+
+    const available_before = try slots.availableAfterCompact();
+    var context = Context{};
+    try testing.expectEqual(
+        @as(usize, 2),
+        try slots.removeIf(Context.isTombstone, &context),
+    );
+
+    try testing.expectEqualSlices(usize, &.{ 0, 1, 3, 4 }, context.seen[0..context.seen_len]);
+    try testing.expectEqual(@as(usize, 3), slots.size());
+    try testing.expectEqualSlices(u8, "zero", try slots.get(0));
+    try testing.expectEqual(@as(u16, 0), slots.entriesConst()[1].offset.get());
+    try testing.expectEqualSlices(u8, "four", try slots.get(2));
+    try testing.expectEqual(@as(u16, 2), try slots.getFlags(2));
+    try testing.expect(try slots.availableAfterCompact() > available_before);
+
+    try slots.compactInPlace();
+    try testing.expectEqualSlices(u8, "zero", try slots.get(0));
+    try testing.expectEqualSlices(u8, "four", try slots.get(2));
+}
+
+test "Slot Variadic: removeIf supports zero flags, no matches, and all matches" {
+    const Context = struct {
+        target: []const u8,
+        calls: usize = 0,
+
+        fn matches(ctx: *@This(), _: usize, flags: u16, data: []const u8) bool {
+            std.debug.assert(flags == 0);
+            ctx.calls += 1;
+            return std.mem.eql(u8, data, ctx.target);
+        }
+
+        fn all(ctx: *@This(), _: usize, flags: u16, _: []const u8) bool {
+            std.debug.assert(flags == 0);
+            ctx.calls += 1;
+            return true;
+        }
+    };
+
+    var buffer: [256]u8 = undefined;
+    var slots = try TestVariadic.init(&buffer);
+    slots.formatHeader();
+    _ = try slots.insert("keep-a");
+    _ = try slots.insert("drop");
+    _ = try slots.insert("keep-b");
+
+    var missing = Context{ .target = "missing" };
+    try testing.expectEqual(@as(usize, 0), try slots.removeIf(Context.matches, &missing));
+    try testing.expectEqual(@as(usize, 3), missing.calls);
+    try testing.expectEqual(@as(usize, 3), slots.size());
+
+    var matching = Context{ .target = "drop" };
+    try testing.expectEqual(@as(usize, 1), try slots.removeIf(Context.matches, &matching));
+    try testing.expectEqualSlices(u8, "keep-a", try slots.get(0));
+    try testing.expectEqualSlices(u8, "keep-b", try slots.get(1));
+
+    var all = Context{ .target = "" };
+    try testing.expectEqual(@as(usize, 2), try slots.removeIf(Context.all, &all));
+    try testing.expectEqual(@as(usize, 0), slots.size());
+    try testing.expectEqual(slots.capacitySpace(), try slots.availableAfterCompact());
+
+    try testing.expectEqual(@as(usize, 0), try slots.insert("reused"));
+    try testing.expectEqualSlices(u8, "reused", try slots.get(0));
+}
+
 test "Slot Variadic: multiple inserts and removes" {
     var buffer: [512]u8 = undefined;
     var slots = try TestVariadic.init(&buffer);

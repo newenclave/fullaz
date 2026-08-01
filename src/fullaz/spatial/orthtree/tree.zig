@@ -104,9 +104,10 @@ pub fn TreeImpl(comptime ModelT: type) type {
             if (acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
-                if (try self.removeFromNode(&root_node, qbox, predicate, ctx)) |va| {
-                    defer self.model.deinitBorrowValue(va.value);
-                    try self.model.decrementEntriesCount();
+                if (try self.removeFromNode(&root_node, qbox, predicate, ctx)) |result_const| {
+                    var result = result_const;
+                    defer self.model.deinitBorrowValue(&result.value);
+                    try self.model.finalizeBorrowValue(&result.value);
                     return true;
                 }
             }
@@ -427,13 +428,20 @@ pub fn TreeImpl(comptime ModelT: type) type {
                 const entry_box = entry.box();
                 if (entry_box.overlaps(&qbox)) {
                     if (try callback(ctx, entry_box, entry.value())) {
-                        const removed_value = try entries.removeCurrent(&cursor);
-                        errdefer self.model.deinitBorrowValue(removed_value);
-                        try self.onRemove(
+                        var removed_value = try entries.removeCurrent(&cursor);
+                        errdefer self.model.deinitBorrowValue(&removed_value);
+                        self.model.decrementEntriesCount() catch |err| {
+                            try self.model.finalizeBorrowValue(&removed_value);
+                            return err;
+                        };
+                        self.onRemove(
                             node,
                             entry_box,
-                            self.model.valueBorrowAsIn(removed_value),
-                        );
+                            self.model.valueBorrowAsIn(&removed_value),
+                        ) catch |err| {
+                            try self.model.finalizeBorrowValue(&removed_value);
+                            return err;
+                        };
                         return RemoveResult{
                             .bbox = entry_box,
                             .value = removed_value,
@@ -450,13 +458,17 @@ pub fn TreeImpl(comptime ModelT: type) type {
                 if (node.getChild(i)) |child_id| {
                     var child_node = try self.getAccessor().loadNode(child_id);
                     defer self.getAccessor().deinitNode(&child_node);
-                    if (try self.removeFromNode(&child_node, qbox, callback, ctx)) |result| {
-                        errdefer self.model.deinitBorrowValue(result.value);
-                        try self.onRemove(
+                    if (try self.removeFromNode(&child_node, qbox, callback, ctx)) |result_const| {
+                        var result = result_const;
+                        errdefer self.model.deinitBorrowValue(&result.value);
+                        self.onRemove(
                             node,
                             result.bbox,
-                            self.model.valueBorrowAsIn(result.value),
-                        );
+                            self.model.valueBorrowAsIn(&result.value),
+                        ) catch |err| {
+                            try self.model.finalizeBorrowValue(&result.value);
+                            return err;
+                        };
                         return result;
                     }
                 }

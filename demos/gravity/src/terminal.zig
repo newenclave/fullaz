@@ -30,6 +30,14 @@ const WindowsInput = if (builtin.os.tag == .windows) struct {
 
     extern "kernel32" fn GetNumberOfConsoleInputEvents(handle: windows.HANDLE, count: *windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn ReadConsoleInputW(handle: windows.HANDLE, buffer: *InputRecord, length: windows.DWORD, read: *windows.DWORD) callconv(.winapi) windows.BOOL;
+
+    fn boolSucceeded(value: windows.BOOL) bool {
+        return switch (@typeInfo(windows.BOOL)) {
+            .int => value != 0,
+            .@"enum" => @intFromEnum(value) != 0,
+            else => @compileError("unexpected Windows BOOL representation"),
+        };
+    }
 };
 
 pub const Size = struct {
@@ -76,12 +84,12 @@ pub fn restore(writer: *Io.Writer) void {
 pub fn pollByte() ?u8 {
     if (comptime builtin.os.tag == .windows) {
         var event_count: std.os.windows.DWORD = 0;
-        if (!WindowsInput.GetNumberOfConsoleInputEvents(Io.File.stdin().handle, &event_count).toBool()) return null;
+        if (!WindowsInput.boolSucceeded(WindowsInput.GetNumberOfConsoleInputEvents(Io.File.stdin().handle, &event_count))) return null;
         while (event_count > 0) : (event_count -= 1) {
             var record: WindowsInput.InputRecord = undefined;
             var read: std.os.windows.DWORD = 0;
-            if (!WindowsInput.ReadConsoleInputW(Io.File.stdin().handle, &record, 1, &read).toBool() or read == 0) return null;
-            if (record.event_type != WindowsInput.key_event or !record.event.key.key_down.toBool()) continue;
+            if (!WindowsInput.boolSucceeded(WindowsInput.ReadConsoleInputW(Io.File.stdin().handle, &record, 1, &read)) or read == 0) return null;
+            if (record.event_type != WindowsInput.key_event or !WindowsInput.boolSucceeded(record.event.key.key_down)) continue;
             const character = record.event.key.character.unicode;
             if (character <= 0x7f) return @intCast(character);
         }

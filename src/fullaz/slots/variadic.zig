@@ -267,6 +267,61 @@ pub fn VariadicImpl(
             hdr.free_begin.set(new_begin);
         }
 
+        /// Removes matching live slots while preserving the order of survivors.
+        /// The predicate receives the original slot id and must not retain data.
+        pub fn removeIf(self: *Self, comptime predicate: anytype, context: anytype) Error!usize {
+            if (read_only) @compileError("Cannot remove from const buffer");
+
+            const slots = self.entriesMut();
+            for (slots) |slot| {
+                const offset: usize = @intCast(slotOffset(slot.offset.get()));
+                if (offset == SLOT_INVALID) {
+                    continue;
+                }
+                const length: usize = @intCast(slot.length.get());
+                if (offset + length > self.body.len) {
+                    return Error.OutOfBounds;
+                }
+            }
+
+            var write_index: usize = 0;
+            var removed: usize = 0;
+
+            for (slots, 0..) |slot, slot_id| {
+                const raw_offset = slot.offset.get();
+                const slot_offset = slotOffset(raw_offset);
+                if (slot_offset == SLOT_INVALID) {
+                    slots[write_index] = slot;
+                    write_index += 1;
+                    continue;
+                }
+
+                const offset: usize = @intCast(slot_offset);
+                const length: usize = @intCast(slot.length.get());
+                const data: []const u8 = self.body[offset..][0..length];
+                if (!predicate(context, slot_id, slotFlags(raw_offset), data)) {
+                    slots[write_index] = slot;
+                    write_index += 1;
+                    continue;
+                }
+
+                var hdr = self.headerMut();
+                if (hdr.free_end.get() == slot_offset) {
+                    hdr.free_end.set(slot_offset + self.fixLength(slot.length.get()));
+                } else {
+                    self.pushFreeSlot(slot_offset, slot.length.get());
+                }
+                removed += 1;
+            }
+
+            if (removed != 0) {
+                var hdr = self.headerMut();
+                hdr.entry_count.set(@intCast(write_index));
+                hdr.free_begin.set(hdr.free_begin.get() - @as(T, @intCast(removed * @sizeOf(Entry))));
+            }
+            return removed;
+        }
+
         pub fn canUpdate(self: *const Self, entry: usize, len: usize) Error!AvailableStatus {
             const fix_len: usize = @as(usize, self.fixLength(@as(T, @intCast(len))));
             const slots = self.entriesConst();
@@ -554,7 +609,9 @@ pub fn VariadicImpl(
         }
 
         fn reserveGetExpand(self: *Self, pos: usize, len: usize, need_slot: bool) Error![]u8 {
-            if (read_only) @compileError("Cannot insert into const buffer");
+            if (read_only) {
+                @compileError("Cannot insert into const buffer");
+            }
 
             if (pos > self.entriesConst().len) {
                 return Error.OutOfBounds;
@@ -630,7 +687,9 @@ pub fn VariadicImpl(
         }
 
         pub fn setFlags(self: *Self, entry: usize, flags: T) Error!void {
-            if (read_only) @compileError("Cannot set flags on const buffer");
+            if (read_only) {
+                @compileError("Cannot set flags on const buffer");
+            }
             const slots = self.entriesMut();
             if (entry >= slots.len) {
                 return Error.OutOfBounds;
@@ -645,7 +704,9 @@ pub fn VariadicImpl(
         }
 
         pub fn entriesMut(self: *Self) EntrySlice {
-            if (read_only) @compileError("Cannot get mutable entries from const buffer");
+            if (read_only) {
+                @compileError("Cannot get mutable entries from const buffer");
+            }
             const header = self.headerConst();
             const first_entry_ptr: [*]Entry = @ptrCast(&self.body[@sizeOf(Header)]);
             return first_entry_ptr[0..header.entry_count.get()];
@@ -709,7 +770,9 @@ pub fn VariadicImpl(
 
         // Free slots management
         fn pushFreeSlot(self: *Self, offset: T, length: T) void {
-            if (read_only) @compileError("Cannot push free slot into const buffer");
+            if (read_only) {
+                @compileError("Cannot push free slot into const buffer");
+            }
             var hdr = self.headerMut();
             const freed_head = hdr.freed.get();
 
