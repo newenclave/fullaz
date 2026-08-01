@@ -23,6 +23,7 @@ pub const PageError = error{
     InvalidId,
     BadType,
     BadData,
+    PageBusy,
 } || HandleError;
 
 pub const NotFoundError = error{
@@ -35,6 +36,7 @@ pub const CacheError = error{
     NoFreeFrames,
     BatchActive,
     BatchTooLarge,
+    PageBusy,
 };
 
 pub const IndexError = error{

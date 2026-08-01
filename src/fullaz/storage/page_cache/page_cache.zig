@@ -25,6 +25,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         ref_count: usize,
         data: []u8,
         frame_type: FrameType,
+        layout_locked: bool,
         prev: ?*Self,
         next: ?*Self,
         pub fn init() Self {
@@ -34,6 +35,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                 .frame_id = 0,
                 .data = &[_]u8{},
                 .frame_type = .clean,
+                .layout_locked = false,
                 .prev = null,
                 .next = null,
             };
@@ -52,6 +54,32 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
 
         pub const Error = errors.PageError;
         pub const Pid = DeviceT.BlockId;
+
+        pub const LayoutLock = struct {
+            const LockSelf = @This();
+
+            handle: Self,
+
+            pub fn deinit(self: *LockSelf) void {
+                if (self.handle.frame) |frame| {
+                    std.debug.assert(frame.layout_locked);
+                    frame.layout_locked = false;
+                }
+                self.handle.deinit();
+            }
+
+            pub fn pid(self: *const LockSelf) Error!Pid {
+                return self.handle.pid();
+            }
+
+            pub fn getData(self: *const LockSelf) Error![]const u8 {
+                return self.handle.getData();
+            }
+
+            pub fn getDataMut(self: *LockSelf) Error![]u8 {
+                return self.handle.getDataMut();
+            }
+        };
 
         fn init(frame: *Frame) Self {
             const res = Self{
@@ -101,6 +129,24 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             }
             try self.markDirty();
             return self.frame.?.data;
+        }
+
+        pub fn isLayoutLocked(self: *const Self) Error!bool {
+            if (self.frame == null) {
+                return Error.InvalidHandle;
+            }
+            return self.frame.?.layout_locked;
+        }
+
+        pub fn lockLayout(self: *const Self) Error!LayoutLock {
+            const frame = self.frame orelse return Error.InvalidHandle;
+            if (frame.layout_locked) {
+                return Error.PageBusy;
+            }
+
+            frame.layout_locked = true;
+            errdefer frame.layout_locked = false;
+            return .{ .handle = try self.clone() };
         }
 
         pub fn clone(self: *const Self) Error!Self {
