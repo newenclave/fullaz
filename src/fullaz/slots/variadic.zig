@@ -37,6 +37,8 @@ pub fn VariadicImpl(
     const Magic = PackedInt(u16, Endian);
 
     const SLOT_INVALID: T = 0;
+    const FLAGS_MASK: T = align_value - 1;
+    const OFFSET_MASK: T = ~FLAGS_MASK;
 
     const EntryHeader = extern struct {
         offset: IndexType,
@@ -73,12 +75,26 @@ pub fn VariadicImpl(
         pub const Entry = EntryHeader;
         pub const EntrySlice = []Entry;
         pub const EntrySliceConst = []const Entry;
+        pub const FlagsMask = FLAGS_MASK;
 
         pub const Error = errors.SlotsError;
 
         pub const AvailableStatus = AvailableStatusEnum;
 
         body: BufferType,
+
+        fn slotOffset(raw_offset: T) T {
+            return raw_offset & OFFSET_MASK;
+        }
+
+        fn slotFlags(raw_offset: T) T {
+            return raw_offset & FLAGS_MASK;
+        }
+
+        fn encodeSlotOffset(offset: T, flags: T) T {
+            std.debug.assert(slotOffset(offset) == offset);
+            return offset | slotFlags(flags);
+        }
 
         fn dataEnd(self: *const Self) usize {
             return core.memory.alignDown(usize, self.body.len, @as(usize, align_value));
@@ -129,14 +145,14 @@ pub fn VariadicImpl(
             const slots = self.entriesConst();
             var used = slots.len * @sizeOf(Entry);
             for (slots) |*s| {
-                if (s.offset.get() == SLOT_INVALID) {
+                if (slotOffset(s.offset.get()) == SLOT_INVALID) {
                     continue;
                 }
                 const len: T = s.length.get();
                 const fixed: T = self.fixLength(len);
                 used += @as(usize, fixed);
             }
-            if (used > (self.body.len - @sizeOf(Header))) {
+            if (used > self.capacitySpace()) {
                 return Error.InconsistentLayout;
             }
             return used;
@@ -160,7 +176,7 @@ pub fn VariadicImpl(
 
         pub fn getMutByEntry(self: *Self, slot: *const Entry) Error![]u8 {
             if (read_only) @compileError("Cannot get mutable value from const buffer");
-            const offset: usize = @intCast(slot.offset.get());
+            const offset: usize = @intCast(slotOffset(slot.offset.get()));
             const length: usize = @intCast(slot.length.get());
             if (offset + length > self.body.len) {
                 return Error.OutOfBounds;
@@ -169,7 +185,7 @@ pub fn VariadicImpl(
         }
 
         pub fn getByEntry(self: *const Self, slot: *const Entry) Error![]const u8 {
-            const offset: usize = @intCast(slot.offset.get());
+            const offset: usize = @intCast(slotOffset(slot.offset.get()));
             const length: usize = @intCast(slot.length.get());
             if (offset + length > self.body.len) {
                 return Error.OutOfBounds;
@@ -183,7 +199,7 @@ pub fn VariadicImpl(
                 return Error.OutOfBounds;
             }
             const slot = slots[entry];
-            const offset: usize = @intCast(slot.offset.get());
+            const offset: usize = @intCast(slotOffset(slot.offset.get()));
             const length: usize = @intCast(slot.length.get());
             if (offset + length > self.body.len) {
                 return Error.OutOfBounds;
@@ -198,18 +214,18 @@ pub fn VariadicImpl(
                 return Error.OutOfBounds;
             }
 
-            if (slots[entry].offset.get() == SLOT_INVALID) {
+            if (slotOffset(slots[entry].offset.get()) == SLOT_INVALID) {
                 return; // already freed no op
             }
 
-            const slot_offset = slots[entry].offset.get();
+            const slot_offset = slotOffset(slots[entry].offset.get());
             const slot_length = slots[entry].length.get();
 
             var hdr = self.headerMut();
             if (hdr.free_end.get() == slot_offset) {
                 hdr.free_end.set(slot_offset + self.fixLength(slot_length));
             } else {
-                self.pushFreeSlot(slots[entry].offset.get(), slots[entry].length.get());
+                self.pushFreeSlot(slot_offset, slots[entry].length.get());
             }
 
             slots[entry].offset.set(SLOT_INVALID);
@@ -219,7 +235,7 @@ pub fn VariadicImpl(
         pub fn findFreeEntry(self: *const Self) ?usize {
             const slots = self.entriesConst();
             for (slots, 0..) |s, i| {
-                if (s.offset.get() == SLOT_INVALID) {
+                if (slotOffset(s.offset.get()) == SLOT_INVALID) {
                     return i;
                 }
             }
@@ -233,14 +249,14 @@ pub fn VariadicImpl(
                 return Error.OutOfBounds;
             }
 
-            const slot_offset = slots[entry].offset.get();
+            const slot_offset = slotOffset(slots[entry].offset.get());
             const slot_length = slots[entry].length.get();
 
             var hdr = self.headerMut();
             if (hdr.free_end.get() == slot_offset) {
                 hdr.free_end.set(slot_offset + self.fixLength(slot_length));
             } else {
-                self.pushFreeSlot(slots[entry].offset.get(), slots[entry].length.get());
+                self.pushFreeSlot(slot_offset, slots[entry].length.get());
             }
 
             try self.shrink(entry);
@@ -324,7 +340,7 @@ pub fn VariadicImpl(
 
             // Add data sizes
             for (other_slots) |*s| {
-                if (s.offset.get() != SLOT_INVALID) {
+                if (slotOffset(s.offset.get()) != SLOT_INVALID) {
                     needed += (self.fixLength(s.length.get()) + @sizeOf(Entry));
                 }
             }
@@ -373,7 +389,7 @@ pub fn VariadicImpl(
         }
 
         fn offsetGt(slots: []const Entry, a: T, b: T) bool {
-            return slots[b].offset.get() < slots[a].offset.get();
+            return slotOffset(slots[b].offset.get()) < slotOffset(slots[a].offset.get());
         }
 
         pub fn compactWithBuffer(self: *Self, raw_buffer: []u8) Error!void {
@@ -381,7 +397,7 @@ pub fn VariadicImpl(
             if (sliceAligned(raw_buffer, slots.len)) |buffer| {
                 var total_elements: usize = 0;
                 for (slots, 0..) |*s, idx| {
-                    if (s.offset.get() != SLOT_INVALID) {
+                    if (slotOffset(s.offset.get()) != SLOT_INVALID) {
                         buffer[total_elements] = @intCast(idx);
                         total_elements += 1;
                     }
@@ -392,7 +408,8 @@ pub fn VariadicImpl(
                 var new_end_usize = self.dataEnd();
                 for (offset_buf) |idx| {
                     const uidx: usize = @intCast(idx);
-                    const slot_offset = slots[uidx].offset.get();
+                    const raw_offset = slots[uidx].offset.get();
+                    const slot_offset = slotOffset(raw_offset);
                     const slot_length = slots[uidx].length.get();
                     const target_len = self.fixLength(slot_length);
                     const old_off = slot_offset;
@@ -404,7 +421,7 @@ pub fn VariadicImpl(
 
                     @memmove(dst, src);
 
-                    slots[uidx].offset.set(@intCast(new_end_usize));
+                    slots[uidx].offset.set(encodeSlotOffset(@intCast(new_end_usize), slotFlags(raw_offset)));
                 }
                 self.headerMut().free_end.set(@intCast(new_end_usize));
                 self.headerMut().freed.set(0);
@@ -430,9 +447,11 @@ pub fn VariadicImpl(
                 var best_off: T = 0;
                 var best_len: T = 0;
                 var best_flen: T = 0;
+                var best_flags: T = 0;
 
                 for (slots, 0..) |*s, i| {
-                    const off: T = s.offset.get();
+                    const raw_offset = s.offset.get();
+                    const off = slotOffset(raw_offset);
                     const len: T = s.length.get();
 
                     if (off == SLOT_INVALID) {
@@ -448,6 +467,7 @@ pub fn VariadicImpl(
                         best_off = off;
                         best_len = len;
                         best_flen = self.fixLength(len);
+                        best_flags = slotFlags(raw_offset);
                     }
                 }
 
@@ -463,7 +483,7 @@ pub fn VariadicImpl(
                 const src = self.body[@as(usize, best_off)..@as(usize, best_off + best_len)];
                 @memmove(dst, src);
 
-                slots[best_i.?].offset.set(free_end);
+                slots[best_i.?].offset.set(encodeSlotOffset(free_end, best_flags));
             }
 
             self.headerMut().free_end.set(free_end);
@@ -502,13 +522,13 @@ pub fn VariadicImpl(
             const slots = self.entriesMut();
             const old_len = @as(usize, self.fixLength(slots[pos].length.get()));
             if (fixed_len == old_len) {
-                const offset: usize = @intCast(slots[pos].offset.get());
+                const offset: usize = @intCast(slotOffset(slots[pos].offset.get()));
                 slots[pos].length.set(@as(T, @intCast(len)));
                 return self.body[offset .. offset + len];
             }
 
             if (fixed_len < old_len) {
-                const offset: usize = @intCast(slots[pos].offset.get());
+                const offset: usize = @intCast(slotOffset(slots[pos].offset.get()));
                 slots[pos].length.set(@as(T, @intCast(len)));
 
                 const remain_slot_len = old_len - fixed_len;
@@ -572,7 +592,8 @@ pub fn VariadicImpl(
 
                     var slots = self.entriesMut();
                     slots[pos].length.set(@as(T, @intCast(len)));
-                    slots[pos].offset.set(@as(T, @intCast(slot_offset)));
+                    const flags = if (need_slot) 0 else slotFlags(slots[pos].offset.get());
+                    slots[pos].offset.set(encodeSlotOffset(@intCast(slot_offset), flags));
 
                     return buf[0..len];
                 }
@@ -589,7 +610,8 @@ pub fn VariadicImpl(
 
             var slots = self.entriesMut();
             slots[pos].length.set(@as(T, @intCast(len)));
-            slots[pos].offset.set(self.headerConst().free_end.get());
+            const flags = if (need_slot) 0 else slotFlags(slots[pos].offset.get());
+            slots[pos].offset.set(encodeSlotOffset(self.headerConst().free_end.get(), flags));
 
             return buf;
         }
@@ -597,6 +619,23 @@ pub fn VariadicImpl(
         pub fn size(self: *const Self) usize {
             const header = self.headerConst();
             return @as(usize, @intCast(header.entry_count.get()));
+        }
+
+        pub fn getFlags(self: *const Self, entry: usize) Error!T {
+            const slots = self.entriesConst();
+            if (entry >= slots.len) {
+                return Error.OutOfBounds;
+            }
+            return slotFlags(slots[entry].offset.get());
+        }
+
+        pub fn setFlags(self: *Self, entry: usize, flags: T) Error!void {
+            if (read_only) @compileError("Cannot set flags on const buffer");
+            const slots = self.entriesMut();
+            if (entry >= slots.len) {
+                return Error.OutOfBounds;
+            }
+            slots[entry].offset.set(encodeSlotOffset(slotOffset(slots[entry].offset.get()), flags));
         }
 
         pub fn entriesConst(self: *const Self) EntrySliceConst {
