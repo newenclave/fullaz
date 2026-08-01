@@ -9,6 +9,10 @@ module + executable + test suite, wired into the top-level `build.zig`.
 | [`galaxy/`](galaxy) | A starfield explorer on the paged R\*-tree — the viewport is a window query, movement reveals deterministically-generated stars, the whole galaxy persists to one file. | `zig build run-galaxy -- <image> [--format] [--seed N] [cmd]` | `zig build test-galaxy` |
 | [`gravity/`](gravity) | An interactive Barnes-Hut galaxy simulation using the in-memory 2D orthtree and per-node mass aggregates. | `zig build run-gravity -- [--bodies N] [--theta X] [--dt X] [--seed N] [--central-mass X]` | `zig build test-gravity` |
 
+Build the fsx browser explorer with `zig build wasm-fsx`. It installs `fsx.wasm`
+and `index.html` in `zig-out/web-fsx`; serve that directory over HTTP. The browser
+keeps its image in IndexedDB and supports `.fsx` import/export.
+
 The gravity demo requires an interactive terminal. Press `Space` to run or pause,
 `n` to advance one step while paused, `g` to enter a number of steps to jump, and
 `q` to quit.

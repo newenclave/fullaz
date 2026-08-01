@@ -358,4 +358,6 @@ pub fn build(b: *std.Build) void {
         .dest_dir = .{ .override = .{ .custom = "web-fsx" } },
     });
     fsx_wasm_step.dependOn(&install_fsx_wasm.step);
+    const install_fsx_html = b.addInstallFile(b.path("demos/fsx/web/index.html"), "web-fsx/index.html");
+    fsx_wasm_step.dependOn(&install_fsx_html.step);
 }
