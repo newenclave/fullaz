@@ -99,8 +99,14 @@ fn SlotWrapperView(comptime PageIdT: type, comptime IndexT: type, comptime Endia
     };
 }
 
-pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
-    const HeaderPageView = header.View(PageIdT, IndexT, Endian, read_only);
+pub fn View(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime AdditionalT: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
+    const HeaderPageView = header.ViewImpl(PageIdT, IndexT, AdditionalT, Endian, read_only);
     const SlotsDirType = slots.Variadic(IndexT, Endian, read_only);
 
     const ConstSlotsDirType = slots.Variadic(IndexT, Endian, true);

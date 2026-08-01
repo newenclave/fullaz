@@ -88,7 +88,7 @@ const NoneStorageManager = struct {
 
 test "SkipList paged: page and view" {
     var buf: [4096]u8 = .{0} ** 4096;
-    var view = View(u32, u16, std.builtin.Endian.little, false).init(buf[0..]);
+    var view = View(u32, u16, void, std.builtin.Endian.little, false).init(buf[0..]);
     try view.formatPage(42, 1234, 64);
 
     const hdr = view.page_view.header();
@@ -132,7 +132,7 @@ test "SkipList paged: create and load nodes" {
 
 test "SkipList paged: create slot, work with the slot" {
     var buf: [4096]u8 = .{0} ** 4096;
-    const ViewT = View(u32, u16, std.builtin.Endian.little, false);
+    const ViewT = View(u32, u16, void, std.builtin.Endian.little, false);
     const SlotWrapper = ViewT.SlotWrapper;
 
     _ = SlotWrapper;
@@ -207,7 +207,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     {
         var ph = try cache.fetch(ref.page_id);
         defer ph.deinit();
-        const v = View(u32, u16, std.builtin.Endian.little, true).init(try ph.getData());
+        const v = View(u32, u16, void, std.builtin.Endian.little, true).init(try ph.getData());
         try std.testing.expectEqual(@as(usize, 1), try v.entries());
         const sw = try v.get(ref.slot_id);
         try std.testing.expect(std.mem.eql(u8, sw.key, "AAAA"));
@@ -238,7 +238,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     {
         var ph = try cache.fetch(ref.page_id);
         defer ph.deinit();
-        const v = View(u32, u16, std.builtin.Endian.little, true).init(try ph.getData());
+        const v = View(u32, u16, void, std.builtin.Endian.little, true).init(try ph.getData());
         const used_after_destroy = try (try v.slotsDir()).usedSpace();
         try std.testing.expect(used_after_destroy < used_after_create); // slot reclaimed
     }
@@ -342,7 +342,7 @@ test "SkipList paged: node next/prev links round-trip per level" {
 
 test "SkipList paged: View.compact reclaims a freed hole and preserves slot ids" {
     var buf: [1024]u8 = .{0} ** 1024;
-    const ViewT = View(u32, u16, std.builtin.Endian.little, false);
+    const ViewT = View(u32, u16, void, std.builtin.Endian.little, false);
     var v = ViewT.init(buf[0..]);
     try v.formatPage(1, 7, 0);
 
@@ -404,7 +404,7 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
     }, {}, rand, allocator);
     defer model.deinit();
 
-    const ViewT = View(u32, u16, std.builtin.Endian.little, false);
+    const ViewT = View(u32, u16, void, std.builtin.Endian.little, false);
 
     // a real, formatted node page we fill by hand
     var ph = try cache.create();
