@@ -92,7 +92,11 @@ pub fn Paged(
             var ph = try self.fetchSlab(location.page_id);
             defer ph.deinit();
             var v = View.init(try ph.getDataMut());
-            try v.remove(@intCast(location.slot_id));
+            const slot = (try v.get(@intCast(location.slot_id))) orelse return Error.BadData;
+            if (slot.pid != pid) {
+                return Error.BadData;
+            }
+            try v.remove(slot.slot_id);
             if (try v.isEmpty()) {
                 try self.unlinkAndDestroy(&v, location.page_id);
             }

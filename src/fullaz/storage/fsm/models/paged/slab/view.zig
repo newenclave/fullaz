@@ -147,6 +147,21 @@ pub fn View(
             try slots_dir.clear(slot);
         }
 
+        pub fn get(self: *const Self, slot_index: usize) Error!?SlotInfo {
+            const slots_dir = try self.slotsDir();
+            if (slot_index >= try slots_dir.capacity() or !try slots_dir.isSet(slot_index)) {
+                return null;
+            }
+
+            const slot = try slots_dir.get(slot_index);
+            const slot_data: *const Slot = @ptrCast(slot.ptr);
+            return .{
+                .pid = slot_data.pid.get(),
+                .free_space = slot_data.free_space.get(),
+                .slot_id = slot_index,
+            };
+        }
+
         pub fn setNext(self: *Self, next_page_id: ?PageIdT) ErrorSet!void {
             if (read_only) {
                 @compileError("Cannot set next page on a read-only page");

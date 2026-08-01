@@ -182,6 +182,38 @@ test "Fsm2 paged: add, find, update, remove" {
     try std.testing.expectEqual(@as(?u32, d1), try map.find(1800));
 }
 
+test "Fsm2 paged: remove rejects a location that points to another data page slot" {
+    const allocator = std.testing.allocator;
+    var sm = try NoneStorageManager.init(allocator);
+    defer sm.deinit();
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+
+    var model = Model.init(&cache, &sm, SizePolicy{}, .{});
+    var map = Map.init(&model);
+    defer map.deinit();
+
+    const first = try makeDataPage(&cache);
+    const second = try makeDataPage(&cache);
+    try map.add(first, 100);
+    try map.add(second, 100);
+
+    const second_location = blk: {
+        var ph = try cache.fetch(second);
+        defer ph.deinit();
+        break :blk (try LocationAccessor.read(try ph.getData())).?;
+    };
+    {
+        var ph = try cache.fetch(first);
+        defer ph.deinit();
+        try LocationAccessor.write(try ph.getDataMut(), second_location);
+    }
+
+    try std.testing.expectError(Model.Error.BadData, map.remove(first));
+}
+
 test "Fsm2 paged: a full slab page spills into a second chain page" {
     const allocator = std.testing.allocator;
     var sm = try NoneStorageManager.init(allocator);
