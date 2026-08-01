@@ -27,7 +27,7 @@
 <body>
 <header>
   <h1><span>fullaz</span> / fsx</h1><span id="status">loading WASM...</span><span class="spacer"></span>
-  <button id="new">new image</button><label class="file-label">import <input id="import" type="file" accept=".fsx,application/octet-stream" /></label><button id="download">download .fsx</button>
+  <button id="new">new image</button><button id="load-demo">load demo</button><label class="file-label">import <input id="import" type="file" accept=".fsx,application/octet-stream" /></label><button id="download">download .fsx</button>
 </header>
 <main>
   <section><div class="title"><strong>locations</strong><span class="spacer"></span><button id="root" class="tiny">/</button><button id="up" class="tiny">..</button></div><div id="tree"></div></section>
@@ -47,6 +47,16 @@ const el = {
   pageDetail: document.getElementById("page-detail"), mapStats: document.getElementById("map-stats"),
 };
 let wasm, ex, currentPath = "/", selected = null, pages = [], ownership = new Map(), selectedPage = null;
+const demoDirectories = ["/docs", "/docs/guides", "/docs/design", "/projects", "/projects/nebula", "/notes", "/archive"];
+const demoFiles = {
+  "/README.txt": "Welcome to the fsx demo image. Explore the directories, then edit a file in the browser demo.",
+  "/docs/welcome.txt": "Documentation lives in a paged B+ tree. Each directory entry is stored in a leaf page.",
+  "/docs/guides/getting-started.txt": "1. Open a file. 2. Change its text. 3. Save. 4. Watch the physical page map update.",
+  "/docs/design/storage-map.txt": "Yellow pages are directories. Blue pages contain file chunks. Purple pages are file indexes.",
+  "/projects/nebula/ideas.txt": "Nebula project notes:\n- build a star catalog\n- preserve page locality\n- make the inspector useful",
+  "/notes/today.txt": "Try creating a directory, adding a file, and replacing this text from the editor.",
+  "/archive/README.txt": "This directory is intentionally quiet. Delete it after removing this file to exercise reclamation.",
+};
 
 function setStatus(message, bad = false) { el.status.textContent = message; el.status.style.color = bad ? "#fb7185" : ""; }
 function errorText() { return decode.decode(new Uint8Array(ex.memory.buffer, ex.lastErrorPtr(), ex.lastErrorLen())); }
@@ -88,6 +98,7 @@ document.getElementById("touch").onclick = async () => { const name = prompt("Fi
 el.save.onclick = async () => { if (!selected || selected.kind !== 1) return; try { await mutate("replace", selected.path, el.editor.value); el.editorState.textContent = "saved"; } catch (e) { showError(e); } };
 el.delete.onclick = async () => { if (!selected || !confirm(`Delete ${selected.path}?`)) return; try { await mutate(selected.kind === 1 ? "removeFile" : "removeDirectory", selected.path); selected = null; el.editor.value = ""; el.editor.disabled = true; el.save.disabled = true; el.delete.disabled = true; await openDirectory(currentPath); } catch (e) { showError(e); } };
 document.getElementById("new").onclick = async () => { if (!confirm("Discard the current image and create a new fsx image?")) return; try { ensure(ex.format()); selected = null; currentPath = "/"; await persist(); await openDirectory("/"); } catch (e) { showError(e); } };
+document.getElementById("load-demo").onclick = async () => { if (!confirm("Discard the current image and load the fsx demo structure?")) return; try { ensure(ex.format()); for (const path of demoDirectories) ensure(bytesCall("mkdir", path)); for (const [path, content] of Object.entries(demoFiles)) { ensure(bytesCall("touch", path)); ensure(bytesCall("replace", path, content)); } selected = null; currentPath = "/"; await persist(); await openDirectory("/"); setStatus("demo image saved to IndexedDB"); } catch (e) { showError(e); } };
 document.getElementById("import").onchange = async event => { const file = event.target.files[0]; if (!file) return; try { const bytes = await file.arrayBuffer(); importBytes(bytes); selected = null; currentPath = "/"; await persist(); await openDirectory("/"); setStatus(`imported ${file.name}`); } catch (e) { showError(e); } event.target.value = ""; };
 document.getElementById("download").onclick = () => { try { const ptr = ex.imagePtr(); const bytes = new Uint8Array(ex.memory.buffer, ptr, ex.imageLen()).slice(); const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" })), download: "fsx-image.fsx" }); link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); } catch (e) { showError(e); } };
 function showError(error) { console.error(error); setStatus(String(error.message || error), true); }
