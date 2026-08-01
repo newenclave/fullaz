@@ -3,7 +3,7 @@ const fullaz = @import("fullaz");
 const fsm = fullaz.storage.fsm;
 
 const Memory = fsm.models.Memory(u32, u16);
-const Map = fsm.Fsm2(Memory);
+const Map = fsm.Fsm(Memory);
 
 test "Fsm2 memory: add, find, update, remove" {
     const allocator = std.testing.allocator;

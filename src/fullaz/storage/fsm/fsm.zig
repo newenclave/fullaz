@@ -2,7 +2,7 @@ const std = @import("std");
 const interfaces = @import("models/interfaces.zig");
 pub const models = @import("models/models.zig");
 
-pub fn Fsm2(comptime ModelT: type) type {
+pub fn Fsm(comptime ModelT: type) type {
     comptime interfaces.assertModel(ModelT);
 
     return struct {

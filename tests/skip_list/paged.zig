@@ -13,7 +13,7 @@ const SkipList = skip_list.List;
 const View = skip_list.models.paged.View;
 
 const FsmMem = fsm.models.Memory(u32, u16);
-const Fsm = fsm.Fsm2(FsmMem);
+const Fsm = fsm.Fsm(FsmMem);
 
 const interfaces = skip_list.models.interfaces;
 

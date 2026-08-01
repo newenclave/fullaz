@@ -79,7 +79,7 @@ const NoneStorageManager = struct {
 const Device = dev.MemoryBlock(u32);
 const PageCache = PageCacheT(Device);
 const Model = fsm.models.paged.slab.Model(PageCache, NoneStorageManager, SizePolicy);
-const Map = fsm.Fsm2(Model);
+const Map = fsm.Fsm(Model);
 const HeaderView = fullaz.page.header.View(u32, u16, .little, false);
 
 fn makeDataPage(cache: *PageCache) !u32 {
