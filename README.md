@@ -1,10 +1,6 @@
 # fullaz
 
-**Demos built on it** (under [`demos/`](demos/)): 
-
-[**fsx**](#fsx-a-filesystem-in-a-single-file): a persistent filesystem in a single file 
-
-[**galaxy**](#galaxy-an-r-tree-you-can-fly-through): a starfield explorer you can fly through, on the paged R\*-tree.
+**Demos built on it:** see [`demos/README.md`](demos/README.md).
 
 **fullaz** is a low-level storage and indexing library written in Zig.
 
@@ -119,8 +115,10 @@ If something can be made simpler for learning purposes, it probably will be.
 - [X]  **R-tree**
 - [X]  **R*-tree split/reinsert experiments**
 - [ ]  **KD-tree**
-- [ ]  **Quadtree**
-- [ ]  **Octree**
+- [ ]  **Quadtree** (in progress: generic in-memory 2D `Orthtree` foundation;
+  used by the gravity demo, but no paged model yet)
+- [ ]  **Octree** (in progress: shares the dimension-parametric `Orthtree`
+  foundation; dedicated 3D coverage and a paged model are pending)
 - [ ]  **Grid / hash-grid coarse spatial partitioning**
 
 #### Point-cloud / spatial storage experiments
