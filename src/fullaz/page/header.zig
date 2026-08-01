@@ -1,5 +1,6 @@
 const std = @import("std");
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
+const requiresFnSignature = @import("../contracts/interfaces.zig").requiresFnSignature;
 
 pub const ValidationError = error{
     InvalidHeaderSize,
@@ -91,9 +92,7 @@ pub fn ViewImpl(
         if (!@hasDecl(AdditionalT, "Storage") or @TypeOf(AdditionalT.Storage) != type) {
             @compileError("Page header Additional must declare Storage");
         }
-        if (!@hasDecl(AdditionalT, "format") or @TypeOf(AdditionalT.format) != fn (*AdditionalT.Storage) void) {
-            @compileError("Page header Additional must declare format(*Additional.Storage) void");
-        }
+        requiresFnSignature(AdditionalT, "format", fn (*AdditionalT.Storage) void);
         break :blk AdditionalT.page_version;
     };
     const AdditionalStorage = if (AdditionalT == void) void else AdditionalT.Storage;

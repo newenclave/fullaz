@@ -1,4 +1,5 @@
 const std = @import("std");
+const requiresFnSignature = @import("../contracts/interfaces.zig").requiresFnSignature;
 
 pub const Field = struct {
     name: [:0]const u8,
@@ -16,12 +17,8 @@ pub fn field(comptime name: [:0]const u8, comptime Trait: type) Field {
         if (@TypeOf(Trait.Storage) != type) {
             @compileError("Page extension trait Storage must be a type: " ++ @typeName(Trait));
         }
-        if (!@hasDecl(Trait, "format") or @TypeOf(Trait.format) != fn (*Trait.Storage) void) {
-            @compileError("Page extension trait must declare format(*Storage) void: " ++ @typeName(Trait));
-        }
-        if (!@hasDecl(Trait, "validate") or @TypeOf(Trait.validate) != fn (*const Trait.Storage) bool) {
-            @compileError("Page extension trait must declare validate(*const Storage) bool: " ++ @typeName(Trait));
-        }
+        requiresFnSignature(Trait, "format", fn (*Trait.Storage) void);
+        requiresFnSignature(Trait, "validate", fn (*const Trait.Storage) bool);
     }
 
     return .{

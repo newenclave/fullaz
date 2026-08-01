@@ -1,5 +1,6 @@
 const header = @import("../../page/header.zig");
 const location_accessor = @import("location_accessor.zig");
+const requiresFnSignature = @import("../../contracts/interfaces.zig").requiresFnSignature;
 
 pub fn HeaderLocationAccessor(
     comptime PageIdT: type,
@@ -16,18 +17,10 @@ pub fn HeaderLocationAccessor(
         if (!@hasDecl(Trait, "Location")) {
             @compileError("FSM location trait must declare Location");
         }
-        if (!@hasDecl(Trait, "get") or @TypeOf(Trait.get) != fn (*const Trait.Storage) ?Trait.Location) {
-            @compileError("FSM location trait must declare get(*const Storage) ?Location");
-        }
-        if (!@hasDecl(Trait, "set") or @TypeOf(Trait.set) != fn (*Trait.Storage, Trait.Location) void) {
-            @compileError("FSM location trait must declare set(*Storage, Location) void");
-        }
-        if (!@hasDecl(Trait, "clear") or @TypeOf(Trait.clear) != fn (*Trait.Storage) void) {
-            @compileError("FSM location trait must declare clear(*Storage) void");
-        }
-        if (!@hasDecl(Trait, "validate") or @TypeOf(Trait.validate) != fn (*const Trait.Storage) bool) {
-            @compileError("FSM location trait must declare validate(*const Storage) bool");
-        }
+        requiresFnSignature(Trait, "get", fn (*const Trait.Storage) ?Trait.Location);
+        requiresFnSignature(Trait, "set", fn (*Trait.Storage, Trait.Location) void);
+        requiresFnSignature(Trait, "clear", fn (*Trait.Storage) void);
+        requiresFnSignature(Trait, "validate", fn (*const Trait.Storage) bool);
     }
 
     const Accessor = struct {
