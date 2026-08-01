@@ -13,7 +13,7 @@ const SkipList = skip_list.List;
 const View = skip_list.models.paged.View;
 
 const FsmMem = fsm.models.Memory(u32, u16);
-const Fsm = fsm.Fsm2(FsmMem);
+const Fsm = fsm.Fsm(FsmMem);
 
 const interfaces = skip_list.models.interfaces;
 
@@ -88,7 +88,7 @@ const NoneStorageManager = struct {
 
 test "SkipList paged: page and view" {
     var buf: [4096]u8 = .{0} ** 4096;
-    var view = View(u32, u16, std.builtin.Endian.little, false).init(buf[0..]);
+    var view = View(u32, u16, void, std.builtin.Endian.little, false).init(buf[0..]);
     try view.formatPage(42, 1234, 64);
 
     const hdr = view.page_view.header();
@@ -104,7 +104,7 @@ test "SkipList paged: create and load nodes" {
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
 
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
@@ -132,7 +132,7 @@ test "SkipList paged: create and load nodes" {
 
 test "SkipList paged: create slot, work with the slot" {
     var buf: [4096]u8 = .{0} ** 4096;
-    const ViewT = View(u32, u16, std.builtin.Endian.little, false);
+    const ViewT = View(u32, u16, void, std.builtin.Endian.little, false);
     const SlotWrapper = ViewT.SlotWrapper;
 
     _ = SlotWrapper;
@@ -165,7 +165,7 @@ test "SkipList paged: interfaces" {
     //const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     comptime interfaces.assertPath(Model.Accessor.Path);
 }
@@ -174,7 +174,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
@@ -207,7 +207,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     {
         var ph = try cache.fetch(ref.page_id);
         defer ph.deinit();
-        const v = View(u32, u16, std.builtin.Endian.little, true).init(try ph.getData());
+        const v = View(u32, u16, void, std.builtin.Endian.little, true).init(try ph.getData());
         try std.testing.expectEqual(@as(usize, 1), try v.entries());
         const sw = try v.get(ref.slot_id);
         try std.testing.expect(std.mem.eql(u8, sw.key, "AAAA"));
@@ -238,7 +238,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     {
         var ph = try cache.fetch(ref.page_id);
         defer ph.deinit();
-        const v = View(u32, u16, std.builtin.Endian.little, true).init(try ph.getData());
+        const v = View(u32, u16, void, std.builtin.Endian.little, true).init(try ph.getData());
         const used_after_destroy = try (try v.slotsDir()).usedSpace();
         try std.testing.expect(used_after_destroy < used_after_create); // slot reclaimed
     }
@@ -259,7 +259,7 @@ test "SkipList paged: node next/prev links round-trip per level" {
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
@@ -342,7 +342,7 @@ test "SkipList paged: node next/prev links round-trip per level" {
 
 test "SkipList paged: View.compact reclaims a freed hole and preserves slot ids" {
     var buf: [1024]u8 = .{0} ** 1024;
-    const ViewT = View(u32, u16, std.builtin.Endian.little, false);
+    const ViewT = View(u32, u16, void, std.builtin.Endian.little, false);
     var v = ViewT.init(buf[0..]);
     try v.formatPage(1, 7, 0);
 
@@ -382,7 +382,7 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 1024); // small page -> easy to fill and fragment
     defer dev.deinit();
@@ -404,7 +404,7 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
     }, {}, rand, allocator);
     defer model.deinit();
 
-    const ViewT = View(u32, u16, std.builtin.Endian.little, false);
+    const ViewT = View(u32, u16, void, std.builtin.Endian.little, false);
 
     // a real, formatted node page we fill by hand
     var ph = try cache.create();
@@ -471,7 +471,7 @@ test "SkipList paged: iterator remove test" {
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
@@ -618,7 +618,7 @@ test "SkipList paged: randomized parity vs memory model" {
 
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const PagedModel = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const PagedModel = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
     const PagedSL = SkipList(PagedModel);
 
     // one seed drives the op stream; print it so any failure is reproducible.

@@ -35,7 +35,11 @@ test {
     _ = @import("chain/store_indexed.zig");
 
     _ = @import("fsm/memory.zig");
+    _ = @import("fsm/location.zig");
+    _ = @import("fsm/location_accessor.zig");
+    _ = @import("fsm/header_location_accessor.zig");
     _ = @import("fsm/paged_slab.zig");
+    _ = @import("fsm/skip_list_integration.zig");
 
     _ = @import("device/memory_block.zig");
     _ = @import("device/file_block.zig");
@@ -45,6 +49,8 @@ test {
     _ = @import("spatial/geometry.zig");
     _ = @import("spatial/orthtree/orthtree.zig");
 
+    _ = @import("page/extensions.zig");
+    _ = @import("page/links.zig");
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
     _ = @import("long_store.zig");

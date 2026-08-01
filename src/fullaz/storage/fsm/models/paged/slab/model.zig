@@ -1,14 +1,20 @@
 const std = @import("std");
 const errors = @import("../../../../../core/errors.zig");
-const header = @import("../../../../../page/header.zig");
-const PageSlotRef = @import("../../../../../page/page_slot_ref.zig").PageSlotRef;
+const assertLocationAccessor = @import("../../../location_accessor.zig").assertAccessor;
 const view_mod = @import("view.zig");
 
 pub const Settings = struct {
     page_kind: u16 = 1,
 };
 
-pub fn Paged(comptime PageCacheType: type, comptime SlabStorageManagerT: type, comptime SizePolicyT: type) type {
+pub fn Paged(
+    comptime PageCacheType: type,
+    comptime SlabStorageManagerT: type,
+    comptime SizePolicyT: type,
+    comptime LocationAccessorT: type,
+) type {
+    comptime assertLocationAccessor(LocationAccessorT);
+
     const PidT = PageCacheType.UnderlyingDevice.BlockId;
     const PageHandle = PageCacheType.Handle;
     const SizeClassT = SizePolicyT.SizeClass;
@@ -16,20 +22,14 @@ pub fn Paged(comptime PageCacheType: type, comptime SlabStorageManagerT: type, c
     const View = view_mod.View(PidT, u16, SizeClassT, .little, false).SlabPageView;
     const ConstView = view_mod.View(PidT, u16, SizeClassT, .little, true).SlabPageView;
 
-    const HeaderMut = header.View(PidT, u16, .little, false);
-    const HeaderConst = header.View(PidT, u16, .little, true);
-    const FsmLocation = PageSlotRef(PidT, u16, .little);
-
-    const Located = struct { slab_pid: PidT, slot: usize };
-
     return struct {
         const Self = @This();
 
         pub const Pid = PidT;
         pub const Size = u16;
-        pub const page_metadata_size = @sizeOf(FsmLocation);
         pub const Error = PageCacheType.Error ||
             SlabStorageManagerT.Error ||
+            LocationAccessorT.Error ||
             View.Error ||
             errors.PageError;
 
@@ -76,7 +76,10 @@ pub fn Paged(comptime PageCacheType: type, comptime SlabStorageManagerT: type, c
             defer slab.ph.deinit();
             var v = View.init(try slab.ph.getDataMut());
             const si = try v.insert(pid, free);
-            try self.stampFsmIndex(pid, slab.pid, si.slot_id);
+            try self.writeLocation(pid, .{
+                .page_id = slab.pid,
+                .slot_id = @intCast(si.slot_id),
+            });
         }
 
         pub fn update(self: *Self, pid: Pid, free: Size) Error!void {
@@ -85,13 +88,17 @@ pub fn Paged(comptime PageCacheType: type, comptime SlabStorageManagerT: type, c
         }
 
         pub fn remove(self: *Self, pid: Pid) Error!void {
-            const loc = try self.readFsmIndex(pid);
-            var ph = try self.fetchSlab(loc.slab_pid);
+            const location = (try self.readLocation(pid)) orelse return Error.BadData;
+            var ph = try self.fetchSlab(location.page_id);
             defer ph.deinit();
             var v = View.init(try ph.getDataMut());
-            try v.remove(loc.slot);
+            const slot = (try v.get(@intCast(location.slot_id))) orelse return Error.BadData;
+            if (slot.pid != pid) {
+                return Error.BadData;
+            }
+            try v.remove(slot.slot_id);
             if (try v.isEmpty()) {
-                try self.unlinkAndDestroy(&v, loc.slab_pid);
+                try self.unlinkAndDestroy(&v, location.page_id);
             }
         }
 
@@ -183,32 +190,16 @@ pub fn Paged(comptime PageCacheType: type, comptime SlabStorageManagerT: type, c
             try self.sm.destroyPage(slab_pid);
         }
 
-        fn stampFsmIndex(self: *Self, data_pid: PidT, slab_pid: PidT, slot: usize) Error!void {
+        fn writeLocation(self: *Self, data_pid: PidT, location: LocationAccessorT.Location) Error!void {
             var ph = try self.cache.fetch(data_pid);
             defer ph.deinit();
-            var hv = HeaderMut.init(try ph.getDataMut());
-            const metadata = hv.metadataMut();
-            if (metadata.len < page_metadata_size) {
-                return Error.BadData;
-            }
-            const loc: *FsmLocation = @ptrCast(metadata.ptr);
-            loc.page_id.set(slab_pid);
-            loc.slot_id.set(@intCast(slot));
+            try LocationAccessorT.write(try ph.getDataMut(), location);
         }
 
-        fn readFsmIndex(self: *Self, data_pid: PidT) Error!Located {
+        fn readLocation(self: *Self, data_pid: PidT) Error!?LocationAccessorT.Location {
             var ph = try self.cache.fetch(data_pid);
             defer ph.deinit();
-            const hv = HeaderConst.init(try ph.getData());
-            const metadata = hv.metadata();
-            if (metadata.len < page_metadata_size) {
-                return Error.BadData;
-            }
-            const loc: *const FsmLocation = @ptrCast(metadata.ptr);
-            return .{
-                .slab_pid = loc.page_id.get(),
-                .slot = @intCast(loc.slot_id.get()),
-            };
+            return try LocationAccessorT.read(try ph.getData());
         }
     };
 }

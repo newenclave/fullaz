@@ -1,8 +1,11 @@
 const std = @import("std");
 const interfaces = @import("models/interfaces.zig");
 pub const models = @import("models/models.zig");
+pub const location = @import("location.zig");
+pub const location_accessor = @import("location_accessor.zig");
+pub const HeaderLocationAccessor = @import("header_location_accessor.zig").HeaderLocationAccessor;
 
-pub fn Fsm2(comptime ModelT: type) type {
+pub fn Fsm(comptime ModelT: type) type {
     comptime interfaces.assertModel(ModelT);
 
     return struct {
@@ -12,7 +15,6 @@ pub fn Fsm2(comptime ModelT: type) type {
         pub const Pid = ModelT.Pid;
         pub const Size = ModelT.Size;
         pub const Error = ModelT.Error;
-        pub const page_metadata_size = if (@hasDecl(ModelT, "page_metadata_size")) ModelT.page_metadata_size else 0;
 
         model: *ModelT = undefined,
 

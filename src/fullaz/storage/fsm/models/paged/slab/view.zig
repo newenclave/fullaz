@@ -7,7 +7,13 @@ const errors = @import("../../../../../core/errors.zig");
 
 const SlotInfoImpl = @import("slot_info.zig").SlotInfo;
 
-pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+pub fn View(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime SizeClassT: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
     const HeaderPageViewT = header.View(PageIdT, IndexT, Endian, read_only);
     const SlotsDirType = slots.Fixed(u16, IndexT, Endian, read_only);
     const ConstSlotsDirType = slots.Fixed(u16, IndexT, Endian, true);
@@ -64,7 +70,13 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
             return self.page_view.header();
         }
 
-        pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT, size_class: SizeClassT) ErrorSet!void {
+        pub fn formatPage(
+            self: *Self,
+            kind: u16,
+            page_id: PageIdT,
+            metadata_len: IndexT,
+            size_class: SizeClassT,
+        ) ErrorSet!void {
             const subheader_size = @as(IndexT, @intCast(@sizeOf(SubheaderType)));
             self.page_view.formatPage(kind, page_id, subheader_size, metadata_len);
             const data = self.page_view.dataMut();
@@ -133,6 +145,21 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
                 return Error.OutOfBounds;
             }
             try slots_dir.clear(slot);
+        }
+
+        pub fn get(self: *const Self, slot_index: usize) Error!?SlotInfo {
+            const slots_dir = try self.slotsDir();
+            if (slot_index >= try slots_dir.capacity() or !try slots_dir.isSet(slot_index)) {
+                return null;
+            }
+
+            const slot = try slots_dir.get(slot_index);
+            const slot_data: *const Slot = @ptrCast(slot.ptr);
+            return .{
+                .pid = slot_data.pid.get(),
+                .free_space = slot_data.free_space.get(),
+                .slot_id = slot_index,
+            };
         }
 
         pub fn setNext(self: *Self, next_page_id: ?PageIdT) ErrorSet!void {

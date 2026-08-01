@@ -78,16 +78,24 @@ const NoneStorageManager = struct {
 
 const Device = dev.MemoryBlock(u32);
 const PageCache = PageCacheT(Device);
-const Model = fsm.models.paged.slab.Model(PageCache, NoneStorageManager, SizePolicy);
-const Map = fsm.Fsm2(Model);
-const HeaderView = fullaz.page.header.View(u32, u16, .little, false);
+const LocationTrait = fsm.location.Trait(u32, u16, .little);
+const Additional = fullaz.page.extensions.Compose(.{
+    .version = 2,
+    .fields = .{
+        fullaz.page.extensions.field("fsm", LocationTrait),
+    },
+});
+const LocationAccessor = fsm.HeaderLocationAccessor(u32, u16, .little, Additional, "fsm");
+const Model = fsm.models.paged.slab.Model(PageCache, NoneStorageManager, SizePolicy, LocationAccessor);
+const Map = fsm.Fsm(Model);
+const HeaderView = fullaz.page.header.ViewImpl(u32, u16, Additional, .little, false);
 
 fn makeDataPage(cache: *PageCache) !u32 {
     var ph = try cache.create();
     defer ph.deinit();
     const pid = try ph.pid();
     var hv = HeaderView.init(try ph.getDataMut());
-    hv.formatPage(999, pid, 0, @intCast(Map.page_metadata_size));
+    hv.formatPage(999, pid, 0, 0);
     return pid;
 }
 
@@ -141,7 +149,7 @@ fn fillUntilSpill(map: *Map, sm: *NoneStorageManager, cache: *PageCache, free: u
     return .{ .page1 = page1, .page2 = page2, .s = s, .total = s + 1 + extra, .pids = pids };
 }
 
-test "Fsm2 paged: add, find, update, remove" {
+test "Fsm paged: add, find, update, remove" {
     const allocator = std.testing.allocator;
     var sm = try NoneStorageManager.init(allocator);
     defer sm.deinit();
@@ -174,7 +182,39 @@ test "Fsm2 paged: add, find, update, remove" {
     try std.testing.expectEqual(@as(?u32, d1), try map.find(1800));
 }
 
-test "Fsm2 paged: a full slab page spills into a second chain page" {
+test "Fsm paged: remove rejects a location that points to another data page slot" {
+    const allocator = std.testing.allocator;
+    var sm = try NoneStorageManager.init(allocator);
+    defer sm.deinit();
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+
+    var model = Model.init(&cache, &sm, SizePolicy{}, .{});
+    var map = Map.init(&model);
+    defer map.deinit();
+
+    const first = try makeDataPage(&cache);
+    const second = try makeDataPage(&cache);
+    try map.add(first, 100);
+    try map.add(second, 100);
+
+    const second_location = blk: {
+        var ph = try cache.fetch(second);
+        defer ph.deinit();
+        break :blk (try LocationAccessor.read(try ph.getData())).?;
+    };
+    {
+        var ph = try cache.fetch(first);
+        defer ph.deinit();
+        try LocationAccessor.write(try ph.getDataMut(), second_location);
+    }
+
+    try std.testing.expectError(Model.Error.BadData, map.remove(first));
+}
+
+test "Fsm paged: a full slab page spills into a second chain page" {
     const allocator = std.testing.allocator;
     var sm = try NoneStorageManager.init(allocator);
     defer sm.deinit();
@@ -196,7 +236,7 @@ test "Fsm2 paged: a full slab page spills into a second chain page" {
     try std.testing.expectEqual(@as(?u32, null), try map.find(60000));
 }
 
-test "Fsm2 paged: emptying a slab page destroys it and clears the class root" {
+test "Fsm paged: emptying a slab page destroys it and clears the class root" {
     const allocator = std.testing.allocator;
     var sm = try NoneStorageManager.init(allocator);
     defer sm.deinit();
@@ -230,7 +270,7 @@ test "Fsm2 paged: emptying a slab page destroys it and clears the class root" {
     try std.testing.expectEqual(@as(?u32, null), try map.find(100));
 }
 
-test "Fsm2 paged: removing the tail page unlinks it, root unchanged" {
+test "Fsm paged: removing the tail page unlinks it, root unchanged" {
     const allocator = std.testing.allocator;
     var sm = try NoneStorageManager.init(allocator);
     defer sm.deinit();
@@ -258,7 +298,7 @@ test "Fsm2 paged: removing the tail page unlinks it, root unchanged" {
     try std.testing.expect((try map.find(100)) != null);
 }
 
-test "Fsm2 paged: removing the head page advances the class root to next" {
+test "Fsm paged: removing the head page advances the class root to next" {
     const allocator = std.testing.allocator;
     var sm = try NoneStorageManager.init(allocator);
     defer sm.deinit();
@@ -286,7 +326,7 @@ test "Fsm2 paged: removing the head page advances the class root to next" {
     try std.testing.expect((try map.find(100)) != null);
 }
 
-test "Fsm2 paged: find walks the chain to a non-root page" {
+test "Fsm paged: find walks the chain to a non-root page" {
     const allocator = std.testing.allocator;
     var sm = try NoneStorageManager.init(allocator);
     defer sm.deinit();

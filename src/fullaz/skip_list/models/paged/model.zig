@@ -15,6 +15,7 @@ pub fn Paged(
     comptime PageCacheType: type,
     comptime StorageManager: type,
     comptime FsmT: type,
+    comptime AdditionalT: type,
     comptime cmp: anytype,
     comptime Ctx: type,
 ) type {
@@ -25,8 +26,8 @@ pub fn Paged(
     const KeyT = []const u8;
     const ValueT = []const u8;
 
-    const NodeViewMut = SubheaderView(BlockIdType, u16, .little, false);
-    const NodeViewConst = SubheaderView(BlockIdType, u16, .little, true);
+    const NodeViewMut = SubheaderView(BlockIdType, u16, AdditionalT, .little, false);
+    const NodeViewConst = SubheaderView(BlockIdType, u16, AdditionalT, .little, true);
     const SlotWrapperConst = NodeViewConst.SlotWrapperConst;
     const SlotWrapper = NodeViewMut.SlotWrapperConst;
 
@@ -386,11 +387,7 @@ pub fn Paged(
             errdefer ph.deinit();
             const pid = try ph.pid();
             var view = NodeViewMut.init(try ph.getDataMut());
-            try view.formatPage(
-                self.context.settings.node_page_kind,
-                pid,
-                @intCast(FsmT.page_metadata_size),
-            );
+            try view.formatPage(self.context.settings.node_page_kind, pid, 0);
             return ph;
         }
 
@@ -409,13 +406,9 @@ pub fn Paged(
     return struct {
         const Self = @This();
 
-        pub const Error = PageCacheType.Error ||
-            StorageManager.Error ||
-            errors.SpaceError ||
+        pub const Error = AccessorImpl.Error ||
             errors.NotFoundError ||
-            errors.LayoutError ||
-            errors.SetError ||
-            errors.IndexError;
+            errors.SetError;
 
         pub const Accessor = AccessorImpl;
         pub const Node = NodeImpl;
