@@ -4,6 +4,7 @@ const superblock = @import("superblock.zig");
 const inode = @import("inode.zig");
 const dir = @import("dir.zig");
 const file = @import("file.zig");
+const inspect = @import("inspect.zig");
 const reclaiming_cache = @import("reclaiming_cache.zig");
 
 const PageId = constants.PageId;
@@ -79,6 +80,29 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
             defer ph.deinit();
             const sb = superblock.View(true).init(try ph.getData());
             return sb.getRootDirRoot();
+        }
+
+        pub fn inspectPages(
+            self: *Self,
+            ctx: anytype,
+            comptime callback: fn (@TypeOf(ctx), inspect.PageInfo) anyerror!void,
+        ) anyerror!void {
+            var inspector = inspect.Inspector(PageCacheType).init(self.cache.inner);
+            try inspector.scan(self.format_version, ctx, callback);
+        }
+
+        pub fn inspectOwnership(
+            self: *Self,
+            path: []const u8,
+            ctx: anytype,
+            comptime callback: fn (@TypeOf(ctx), inspect.OwnedPage) anyerror!void,
+        ) anyerror!void {
+            const node = (try self.resolve(path)) orelse return Error.NotFound;
+            var inspector = inspect.Inspector(PageCacheType).init(self.cache.inner);
+            switch (node) {
+                .dir => |roots| try inspector.traceDirectory(roots.root, ctx, callback),
+                .file => |roots| try inspector.traceFile(roots, self.format_version, ctx, callback),
+            }
         }
 
         pub fn setRootDirRoot(self: *Self, pid: ?PageId) !void {
