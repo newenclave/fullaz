@@ -127,3 +127,20 @@ test "page extension Compose retains its page version" {
 
     try std.testing.expectEqual(@as(u8, 7), Additional.page_version);
 }
+
+test "page extension Compose returns traits by field name" {
+    const Additional = extensions.Compose(.{
+        .version = 7,
+        .fields = .{
+            extensions.field("fsm", FsmTrait),
+            extensions.field("links", LinksTrait),
+        },
+    });
+
+    comptime if (Additional.traitType("fsm") != FsmTrait) {
+        @compileError("fsm field must return FsmTrait");
+    };
+    comptime if (Additional.traitType("links") != LinksTrait) {
+        @compileError("links field must return LinksTrait");
+    };
+}

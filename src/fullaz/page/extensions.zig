@@ -102,6 +102,16 @@ pub fn Compose(comptime config: anytype) type {
             return true;
         }
 
+        pub fn traitType(comptime name: []const u8) type {
+            inline for (0..field_count) |index| {
+                const descriptor = descriptors[index];
+                if (std.mem.eql(u8, name, descriptor.name)) {
+                    return descriptor.Trait;
+                }
+            }
+            @compileError("Unknown page extension field: " ++ name);
+        }
+
         fn storageType(comptime name: []const u8) type {
             inline for (0..field_count) |index| {
                 const descriptor = descriptors[index];
