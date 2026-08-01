@@ -2,6 +2,7 @@ const std = @import("std");
 const interfaces = @import("models/interfaces.zig");
 pub const models = @import("models/models.zig");
 pub const location = @import("location.zig");
+pub const location_accessor = @import("location_accessor.zig");
 
 pub fn Fsm(comptime ModelT: type) type {
     comptime interfaces.assertModel(ModelT);
