@@ -3,6 +3,7 @@ const interfaces = @import("models/interfaces.zig");
 pub const models = @import("models/models.zig");
 pub const location = @import("location.zig");
 pub const location_accessor = @import("location_accessor.zig");
+pub const HeaderLocationAccessor = @import("header_location_accessor.zig").HeaderLocationAccessor;
 
 pub fn Fsm(comptime ModelT: type) type {
     comptime interfaces.assertModel(ModelT);

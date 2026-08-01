@@ -37,6 +37,7 @@ test {
     _ = @import("fsm/memory.zig");
     _ = @import("fsm/location.zig");
     _ = @import("fsm/location_accessor.zig");
+    _ = @import("fsm/header_location_accessor.zig");
     _ = @import("fsm/paged_slab.zig");
 
     _ = @import("device/memory_block.zig");
