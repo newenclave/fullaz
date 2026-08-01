@@ -1,10 +1,15 @@
 const std = @import("std");
 const Variadic = @import("fullaz").slots.Variadic;
+const VariadicImpl = @import("fullaz").slots.VariadicImpl;
 const testing = std.testing;
 const printer = @import("test_printer");
 
 const TestVariadic = Variadic(u16, .little, false);
 const TestVariadicConst = Variadic(u16, .little, true);
+const TestVariadicAligned2 = VariadicImpl(u16, .little, false, 2);
+const TestVariadicAligned4 = VariadicImpl(u16, .little, false, 4);
+const TestVariadicAligned2Const = VariadicImpl(u16, .little, true, 2);
+const TestVariadicAligned4BigEndian = VariadicImpl(u16, .big, false, 4);
 
 const errors = @import("fullaz").core.errors;
 
@@ -41,6 +46,164 @@ test "Slot Variadic: initialization with small buffer fails" {
     // Should fail - buffer too small for header
     const result = TestVariadic.init(&buffer);
     try testing.expectError(Error.BufferTooSmall, result);
+}
+
+test "Slot Variadic: aligned layout excludes trailing bytes" {
+    var buffer: [257]u8 = undefined;
+    var slots = try TestVariadicAligned4.init(&buffer);
+    slots.formatHeader();
+
+    try testing.expectEqual(@as(usize, 246), slots.capacitySpace());
+    try testing.expectEqual(
+        slots.capacitySpace() / TestVariadicAligned4.fullSlotSize(1),
+        slots.capacityFor(1),
+    );
+
+    _ = try slots.insert("a");
+    _ = try slots.insert("bbb");
+    for (slots.entriesConst()) |entry| {
+        try testing.expectEqual(@as(u16, 0), entry.offset.get() & 3);
+    }
+}
+
+test "Slot Variadic: compaction preserves aligned offsets" {
+    var buffer: [257]u8 = undefined;
+    var compact_buffer: [64]u8 = undefined;
+
+    var in_place = try TestVariadicAligned2.init(&buffer);
+    in_place.formatHeader();
+    _ = try in_place.insert("a");
+    _ = try in_place.insert("bbb");
+    _ = try in_place.insert("ccccc");
+    try in_place.free(1);
+    try in_place.compactInPlace();
+    for (in_place.entriesConst()) |entry| {
+        if (entry.offset.get() != 0) {
+            try testing.expectEqual(@as(u16, 0), entry.offset.get() & 1);
+        }
+    }
+    try testing.expectEqualSlices(u8, "a", try in_place.get(0));
+    try testing.expectEqualSlices(u8, "ccccc", try in_place.get(2));
+
+    var with_buffer = try TestVariadicAligned2.init(&buffer);
+    with_buffer.formatHeader();
+    _ = try with_buffer.insert("a");
+    _ = try with_buffer.insert("bbb");
+    _ = try with_buffer.insert("ccccc");
+    try with_buffer.free(1);
+    try with_buffer.compactWithBuffer(&compact_buffer);
+    for (with_buffer.entriesConst()) |entry| {
+        if (entry.offset.get() != 0) {
+            try testing.expectEqual(@as(u16, 0), entry.offset.get() & 1);
+        }
+    }
+    try testing.expectEqualSlices(u8, "a", try with_buffer.get(0));
+    try testing.expectEqualSlices(u8, "ccccc", try with_buffer.get(2));
+}
+
+test "Slot Variadic: flags mask offsets and survive mutation" {
+    var buffer: [257]u8 = undefined;
+    var slots = try TestVariadicAligned2.init(&buffer);
+    slots.formatHeader();
+
+    _ = try slots.insert("one");
+    _ = try slots.insert("two");
+    _ = try slots.insert("three");
+    try slots.setFlags(0, 1);
+    try slots.setFlags(2, 1);
+
+    try testing.expectEqual(@as(u16, 1), TestVariadicAligned2.FlagsMask);
+    try testing.expectEqual(@as(u16, 1), try slots.getFlags(0));
+    try testing.expectEqual(@as(u16, 1), try slots.getFlags(2));
+    try testing.expectEqualSlices(u8, "one", try slots.get(0));
+    try testing.expectEqualSlices(u8, "three", try slots.getByEntry(&slots.entriesConst()[2]));
+
+    const first = try slots.getMutByEntry(&slots.entriesConst()[0]);
+    first[0] = 'O';
+    try testing.expectEqualSlices(u8, "One", try slots.get(0));
+    const third = try slots.getMut(2);
+    third[0] = 'T';
+    try testing.expectEqualSlices(u8, "Three", try slots.get(2));
+
+    const reopened = try TestVariadicAligned2Const.init(&buffer);
+    try testing.expectEqual(@as(u16, 1), try reopened.getFlags(0));
+    try testing.expectEqualSlices(u8, "One", try reopened.get(0));
+
+    try slots.free(0);
+    try testing.expectEqual(@as(u16, 0), try slots.getFlags(0));
+    _ = try slots.insert("new");
+    try testing.expectEqualSlices(u8, "new", try slots.get(3));
+
+    try slots.setFlags(2, 1);
+    try slots.remove(1);
+    try testing.expectEqual(@as(u16, 1), try slots.getFlags(1));
+    try testing.expectEqualSlices(u8, "Three", try slots.get(1));
+}
+
+test "Slot Variadic: free list uses flagged slot address" {
+    var buffer: [64]u8 = undefined;
+    var slots = try TestVariadicAligned2.init(&buffer);
+    slots.formatHeader();
+
+    _ = try slots.insert("0123456789");
+    _ = try slots.insert("abcdefghij");
+    _ = try slots.insert("klmnopqrst");
+    try slots.setFlags(1, 1);
+    try slots.free(1);
+
+    const reused = try slots.insert("uvwxyzABCD");
+    try testing.expectEqual(@as(usize, 3), reused);
+    try testing.expectEqual(@as(u16, 0), try slots.getFlags(reused));
+    try testing.expectEqualSlices(u8, "uvwxyzABCD", try slots.get(reused));
+
+    try slots.setFlags(2, 1);
+    try slots.remove(2);
+    try testing.expectEqualSlices(u8, "0123456789", try slots.get(0));
+    try testing.expectEqualSlices(u8, "uvwxyzABCD", try slots.get(2));
+}
+
+test "Slot Variadic: flags preserve through resize and compaction" {
+    var buffer: [257]u8 = undefined;
+    var compact_buffer: [64]u8 = undefined;
+    var slots = try TestVariadicAligned4.init(&buffer);
+    slots.formatHeader();
+
+    _ = try slots.insert("a");
+    _ = try slots.insert("bbb");
+    _ = try slots.insert("ccccc");
+    try slots.setFlags(0, 7);
+    try slots.setFlags(2, 2);
+    try testing.expectEqual(@as(u16, 3), try slots.getFlags(0));
+    try testing.expectEqual(@as(u16, 2), try slots.getFlags(2));
+
+    const resized = try slots.resizeGet(0, 12);
+    @memcpy(resized, "abcdefghijkl");
+    try testing.expectEqual(@as(u16, 3), try slots.getFlags(0));
+    try testing.expectEqualSlices(u8, "abcdefghijkl", try slots.get(0));
+
+    try slots.free(1);
+    try slots.compactInPlace();
+    try testing.expectEqual(@as(u16, 3), try slots.getFlags(0));
+    try testing.expectEqual(@as(u16, 2), try slots.getFlags(2));
+    try testing.expectEqualSlices(u8, "ccccc", try slots.get(2));
+
+    try slots.compactWithBuffer(&compact_buffer);
+    try testing.expectEqual(@as(u16, 3), try slots.getFlags(0));
+    try testing.expectEqual(@as(u16, 2), try slots.getFlags(2));
+    try testing.expectEqualSlices(u8, "abcdefghijkl", try slots.get(0));
+    try testing.expectEqualSlices(u8, "ccccc", try slots.get(2));
+}
+
+test "Slot Variadic: flags use the packed offset endian" {
+    var buffer: [257]u8 = undefined;
+    var slots = try TestVariadicAligned4BigEndian.init(&buffer);
+    slots.formatHeader();
+
+    _ = try slots.insert("data");
+    try slots.setFlags(0, 3);
+
+    try testing.expectEqual(@as(u16, 3), try slots.getFlags(0));
+    try testing.expectEqualSlices(u8, "data", try slots.get(0));
 }
 
 test "Variadic: basic insert and retrieve" {
