@@ -15,11 +15,6 @@ pub fn Fsm(comptime ModelT: type) type {
         pub const Pid = ModelT.Pid;
         pub const Size = ModelT.Size;
         pub const Error = ModelT.Error;
-        pub const page_metadata_size =
-            if (@hasDecl(ModelT, "page_metadata_size"))
-                ModelT.page_metadata_size
-            else
-                0;
 
         model: *ModelT = undefined,
 

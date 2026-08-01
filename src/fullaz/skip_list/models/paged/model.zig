@@ -387,11 +387,7 @@ pub fn Paged(
             errdefer ph.deinit();
             const pid = try ph.pid();
             var view = NodeViewMut.init(try ph.getDataMut());
-            try view.formatPage(
-                self.context.settings.node_page_kind,
-                pid,
-                @intCast(FsmT.page_metadata_size),
-            );
+            try view.formatPage(self.context.settings.node_page_kind, pid, 0);
             return ph;
         }
 
