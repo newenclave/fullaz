@@ -104,7 +104,7 @@ test "SkipList paged: create and load nodes" {
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
 
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
@@ -165,7 +165,7 @@ test "SkipList paged: interfaces" {
     //const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     comptime interfaces.assertPath(Model.Accessor.Path);
 }
@@ -174,7 +174,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
@@ -259,7 +259,7 @@ test "SkipList paged: node next/prev links round-trip per level" {
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
@@ -382,7 +382,7 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 1024); // small page -> easy to fill and fragment
     defer dev.deinit();
@@ -471,7 +471,7 @@ test "SkipList paged: iterator remove test" {
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
@@ -618,7 +618,7 @@ test "SkipList paged: randomized parity vs memory model" {
 
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const PagedModel = ModelType(PageCache, NoneStorageManager, Fsm, keyCmp, void);
+    const PagedModel = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
     const PagedSL = SkipList(PagedModel);
 
     // one seed drives the op stream; print it so any failure is reproducible.

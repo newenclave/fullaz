@@ -15,6 +15,7 @@ pub fn Paged(
     comptime PageCacheType: type,
     comptime StorageManager: type,
     comptime FsmT: type,
+    comptime AdditionalT: type,
     comptime cmp: anytype,
     comptime Ctx: type,
 ) type {
@@ -25,8 +26,8 @@ pub fn Paged(
     const KeyT = []const u8;
     const ValueT = []const u8;
 
-    const NodeViewMut = SubheaderView(BlockIdType, u16, void, .little, false);
-    const NodeViewConst = SubheaderView(BlockIdType, u16, void, .little, true);
+    const NodeViewMut = SubheaderView(BlockIdType, u16, AdditionalT, .little, false);
+    const NodeViewConst = SubheaderView(BlockIdType, u16, AdditionalT, .little, true);
     const SlotWrapperConst = NodeViewConst.SlotWrapperConst;
     const SlotWrapper = NodeViewMut.SlotWrapperConst;
 
