@@ -29,15 +29,34 @@ pub fn Compose(comptime descriptors: anytype) type {
     if (descriptors_info != .@"struct" or !descriptors_info.@"struct".is_tuple) {
         @compileError("Page extension descriptors must be a tuple");
     }
-    if (descriptors_info.@"struct".fields.len != 1) {
-        @compileError("Page extension Compose currently requires exactly one field");
+    const field_count = descriptors_info.@"struct".fields.len;
+    if (field_count == 0) {
+        @compileError("Page extension Compose requires at least one field");
     }
 
-    const descriptor = descriptors[0];
-    const Trait = descriptor.Trait;
-    const field_names = [_][]const u8{descriptor.name};
-    const field_types = [_]type{Trait.Storage};
-    const field_attrs = [_]std.builtin.Type.StructField.Attributes{.{}};
+    comptime var field_names: [field_count][]const u8 = undefined;
+    comptime var field_types: [field_count]type = undefined;
+    comptime var field_attrs: [field_count]std.builtin.Type.StructField.Attributes = undefined;
+    inline for (0..field_count) |index| {
+        const descriptor = descriptors[index];
+        if (@TypeOf(descriptor) != Field) {
+            @compileError("Page extension descriptor must be created with field()");
+        }
+        if (@alignOf(descriptor.Trait.Storage) != 1) {
+            @compileError("Page extension storage must have alignment 1: " ++ descriptor.name);
+        }
+
+        inline for (0..index) |previous_index| {
+            if (std.mem.eql(u8, descriptor.name, descriptors[previous_index].name)) {
+                @compileError("Duplicate page extension field: " ++ descriptor.name);
+            }
+        }
+
+        field_names[index] = descriptor.name;
+        field_types[index] = descriptor.Trait.Storage;
+        field_attrs[index] = .{};
+    }
+
     const GeneratedStorage = @Struct(
         .@"extern",
         null,
@@ -50,10 +69,13 @@ pub fn Compose(comptime descriptors: anytype) type {
         pub const Storage = GeneratedStorage;
 
         fn storageType(comptime name: []const u8) type {
-            if (!std.mem.eql(u8, name, descriptor.name)) {
-                @compileError("Unknown page extension field: " ++ name);
+            inline for (0..field_count) |index| {
+                const descriptor = descriptors[index];
+                if (std.mem.eql(u8, name, descriptor.name)) {
+                    return descriptor.Trait.Storage;
+                }
             }
-            return Trait.Storage;
+            @compileError("Unknown page extension field: " ++ name);
         }
 
         pub fn field(storage: *const GeneratedStorage, comptime name: []const u8) *const storageType(name) {
