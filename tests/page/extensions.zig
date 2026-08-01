@@ -48,7 +48,10 @@ test "page extension field records its name and trait" {
 
 test "page extension Compose generates one typed storage field" {
     const Additional = extensions.Compose(.{
-        extensions.field("fsm", FsmTrait),
+        .version = 2,
+        .fields = .{
+            extensions.field("fsm", FsmTrait),
+        },
     });
 
     var storage: Additional.Storage = undefined;
@@ -63,8 +66,11 @@ test "page extension Compose generates one typed storage field" {
 
 test "page extension Compose preserves descriptor order across typed fields" {
     const Additional = extensions.Compose(.{
-        extensions.field("fsm", FsmTrait),
-        extensions.field("links", LinksTrait),
+        .version = 2,
+        .fields = .{
+            extensions.field("fsm", FsmTrait),
+            extensions.field("links", LinksTrait),
+        },
     });
 
     var storage: Additional.Storage = undefined;
@@ -85,8 +91,11 @@ test "page extension Compose preserves descriptor order across typed fields" {
 
 test "page extension Compose formats and validates every field" {
     const Additional = extensions.Compose(.{
-        extensions.field("fsm", FsmTrait),
-        extensions.field("links", LinksTrait),
+        .version = 2,
+        .fields = .{
+            extensions.field("fsm", FsmTrait),
+            extensions.field("links", LinksTrait),
+        },
     });
 
     var storage: Additional.Storage = undefined;
@@ -106,4 +115,15 @@ test "page extension Compose formats and validates every field" {
 
     Additional.fieldMut(&storage, "links").prev.set(11);
     try std.testing.expect(!Additional.validate(&storage));
+}
+
+test "page extension Compose retains its page version" {
+    const Additional = extensions.Compose(.{
+        .version = 7,
+        .fields = .{
+            extensions.field("fsm", FsmTrait),
+        },
+    });
+
+    try std.testing.expectEqual(@as(u8, 7), Additional.page_version);
 }

@@ -30,7 +30,17 @@ pub fn field(comptime name: [:0]const u8, comptime Trait: type) Field {
     };
 }
 
-pub fn Compose(comptime descriptors: anytype) type {
+pub fn Compose(comptime config: anytype) type {
+    const config_info = @typeInfo(@TypeOf(config));
+    if (config_info != .@"struct" or config_info.@"struct".is_tuple) {
+        @compileError("Page extension Compose requires a named config struct");
+    }
+    if (!@hasField(@TypeOf(config), "version") or !@hasField(@TypeOf(config), "fields")) {
+        @compileError("Page extension Compose config requires version and fields");
+    }
+
+    const configured_version: u8 = @intCast(config.version);
+    const descriptors = config.fields;
     const descriptors_info = @typeInfo(@TypeOf(descriptors));
     if (descriptors_info != .@"struct" or !descriptors_info.@"struct".is_tuple) {
         @compileError("Page extension descriptors must be a tuple");
@@ -73,6 +83,7 @@ pub fn Compose(comptime descriptors: anytype) type {
 
     return struct {
         pub const Storage = GeneratedStorage;
+        pub const page_version = configured_version;
 
         pub fn format(storage: *GeneratedStorage) void {
             inline for (0..field_count) |index| {
