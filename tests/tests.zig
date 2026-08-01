@@ -47,6 +47,7 @@ test {
     _ = @import("spatial/orthtree/orthtree.zig");
 
     _ = @import("page/extensions.zig");
+    _ = @import("page/links.zig");
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
     _ = @import("long_store.zig");
