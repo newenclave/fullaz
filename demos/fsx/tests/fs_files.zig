@@ -202,6 +202,69 @@ test "Fs write: appends across calls" {
     try std.testing.expectEqualSlices(u8, "abcdef", buf[0..r]);
 }
 
+test "Fs replace: overwrites a multi-page file and persists" {
+    const allocator = std.testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+
+    {
+        var cache = try PageCache.init(&device, allocator, 64);
+        defer cache.deinit();
+        var f = try FsT.format(&cache, 4096);
+        try f.touch("/note.txt");
+
+        const original = [_]u8{0x61} ** 12_000;
+        const replacement = [_]u8{0x62} ** 1_500;
+        _ = try f.write("/note.txt", &original);
+        const written = try f.replace("/note.txt", &replacement);
+        try std.testing.expectEqual(replacement.len, written);
+        try std.testing.expectEqual(@as(u32, replacement.len), try f.size("/note.txt"));
+
+        var read_back: [replacement.len]u8 = undefined;
+        const read = try f.read("/note.txt", &read_back);
+        try std.testing.expectEqual(replacement.len, read);
+        try std.testing.expectEqualSlices(u8, &replacement, &read_back);
+    }
+
+    {
+        var cache = try PageCache.init(&device, allocator, 64);
+        defer cache.deinit();
+        var f = try FsT.open(&cache, 4096);
+
+        const replacement = [_]u8{0x62} ** 1_500;
+        var read_back: [replacement.len]u8 = undefined;
+        const read = try f.read("/note.txt", &read_back);
+        try std.testing.expectEqual(replacement.len, read);
+        try std.testing.expectEqualSlices(u8, &replacement, &read_back);
+    }
+}
+
+test "Fs replace: empty save and regrowth reuse pages" {
+    const allocator = std.testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 64);
+    defer cache.deinit();
+    var f = try FsT.format(&cache, 4096);
+    try f.touch("/note.txt");
+
+    const content = [_]u8{0x63} ** 12_000;
+    _ = try f.write("/note.txt", &content);
+    const grown_blocks = device.blocksCount();
+
+    try std.testing.expectEqual(@as(usize, 0), try f.replace("/note.txt", ""));
+    try std.testing.expectEqual(@as(u32, 0), try f.size("/note.txt"));
+    var empty: [1]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), try f.read("/note.txt", &empty));
+
+    _ = try f.replace("/note.txt", &content);
+    try std.testing.expectEqual(grown_blocks, device.blocksCount());
+    var read_back: [content.len]u8 = undefined;
+    const read = try f.read("/note.txt", &read_back);
+    try std.testing.expectEqual(content.len, read);
+    try std.testing.expectEqualSlices(u8, &content, &read_back);
+}
+
 test "Fs v2 writes declared file-index page kinds" {
     try expectFileIndexLeafKind(constants.version, constants.PageKind.file_index_leaf);
 }

@@ -208,6 +208,40 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
             return written;
         }
 
+        pub fn replace(self: *Self, path: []const u8, bytes: []const u8) !usize {
+            var comps_buf: [PathPolicy.MaxDepth][]const u8 = undefined;
+            const n = try PathPolicy.split(path, &comps_buf);
+            if (n == 0) {
+                return Error.InvalidPath;
+            }
+            const comps = comps_buf[0..n];
+
+            var roots_buf: [PathPolicy.MaxDepth]?PageId = undefined;
+            const roots = roots_buf[0..n];
+            roots[0] = try self.getRootDirRoot();
+            try self.descendParents(comps, roots);
+
+            const p = n - 1;
+            const root0_before = roots[0];
+            var written: usize = 0;
+            {
+                var parent = Dir.init(&self.cache, roots[p]);
+                const entry = (try parent.lookup(comps[p])) orelse return Error.NotFound;
+                const froots = switch (entry) {
+                    .file => |fr| fr,
+                    .dir => {
+                        return Error.IsADirectory;
+                    },
+                };
+                var f = FileT.init(&self.cache, froots, self.fileSettings());
+                written = try f.replace(bytes);
+                _ = try parent.update(comps[p], Inode{ .file = f.getRoots() });
+                roots[p] = parent.getRoot();
+            }
+            try self.flushUp(comps, roots, root0_before);
+            return written;
+        }
+
         pub fn read(self: *Self, path: []const u8, buf: []u8) !usize {
             const node = (try self.resolve(path)) orelse return Error.NotFound;
             const froots = switch (node) {

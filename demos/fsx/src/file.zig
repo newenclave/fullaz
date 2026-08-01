@@ -83,6 +83,27 @@ pub fn File(comptime PageCacheType: type) type {
             return written;
         }
 
+        pub fn replace(self: *Self, bytes: []const u8) !usize {
+            var sm = FileSM{ .cache = self.cache, .roots = self.roots };
+            var handle = Chain.init(self.cache, &sm, self.settings);
+            defer handle.deinit();
+
+            if (sm.roots.first != null) {
+                try handle.truncate(sm.roots.total);
+            }
+            if (bytes.len == 0) {
+                self.roots = sm.roots;
+                return 0;
+            }
+            if (sm.roots.first == null) {
+                try handle.create();
+            }
+            try handle.setp(0);
+            const written = try handle.write(bytes);
+            self.roots = sm.roots;
+            return written;
+        }
+
         pub fn read(self: *Self, buf: []u8) !usize {
             var sm = FileSM{ .cache = self.cache, .roots = self.roots };
             var handle = Chain.init(self.cache, &sm, self.settings);
@@ -95,7 +116,6 @@ pub fn File(comptime PageCacheType: type) type {
             return try handle.read(buf);
         }
 
-        // TODO: chain_store.Handle has a bug. So it should be fixed as well here.
         pub fn destroy(self: *Self) !void {
             var sm = FileSM{ .cache = self.cache, .roots = self.roots };
             var handle = Chain.init(self.cache, &sm, self.settings);
@@ -103,18 +123,10 @@ pub fn File(comptime PageCacheType: type) type {
 
             if (sm.roots.first != null) {
                 try handle.truncate(sm.roots.total);
-                const first = sm.roots.first;
-                const last = sm.roots.last;
-                if (first) |fp| {
-                    try self.cache.free(fp);
-                }
-                if (last) |lp| {
-                    if (first == null or lp != first.?) {
-                        try self.cache.free(lp);
-                    }
-                }
-                if (sm.roots.index) |ip| {
-                    try self.cache.free(ip);
+                // truncate retains one empty tail chunk so a live handle can keep
+                // writing; a deleted fsx file owns and releases that final page.
+                if (sm.roots.first) |pid| {
+                    try self.cache.free(pid);
                 }
             }
             self.roots = .{};
