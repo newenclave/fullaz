@@ -74,6 +74,8 @@ pub fn assertModel(comptime M: type) void {
     requiresTypeDeclaration(M, "Accessor");
     requiresTypeDeclaration(M, "Entry");
     requiresTypeDeclaration(M, "Node");
+    requiresTypeDeclaration(M, "ValueIn");
+    requiresTypeDeclaration(M, "ValueBorrow");
 
     //    requiresTypeDeclaration(M, "Accessor");
 
@@ -81,6 +83,9 @@ pub fn assertModel(comptime M: type) void {
     // const Node = M.Node;
     const Box = M.Box;
     const Accessor = M.Accessor;
+    const ValueIn = M.ValueIn;
+    const ValueBorrow = M.ValueBorrow;
+    const Error = M.Error;
 
     assertBox(Box);
     assertAccessor(Accessor);
@@ -90,4 +95,7 @@ pub fn assertModel(comptime M: type) void {
     //    assertNode(Node);
 
     requiresFnSignature(M, "getAccessor", fn (*M) *Accessor);
+    requiresFnSignature(M, "valueBorrowAsIn", fn (*M, *const ValueBorrow) ValueIn);
+    requiresFnSignature(M, "finalizeBorrowValue", fn (*M, *ValueBorrow) Error!void);
+    requiresFnSignature(M, "deinitBorrowValue", fn (*M, *ValueBorrow) void);
 }
