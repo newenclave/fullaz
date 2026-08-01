@@ -16,6 +16,12 @@ pub fn field(comptime name: [:0]const u8, comptime Trait: type) Field {
         if (@TypeOf(Trait.Storage) != type) {
             @compileError("Page extension trait Storage must be a type: " ++ @typeName(Trait));
         }
+        if (!@hasDecl(Trait, "format") or @TypeOf(Trait.format) != fn (*Trait.Storage) void) {
+            @compileError("Page extension trait must declare format(*Storage) void: " ++ @typeName(Trait));
+        }
+        if (!@hasDecl(Trait, "validate") or @TypeOf(Trait.validate) != fn (*const Trait.Storage) bool) {
+            @compileError("Page extension trait must declare validate(*const Storage) bool: " ++ @typeName(Trait));
+        }
     }
 
     return .{
@@ -67,6 +73,23 @@ pub fn Compose(comptime descriptors: anytype) type {
 
     return struct {
         pub const Storage = GeneratedStorage;
+
+        pub fn format(storage: *GeneratedStorage) void {
+            inline for (0..field_count) |index| {
+                const descriptor = descriptors[index];
+                descriptor.Trait.format(&@field(storage.*, descriptor.name));
+            }
+        }
+
+        pub fn validate(storage: *const GeneratedStorage) bool {
+            inline for (0..field_count) |index| {
+                const descriptor = descriptors[index];
+                if (!descriptor.Trait.validate(&@field(storage.*, descriptor.name))) {
+                    return false;
+                }
+            }
+            return true;
+        }
 
         fn storageType(comptime name: []const u8) type {
             inline for (0..field_count) |index| {
