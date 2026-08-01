@@ -103,6 +103,49 @@ test "Header.View: common reader uses stored extended header size" {
     try testing.expectEqual(@as(usize, 256 - ExtendedView.header_size - 8 - 16), common.data().len);
 }
 
+test "Header.View: validates common and typed layouts" {
+    const Additional = headerAdditional(7);
+    const ExtendedView = header.ViewImpl(u32, u16, Additional, .little, false);
+    const CommonView = header.View(u32, u16, .little, true);
+    const WrongVersionView = header.ViewImpl(u32, u16, headerAdditional(8), .little, true);
+
+    var buffer: [256]u8 = undefined;
+    @memset(&buffer, 0);
+
+    var extended = ExtendedView.init(&buffer);
+    extended.formatPage(42, 123, 8, 16);
+    try extended.validateCommon();
+    try extended.validateTyped();
+
+    const common = CommonView.init(&buffer);
+    try common.validateCommon();
+    try testing.expectError(CommonView.Error.InvalidHeaderSize, common.validateTyped());
+
+    const wrong_version = WrongVersionView.init(&buffer);
+    try testing.expectError(WrongVersionView.Error.UnsupportedVersion, wrong_version.validateTyped());
+}
+
+test "Header.View: common validation rejects corrupted layout" {
+    const HeaderView = header.View(u32, u16, .little, false);
+
+    var buffer: [256]u8 = undefined;
+    @memset(&buffer, 0);
+
+    var view = HeaderView.init(&buffer);
+    view.formatPage(42, 123, 8, 16);
+
+    view.headerMut().header_size.set(0);
+    try testing.expectError(HeaderView.Error.InvalidHeaderSize, view.validateCommon());
+
+    view.headerMut().header_size.set(@intCast(HeaderView.header_size));
+    view.headerMut().page_end.set(128);
+    try testing.expectError(HeaderView.Error.InvalidPageEnd, view.validateCommon());
+
+    view.headerMut().page_end.set(256);
+    view.headerMut().metadata_size.set(250);
+    try testing.expectError(HeaderView.Error.InconsistentLayout, view.validateCommon());
+}
+
 test "Header.HeaderImpl keeps version and header size types distinct" {
     const HeaderT = header.HeaderImpl(u32, u16, u16, u8, void, .little);
 
