@@ -406,13 +406,9 @@ pub fn Paged(
     return struct {
         const Self = @This();
 
-        pub const Error = PageCacheType.Error ||
-            StorageManager.Error ||
-            errors.SpaceError ||
+        pub const Error = AccessorImpl.Error ||
             errors.NotFoundError ||
-            errors.LayoutError ||
-            errors.SetError ||
-            errors.IndexError;
+            errors.SetError;
 
         pub const Accessor = AccessorImpl;
         pub const Node = NodeImpl;
