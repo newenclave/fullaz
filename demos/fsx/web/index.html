@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>fullaz · fsx</title>
+<style>
+  :root { color-scheme: dark; --bg: #0c1118; --panel: #121a24; --edge: #253449; --text: #dce7f5; --muted: #8294aa; --accent: #60a5fa; --dir: #f6c453; --file: #5bc0eb; --free: #64748b; --index: #a78bfa; --bad: #fb7185; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--bg); color: var(--text); font: 13px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  header { min-height: 54px; display: flex; align-items: center; gap: 13px; padding: 10px 16px; border-bottom: 1px solid var(--edge); background: #0e1621; }
+  h1 { font-size: 16px; margin: 0; letter-spacing: .04em; } h1 span { color: var(--accent); }
+  .spacer { flex: 1; } button, .file-label { border: 1px solid var(--edge); border-radius: 5px; background: #172332; color: var(--text); padding: 5px 9px; font: inherit; cursor: pointer; }
+  button:hover, .file-label:hover { border-color: var(--accent); color: #fff; } button.danger:hover { border-color: var(--bad); color: #fecdd3; }
+  input[type=file] { display: none; } #status { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 31vw; }
+  main { display: grid; grid-template-columns: minmax(205px, .8fr) minmax(260px, 1fr) minmax(330px, 1.55fr); min-height: calc(100vh - 54px); }
+  section { min-width: 0; border-right: 1px solid var(--edge); background: var(--panel); } section:last-child { border-right: 0; }
+  .title { display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 8px 11px; border-bottom: 1px solid var(--edge); color: var(--muted); }
+  .title strong { color: var(--text); } .title .spacer { flex: 1; } .tiny { padding: 2px 6px; font-size: 12px; }
+  #tree, #entries { padding: 7px; overflow: auto; max-height: calc(100vh - 96px); } .row { display: flex; gap: 8px; align-items: center; padding: 6px 7px; border-radius: 4px; cursor: pointer; white-space: nowrap; overflow: hidden; } .row:hover { background: #1b2a3c; } .row.active { background: #1d3857; } .row .name { overflow: hidden; text-overflow: ellipsis; } .row .size { margin-left: auto; color: var(--muted); font-size: 11px; } .glyph { width: 13px; text-align: center; } .directory .glyph { color: var(--dir); } .file .glyph { color: var(--file); }
+  #editor-pane { display: flex; flex-direction: column; } #file-name { color: var(--file); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #editor { flex: 1; width: 100%; min-height: 260px; resize: none; border: 0; outline: 0; padding: 14px; background: #0b121b; color: #e5eef9; font: inherit; line-height: 1.55; tab-size: 4; } #editor:disabled { color: var(--muted); } #editor-bar { display: flex; padding: 8px 10px; gap: 8px; border-top: 1px solid var(--edge); color: var(--muted); }
+  #storage { grid-column: 1 / -1; border-top: 1px solid var(--edge); min-height: 245px; } #map-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 270px; } #page-map { padding: 11px; display: grid; grid-template-columns: repeat(auto-fill, minmax(17px, 1fr)); gap: 3px; align-content: start; } .page { aspect-ratio: 1; min-width: 17px; border: 1px solid #243041; border-radius: 2px; cursor: pointer; position: relative; } .page:hover { outline: 1px solid #fff; z-index: 1; } .page.selected { outline: 2px solid #fff; z-index: 2; } .page.owned { box-shadow: inset 0 0 0 2px #fff; } .superblock { background: #d946ef; } .directory_leaf, .directory_inode { background: var(--dir); } .file_chunk { background: var(--file); } .file_index_leaf, .file_index_inode { background: var(--index); } .freed { background: var(--free); } .unknown { background: var(--bad); }
+  #page-detail { padding: 12px; border-left: 1px solid var(--edge); color: var(--muted); } #page-detail strong { color: var(--text); } .legend { display: flex; flex-wrap: wrap; gap: 9px; padding: 0 11px 10px; color: var(--muted); } .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  @media (max-width: 840px) { header { flex-wrap: wrap; } #status { order: 3; max-width: 100%; width: 100%; } main { grid-template-columns: 1fr; } section { border-right: 0; border-bottom: 1px solid var(--edge); } #tree, #entries { max-height: 210px; } #storage { grid-column: auto; } #map-wrap { grid-template-columns: 1fr; } #page-detail { border-left: 0; border-top: 1px solid var(--edge); } }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>fullaz</span> / fsx</h1><span id="status">loading WASM...</span><span class="spacer"></span>
+  <button id="new">new image</button><label class="file-label">import <input id="import" type="file" accept=".fsx,application/octet-stream" /></label><button id="download">download .fsx</button>
+</header>
+<main>
+  <section><div class="title"><strong>locations</strong><span class="spacer"></span><button id="root" class="tiny">/</button><button id="up" class="tiny">..</button></div><div id="tree"></div></section>
+  <section><div class="title"><strong id="path">/</strong><span class="spacer"></span><button id="mkdir" class="tiny">+ dir</button><button id="touch" class="tiny">+ file</button></div><div id="entries"></div></section>
+  <section id="editor-pane"><div class="title"><strong id="file-name">select a text file</strong><span class="spacer"></span><button id="delete" class="tiny danger" disabled>delete</button></div><textarea id="editor" disabled spellcheck="false" placeholder="Select a file to edit its UTF-8 content."></textarea><div id="editor-bar"><span id="editor-state">No file selected</span><span class="spacer"></span><button id="save" disabled>save full file</button></div></section>
+  <section id="storage"><div class="title"><strong>physical image</strong><span id="map-stats"></span><span class="spacer"></span><span>click a page for details</span></div><div class="legend"><span><i class="superblock"></i>superblock</span><span><i class="directory_leaf"></i>directory</span><span><i class="file_chunk"></i>file chunks</span><span><i class="file_index_leaf"></i>file index</span><span><i class="freed"></i>free</span><span><i class="unknown"></i>unknown</span></div><div id="map-wrap"><div id="page-map"></div><aside id="page-detail">Select a page.<br /><br />A white inner border marks pages owned by the selected file or directory.</aside></div></section>
+</main>
+<script>
+const text = new TextEncoder(), decode = new TextDecoder();
+const roleNames = ["superblock", "directory leaf", "directory internal", "file chunk", "file index leaf", "file index internal", "freed", "unknown"];
+const roleClasses = ["superblock", "directory_leaf", "directory_inode", "file_chunk", "file_index_leaf", "file_index_inode", "freed", "unknown"];
+const ownerNames = ["directory tree", "file chunk", "file index"];
+const el = {
+  status: document.getElementById("status"), tree: document.getElementById("tree"), entries: document.getElementById("entries"), path: document.getElementById("path"),
+  fileName: document.getElementById("file-name"), editor: document.getElementById("editor"), editorState: document.getElementById("editor-state"),
+  save: document.getElementById("save"), delete: document.getElementById("delete"), pageMap: document.getElementById("page-map"),
+  pageDetail: document.getElementById("page-detail"), mapStats: document.getElementById("map-stats"),
+};
+let wasm, ex, currentPath = "/", selected = null, pages = [], ownership = new Map(), selectedPage = null;
+
+function setStatus(message, bad = false) { el.status.textContent = message; el.status.style.color = bad ? "#fb7185" : ""; }
+function errorText() { return decode.decode(new Uint8Array(ex.memory.buffer, ex.lastErrorPtr(), ex.lastErrorLen())); }
+function ensure(ok) { if (!ok) throw new Error(errorText() || "operation failed"); }
+function bytesCall(name, path, content) {
+  const p = text.encode(path), d = content === undefined ? null : text.encode(content);
+  const pp = p.length ? ex.allocate(p.length) : 0, dp = d && d.length ? ex.allocate(d.length) : 0;
+  if ((p.length && !pp) || (d && d.length && !dp)) throw new Error("WASM allocation failed");
+  try {
+    const mem = new Uint8Array(ex.memory.buffer); if (p.length) mem.set(p, pp); if (d && d.length) mem.set(d, dp);
+    return d === null ? ex[name](pp, p.length) : ex[name](pp, p.length, dp, d.length);
+  } finally { if (pp) ex.freeAllocation(pp, p.length); if (dp) ex.freeAllocation(dp, d.length); }
+}
+function join(base, name) { return base === "/" ? "/" + name : base + "/" + name; }
+function parent(path) { if (path === "/") return "/"; const i = path.lastIndexOf("/"); return i <= 0 ? "/" : path.slice(0, i); }
+
+const db = new Promise((resolve, reject) => { const req = indexedDB.open("fullaz-fsx", 1); req.onupgradeneeded = () => req.result.createObjectStore("images"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+async function dbGet() { const store = (await db).transaction("images", "readonly").objectStore("images"); return new Promise((resolve, reject) => { const req = store.get("default"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); }); }
+async function dbPut(bytes) { const store = (await db).transaction("images", "readwrite").objectStore("images"); return new Promise((resolve, reject) => { const req = store.put(bytes, "default"); req.onsuccess = () => resolve(); req.onerror = () => reject(req.error); }); }
+async function persist() { const ptr = ex.imagePtr(); ensure(ptr !== 0 || ex.imageLen() === 0); await dbPut(new Uint8Array(ex.memory.buffer, ptr, ex.imageLen()).slice().buffer); }
+function importBytes(bytes) { const ptr = ex.allocate(bytes.byteLength); if (!ptr) throw new Error("WASM allocation failed"); try { new Uint8Array(ex.memory.buffer).set(new Uint8Array(bytes), ptr); ensure(ex.importImage(ptr, bytes.byteLength)); } finally { ex.freeAllocation(ptr, bytes.byteLength); } }
+
+function parseEntries() { const raw = new Uint8Array(ex.memory.buffer, ex.entriesPtr(), ex.entriesLen()).slice(); const view = new DataView(raw.buffer); const result = []; let at = 0; while (at < raw.length) { const kind = raw[at++], nameLen = view.getUint16(at, true); at += 2; const size = view.getUint32(at, true); at += 4; const name = decode.decode(raw.slice(at, at + nameLen)); at += nameLen; result.push({ kind, size, name }); } return result; }
+function snapshotPages() { ensure(ex.snapshotPages()); const words = new Uint32Array(ex.memory.buffer, ex.pagesPtr(), ex.pagesCount() * 4).slice(); pages = []; for (let i = 0; i < words.length; i += 4) pages.push({ pid: words[i], role: words[i + 1], used: words[i + 2], capacity: words[i + 3] }); }
+function snapshotOwnership(path) { ownership = new Map(); if (!path) return; if (!bytesCall("snapshotOwnership", path)) return; const words = new Uint32Array(ex.memory.buffer, ex.ownershipPtr(), ex.ownershipCount() * 2).slice(); for (let i = 0; i < words.length; i += 2) ownership.set(words[i], words[i + 1]); }
+function renderMap() { el.pageMap.replaceChildren(); el.mapStats.textContent = `${pages.length} pages · ${(pages.length * 4096 / 1024).toFixed(0)} KiB`; for (const page of pages) { const node = document.createElement("button"); node.className = `page ${roleClasses[page.role]}${ownership.has(page.pid) ? " owned" : ""}${selectedPage === page.pid ? " selected" : ""}`; node.title = `PID ${page.pid}: ${roleNames[page.role]}`; node.onclick = () => { selectedPage = page.pid; el.pageDetail.innerHTML = `<strong>PID ${page.pid}</strong><br>${roleNames[page.role]}${ownership.has(page.pid) ? `<br>owner: ${ownerNames[ownership.get(page.pid)]}` : ""}<br>used: ${page.used} / ${page.capacity} bytes<br>offset: ${page.pid * 4096} bytes`; renderMap(); }; el.pageMap.append(node); } }
+function makeRow(kind, name, size) { const node = document.createElement("div"), glyph = document.createElement("span"), label = document.createElement("span"), bytes = document.createElement("span"); node.className = `row ${kind === 2 ? "directory" : "file"}`; glyph.className = "glyph"; glyph.textContent = kind === 2 ? "#" : "·"; label.className = "name"; label.textContent = name + (kind === 2 && name !== "/" ? "/" : ""); bytes.className = "size"; bytes.textContent = kind === 1 ? size + " B" : ""; node.append(glyph, label, bytes); return node; }
+function run(action) { Promise.resolve(action()).catch(showError); }
+function renderTree(entries) { el.tree.replaceChildren(); const root = makeRow(2, "/", 0); if (currentPath === "/") root.classList.add("active"); root.onclick = () => run(() => openDirectory("/")); el.tree.append(root); for (const entry of entries.filter(e => e.kind === 2)) { const path = join(currentPath, entry.name), node = makeRow(2, entry.name, 0); if (selected?.path === path) node.classList.add("active"); node.onclick = () => run(() => openDirectory(path)); el.tree.append(node); } }
+function renderEntries(entries) { el.entries.replaceChildren(); for (const entry of entries) { const path = join(currentPath, entry.name), node = makeRow(entry.kind, entry.name, entry.size); if (selected?.path === path) node.classList.add("active"); node.onclick = () => run(() => entry.kind === 2 ? openDirectory(path) : openFile(path, entry)); el.entries.append(node); } }
+async function refresh() { ensure(bytesCall("list", currentPath)); const entries = parseEntries(); el.path.textContent = currentPath; renderTree(entries); renderEntries(entries); snapshotPages(); snapshotOwnership(selected?.path); renderMap(); }
+async function openDirectory(path) { currentPath = path; selected = { path, kind: 2 }; el.fileName.textContent = "directory selected"; el.editor.value = ""; el.editor.disabled = true; el.save.disabled = true; el.delete.disabled = path === "/"; el.editorState.textContent = path; await refresh(); }
+async function openFile(path, entry) { ensure(bytesCall("read", path)); const length = ex.readLen(); const data = length ? new Uint8Array(ex.memory.buffer, ex.readPtr(), length).slice() : new Uint8Array(); ex.releaseRead(); currentPath = parent(path); selected = { path, kind: 1 }; el.fileName.textContent = path; el.editor.disabled = false; el.editor.value = decode.decode(data); el.save.disabled = false; el.delete.disabled = false; el.editorState.textContent = `${entry.size} bytes loaded; save replaces the full file`; await refresh(); }
+async function mutate(name, path, content) { ensure(bytesCall(name, path, content)); try { await persist(); setStatus("saved to IndexedDB"); } catch (error) { setStatus(`changed in memory; IndexedDB save failed: ${error.message || error}`, true); } await refresh(); }
+
+document.getElementById("root").onclick = () => openDirectory("/").catch(showError); document.getElementById("up").onclick = () => openDirectory(parent(currentPath)).catch(showError);
+document.getElementById("mkdir").onclick = async () => { const name = prompt("Directory name:"); if (name) try { await mutate("mkdir", join(currentPath, name)); } catch (e) { showError(e); } };
+document.getElementById("touch").onclick = async () => { const name = prompt("File name:"); if (name) try { await mutate("touch", join(currentPath, name)); } catch (e) { showError(e); } };
+el.save.onclick = async () => { if (!selected || selected.kind !== 1) return; try { await mutate("replace", selected.path, el.editor.value); el.editorState.textContent = "saved"; } catch (e) { showError(e); } };
+el.delete.onclick = async () => { if (!selected || !confirm(`Delete ${selected.path}?`)) return; try { await mutate(selected.kind === 1 ? "removeFile" : "removeDirectory", selected.path); selected = null; el.editor.value = ""; el.editor.disabled = true; el.save.disabled = true; el.delete.disabled = true; await openDirectory(currentPath); } catch (e) { showError(e); } };
+document.getElementById("new").onclick = async () => { if (!confirm("Discard the current image and create a new fsx image?")) return; try { ensure(ex.format()); selected = null; currentPath = "/"; await persist(); await openDirectory("/"); } catch (e) { showError(e); } };
+document.getElementById("import").onchange = async event => { const file = event.target.files[0]; if (!file) return; try { const bytes = await file.arrayBuffer(); importBytes(bytes); selected = null; currentPath = "/"; await persist(); await openDirectory("/"); setStatus(`imported ${file.name}`); } catch (e) { showError(e); } event.target.value = ""; };
+document.getElementById("download").onclick = () => { try { const ptr = ex.imagePtr(); const bytes = new Uint8Array(ex.memory.buffer, ptr, ex.imageLen()).slice(); const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" })), download: "fsx-image.fsx" }); link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); } catch (e) { showError(e); } };
+function showError(error) { console.error(error); setStatus(String(error.message || error), true); }
+
+(async () => { try { const bytes = await (await fetch("fsx.wasm")).arrayBuffer(); wasm = await WebAssembly.instantiate(bytes, {}); ex = wasm.instance.exports; const saved = await dbGet(); if (saved) { try { importBytes(saved); setStatus("restored IndexedDB image"); } catch (_) { ensure(ex.format()); await persist(); setStatus("saved image was invalid; created a new image", true); } } else { ensure(ex.format()); await persist(); setStatus("new image saved to IndexedDB"); } await openDirectory("/"); } catch (error) { showError(error); } })();
+</script>
+</body>
+</html>

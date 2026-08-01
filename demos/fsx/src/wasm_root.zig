@@ -7,4 +7,3 @@ pub const path = @import("path.zig");
 pub const reclaiming_cache = @import("reclaiming_cache.zig");
 pub const inspect = @import("inspect.zig");
 pub const fs = @import("fs.zig");
-pub const cli = @import("cli.zig");

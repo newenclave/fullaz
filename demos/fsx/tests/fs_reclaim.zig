@@ -74,3 +74,24 @@ test "Fs: repeated create/rm cycles keep the device bounded" {
         try std.testing.expectEqual(baseline, device.blocksCount());
     }
 }
+
+test "Fs rm after replace reclaims the retained tail chunk" {
+    const allocator = std.testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 64);
+    defer cache.deinit();
+    var f = try FsT.format(&cache, 4096);
+    try f.touch("/f");
+
+    const large = [_]u8{0x71} ** 12_000;
+    _ = try f.write("/f", &large);
+    const baseline = device.blocksCount();
+
+    _ = try f.replace("/f", "short");
+    try f.rm("/f");
+    try f.touch("/f");
+    _ = try f.write("/f", &large);
+
+    try std.testing.expectEqual(baseline, device.blocksCount());
+}

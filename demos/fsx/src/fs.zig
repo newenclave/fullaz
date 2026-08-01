@@ -1,8 +1,10 @@
+const fullaz = @import("fullaz");
 const constants = @import("constants.zig");
 const superblock = @import("superblock.zig");
 const inode = @import("inode.zig");
 const dir = @import("dir.zig");
 const file = @import("file.zig");
+const inspect = @import("inspect.zig");
 const reclaiming_cache = @import("reclaiming_cache.zig");
 
 const PageId = constants.PageId;
@@ -34,6 +36,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
 
         cache: Cache,
         block_size: u32,
+        format_version: u16,
 
         pub fn format(cache: *PageCacheType, block_size: u32) !Self {
             var ph = try cache.create();
@@ -45,7 +48,11 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
             var sb = superblock.View(false).init(try ph.getDataMut());
             sb.format(block_size);
             try cache.flush(constants.superblock_pid);
-            return .{ .cache = try Cache.init(cache), .block_size = block_size };
+            return .{
+                .cache = try Cache.init(cache),
+                .block_size = block_size,
+                .format_version = constants.version,
+            };
         }
 
         pub fn open(cache: *PageCacheType, block_size: u32) !Self {
@@ -53,7 +60,19 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
             defer ph.deinit();
             const sb = superblock.View(true).init(try ph.getData());
             try sb.validate(block_size);
-            return .{ .cache = try Cache.init(cache), .block_size = block_size };
+            return .{
+                .cache = try Cache.init(cache),
+                .block_size = block_size,
+                .format_version = sb.getVersion(),
+            };
+        }
+
+        fn fileSettings(self: *const Self) fullaz.storage.chain_store.Settings {
+            return .{
+                .chunk_page_kind = constants.PageKind.file_chunk,
+                .index_leaf_page_kind = constants.fileIndexLeafKind(self.format_version),
+                .index_inode_page_kind = constants.fileIndexInodeKind(self.format_version),
+            };
         }
 
         pub fn getRootDirRoot(self: *Self) !?PageId {
@@ -61,6 +80,29 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
             defer ph.deinit();
             const sb = superblock.View(true).init(try ph.getData());
             return sb.getRootDirRoot();
+        }
+
+        pub fn inspectPages(
+            self: *Self,
+            ctx: anytype,
+            comptime callback: fn (@TypeOf(ctx), inspect.PageInfo) anyerror!void,
+        ) anyerror!void {
+            var inspector = inspect.Inspector(PageCacheType).init(self.cache.inner);
+            try inspector.scan(self.format_version, ctx, callback);
+        }
+
+        pub fn inspectOwnership(
+            self: *Self,
+            path: []const u8,
+            ctx: anytype,
+            comptime callback: fn (@TypeOf(ctx), inspect.OwnedPage) anyerror!void,
+        ) anyerror!void {
+            const node = (try self.resolve(path)) orelse return Error.NotFound;
+            var inspector = inspect.Inspector(PageCacheType).init(self.cache.inner);
+            switch (node) {
+                .dir => |roots| try inspector.traceDirectory(roots.root, ctx, callback),
+                .file => |roots| try inspector.traceFile(roots, self.format_version, ctx, callback),
+            }
         }
 
         pub fn setRootDirRoot(self: *Self, pid: ?PageId) !void {
@@ -181,8 +223,42 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
                         return Error.IsADirectory;
                     },
                 };
-                var f = FileT.init(&self.cache, froots);
+                var f = FileT.init(&self.cache, froots, self.fileSettings());
                 written = try f.append(bytes);
+                _ = try parent.update(comps[p], Inode{ .file = f.getRoots() });
+                roots[p] = parent.getRoot();
+            }
+            try self.flushUp(comps, roots, root0_before);
+            return written;
+        }
+
+        pub fn replace(self: *Self, path: []const u8, bytes: []const u8) !usize {
+            var comps_buf: [PathPolicy.MaxDepth][]const u8 = undefined;
+            const n = try PathPolicy.split(path, &comps_buf);
+            if (n == 0) {
+                return Error.InvalidPath;
+            }
+            const comps = comps_buf[0..n];
+
+            var roots_buf: [PathPolicy.MaxDepth]?PageId = undefined;
+            const roots = roots_buf[0..n];
+            roots[0] = try self.getRootDirRoot();
+            try self.descendParents(comps, roots);
+
+            const p = n - 1;
+            const root0_before = roots[0];
+            var written: usize = 0;
+            {
+                var parent = Dir.init(&self.cache, roots[p]);
+                const entry = (try parent.lookup(comps[p])) orelse return Error.NotFound;
+                const froots = switch (entry) {
+                    .file => |fr| fr,
+                    .dir => {
+                        return Error.IsADirectory;
+                    },
+                };
+                var f = FileT.init(&self.cache, froots, self.fileSettings());
+                written = try f.replace(bytes);
                 _ = try parent.update(comps[p], Inode{ .file = f.getRoots() });
                 roots[p] = parent.getRoot();
             }
@@ -198,7 +274,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
                     return Error.IsADirectory;
                 },
             };
-            var f = FileT.init(&self.cache, froots);
+            var f = FileT.init(&self.cache, froots, self.fileSettings());
             return try f.read(buf);
         }
 
@@ -244,7 +320,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
                         return Error.IsADirectory;
                     },
                 };
-                var f = FileT.init(&self.cache, froots);
+                var f = FileT.init(&self.cache, froots, self.fileSettings());
                 try f.destroy();
                 _ = try parent.remove(comps[p]);
                 roots[p] = parent.getRoot();

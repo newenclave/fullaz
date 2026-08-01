@@ -1216,11 +1216,8 @@ pub fn Bpt(comptime ModelT: type) type {
                 pos_child = try parent.getChild(pos);
 
                 // TODO: investigate why this happens
-                if (try parent.canInsertChild(pos, first_key_like, pos_child)) {
-                    // all good
-                } else {
-                    std.debug.print("Parent inode id: {} cannot insert child at pos: {} with key: {any}\n", .{ parent.id(), pos, first_key });
-                    @breakpoint();
+                if (!try parent.canInsertChild(pos, first_key_like, pos_child)) {
+                    return Error.NotEnoughSpaceForUpdate;
                 }
 
                 try parent.insertChild(pos, first_key_like, pos_child);

@@ -326,7 +326,6 @@ pub fn VariadicImpl(
             const fix_len: usize = @as(usize, self.fixLength(@as(T, @intCast(len))));
             const slots = self.entriesConst();
             if (entry >= slots.len) {
-                std.debug.print("canUpdate: entry {} out of bounds (size {})\n", .{ entry, slots.len });
                 return Error.OutOfBounds;
             }
 

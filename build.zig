@@ -328,4 +328,36 @@ pub fn build(b: *std.Build) void {
     gravity_wasm_step.dependOn(&install_gravity_wasm.step);
     const install_gravity_html = b.addInstallFile(b.path("demos/gravity/web/index.html"), "web-gravity/index.html");
     gravity_wasm_step.dependOn(&install_gravity_html.step);
+
+    // --- fsx WASM build: browser filesystem explorer backend ---
+    const fsx_wasm_mod = b.createModule(.{
+        .root_source_file = b.path("demos/fsx/src/wasm_root.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+        .imports = &.{
+            .{ .name = "fullaz", .module = fullaz_wasm },
+        },
+    });
+    const fsx_wasm = b.addExecutable(.{
+        .name = "fsx",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("demos/fsx/src/wasm.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{
+                .{ .name = "fullaz", .module = fullaz_wasm },
+                .{ .name = "fsx", .module = fsx_wasm_mod },
+            },
+        }),
+    });
+    fsx_wasm.entry = .disabled;
+    fsx_wasm.rdynamic = true;
+
+    const fsx_wasm_step = b.step("wasm-fsx", "Build the fsx WASM backend into zig-out/web-fsx");
+    const install_fsx_wasm = b.addInstallArtifact(fsx_wasm, .{
+        .dest_dir = .{ .override = .{ .custom = "web-fsx" } },
+    });
+    fsx_wasm_step.dependOn(&install_fsx_wasm.step);
+    const install_fsx_html = b.addInstallFile(b.path("demos/fsx/web/index.html"), "web-fsx/index.html");
+    fsx_wasm_step.dependOn(&install_fsx_html.step);
 }

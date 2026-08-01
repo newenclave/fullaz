@@ -16,6 +16,7 @@ test {
     _ = @import("inode.zig");
     _ = @import("path.zig");
     _ = @import("reclaiming_cache.zig");
+    _ = @import("inspect.zig");
     _ = @import("dir.zig");
     _ = @import("fs.zig");
     _ = @import("fs_paths.zig");
