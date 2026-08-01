@@ -77,6 +77,19 @@ pub fn ViewImpl(
     comptime read_only: bool,
 ) type {
     const IndexType = PackedInt(IndexT, Endian);
+    const page_version: u8 = if (AdditionalT == void) 1 else blk: {
+        if (!@hasDecl(AdditionalT, "page_version") or @TypeOf(AdditionalT.page_version) != u8) {
+            @compileError("Page header Additional must declare page_version: u8");
+        }
+        if (!@hasDecl(AdditionalT, "Storage") or @TypeOf(AdditionalT.Storage) != type) {
+            @compileError("Page header Additional must declare Storage");
+        }
+        if (!@hasDecl(AdditionalT, "format") or @TypeOf(AdditionalT.format) != fn (*AdditionalT.Storage) void) {
+            @compileError("Page header Additional must declare format(*Additional.Storage) void");
+        }
+        break :blk AdditionalT.page_version;
+    };
+    const AdditionalStorage = if (AdditionalT == void) void else AdditionalT.Storage;
 
     return struct {
         const Self = @This();
@@ -88,7 +101,7 @@ pub fn ViewImpl(
             IndexT,
             u8,
             u8,
-            AdditionalT,
+            AdditionalStorage,
             Endian,
         );
         pub const has_additional = PageHeader.has_additional;
@@ -129,7 +142,7 @@ pub fn ViewImpl(
 
             var hdr = self.headerMut();
 
-            hdr.version.set(@intCast(1));
+            hdr.version.set(page_version);
             hdr.header_size.set(@intCast(header_size));
 
             hdr.kind.set(kind);
@@ -140,6 +153,10 @@ pub fn ViewImpl(
             hdr.self_pid.set(page_id);
 
             hdr.crc.set(0);
+
+            if (comptime has_additional) {
+                AdditionalT.format(&hdr.additional);
+            }
         }
 
         pub fn commonHeaderSize(self: *const Self) usize {
@@ -162,12 +179,12 @@ pub fn ViewImpl(
             return @ptrCast(self.page.ptr);
         }
 
-        pub fn additional(self: *const Self) *const Additional {
+        pub fn additional(self: *const Self) *const AdditionalStorage {
             const hdr = self.header();
             return &hdr.additional;
         }
 
-        pub fn additionalMut(self: *Self) *Additional {
+        pub fn additionalMut(self: *Self) *AdditionalStorage {
             const hdr = self.headerMut();
             return &hdr.additional;
         }

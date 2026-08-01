@@ -4,9 +4,35 @@ const testing = std.testing;
 const page = @import("fullaz").page;
 const bpt_view = @import("fullaz").bpt.models.paged;
 const header = page.header;
+const extensions = page.extensions;
 const PackedInt = @import("fullaz").core.packed_int.PackedInt;
 
 const algorithm = @import("fullaz").core.algorithm;
+
+const HeaderFsmTrait = struct {
+    pub const Storage = extern struct {
+        page_id: PackedInt(u32, .little),
+        slot_id: PackedInt(u16, .little),
+    };
+
+    pub fn format(storage: *Storage) void {
+        storage.page_id.setMax();
+        storage.slot_id.setMax();
+    }
+
+    pub fn validate(storage: *const Storage) bool {
+        return storage.page_id.isMax() == storage.slot_id.isMax();
+    }
+};
+
+fn headerAdditional(comptime version: u8) type {
+    return extensions.Compose(.{
+        .version = version,
+        .fields = .{
+            extensions.field("fsm", HeaderFsmTrait),
+        },
+    });
+}
 
 fn getRandomSeed() !u64 {
     const io = std.testing.io;
@@ -33,7 +59,7 @@ test "Header.View: additional field" {
     var buffer: [256]u8 = undefined;
     @memset(&buffer, 0);
 
-    const Additional = [5]u8;
+    const Additional = headerAdditional(2);
 
     const HeaderView = header.ViewImpl(u32, u16, Additional, .little, false);
     var view = HeaderView.init(&buffer);
@@ -42,14 +68,11 @@ test "Header.View: additional field" {
     //const add = view.additional();
     //std.debug.print("Add non void ptr = {any}\n", .{add});
 
-    try testing.expect(HeaderView.header_size - HeaderView.common_size == @sizeOf(Additional));
+    try testing.expect(HeaderView.header_size - HeaderView.common_size == @sizeOf(Additional.Storage));
 }
 
 test "Header.View: common reader uses stored extended header size" {
-    const Additional = extern struct {
-        fsm_page_id: PackedInt(u32, .little),
-        fsm_slot_id: PackedInt(u16, .little),
-    };
+    const Additional = headerAdditional(7);
     const ExtendedView = header.ViewImpl(u32, u16, Additional, .little, false);
     const CommonView = header.View(u32, u16, .little, true);
 
@@ -58,8 +81,9 @@ test "Header.View: common reader uses stored extended header size" {
 
     var extended = ExtendedView.init(&buffer);
     extended.formatPage(42, 123, 8, 16);
-    extended.additionalMut().fsm_page_id.set(77);
-    extended.additionalMut().fsm_slot_id.set(3);
+    try testing.expect(Additional.validate(extended.additional()));
+    Additional.fieldMut(extended.additionalMut(), "fsm").page_id.set(77);
+    Additional.fieldMut(extended.additionalMut(), "fsm").slot_id.set(3);
 
     const subheader = extended.subheaderMut();
     subheader[0] = 0xAA;
@@ -69,7 +93,7 @@ test "Header.View: common reader uses stored extended header size" {
     metadata[15] = 0xDD;
 
     const common = CommonView.init(&buffer);
-    try testing.expectEqual(@as(u8, 1), common.header().version.get());
+    try testing.expectEqual(@as(u8, 7), common.header().version.get());
     try testing.expectEqual(@as(u8, @intCast(ExtendedView.header_size)), common.headerSize());
     try testing.expectEqual(ExtendedView.header_size, common.headerSize());
     try testing.expectEqualSlices(u8, &.{ 0xAA, 0, 0, 0, 0, 0, 0, 0xBB }, common.subheader());
@@ -96,16 +120,14 @@ test "Header.View: void field" {
     var buffer: [256]u8 = undefined;
     @memset(&buffer, 0);
 
-    const Additional = void;
-
-    const HeaderView = header.ViewImpl(u32, u16, Additional, .little, false);
+    const HeaderView = header.View(u32, u16, .little, false);
     var view = HeaderView.init(&buffer);
     view.formatPage(42, 123, 8, 16); // kind=42, page_id=123, subhdr_len=8, metadata_len=16
     //const hdr = view.header();
     //const add = view.additional();
     //std.debug.print("Add void ptr = {any}\n", .{add});
 
-    try testing.expect(HeaderView.header_size - HeaderView.common_size == @sizeOf(Additional));
+    try testing.expectEqual(@as(u8, 1), view.header().version.get());
 }
 
 test "Header.View: formatPage sets header fields correctly" {
