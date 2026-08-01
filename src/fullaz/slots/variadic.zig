@@ -20,6 +20,19 @@ pub fn VariadicImpl(
     comptime read_only: bool,
     comptime align_value: T,
 ) type {
+    comptime {
+        const int_info = switch (@typeInfo(T)) {
+            .int => |info| info,
+            else => @compileError("Variadic index type must be an unsigned integer"),
+        };
+        if (int_info.signedness != .unsigned) {
+            @compileError("Variadic index type must be an unsigned integer");
+        }
+        if (align_value == 0 or (align_value & (align_value - 1)) != 0) {
+            @compileError("Variadic alignment must be a non-zero power of two");
+        }
+    }
+
     const IndexType = PackedInt(T, Endian);
     const Magic = PackedInt(u16, Endian);
 
@@ -67,8 +80,12 @@ pub fn VariadicImpl(
 
         body: BufferType,
 
+        fn dataEnd(self: *const Self) usize {
+            return core.memory.alignDown(usize, self.body.len, @as(usize, align_value));
+        }
+
         pub fn init(body: BufferType) Error!Self {
-            if (body.len < @sizeOf(Header)) {
+            if (core.memory.alignDown(usize, body.len, @as(usize, align_value)) < @sizeOf(Header)) {
                 return Error.BufferTooSmall;
             }
             return .{
@@ -83,21 +100,17 @@ pub fn VariadicImpl(
             var header = self.headerMut();
             header.entry_count.set(0);
             header.free_begin.set(@intCast(@sizeOf(Header)));
-            if (align_value > 1) {
-                header.free_end.set(core.memory.alignDown(T, @intCast(self.body.len), align_value));
-            } else {
-                header.free_end.set(@intCast(self.body.len));
-            }
+            header.free_end.set(@intCast(self.dataEnd()));
             header.freed.set(0);
         }
 
         pub fn fullSlotSize(obj_len: usize) usize {
-            return @sizeOf(Entry) + obj_len;
+            const min_len = @max(obj_len, @sizeOf(FreedEntry));
+            return @sizeOf(Entry) + core.memory.alignUp(usize, min_len, @as(usize, align_value));
         }
 
         pub fn capacityFor(self: *const Self, obj_len: usize) usize {
-            const total_size = self.body.len - @sizeOf(Header);
-            return total_size / (@sizeOf(Entry) + obj_len);
+            return self.capacitySpace() / fullSlotSize(obj_len);
         }
 
         pub fn availableSpace(self: *const Self) usize {
@@ -108,7 +121,7 @@ pub fn VariadicImpl(
         }
 
         pub fn capacitySpace(self: *const Self) usize {
-            const total_size = self.body.len - @sizeOf(Header);
+            const total_size = self.dataEnd() - @sizeOf(Header);
             return total_size;
         }
 
@@ -246,8 +259,8 @@ pub fn VariadicImpl(
                 return Error.OutOfBounds;
             }
 
-            const old_len = @as(usize, slots[entry].length.get());
-            if (len <= old_len) {
+            const old_len = @as(usize, self.fixLength(slots[entry].length.get()));
+            if (fix_len <= old_len) {
                 return .enough;
             }
 
@@ -376,7 +389,7 @@ pub fn VariadicImpl(
                 const offset_buf = buffer[0..total_elements];
                 std.sort.pdq(T, offset_buf, slots, offsetGt);
 
-                var new_end_usize: usize = self.body.len;
+                var new_end_usize = self.dataEnd();
                 for (offset_buf) |idx| {
                     const uidx: usize = @intCast(idx);
                     const slot_offset = slots[uidx].offset.get();
@@ -405,7 +418,7 @@ pub fn VariadicImpl(
         pub fn compactInPlace(self: *Self) Error!void {
             const slots = self.entriesMut();
 
-            const base_end: T = @intCast(self.body.len);
+            const base_end: T = @intCast(self.dataEnd());
 
             const old_data_beg: T = self.headerConst().free_end.get();
 
@@ -458,15 +471,11 @@ pub fn VariadicImpl(
         }
 
         pub fn fixLength(_: Self, len: T) T {
-            if (align_value > 1) {
-                return core.memory.alignUp(
-                    T,
-                    if (len < @sizeOf(FreedEntry)) @sizeOf(FreedEntry) else len,
-                    align_value,
-                );
-            } else {
-                return if (len < @sizeOf(FreedEntry)) @sizeOf(FreedEntry) else len;
-            }
+            return core.memory.alignUp(
+                T,
+                if (len < @sizeOf(FreedEntry)) @sizeOf(FreedEntry) else len,
+                align_value,
+            );
         }
 
         pub fn headerConst(self: *const Self) *const Header {

@@ -1,10 +1,13 @@
 const std = @import("std");
 const Variadic = @import("fullaz").slots.Variadic;
+const VariadicImpl = @import("fullaz").slots.VariadicImpl;
 const testing = std.testing;
 const printer = @import("test_printer");
 
 const TestVariadic = Variadic(u16, .little, false);
 const TestVariadicConst = Variadic(u16, .little, true);
+const TestVariadicAligned2 = VariadicImpl(u16, .little, false, 2);
+const TestVariadicAligned4 = VariadicImpl(u16, .little, false, 4);
 
 const errors = @import("fullaz").core.errors;
 
@@ -41,6 +44,59 @@ test "Slot Variadic: initialization with small buffer fails" {
     // Should fail - buffer too small for header
     const result = TestVariadic.init(&buffer);
     try testing.expectError(Error.BufferTooSmall, result);
+}
+
+test "Slot Variadic: aligned layout excludes trailing bytes" {
+    var buffer: [257]u8 = undefined;
+    var slots = try TestVariadicAligned4.init(&buffer);
+    slots.formatHeader();
+
+    try testing.expectEqual(@as(usize, 246), slots.capacitySpace());
+    try testing.expectEqual(
+        slots.capacitySpace() / TestVariadicAligned4.fullSlotSize(1),
+        slots.capacityFor(1),
+    );
+
+    _ = try slots.insert("a");
+    _ = try slots.insert("bbb");
+    for (slots.entriesConst()) |entry| {
+        try testing.expectEqual(@as(u16, 0), entry.offset.get() & 3);
+    }
+}
+
+test "Slot Variadic: compaction preserves aligned offsets" {
+    var buffer: [257]u8 = undefined;
+    var compact_buffer: [64]u8 = undefined;
+
+    var in_place = try TestVariadicAligned2.init(&buffer);
+    in_place.formatHeader();
+    _ = try in_place.insert("a");
+    _ = try in_place.insert("bbb");
+    _ = try in_place.insert("ccccc");
+    try in_place.free(1);
+    try in_place.compactInPlace();
+    for (in_place.entriesConst()) |entry| {
+        if (entry.offset.get() != 0) {
+            try testing.expectEqual(@as(u16, 0), entry.offset.get() & 1);
+        }
+    }
+    try testing.expectEqualSlices(u8, "a", try in_place.get(0));
+    try testing.expectEqualSlices(u8, "ccccc", try in_place.get(2));
+
+    var with_buffer = try TestVariadicAligned2.init(&buffer);
+    with_buffer.formatHeader();
+    _ = try with_buffer.insert("a");
+    _ = try with_buffer.insert("bbb");
+    _ = try with_buffer.insert("ccccc");
+    try with_buffer.free(1);
+    try with_buffer.compactWithBuffer(&compact_buffer);
+    for (with_buffer.entriesConst()) |entry| {
+        if (entry.offset.get() != 0) {
+            try testing.expectEqual(@as(u16, 0), entry.offset.get() & 1);
+        }
+    }
+    try testing.expectEqualSlices(u8, "a", try with_buffer.get(0));
+    try testing.expectEqualSlices(u8, "ccccc", try with_buffer.get(2));
 }
 
 test "Variadic: basic insert and retrieve" {
