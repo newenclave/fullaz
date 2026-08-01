@@ -78,16 +78,24 @@ const NoneStorageManager = struct {
 
 const Device = dev.MemoryBlock(u32);
 const PageCache = PageCacheT(Device);
-const Model = fsm.models.paged.slab.Model(PageCache, NoneStorageManager, SizePolicy);
+const LocationTrait = fsm.location.Trait(u32, u16, .little);
+const Additional = fullaz.page.extensions.Compose(.{
+    .version = 2,
+    .fields = .{
+        fullaz.page.extensions.field("fsm", LocationTrait),
+    },
+});
+const LocationAccessor = fsm.HeaderLocationAccessor(u32, u16, .little, Additional, "fsm");
+const Model = fsm.models.paged.slab.Model(PageCache, NoneStorageManager, SizePolicy, LocationAccessor);
 const Map = fsm.Fsm(Model);
-const HeaderView = fullaz.page.header.View(u32, u16, .little, false);
+const HeaderView = fullaz.page.header.ViewImpl(u32, u16, Additional, .little, false);
 
 fn makeDataPage(cache: *PageCache) !u32 {
     var ph = try cache.create();
     defer ph.deinit();
     const pid = try ph.pid();
     var hv = HeaderView.init(try ph.getDataMut());
-    hv.formatPage(999, pid, 0, @intCast(Map.page_metadata_size));
+    hv.formatPage(999, pid, 0, 0);
     return pid;
 }
 

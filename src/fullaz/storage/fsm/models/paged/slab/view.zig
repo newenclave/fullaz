@@ -7,7 +7,13 @@ const errors = @import("../../../../../core/errors.zig");
 
 const SlotInfoImpl = @import("slot_info.zig").SlotInfo;
 
-pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+pub fn View(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime SizeClassT: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
     const HeaderPageViewT = header.View(PageIdT, IndexT, Endian, read_only);
     const SlotsDirType = slots.Fixed(u16, IndexT, Endian, read_only);
     const ConstSlotsDirType = slots.Fixed(u16, IndexT, Endian, true);
@@ -64,7 +70,13 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: 
             return self.page_view.header();
         }
 
-        pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT, size_class: SizeClassT) ErrorSet!void {
+        pub fn formatPage(
+            self: *Self,
+            kind: u16,
+            page_id: PageIdT,
+            metadata_len: IndexT,
+            size_class: SizeClassT,
+        ) ErrorSet!void {
             const subheader_size = @as(IndexT, @intCast(@sizeOf(SubheaderType)));
             self.page_view.formatPage(kind, page_id, subheader_size, metadata_len);
             const data = self.page_view.dataMut();
