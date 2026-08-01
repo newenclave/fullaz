@@ -6,6 +6,8 @@ const bpt_view = @import("fullaz").bpt.models.paged;
 const header = page.header;
 const extensions = page.extensions;
 const PackedInt = @import("fullaz").core.packed_int.PackedInt;
+const FsmLocationTrait = @import("fullaz").storage.fsm.location.Trait(u32, u16, .little);
+const PageLinksTrait = page.links.Trait(u32, .little);
 
 const algorithm = @import("fullaz").core.algorithm;
 
@@ -101,6 +103,59 @@ test "Header.View: common reader uses stored extended header size" {
     try testing.expectEqual(@as(u8, 0xCC), common.metadata()[0]);
     try testing.expectEqual(@as(u8, 0xDD), common.metadata()[15]);
     try testing.expectEqual(@as(usize, 256 - ExtendedView.header_size - 8 - 16), common.data().len);
+}
+
+test "Header.View: composed FSM location and page links remain independent" {
+    const Additional = extensions.Compose(.{
+        .version = 9,
+        .fields = .{
+            extensions.field("fsm", FsmLocationTrait),
+            extensions.field("links", PageLinksTrait),
+        },
+    });
+    const ExtendedView = header.ViewImpl(u32, u16, Additional, .little, false);
+
+    var buffer: [256]u8 = undefined;
+    @memset(&buffer, 0);
+
+    var view = ExtendedView.init(&buffer);
+    view.formatPage(42, 123, 8, 16);
+
+    const fsm = Additional.fieldMut(view.additionalMut(), "fsm");
+    const links = Additional.fieldMut(view.additionalMut(), "links");
+    try testing.expectEqual(@as(?FsmLocationTrait.Location, null), FsmLocationTrait.get(fsm));
+    try testing.expectEqual(@as(?u32, null), PageLinksTrait.getPrev(links));
+    try testing.expectEqual(@as(?u32, null), PageLinksTrait.getNext(links));
+
+    FsmLocationTrait.set(fsm, .{ .page_id = 77, .slot_id = 3 });
+    PageLinksTrait.setPrev(links, 11);
+    PageLinksTrait.setNext(links, 22);
+
+    const location = FsmLocationTrait.get(Additional.field(view.additional(), "fsm")).?;
+    try testing.expectEqual(@as(u32, 77), location.page_id);
+    try testing.expectEqual(@as(u16, 3), location.slot_id);
+    try testing.expectEqual(
+        @as(?u32, 11),
+        PageLinksTrait.getPrev(Additional.field(view.additional(), "links")),
+    );
+    try testing.expectEqual(
+        @as(?u32, 22),
+        PageLinksTrait.getNext(Additional.field(view.additional(), "links")),
+    );
+
+    FsmLocationTrait.clear(fsm);
+    try testing.expectEqual(
+        @as(?FsmLocationTrait.Location, null),
+        FsmLocationTrait.get(Additional.field(view.additional(), "fsm")),
+    );
+    try testing.expectEqual(
+        @as(?u32, 11),
+        PageLinksTrait.getPrev(Additional.field(view.additional(), "links")),
+    );
+    try testing.expectEqual(
+        @as(?u32, 22),
+        PageLinksTrait.getNext(Additional.field(view.additional(), "links")),
+    );
 }
 
 test "Header.View: validates common and typed layouts" {
