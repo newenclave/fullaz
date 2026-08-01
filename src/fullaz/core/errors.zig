@@ -23,7 +23,6 @@ pub const PageError = error{
     InvalidId,
     BadType,
     BadData,
-    PageBusy,
 } || HandleError;
 
 pub const NotFoundError = error{

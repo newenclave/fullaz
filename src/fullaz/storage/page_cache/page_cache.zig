@@ -52,7 +52,8 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         const Self = @This();
         frame: ?*Frame,
 
-        pub const Error = errors.PageError;
+        pub const Error = errors.PageError ||
+            errors.CacheError;
         pub const Pid = DeviceT.BlockId;
 
         pub const LayoutLock = struct {
@@ -183,7 +184,11 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         const DeviceError = DeviceT.Error;
         const WalErrors = if (WalPolicy.enabled) WalPolicy.Error else error{};
 
-        pub const Error = errors.CacheError || DeviceError || std.mem.Allocator.Error || WalErrors;
+        pub const Error = errors.CacheError ||
+            DeviceError ||
+            std.mem.Allocator.Error ||
+            WalErrors ||
+            Handle.Error;
 
         device: *UnderlyingDevice = undefined,
         allocator: std.mem.Allocator = undefined,

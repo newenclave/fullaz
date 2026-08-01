@@ -70,7 +70,8 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         const ViewType = ViewTypes.ChunkView;
         const ViewTypeConst = ViewTypesConst.ChunkView;
 
-        const Error = errors.PageError;
+        const Error = errors.PageError ||
+            PageHandle.Error;
 
         handle: PageHandle,
         fn init(ph: PageHandle) Self {
