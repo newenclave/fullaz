@@ -62,10 +62,12 @@ test "paged SkipList tracks node pages through paged FSM header locations" {
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
     const LocationTrait = fsm.location.Trait(u32, u16, .little);
+    const LinksTrait = fullaz.page.links.Trait(u32, .little);
     const Additional = fullaz.page.extensions.Compose(.{
         .version = 2,
         .fields = .{
             fullaz.page.extensions.field("fsm", LocationTrait),
+            fullaz.page.extensions.field("links", LinksTrait),
         },
     });
     const LocationAccessor = fsm.HeaderLocationAccessor(u32, u16, .little, Additional, "fsm");
@@ -73,6 +75,8 @@ test "paged SkipList tracks node pages through paged FSM header locations" {
     const Fsm = fsm.Fsm(FsmModel);
     const SkipModel = skip_list.models.Paged(PageCache, StorageManager, Fsm, Additional, keyCmp, void);
     const SkipList = skip_list.List(SkipModel);
+    const HeaderViewMut = fullaz.page.header.ViewImpl(u32, u16, Additional, .little, false);
+    const HeaderViewConst = fullaz.page.header.ViewImpl(u32, u16, Additional, .little, true);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
@@ -113,6 +117,14 @@ test "paged SkipList tracks node pages through paged FSM header locations" {
         defer ph.deinit();
         try std.testing.expect((try LocationAccessor.read(try ph.getData())) != null);
     }
+    {
+        var ph = try cache.fetch(data_page_id);
+        defer ph.deinit();
+        var page_view = HeaderViewMut.init(try ph.getDataMut());
+        const links = Additional.fieldMut(page_view.additionalMut(), "links");
+        LinksTrait.setPrev(links, 11);
+        LinksTrait.setNext(links, 22);
+    }
 
     try list.remove("BBBB");
     try std.testing.expect(!(try list.contains("BBBB")));
@@ -124,5 +136,9 @@ test "paged SkipList tracks node pages through paged FSM header locations" {
         var ph = try cache.fetch(data_page_id);
         defer ph.deinit();
         try std.testing.expect((try LocationAccessor.read(try ph.getData())) != null);
+        const page_view = HeaderViewConst.init(try ph.getData());
+        const links = Additional.field(page_view.additional(), "links");
+        try std.testing.expectEqual(@as(?u32, 11), LinksTrait.getPrev(links));
+        try std.testing.expectEqual(@as(?u32, 22), LinksTrait.getNext(links));
     }
 }
