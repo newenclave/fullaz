@@ -35,6 +35,7 @@ test {
     _ = @import("chain/store_indexed.zig");
 
     _ = @import("fsm/memory.zig");
+    _ = @import("fsm/location.zig");
     _ = @import("fsm/paged_slab.zig");
 
     _ = @import("device/memory_block.zig");

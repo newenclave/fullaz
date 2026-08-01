@@ -1,6 +1,7 @@
 const std = @import("std");
 const interfaces = @import("models/interfaces.zig");
 pub const models = @import("models/models.zig");
+pub const location = @import("location.zig");
 
 pub fn Fsm(comptime ModelT: type) type {
     comptime interfaces.assertModel(ModelT);
@@ -12,7 +13,11 @@ pub fn Fsm(comptime ModelT: type) type {
         pub const Pid = ModelT.Pid;
         pub const Size = ModelT.Size;
         pub const Error = ModelT.Error;
-        pub const page_metadata_size = if (@hasDecl(ModelT, "page_metadata_size")) ModelT.page_metadata_size else 0;
+        pub const page_metadata_size =
+            if (@hasDecl(ModelT, "page_metadata_size"))
+                ModelT.page_metadata_size
+            else
+                0;
 
         model: *ModelT = undefined,
 
