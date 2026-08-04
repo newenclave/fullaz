@@ -5,7 +5,12 @@ const errors = @import("../../../core/errors.zig");
 
 const SkipListPage = @import("../../../page/skip_list.zig").SkipList;
 
-fn SlotWrapperView(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+fn SlotWrapperView(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
     const SlotsDirType = slots.Variadic(IndexT, Endian, read_only);
 
     return struct {

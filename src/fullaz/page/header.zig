@@ -14,12 +14,26 @@ pub fn Header(
     comptime IndexT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
+    return HeaderEx(
+        PageIdT,
+        IndexT,
+        void,
+        Endian,
+    );
+}
+
+pub fn HeaderEx(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime AdditionalT: type,
+    comptime Endian: std.builtin.Endian,
+) type {
     return HeaderImpl(
         PageIdT,
         IndexT,
         u8,
         u8,
-        void,
+        AdditionalT,
         Endian,
     );
 }
