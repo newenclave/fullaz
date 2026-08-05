@@ -1,1 +1,2 @@
-pub const view = @import("view.zig");
+pub const View = @import("view.zig").View;
+pub const Handle = @import("handle.zig").Handle;

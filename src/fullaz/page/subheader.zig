@@ -1,6 +1,6 @@
 const std = @import("std");
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
-const PageViewType = @import("header.zig").View;
+const PageViewType = @import("header.zig").ViewImpl;
 
 pub fn View(
     comptime PageIdT: type,
@@ -9,11 +9,35 @@ pub fn View(
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
+    return ViewImpl(
+        PageIdT,
+        IndexT,
+        Subheader,
+        void,
+        Endian,
+        read_only,
+    );
+}
+
+pub fn ViewImpl(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime AdditionalT: type,
+    comptime Subheader: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
     return struct {
         const Self = @This();
         const DataType = if (read_only) []const u8 else []u8;
 
-        pub const PageView = PageViewType(PageIdT, IndexT, Endian, read_only);
+        pub const PageView = PageViewType(
+            PageIdT,
+            IndexT,
+            AdditionalT,
+            Endian,
+            read_only,
+        );
 
         page_view: PageView,
 
@@ -41,6 +65,17 @@ pub fn View(
                 @as(IndexT, @intCast(@sizeOf(Subheader))),
                 metadata_len,
             );
+        }
+
+        pub fn header(self: *const Self) *const PageView.PageHeader {
+            return self.page_view.header();
+        }
+
+        pub fn headerMut(self: *Self) *PageView.PageHeader {
+            if (read_only) {
+                @compileError("Cannot get mutable header from a read-only page");
+            }
+            return self.page_view.headerMut();
         }
 
         pub fn subheader(self: *const Self) *const Subheader {
