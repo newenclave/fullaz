@@ -12,8 +12,8 @@ pub fn View(
     return ViewImpl(
         PageIdT,
         IndexT,
-        Subheader,
         void,
+        Subheader,
         Endian,
         read_only,
     );

@@ -80,6 +80,88 @@ test "SlotChain: handle" {
     var p = try hdl.loadPage(1);
     defer p.deinit();
 
+    try p.setTombstone(1);
+
     try std.testing.expect(try p.id() == 1);
     try std.testing.expect(try p.size() == 2);
+    try std.testing.expect(try p.isTombstone(1));
+    try std.testing.expect(!try p.isTombstone(0));
+
+    const removed = try p.removeTombstones();
+    try std.testing.expect(removed == 1);
+    try std.testing.expect(try p.size() == 1);
+    try std.testing.expect(!try p.isTombstone(0));
+}
+
+test "SlotChain: iterator" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    _ = dev.appendBlock() catch {};
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    _ = try hdl.append("first");
+    _ = try hdl.append("second");
+
+    var page = try hdl.loadPage(1);
+    defer page.deinit();
+    try page.setTombstone(0);
+
+    var itr = (try hdl.iterator()).?;
+    defer itr.deinit();
+
+    const first = (try itr.next()).?;
+    try std.testing.expectEqualStrings("second", first.value);
+    try std.testing.expect((try itr.next()) == null);
+
+    const last = (try itr.prev()).?;
+    try std.testing.expectEqualStrings("second", last.value);
+    try std.testing.expect((try itr.prev()) == null);
+}
+
+test "SlotChain: iterator crosses chunks" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    _ = dev.appendBlock() catch {};
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var first: [3000]u8 = undefined;
+    @memset(&first, 'a');
+    var second: [3000]u8 = undefined;
+    @memset(&second, 'b');
+    _ = try hdl.append(&first);
+    _ = try hdl.append(&second);
+
+    var itr = (try hdl.iterator()).?;
+    defer itr.deinit();
+
+    const first_result = (try itr.next()).?;
+    try std.testing.expectEqual(@as(u8, 'a'), first_result.value[0]);
+    const second_result = (try itr.next()).?;
+    try std.testing.expectEqual(@as(u8, 'b'), second_result.value[0]);
+    try std.testing.expect((try itr.next()) == null);
+
+    const last_result = (try itr.prev()).?;
+    try std.testing.expectEqual(@as(u8, 'b'), last_result.value[0]);
+    const previous_result = (try itr.prev()).?;
+    try std.testing.expectEqual(@as(u8, 'a'), previous_result.value[0]);
 }

@@ -32,7 +32,13 @@ pub fn View(
         pub const SubheaderType = SubheadersType.HeaderSubheader;
         pub const HeaderType = HeaderPageView.PageHeader;
 
-        pub const SubheaderView = subheaders.View(PageIdT, IndexT, SubheaderType, Endian, read_only);
+        pub const SubheaderView = subheaders.View(
+            PageIdT,
+            IndexT,
+            SubheaderType,
+            Endian,
+            read_only,
+        );
 
         pub const Error = error{} || CommonErrorSet;
 

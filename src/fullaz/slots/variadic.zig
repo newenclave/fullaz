@@ -270,7 +270,9 @@ pub fn VariadicImpl(
         /// Removes matching live slots while preserving the order of survivors.
         /// The predicate receives the original slot id and must not retain data.
         pub fn removeIf(self: *Self, comptime predicate: anytype, context: anytype) Error!usize {
-            if (read_only) @compileError("Cannot remove from const buffer");
+            if (read_only) {
+                @compileError("Cannot remove from const buffer");
+            }
 
             const slots = self.entriesMut();
             for (slots) |slot| {
@@ -693,7 +695,9 @@ pub fn VariadicImpl(
             if (entry >= slots.len) {
                 return Error.OutOfBounds;
             }
-            slots[entry].offset.set(encodeSlotOffset(slotOffset(slots[entry].offset.get()), flags));
+            slots[entry].offset.set(
+                encodeSlotOffset(slotOffset(slots[entry].offset.get()), flags),
+            );
         }
 
         pub fn entriesConst(self: *const Self) EntrySliceConst {
