@@ -6,6 +6,18 @@ pub const Field = struct {
     Trait: type,
 };
 
+pub const Empty = struct {
+    pub const Storage = extern struct {};
+    pub const page_version: u8 = 0;
+    pub const fields = [0]Field{};
+
+    pub fn format(_: *Storage) void {}
+
+    pub fn validate(_: *const Storage) bool {
+        return true;
+    }
+};
+
 pub fn field(comptime name: [:0]const u8, comptime Trait: type) Field {
     comptime {
         if (name.len == 0) {
@@ -196,17 +208,42 @@ pub fn Extend(comptime Base: type, comptime config: anytype) type {
 
     const base_count = Base.fields.len;
     const field_count = fields_info.@"struct".fields.len;
+    const extension_fields = comptime blk: {
+        var result: [field_count]Field = undefined;
+        for (0..field_count) |index| {
+            const descriptor = configured_fields[index];
+            if (@TypeOf(descriptor) != Field) {
+                @compileError("Page extension descriptor must be created with field()");
+            }
+            result[index] = descriptor;
+        }
+        break :blk result;
+    };
+
+    if (@hasField(@TypeOf(config), "namespace")) {
+        const namespace: [:0]const u8 = config.namespace;
+        if (namespace.len == 0) {
+            @compileError("Page extension namespace cannot be empty");
+        }
+        const Namespace = composeFromFields(configured_version, extension_fields);
+        const descriptors = comptime blk: {
+            var result: [base_count + 1]Field = undefined;
+            for (0..base_count) |index| {
+                result[index] = Base.fields[index];
+            }
+            result[base_count] = field(namespace, Namespace);
+            break :blk result;
+        };
+        return composeFromFields(configured_version, descriptors);
+    }
+
     const descriptors = comptime blk: {
         var result: [base_count + field_count]Field = undefined;
         for (0..base_count) |index| {
             result[index] = Base.fields[index];
         }
         for (0..field_count) |index| {
-            const descriptor = configured_fields[index];
-            if (@TypeOf(descriptor) != Field) {
-                @compileError("Page extension descriptor must be created with field()");
-            }
-            result[base_count + index] = descriptor;
+            result[base_count + index] = extension_fields[index];
         }
         break :blk result;
     };

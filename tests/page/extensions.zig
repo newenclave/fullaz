@@ -170,3 +170,34 @@ test "page extension Extend appends fields with a new version" {
     try std.testing.expect(Additional.field(&storage, "fsm").page_id.isMax());
     try std.testing.expect(Additional.field(&storage, "links").prev.isMax());
 }
+
+test "page extension Extend namespaces fields independently from base fields" {
+    const Base = extensions.Compose(.{
+        .version = 2,
+        .fields = .{
+            extensions.field("links", LinksTrait),
+        },
+    });
+    const Additional = extensions.Extend(Base, .{
+        .version = 3,
+        .namespace = "page_chain",
+        .fields = .{
+            extensions.field("links", LinksTrait),
+        },
+    });
+
+    var storage: Additional.Storage = undefined;
+    Additional.format(&storage);
+
+    const user_links = Additional.field(&storage, "links");
+    const chain = Additional.field(&storage, "page_chain");
+    try std.testing.expectEqual(@as(u8, 3), Additional.page_version);
+    try std.testing.expectEqual(@as(usize, 2), Additional.fields.len);
+    try std.testing.expectEqual(@sizeOf(LinksTrait.Storage), @offsetOf(Additional.Storage, "page_chain"));
+    try std.testing.expect(user_links.prev.isMax());
+    try std.testing.expect(chain.links.prev.isMax());
+
+    Additional.fieldMut(&storage, "links").prev.set(11);
+    try std.testing.expectEqual(@as(u32, 11), user_links.prev.get());
+    try std.testing.expect(chain.links.prev.isMax());
+}

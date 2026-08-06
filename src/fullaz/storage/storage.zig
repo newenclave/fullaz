@@ -5,4 +5,5 @@ pub const chain_store = @import("chain_store/chain_store.zig");
 pub const fsm = @import("fsm/fsm.zig");
 pub const free_list = @import("free_list.zig");
 pub const wal = @import("wal/wal.zig");
+pub const page_chain = @import("page_chain/page_chain.zig");
 pub const slot_chain = @import("slot_chain/slot_chain.zig");

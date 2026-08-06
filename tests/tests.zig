@@ -30,7 +30,9 @@ test {
 
     _ = @import("slots/variadic.zig");
     _ = @import("slots/fixed.zig");
+
     _ = @import("slot_chain/slot_chain.zig");
+    _ = @import("page_chain/page_chain.zig");
 
     _ = @import("chain/storage.zig");
     _ = @import("chain/store_indexed.zig");

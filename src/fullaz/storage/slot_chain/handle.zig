@@ -121,6 +121,10 @@ pub fn Handle(
             pos: usize,
         };
 
+        page_cache: *PageCacheType,
+        page: ?ChunkHandle,
+        cursor: Cursor,
+
         fn init(page_cache: *PageCacheType, page_id: BlockIdType, cursor: Cursor) Error!Self {
             return .{
                 .page_cache = page_cache,
@@ -249,10 +253,6 @@ pub fn Handle(
             self.page = prev_page;
             return true;
         }
-
-        page_cache: *PageCacheType,
-        page: ?ChunkHandle,
-        cursor: Cursor,
     };
 
     return struct {
