@@ -144,3 +144,29 @@ test "page extension Compose returns traits by field name" {
         @compileError("links field must return LinksTrait");
     };
 }
+
+test "page extension Extend appends fields with a new version" {
+    const Base = extensions.Compose(.{
+        .version = 2,
+        .fields = .{
+            extensions.field("fsm", FsmTrait),
+        },
+    });
+    const Additional = extensions.Extend(Base, .{
+        .version = 3,
+        .fields = .{
+            extensions.field("links", LinksTrait),
+        },
+    });
+
+    var storage: Additional.Storage = undefined;
+    Additional.format(&storage);
+
+    try std.testing.expectEqual(@as(u8, 3), Additional.page_version);
+    try std.testing.expectEqual(@as(usize, 2), Additional.fields.len);
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(Additional.Storage, "fsm"));
+    try std.testing.expectEqual(@sizeOf(FsmTrait.Storage), @offsetOf(Additional.Storage, "links"));
+    try std.testing.expect(Additional.validate(&storage));
+    try std.testing.expect(Additional.field(&storage, "fsm").page_id.isMax());
+    try std.testing.expect(Additional.field(&storage, "links").prev.isMax());
+}

@@ -27,22 +27,17 @@ pub fn field(comptime name: [:0]const u8, comptime Trait: type) Field {
     };
 }
 
-pub fn Compose(comptime config: anytype) type {
-    const config_info = @typeInfo(@TypeOf(config));
-    if (config_info != .@"struct" or config_info.@"struct".is_tuple) {
-        @compileError("Page extension Compose requires a named config struct");
-    }
-    if (!@hasField(@TypeOf(config), "version") or !@hasField(@TypeOf(config), "fields")) {
-        @compileError("Page extension Compose config requires version and fields");
-    }
-
-    const configured_version: u8 = @intCast(config.version);
-    const descriptors = config.fields;
+fn composeFromFields(comptime configured_version: u8, comptime descriptors: anytype) type {
     const descriptors_info = @typeInfo(@TypeOf(descriptors));
-    if (descriptors_info != .@"struct" or !descriptors_info.@"struct".is_tuple) {
-        @compileError("Page extension descriptors must be a tuple");
-    }
-    const field_count = descriptors_info.@"struct".fields.len;
+    const field_count = switch (descriptors_info) {
+        .array => |info| blk: {
+            if (info.child != Field) {
+                @compileError("Page extension descriptors must be Field values");
+            }
+            break :blk info.len;
+        },
+        else => @compileError("Page extension descriptors must be an array"),
+    };
     if (field_count == 0) {
         @compileError("Page extension Compose requires at least one field");
     }
@@ -81,6 +76,7 @@ pub fn Compose(comptime config: anytype) type {
     return struct {
         pub const Storage = GeneratedStorage;
         pub const page_version = configured_version;
+        pub const fields = descriptors;
 
         pub fn format(storage: *GeneratedStorage) void {
             inline for (0..field_count) |index| {
@@ -127,4 +123,92 @@ pub fn Compose(comptime config: anytype) type {
             return &@field(storage.*, name);
         }
     };
+}
+
+pub fn Compose(comptime config: anytype) type {
+    const config_info = @typeInfo(@TypeOf(config));
+    if (config_info != .@"struct" or config_info.@"struct".is_tuple) {
+        @compileError("Page extension Compose requires a named config struct");
+    }
+    if (!@hasField(@TypeOf(config), "version") or !@hasField(@TypeOf(config), "fields")) {
+        @compileError("Page extension Compose config requires version and fields");
+    }
+
+    const configured_version: u8 = @intCast(config.version);
+    const configured_fields = config.fields;
+    const fields_info = @typeInfo(@TypeOf(configured_fields));
+    if (fields_info != .@"struct" or !fields_info.@"struct".is_tuple) {
+        @compileError("Page extension descriptors must be a tuple");
+    }
+
+    const field_count = fields_info.@"struct".fields.len;
+    const descriptors = comptime blk: {
+        var result: [field_count]Field = undefined;
+        for (0..field_count) |index| {
+            const descriptor = configured_fields[index];
+            if (@TypeOf(descriptor) != Field) {
+                @compileError("Page extension descriptor must be created with field()");
+            }
+            result[index] = descriptor;
+        }
+        break :blk result;
+    };
+    return composeFromFields(configured_version, descriptors);
+}
+
+fn assertExtendable(comptime Base: type) void {
+    comptime {
+        if (!@hasDecl(Base, "page_version") or @TypeOf(Base.page_version) != u8) {
+            @compileError("Page extension Extend base must declare page_version: u8");
+        }
+        if (!@hasDecl(Base, "Storage") or @TypeOf(Base.Storage) != type) {
+            @compileError("Page extension Extend base must declare Storage");
+        }
+        if (!@hasDecl(Base, "fields")) {
+            @compileError("Page extension Extend base must declare fields");
+        }
+        const fields_info = @typeInfo(@TypeOf(Base.fields));
+        if (fields_info != .array or fields_info.array.child != Field) {
+            @compileError("Page extension Extend base fields must be an array of Field");
+        }
+        requiresFnSignature(Base, "format", fn (*Base.Storage) void);
+        requiresFnSignature(Base, "validate", fn (*const Base.Storage) bool);
+    }
+}
+
+pub fn Extend(comptime Base: type, comptime config: anytype) type {
+    assertExtendable(Base);
+
+    const config_info = @typeInfo(@TypeOf(config));
+    if (config_info != .@"struct" or config_info.@"struct".is_tuple) {
+        @compileError("Page extension Extend requires a named config struct");
+    }
+    if (!@hasField(@TypeOf(config), "version") or !@hasField(@TypeOf(config), "fields")) {
+        @compileError("Page extension Extend config requires version and fields");
+    }
+
+    const configured_version: u8 = @intCast(config.version);
+    const configured_fields = config.fields;
+    const fields_info = @typeInfo(@TypeOf(configured_fields));
+    if (fields_info != .@"struct" or !fields_info.@"struct".is_tuple) {
+        @compileError("Page extension descriptors must be a tuple");
+    }
+
+    const base_count = Base.fields.len;
+    const field_count = fields_info.@"struct".fields.len;
+    const descriptors = comptime blk: {
+        var result: [base_count + field_count]Field = undefined;
+        for (0..base_count) |index| {
+            result[index] = Base.fields[index];
+        }
+        for (0..field_count) |index| {
+            const descriptor = configured_fields[index];
+            if (@TypeOf(descriptor) != Field) {
+                @compileError("Page extension descriptor must be created with field()");
+            }
+            result[base_count + index] = descriptor;
+        }
+        break :blk result;
+    };
+    return composeFromFields(configured_version, descriptors);
 }
