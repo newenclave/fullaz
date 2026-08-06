@@ -73,6 +73,16 @@ pub fn HandleImpl(
             return ChunkViewConst.init(try self.ph.getData());
         }
 
+        pub fn getData(self: *const Self) Error![]const u8 {
+            const cv = try self.getView();
+            return cv.data();
+        }
+
+        pub fn getDataMut(self: *Self) Error![]u8 {
+            var cv = try self.getViewMut();
+            return cv.dataMut();
+        }
+
         pub fn getNext(self: *Self) Error!?BlockIdType {
             const cv = try self.getView();
             return cv.getNext();
@@ -102,6 +112,16 @@ pub fn HandleImpl(
             return @ptrCast(cv.subheader());
         }
 
+        pub fn header(self: *const Self) Error!*const ViewTypeConst.PageHeader {
+            const cv = try self.getView();
+            return @ptrCast(cv.header());
+        }
+
+        pub fn headerMut(self: *Self) Error!*ViewType.PageHeader {
+            var cv = try self.getViewMut();
+            return @ptrCast(cv.headerMut());
+        }
+
         pub fn subheaderMut(self: *Self) Error!*SubheaderType {
             var cv = try self.getViewMut();
             return @ptrCast(cv.subheaderMut());
@@ -115,11 +135,6 @@ pub fn HandleImpl(
         pub fn metadataMut(self: *Self) Error![]u8 {
             var cv = try self.getViewMut();
             return cv.metadataMut();
-        }
-
-        pub fn data(self: *const Self) Error![]const u8 {
-            const cv = try self.getView();
-            return cv.data();
         }
     };
 
@@ -164,7 +179,7 @@ pub fn HandleImpl(
             }
             const page = self.page orelse return null;
             return .{
-                .value = try page.data(),
+                .value = try page.getData(),
                 .page_id = try page.id(),
             };
         }

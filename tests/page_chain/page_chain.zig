@@ -42,8 +42,8 @@ test "PageChain: Create" {
     try std.testing.expect(c.getNext() == null);
     try std.testing.expect(c.getPrev() == null);
 
-    // printer.print("Header size = {}\n", .{@sizeOf(View.PageHeader)});
-    // printer.print("Chunk size = {}\n", .{c.data().len});
+    printer.print("Header size = {}\n", .{@sizeOf(View.PageHeader)});
+    printer.print("Chunk size = {}\n", .{c.data().len});
 }
 
 test "PageChain: void additional uses namespaced links" {
@@ -141,7 +141,7 @@ test "PageChain: handle" {
     const Handle = page_chain.Handle(Cache, NoneStorageManager, Subheader, .little);
 
     var mgr = NoneStorageManager{};
-    var dev = try Device.init(std.testing.allocator, 4096);
+    var dev = try Device.init(std.testing.allocator, 1000);
     defer dev.deinit();
     var cache = try Cache.init(&dev, std.testing.allocator, 8);
     defer cache.deinit();
@@ -161,7 +161,10 @@ test "PageChain: handle" {
     sh.aa[2] = 0x33;
     sh.aa[3] = 0x44;
 
-    printer.print("Subheader address = {any}\n", .{sh});
+    printer.print("Subheader = {any}\n", .{sh});
+    printer.print("Header Len = {}\n", .{(try c.header()).header_size.get()});
+    printer.print("SubHeader Len = {}\n", .{(try c.header()).subheader_size.get()});
+    printer.print("Data len = {}\n", .{(try c.getData()).len});
 }
 
 test "PageChain: evictChunk relinks neighbors and boundaries" {
