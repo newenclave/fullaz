@@ -14,6 +14,7 @@ pub fn Handle(
         StorageManager,
         void,
         void,
+        void,
         Endian,
     );
 }
@@ -23,8 +24,10 @@ pub fn HandleImpl(
     comptime StorageManager: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
+    comptime FsmT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
+    const FsmError = if (FsmT == void) error{} else FsmT.Error;
     const PosType = StorageManager.Size;
     _ = PosType;
     const IndexT = u16;
@@ -61,6 +64,12 @@ pub fn HandleImpl(
             _ = data;
             return flags != 0;
         }
+    };
+
+    const Context = struct {
+        page_chain: PageChainHandle = undefined,
+        fsm: ?*FsmT = null,
+        settings: Settings = .{},
     };
 
     const ChunkHandle = struct {
@@ -259,12 +268,12 @@ pub fn HandleImpl(
         pub const Error = PageChainHandle.Error ||
             PageCacheType.Error ||
             ViewType.Error ||
-            StorageManager.Error;
+            StorageManager.Error ||
+            FsmError;
         pub const ValueIn = []const u8;
         pub const ValueOut = []const u8;
 
-        page_chain: PageChainHandle,
-        settings: Settings = .{},
+        ctx: Context = .{},
         last_chunk: ?ChunkHandle = null,
 
         pub fn init(
@@ -273,14 +282,37 @@ pub fn HandleImpl(
             settings: Settings,
         ) Error!Self {
             return .{
-                .page_chain = try PageChainHandle.init(
-                    page_cache,
-                    storage_manager,
-                    .{
-                        .chunk_page_kind = settings.chunk_page_kind,
-                    },
-                ),
-                .settings = settings,
+                .ctx = .{
+                    .page_chain = try PageChainHandle.init(
+                        page_cache,
+                        storage_manager,
+                        .{
+                            .chunk_page_kind = settings.chunk_page_kind,
+                        },
+                    ),
+                    .settings = settings,
+                },
+            };
+        }
+
+        pub fn initWithFsm(
+            page_cache: *PageCacheType,
+            storage_manager: *StorageManager,
+            fsm: *FsmT,
+            settings: Settings,
+        ) Error!Self {
+            return .{
+                .ctx = .{
+                    .page_chain = try PageChainHandle.init(
+                        page_cache,
+                        storage_manager,
+                        .{
+                            .chunk_page_kind = settings.chunk_page_kind,
+                        },
+                    ),
+                    .fsm = fsm,
+                    .settings = settings,
+                },
             };
         }
 
@@ -288,12 +320,12 @@ pub fn HandleImpl(
             if (self.last_chunk) |*last_c| {
                 last_c.deinit();
             }
-            self.page_chain.deinit();
+            self.ctx.page_chain.deinit();
         }
 
         fn compactPage(self: *const Self, page: *ChunkHandle) Error!void {
             var sv = try page.slotsDirMut();
-            var tmp = self.page_chain.page_cache.getTemporaryPage() catch {
+            var tmp = self.ctx.page_chain.page_cache.getTemporaryPage() catch {
                 try sv.compactInPlace();
                 return;
             };
@@ -303,9 +335,37 @@ pub fn HandleImpl(
             };
         }
 
+        pub fn insertUnordered(self: *Self, val: ValueIn) Error!void {
+            if (try self.findFreeSlot(val.len)) |page_id| {
+                var page = try self.loadPage(page_id);
+                defer page.deinit();
+                var sd = try page.slotsDirMut();
+
+                switch (try sd.canInsert(val.len)) {
+                    .enough => {},
+                    .need_compact => {
+                        try self.compactPage(&page);
+                        sd = try page.slotsDirMut();
+                    },
+                    .not_enough => {
+                        try self.updatePageInFsm(page_id, sd.availableSpace());
+                        _ = try self.append(val);
+                        return;
+                    },
+                }
+
+                _ = try sd.insert(val);
+                const total = try self.ctx.page_chain.manager().getTotalSize();
+                try self.ctx.page_chain.managerMut().setTotalSize(total + 1);
+                try self.updatePageInFsm(page_id, sd.availableSpace());
+            } else {
+                _ = try self.append(val);
+            }
+        }
+
         pub fn append(self: *Self, val: ValueIn) Error!PageId {
             if (self.last_chunk) |*last_c| {
-                const total = try self.page_chain.manager().getTotalSize();
+                const total = try self.ctx.page_chain.manager().getTotalSize();
                 var sd = try last_c.slotsDirMut();
                 switch (try sd.canInsert(val.len)) {
                     .need_compact => {
@@ -319,8 +379,8 @@ pub fn HandleImpl(
                         var next_sd = try next.slotsDirMut();
                         _ = try next_sd.insert(val);
 
-                        try self.page_chain.insertLast(&next.ph);
-                        try self.page_chain.managerMut().setTotalSize(total + 1);
+                        try self.ctx.page_chain.insertLast(&next.ph);
+                        try self.ctx.page_chain.managerMut().setTotalSize(total + 1);
 
                         last_c.deinit();
                         self.last_chunk = next;
@@ -331,8 +391,9 @@ pub fn HandleImpl(
                 }
 
                 _ = try sd.insert(val);
-                try self.page_chain.managerMut().setTotalSize(total + 1);
-                return try last_c.id();
+                try self.ctx.page_chain.managerMut().setTotalSize(total + 1);
+                try self.updatePageInFsm(try last_c.id(), sd.availableSpace());
+                return try self.last_chunk.?.id();
             } else {
                 var page = try self.createPage();
                 errdefer page.deinit();
@@ -341,39 +402,70 @@ pub fn HandleImpl(
                 var sd = try page.slotsDirMut();
                 _ = try sd.insert(val);
 
-                try self.page_chain.insertFirst(&page.ph);
-                try self.page_chain.managerMut().setTotalSize(1);
+                try self.ctx.page_chain.insertFirst(&page.ph);
+                try self.ctx.page_chain.managerMut().setTotalSize(1);
+                try self.updatePageInFsm(page_id, sd.availableSpace());
                 self.last_chunk = page;
                 return page_id;
             }
         }
 
         pub fn size(self: *const Self) Error!usize {
-            return self.page_chain.manager().getTotalSize();
+            return @intCast(try self.ctx.page_chain.manager().getTotalSize());
         }
 
         pub fn iterator(self: *const Self) Error!?Iterator {
-            if (try self.page_chain.manager().getFirst() == null) return null;
-            return Iterator.init(try self.page_chain.iterator(), .before_first);
+            if (try self.ctx.page_chain.manager().getFirst() == null) return null;
+            return Iterator.init(try self.ctx.page_chain.iterator(), .before_first);
         }
 
         pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
-            if (try self.page_chain.manager().getLast() == null) return null;
-            var page_itr = try self.page_chain.iteratorFromEnd();
+            if (try self.ctx.page_chain.manager().getLast() == null) return null;
+            var page_itr = try self.ctx.page_chain.iteratorFromEnd();
             try page_itr.next();
             return Iterator.init(page_itr, .after_last);
         }
 
+        pub fn insertPageToFsm(self: *Self, page_id: PageId, free_size: usize) Error!void {
+            if (comptime FsmT == void) {
+                return;
+            }
+            const fsm = self.ctx.fsm orelse return;
+            try fsm.add(page_id, @intCast(free_size));
+        }
+
+        pub fn findFreeSlot(self: *Self, required_size: usize) Error!?PageId {
+            if (comptime FsmT == void) {
+                return null;
+            }
+            const full_slot_size = SlotsDirConst.fullSlotSize(required_size);
+            const fsm = self.ctx.fsm orelse return null;
+            return fsm.find(@intCast(full_slot_size));
+        }
+
         pub fn loadPage(self: *const Self, pid: PageId) Error!ChunkHandle {
-            return .{ .ph = try self.page_chain.loadChunk(pid) };
+            return .{
+                .ph = try self.ctx.page_chain.loadChunk(pid),
+            };
         }
 
         pub fn createPage(self: *Self) Error!ChunkHandle {
-            var ch: ChunkHandle = .{ .ph = try self.page_chain.createChunk() };
+            var ch: ChunkHandle = .{
+                .ph = try self.ctx.page_chain.createChunk(),
+            };
             errdefer ch.deinit();
             var sd = try ch.slotsDirMut();
             sd.formatHeader();
+            try self.insertPageToFsm(try ch.id(), sd.availableSpace());
             return ch;
+        }
+
+        fn updatePageInFsm(self: *Self, page_id: PageId, free_size: usize) Error!void {
+            if (comptime FsmT == void) {
+                return;
+            }
+            const fsm = self.ctx.fsm orelse return;
+            try fsm.update(page_id, @intCast(free_size));
         }
     };
 }

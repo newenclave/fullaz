@@ -4,6 +4,7 @@ const slot_chain = fullaz.storage.slot_chain;
 
 const page_cache = @import("fullaz").storage.page_cache;
 const devices = @import("fullaz").device;
+const fsm = @import("fullaz").storage.fsm;
 const printer = @import("test_printer");
 
 const NoneStorageManager = struct {
@@ -171,4 +172,69 @@ test "SlotChain: iterator crosses chunks" {
     try std.testing.expectEqual(@as(u8, 'b'), reverse_last.value[0]);
     const reverse_first = (try reverse_itr.prev()).?;
     try std.testing.expectEqual(@as(u8, 'a'), reverse_first.value[0]);
+}
+
+test "SlotChain: insertUnordered falls back to append without FSM" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    try hdl.insertUnordered("first");
+    try hdl.insertUnordered("second");
+    try std.testing.expectEqual(@as(u32, 2), try hdl.size());
+
+    var itr = (try hdl.iterator()).?;
+    defer itr.deinit();
+    try std.testing.expectEqualStrings("first", (try itr.next()).?.value);
+    try std.testing.expectEqualStrings("second", (try itr.next()).?.value);
+}
+
+test "SlotChain: insertUnordered uses FSM free-space index" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const FsmModel = fsm.models.Memory(u32, u16);
+    const Fsm = fsm.Fsm(FsmModel);
+    const Handle = slot_chain.HandleImpl(Cache, NoneStorageManager, void, void, Fsm, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm_index = Fsm.init(&fsm_model);
+    defer fsm_index.deinit();
+
+    var hdl = try Handle.initWithFsm(&cache, &mgr, &fsm_index, .{});
+    defer hdl.deinit();
+
+    var first: [3500]u8 = undefined;
+    @memset(&first, 'a');
+    var second: [3000]u8 = undefined;
+    @memset(&second, 'b');
+    _ = try hdl.append(&first);
+    const first_id = mgr.first_block_id.?;
+    _ = try hdl.append(&second);
+    const last_id = mgr.last_block_id.?;
+    try std.testing.expect(first_id != last_id);
+
+    try hdl.insertUnordered("fsm");
+    try std.testing.expectEqual(@as(u32, 3), try hdl.size());
+
+    var first_page = try hdl.loadPage(first_id);
+    defer first_page.deinit();
+    var last_page = try hdl.loadPage(last_id);
+    defer last_page.deinit();
+    try std.testing.expectEqual(@as(usize, 2), try first_page.size());
+    try std.testing.expectEqual(@as(usize, 1), try last_page.size());
 }
