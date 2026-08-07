@@ -51,7 +51,7 @@ pub fn HandleImpl(
 
         ph: PageHandle = undefined,
 
-        fn init(ph: PageHandle) Self {
+        pub fn init(ph: PageHandle) Self {
             return .{ .ph = ph };
         }
 
@@ -71,6 +71,14 @@ pub fn HandleImpl(
 
         fn getView(self: *const Self) Error!ChunkViewConst {
             return ChunkViewConst.init(try self.ph.getData());
+        }
+
+        pub fn getPage(self: *const Self) Error![]const u8 {
+            return self.ph.getData();
+        }
+
+        pub fn getPageMut(self: *Self) Error![]u8 {
+            return self.ph.getDataMut();
         }
 
         pub fn getData(self: *const Self) Error![]const u8 {
@@ -278,6 +286,20 @@ pub fn HandleImpl(
 
         pub fn deinit(self: *Self) void {
             _ = self;
+        }
+
+        pub fn cache(self: *const Self) *const PageCacheType {
+            return self.page_cache;
+        }
+        pub fn cacheMut(self: *Self) *PageCacheType {
+            return self.page_cache;
+        }
+
+        pub fn manager(self: *const Self) *const StorageManager {
+            return self.mgr;
+        }
+        pub fn managerMut(self: *Self) *StorageManager {
+            return self.mgr;
         }
 
         pub fn iterator(self: *const Self) Error!Iterator {

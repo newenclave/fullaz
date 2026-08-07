@@ -1,20 +1,34 @@
 const std = @import("std");
 const view = @import("view.zig");
+const page_chain = @import("../page_chain/page_chain.zig");
 
-pub const Settings = struct {
-    chunk_page_kind: u16 = 0x41,
-};
+pub const Settings = page_chain.Settings;
 
 pub fn Handle(
     comptime PageCacheType: type,
     comptime StorageManager: type,
     comptime Endian: std.builtin.Endian,
 ) type {
+    return HandleImpl(
+        PageCacheType,
+        StorageManager,
+        void,
+        void,
+        Endian,
+    );
+}
+
+pub fn HandleImpl(
+    comptime PageCacheType: type,
+    comptime StorageManager: type,
+    comptime AdditionalT: type,
+    comptime SubheaderT: type,
+    comptime Endian: std.builtin.Endian,
+) type {
     const PosType = StorageManager.Size;
     _ = PosType;
     const IndexT = u16;
     const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
     const ViewType = view.View(BlockIdType, IndexT, Endian, false);
@@ -25,6 +39,14 @@ pub fn Handle(
 
     const ChunkView = ViewType.Chunk;
     const ChunkViewConst = ViewTypeConst.Chunk;
+
+    const PageChainHandle = page_chain.HandleImpl(
+        PageCacheType,
+        StorageManager,
+        AdditionalT,
+        SubheaderT,
+        Endian,
+    );
 
     const SlotsFlags = enum(IndexT) {
         none = 0,
@@ -44,21 +66,21 @@ pub fn Handle(
     const ChunkHandle = struct {
         const Self = @This();
         pub const Error = PageCacheType.Error || ViewTypeConst.Error;
-        ph: PageHandle,
-        fn init(ph: PageHandle) Self {
-            return .{ .ph = ph };
-        }
+
+        pub const PageChainChunk = PageChainHandle.Chunk;
+
+        ph: PageChainChunk = undefined,
 
         pub fn deinit(self: *Self) void {
             self.ph.deinit();
         }
 
         pub fn view(self: *const Self) Error!ChunkViewConst {
-            return ChunkViewConst.init(try self.ph.getData());
+            return ChunkViewConst.init(try self.ph.getPage());
         }
 
         pub fn viewMut(self: *Self) Error!ChunkView {
-            return ChunkView.init(try self.ph.getDataMut());
+            return ChunkView.init(try self.ph.getPageMut());
         }
 
         pub fn slotsDir(self: *const Self) Error!SlotsDirConst {
@@ -77,7 +99,7 @@ pub fn Handle(
         }
 
         pub fn id(self: *const Self) Error!BlockIdType {
-            return try self.ph.pid();
+            return try self.ph.id();
         }
 
         pub fn setTombstone(self: *Self, index: IndexT) Error!void {
@@ -107,7 +129,7 @@ pub fn Handle(
 
     const IteratorImpl = struct {
         const Self = @This();
-        pub const Error = ChunkHandle.Error;
+        pub const Error = ChunkHandle.Error || PageChainHandle.Error;
 
         const Cursor = union(enum) {
             before_first,
@@ -121,31 +143,29 @@ pub fn Handle(
             pos: usize,
         };
 
-        page_cache: *PageCacheType,
-        page: ?ChunkHandle,
+        page_itr: PageChainHandle.Iterator,
         cursor: Cursor,
 
-        fn init(page_cache: *PageCacheType, page_id: BlockIdType, cursor: Cursor) Error!Self {
+        fn init(page_itr: PageChainHandle.Iterator, cursor: Cursor) Self {
             return .{
-                .page_cache = page_cache,
-                .page = ChunkHandle.init(try page_cache.fetch(page_id)),
+                .page_itr = page_itr,
                 .cursor = cursor,
             };
         }
 
         pub fn get(self: *const Self) Error!?Result {
-            const page = self.page orelse return null;
             const pos = switch (self.cursor) {
                 .on => |index| index,
                 else => return null,
             };
-            const sd = try page.slotsDir();
+            const page = (try self.page_itr.get()) orelse return null;
+            const sd = try SlotsDirConst.init(page.value);
             if (pos >= sd.size()) {
                 return null;
             }
             return .{
                 .value = try sd.get(pos),
-                .page_id = try page.id(),
+                .page_id = page.page_id,
                 .pos = pos,
             };
         }
@@ -168,8 +188,10 @@ pub fn Handle(
                 .before_first => return null,
                 .on => |pos| pos,
                 .after_last => blk: {
-                    const page = self.page orelse return null;
-                    break :blk try page.size();
+                    try self.page_itr.prev();
+                    const page = (try self.page_itr.get()) orelse return null;
+                    const sd = try SlotsDirConst.init(page.value);
+                    break :blk sd.size();
                 },
             };
             if (!try self.findPrev(start)) {
@@ -180,17 +202,14 @@ pub fn Handle(
         }
 
         pub fn deinit(self: *Self) void {
-            if (self.page) |*page| {
-                page.deinit();
-            }
-            self.page = null;
+            self.page_itr.deinit();
         }
 
         fn findNext(self: *Self, start: usize) Error!bool {
             var index = start;
             while (true) {
-                const page = self.page orelse return false;
-                const sd = try page.slotsDir();
+                const page = (try self.page_itr.get()) orelse return false;
+                const sd = try SlotsDirConst.init(page.value);
                 while (index < sd.size()) : (index += 1) {
                     const flags = try sd.getFlags(index);
                     if ((flags & @intFromEnum(SlotsFlags.tombstone)) == 0) {
@@ -200,9 +219,7 @@ pub fn Handle(
                         return true;
                     }
                 }
-                if (!try self.moveNextPage()) {
-                    return false;
-                }
+                try self.page_itr.next();
                 index = 0;
             }
         }
@@ -210,8 +227,8 @@ pub fn Handle(
         fn findPrev(self: *Self, start: usize) Error!bool {
             var index = start;
             while (true) {
-                const page = self.page orelse return false;
-                const sd = try page.slotsDir();
+                const page = (try self.page_itr.get()) orelse return false;
+                const sd = try SlotsDirConst.init(page.value);
                 while (index > 0) {
                     index -= 1;
                     const flags = try sd.getFlags(index);
@@ -222,36 +239,14 @@ pub fn Handle(
                         return true;
                     }
                 }
-                if (!try self.movePrevPage()) {
+                try self.page_itr.prev();
+                if (try self.page_itr.get()) |prev_page| {
+                    const prev_sd = try SlotsDirConst.init(prev_page.value);
+                    index = prev_sd.size();
+                } else {
                     return false;
                 }
-                const prev_page = self.page orelse return false;
-                index = try prev_page.size();
             }
-        }
-
-        fn moveNextPage(self: *Self) Error!bool {
-            const page = self.page orelse return false;
-            const next_id = (try page.view()).getNext() orelse return false;
-            var next_page = ChunkHandle.init(try self.page_cache.fetch(next_id));
-            errdefer next_page.deinit();
-            if (self.page) |*current| {
-                current.deinit();
-            }
-            self.page = next_page;
-            return true;
-        }
-
-        fn movePrevPage(self: *Self) Error!bool {
-            const page = self.page orelse return false;
-            const prev_id = (try page.view()).getPrev() orelse return false;
-            var prev_page = ChunkHandle.init(try self.page_cache.fetch(prev_id));
-            errdefer prev_page.deinit();
-            if (self.page) |*current| {
-                current.deinit();
-            }
-            self.page = prev_page;
-            return true;
         }
     };
 
@@ -261,14 +256,14 @@ pub fn Handle(
         pub const Index = IndexT;
         pub const View = ViewType;
         pub const Iterator = IteratorImpl;
-        pub const Error = PageCacheType.Error ||
+        pub const Error = PageChainHandle.Error ||
+            PageCacheType.Error ||
             ViewType.Error ||
             StorageManager.Error;
         pub const ValueIn = []const u8;
         pub const ValueOut = []const u8;
 
-        page_cache: *PageCacheType,
-        mgr: *StorageManager,
+        page_chain: PageChainHandle,
         settings: Settings = .{},
         last_chunk: ?ChunkHandle = null,
 
@@ -278,8 +273,13 @@ pub fn Handle(
             settings: Settings,
         ) Error!Self {
             return .{
-                .page_cache = page_cache,
-                .mgr = storage_manager,
+                .page_chain = try PageChainHandle.init(
+                    page_cache,
+                    storage_manager,
+                    .{
+                        .chunk_page_kind = settings.chunk_page_kind,
+                    },
+                ),
                 .settings = settings,
             };
         }
@@ -288,11 +288,12 @@ pub fn Handle(
             if (self.last_chunk) |*last_c| {
                 last_c.deinit();
             }
+            self.page_chain.deinit();
         }
 
         fn compactPage(self: *const Self, page: *ChunkHandle) Error!void {
             var sv = try page.slotsDirMut();
-            var tmp = self.page_cache.getTemporaryPage() catch {
+            var tmp = self.page_chain.page_cache.getTemporaryPage() catch {
                 try sv.compactInPlace();
                 return;
             };
@@ -304,7 +305,7 @@ pub fn Handle(
 
         pub fn append(self: *Self, val: ValueIn) Error!PageId {
             if (self.last_chunk) |*last_c| {
-                const total = try self.mgr.getTotalSize();
+                const total = try self.page_chain.manager().getTotalSize();
                 var sd = try last_c.slotsDirMut();
                 switch (try sd.canInsert(val.len)) {
                     .need_compact => {
@@ -318,13 +319,8 @@ pub fn Handle(
                         var next_sd = try next.slotsDirMut();
                         _ = try next_sd.insert(val);
 
-                        var pv = try last_c.viewMut();
-                        var nv = try next.viewMut();
-                        pv.setNext(next_id);
-                        nv.setPrev(try last_c.id());
-
-                        try self.mgr.setLast(next_id);
-                        try self.mgr.setTotalSize(total + 1);
+                        try self.page_chain.insertLast(&next.ph);
+                        try self.page_chain.managerMut().setTotalSize(total + 1);
 
                         last_c.deinit();
                         self.last_chunk = next;
@@ -335,83 +331,49 @@ pub fn Handle(
                 }
 
                 _ = try sd.insert(val);
-                try self.mgr.setTotalSize(total + 1);
+                try self.page_chain.managerMut().setTotalSize(total + 1);
                 return try last_c.id();
             } else {
                 var page = try self.createPage();
                 errdefer page.deinit();
+
                 const page_id = try page.id();
                 var sd = try page.slotsDirMut();
                 _ = try sd.insert(val);
-                try self.mgr.setFirst(page_id);
-                try self.mgr.setLast(page_id);
-                try self.mgr.setTotalSize(1);
+
+                try self.page_chain.insertFirst(&page.ph);
+                try self.page_chain.managerMut().setTotalSize(1);
                 self.last_chunk = page;
                 return page_id;
             }
         }
 
         pub fn size(self: *const Self) Error!usize {
-            return self.mgr.getTotalSize();
+            return self.page_chain.manager().getTotalSize();
         }
 
         pub fn iterator(self: *const Self) Error!?Iterator {
-            const first = (try self.mgr.getFirst()) orelse return null;
-            return try Iterator.init(self.page_cache, first, .before_first);
+            if (try self.page_chain.manager().getFirst() == null) return null;
+            return Iterator.init(try self.page_chain.iterator(), .before_first);
         }
 
         pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
-            const last = (try self.mgr.getLast()) orelse return null;
-            return try Iterator.init(self.page_cache, last, .after_last);
+            if (try self.page_chain.manager().getLast() == null) return null;
+            var page_itr = try self.page_chain.iteratorFromEnd();
+            try page_itr.next();
+            return Iterator.init(page_itr, .after_last);
         }
 
         pub fn loadPage(self: *const Self, pid: PageId) Error!ChunkHandle {
-            const page_handle = try self.page_cache.fetch(pid);
-            return ChunkHandle.init(page_handle);
+            return .{ .ph = try self.page_chain.loadChunk(pid) };
         }
 
         pub fn createPage(self: *Self) Error!ChunkHandle {
-            const ph = try self.page_cache.create();
-            var ch = ChunkHandle.init(ph);
-            var v = try ch.viewMut();
-            try v.formatPage(self.settings.chunk_page_kind, try ch.ph.pid(), 0);
+            var ch: ChunkHandle = .{ .ph = try self.page_chain.createChunk() };
+            errdefer ch.deinit();
+            var sd = try ch.slotsDirMut();
+            sd.formatHeader();
             return ch;
-        }
-
-        fn removeChunkFromList(self: *Self, ch: *ChunkHandle) Error!void {
-            var v = try ch.viewMut();
-            const next = v.getNext();
-            const prev = v.getPrev();
-
-            var the_last = false;
-            //var the_first = false;
-
-            if (self.last_chunk) |*last_c| {
-                the_last = (try last_c.id()) == (try ch.ph.pid());
-            }
-
-            if (prev) |prev_id| {
-                var prev_page = try self.page_cache.fetch(prev_id);
-                errdefer prev_page.deinit();
-                var prev_v = try ChunkView.init(try prev_page.getDataMut());
-                prev_v.setNext(next);
-                if (the_last) {
-                    self.last_chunk = prev_page;
-                } else {
-                    prev_page.deinit();
-                }
-            } else {
-                try self.mgr.setFirst(next);
-            }
-
-            if (next) |next_id| {
-                var next_page = try self.page_cache.fetch(next_id);
-                defer next_page.deinit();
-                var next_v = try ChunkView.init(try next_page.getDataMut());
-                next_v.setPrev(prev);
-            } else {
-                try self.mgr.setLast(prev);
-            }
         }
     };
 }

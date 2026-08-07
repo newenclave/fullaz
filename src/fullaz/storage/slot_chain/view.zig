@@ -4,6 +4,7 @@ const extensions = @import("../../page/extensions.zig");
 const subheaders = @import("../../page/subheader.zig");
 const slots = @import("../../slots/variadic.zig");
 const links = @import("../../page/links.zig");
+const page_chain = @import("../page_chain/page_chain.zig");
 
 const PageView = @import("../../page/header.zig").View;
 const errors = @import("../../core/errors.zig");
@@ -16,35 +17,56 @@ pub fn View(
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
-    const LinkTrait = links.Trait(PageIdT, Endian);
+    return ViewImpl(
+        PageIdT,
+        IndexT,
+        void,
+        Endian,
+        read_only,
+    );
+}
 
+pub fn ViewImpl(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime AdditionalT: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
     const SlotsDirType = slots.VariadicImpl(IndexT, Endian, read_only, 2);
     const SlotsDirTypeMut = slots.VariadicImpl(IndexT, Endian, false, 2);
 
+    const PageChainView = page_chain.ViewImpl(
+        PageIdT,
+        IndexT,
+        AdditionalT,
+        Endian,
+        false,
+    );
+
+    const PageChainViewConst = page_chain.ViewImpl(
+        PageIdT,
+        IndexT,
+        AdditionalT,
+        Endian,
+        true,
+    );
+
+    _ = PageChainView;
+    _ = PageChainViewConst;
+
     const DataType = if (read_only) []const u8 else []u8;
-
-    const Additional = extensions.Compose(.{
-        .version = 1,
-        .fields = .{
-            extensions.field("links", LinkTrait),
-        },
-    });
-
-    const ChunkSubheader = extern struct {
-        reserved: [2]u8,
-    };
 
     const ChunkImpl = struct {
         const Self = @This();
-        const SubheaderType = ChunkSubheader;
-        const SubheaderView = subheaders.ViewImpl(
+
+        const SubheaderView = page_chain.ViewImpl(
             PageIdT,
             IndexT,
-            Additional,
-            SubheaderType,
+            AdditionalT,
             Endian,
             read_only,
-        );
+        ).Chunk;
         pub const Error = errors.SlotsError;
 
         view: SubheaderView = undefined,
@@ -59,41 +81,36 @@ pub fn View(
             if (read_only) {
                 @compileError("Cannot format a read-only page");
             }
-            self.view.formatPage(kind, page_id, metadata_len);
-
-            var sh = self.view.subheaderMut();
-            sh.reserved[0] = 0;
-            sh.reserved[1] = 0;
+            self.view.formatPage(kind, page_id, 0, metadata_len);
 
             var sd = try self.slotsDirMut();
             sd.formatHeader();
         }
 
         pub fn slotsDir(self: *const Self) Error!SlotsDirType {
-            const data = self.view.page().data();
+            const data = self.view.data();
             return try SlotsDirType.init(data);
         }
 
         pub fn slotsDirMut(self: *Self) Error!SlotsDirTypeMut {
-            var p = self.view.pageMut();
-            const data = p.dataMut();
+            const data = self.view.dataMut();
             return try SlotsDirTypeMut.init(data);
         }
 
         pub fn setNext(self: *Self, pid: ?PageIdT) void {
-            LinkTrait.setNext(&self.view.headerMut().additional.links, pid);
+            self.view.setNext(pid);
         }
 
         pub fn getNext(self: *const Self) ?PageIdT {
-            return LinkTrait.getNext(&self.view.header().additional.links);
+            return self.view.getNext();
         }
 
         pub fn setPrev(self: *Self, pid: ?PageIdT) void {
-            LinkTrait.setPrev(&self.view.headerMut().additional.links, pid);
+            self.view.setPrev(pid);
         }
 
         pub fn getPrev(self: *const Self) ?PageIdT {
-            return LinkTrait.getPrev(&self.view.header().additional.links);
+            return self.view.getPrev();
         }
     };
 

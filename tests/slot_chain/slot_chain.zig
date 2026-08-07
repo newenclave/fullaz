@@ -54,8 +54,8 @@ test "SlotChain: create" {
     var c = Chunk.init(&page);
     try c.formatPage(1, 42, 0);
     try std.testing.expect(c.view.header().kind.get() == 1);
-    try std.testing.expect(c.view.header().additional.links.prev.isMax());
-    try std.testing.expect(c.view.header().additional.links.next.isMax());
+    try std.testing.expect(c.view.getNext() == null);
+    try std.testing.expect(c.view.getPrev() == null);
 }
 
 test "SlotChain: handle" {
@@ -164,4 +164,11 @@ test "SlotChain: iterator crosses chunks" {
     try std.testing.expectEqual(@as(u8, 'b'), last_result.value[0]);
     const previous_result = (try itr.prev()).?;
     try std.testing.expectEqual(@as(u8, 'a'), previous_result.value[0]);
+
+    var reverse_itr = (try hdl.iteratorFromEnd()).?;
+    defer reverse_itr.deinit();
+    const reverse_last = (try reverse_itr.prev()).?;
+    try std.testing.expectEqual(@as(u8, 'b'), reverse_last.value[0]);
+    const reverse_first = (try reverse_itr.prev()).?;
+    try std.testing.expectEqual(@as(u8, 'a'), reverse_first.value[0]);
 }

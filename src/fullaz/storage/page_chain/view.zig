@@ -134,11 +134,11 @@ pub fn ViewImpl(
             return &self.page_view;
         }
 
-        pub fn page(self: *const Self) *[]const u8 {
+        pub fn page(self: *const Self) []const u8 {
             return self.page_view.page;
         }
 
-        pub fn pageMut(self: *Self) *[]u8 {
+        pub fn pageMut(self: *Self) []u8 {
             if (read_only) {
                 @compileError("Cannot get mutable page from a read-only page");
             }
