@@ -1,6 +1,7 @@
 const std = @import("std");
 const view = @import("view.zig");
 const page_chain = @import("../page_chain/page_chain.zig");
+const errors = @import("../../core/errors.zig");
 
 pub const Settings = page_chain.Settings;
 
@@ -27,15 +28,15 @@ pub fn HandleImpl(
     comptime FsmT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
-    const FsmError = if (FsmT == void) error{} else FsmT.Error;
+    const FsmError = if (FsmT != void) FsmT.Error else error{};
     const PosType = StorageManager.Size;
     _ = PosType;
     const IndexT = u16;
     const BlockDevice = PageCacheType.UnderlyingDevice;
     const BlockIdType = BlockDevice.BlockId;
 
-    const ViewType = view.View(BlockIdType, IndexT, Endian, false);
-    const ViewTypeConst = view.View(BlockIdType, IndexT, Endian, true);
+    const ViewType = view.ViewImpl(BlockIdType, IndexT, AdditionalT, Endian, false);
+    const ViewTypeConst = view.ViewImpl(BlockIdType, IndexT, AdditionalT, Endian, true);
 
     const SlotsDir = ViewType.SlotsDir;
     const SlotsDirConst = ViewTypeConst.SlotsDir;
@@ -136,6 +137,61 @@ pub fn HandleImpl(
         }
     };
 
+    const PendingRemovalImpl = struct {
+        const Self = @This();
+        pub const Error = ChunkHandle.Error ||
+            PageChainHandle.Error ||
+            errors.IteratorError ||
+            FsmError;
+
+        page_id: BlockIdType,
+        slot_id: usize,
+        page: PageChainHandle.Chunk,
+        fsm: ?*FsmT,
+        manager: *StorageManager,
+        cleaned: bool = false,
+
+        pub fn value(self: *const Self) Error![]const u8 {
+            if (self.cleaned) {
+                return Error.InvalidIterator;
+            }
+            const sd = try SlotsDirConst.init(try self.page.getData());
+            return sd.get(self.slot_id);
+        }
+
+        pub fn clean(self: *Self) Error!bool {
+            if (self.cleaned) {
+                return false;
+            }
+
+            var sd = try SlotsDir.init(try self.page.getDataMut());
+            if (self.slot_id >= sd.size()) {
+                self.cleaned = true;
+                return false;
+            }
+            const flags = try sd.getFlags(self.slot_id);
+            if ((flags & @intFromEnum(SlotsFlags.tombstone)) == 0) {
+                self.cleaned = true;
+                return false;
+            }
+
+            try sd.remove(self.slot_id);
+            if (comptime FsmT != void) {
+                if (self.fsm) |fsm| {
+                    try fsm.update(self.page_id, @intCast(sd.availableSpace()));
+                }
+            }
+            const total = try self.manager.getTotalSize();
+            try self.manager.setTotalSize(total - 1);
+            self.cleaned = true;
+            return true;
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.page.deinit();
+        }
+    };
+
     const IteratorImpl = struct {
         const Self = @This();
         pub const Error = ChunkHandle.Error || PageChainHandle.Error;
@@ -154,11 +210,20 @@ pub fn HandleImpl(
 
         page_itr: PageChainHandle.Iterator,
         cursor: Cursor,
+        fsm: ?*FsmT,
+        manager: *StorageManager,
 
-        fn init(page_itr: PageChainHandle.Iterator, cursor: Cursor) Self {
+        fn init(
+            page_itr: PageChainHandle.Iterator,
+            cursor: Cursor,
+            fsm: ?*FsmT,
+            manager: *StorageManager,
+        ) Self {
             return .{
                 .page_itr = page_itr,
                 .cursor = cursor,
+                .fsm = fsm,
+                .manager = manager,
             };
         }
 
@@ -214,6 +279,25 @@ pub fn HandleImpl(
             self.page_itr.deinit();
         }
 
+        pub fn markForRemoval(self: *Self) Error!PendingRemovalImpl {
+            const slot_id = switch (self.cursor) {
+                .on => |index| index,
+                else => return Error.InvalidIterator,
+            };
+            var page = (try self.page_itr.chunk()) orelse return Error.InvalidIterator;
+            errdefer page.deinit();
+
+            var sd = try SlotsDir.init(try page.getDataMut());
+            try sd.setFlags(slot_id, @intCast(@intFromEnum(SlotsFlags.tombstone)));
+            return .{
+                .page_id = try page.id(),
+                .slot_id = slot_id,
+                .page = page,
+                .fsm = self.fsm,
+                .manager = self.manager,
+            };
+        }
+
         fn findNext(self: *Self, start: usize) Error!bool {
             var index = start;
             while (true) {
@@ -265,6 +349,7 @@ pub fn HandleImpl(
         pub const Index = IndexT;
         pub const View = ViewType;
         pub const Iterator = IteratorImpl;
+        pub const PendingRemoval = PendingRemovalImpl;
         pub const Error = PageChainHandle.Error ||
             PageCacheType.Error ||
             ViewType.Error ||
@@ -414,16 +499,26 @@ pub fn HandleImpl(
             return @intCast(try self.ctx.page_chain.manager().getTotalSize());
         }
 
-        pub fn iterator(self: *const Self) Error!?Iterator {
+        pub fn iterator(self: *Self) Error!?Iterator {
             if (try self.ctx.page_chain.manager().getFirst() == null) return null;
-            return Iterator.init(try self.ctx.page_chain.iterator(), .before_first);
+            return Iterator.init(
+                try self.ctx.page_chain.iterator(),
+                .before_first,
+                self.ctx.fsm,
+                self.ctx.page_chain.managerMut(),
+            );
         }
 
-        pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
+        pub fn iteratorFromEnd(self: *Self) Error!?Iterator {
             if (try self.ctx.page_chain.manager().getLast() == null) return null;
             var page_itr = try self.ctx.page_chain.iteratorFromEnd();
             try page_itr.next();
-            return Iterator.init(page_itr, .after_last);
+            return Iterator.init(
+                page_itr,
+                .after_last,
+                self.ctx.fsm,
+                self.ctx.page_chain.managerMut(),
+            );
         }
 
         pub fn insertPageToFsm(self: *Self, page_id: PageId, free_size: usize) Error!void {

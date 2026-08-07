@@ -44,17 +44,6 @@ pub fn ViewImpl(
         false,
     );
 
-    const PageChainViewConst = page_chain.ViewImpl(
-        PageIdT,
-        IndexT,
-        AdditionalT,
-        Endian,
-        true,
-    );
-
-    _ = PageChainView;
-    _ = PageChainViewConst;
-
     const DataType = if (read_only) []const u8 else []u8;
 
     const ChunkImpl = struct {
@@ -118,6 +107,8 @@ pub fn ViewImpl(
         pub const Error = ChunkImpl.Error;
         pub const PageId = PageIdT;
         pub const Index = IndexT;
+        pub const Additional = PageChainView.PageView.Additional;
+        pub const PageView = PageChainView.PageView;
         pub const Chunk = ChunkImpl;
         pub const SlotsDir = SlotsDirType;
     };

@@ -14,7 +14,10 @@ pub fn Memory(comptime PidT: type, comptime SizeT: type) type {
 
         pub const Pid = PidT;
         pub const Size = SizeT;
-        pub const Error = std.mem.Allocator.Error || errors.SetError || errors.NotFoundError;
+
+        pub const Error = std.mem.Allocator.Error ||
+            errors.SetError ||
+            errors.NotFoundError;
 
         allocator: std.mem.Allocator,
         entries: Container,
@@ -44,14 +47,20 @@ pub fn Memory(comptime PidT: type, comptime SizeT: type) type {
                 return Error.KeyAlreadyExists;
             }
             const idx = self.lowerBound(free);
-            try self.entries.insert(self.allocator, idx, .{ .pid = pid, .free = free });
+            try self.entries.insert(self.allocator, idx, .{
+                .pid = pid,
+                .free = free,
+            });
         }
 
         pub fn update(self: *Self, pid: Pid, free: Size) Error!void {
             const i = self.findPid(pid) orelse return Error.KeyNotFound;
             _ = self.entries.orderedRemove(i);
             const idx = self.lowerBound(free);
-            try self.entries.insert(self.allocator, idx, .{ .pid = pid, .free = free });
+            try self.entries.insert(self.allocator, idx, .{
+                .pid = pid,
+                .free = free,
+            });
         }
 
         pub fn remove(self: *Self, pid: Pid) Error!void {
@@ -60,8 +69,13 @@ pub fn Memory(comptime PidT: type, comptime SizeT: type) type {
         }
 
         fn lowerBound(self: *const Self, size: SizeT) usize {
-            return algorithm.lowerBound(Entry, self.entries.items, size, entryCmp, {}) catch
-                self.entries.items.len;
+            return algorithm.lowerBound(
+                Entry,
+                self.entries.items,
+                size,
+                entryCmp,
+                {},
+            ) catch self.entries.items.len;
         }
 
         fn entryCmp(_: void, e: Entry, key: SizeT) algorithm.Order {

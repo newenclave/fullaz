@@ -5,6 +5,7 @@ const slot_chain = fullaz.storage.slot_chain;
 const page_cache = @import("fullaz").storage.page_cache;
 const devices = @import("fullaz").device;
 const fsm = @import("fullaz").storage.fsm;
+const extensions = @import("fullaz").page.extensions;
 const printer = @import("test_printer");
 
 const NoneStorageManager = struct {
@@ -44,6 +45,63 @@ const NoneStorageManager = struct {
 
     pub fn setLast(self: *Self, page_id: ?PageId) Error!void {
         self.last_block_id = page_id;
+    }
+};
+
+const FsmStorageManager = struct {
+    pub const PageId = u32;
+    pub const Size = u32;
+    pub const Error = error{};
+
+    first_block_id: ?u32 = null,
+    last_block_id: ?u32 = null,
+    total_sze: u32 = 0,
+    fsm_roots: [256]?u32 = .{null} ** 256,
+
+    pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
+
+    pub fn getTotalSize(self: *const @This()) Error!Size {
+        return self.total_sze;
+    }
+
+    pub fn setTotalSize(self: *@This(), size: Size) Error!void {
+        self.total_sze = size;
+    }
+
+    pub fn getFirst(self: *const @This()) Error!?PageId {
+        return self.first_block_id;
+    }
+
+    pub fn getLast(self: *const @This()) Error!?PageId {
+        return self.last_block_id;
+    }
+
+    pub fn setFirst(self: *@This(), page_id: ?PageId) Error!void {
+        self.first_block_id = page_id;
+    }
+
+    pub fn setLast(self: *@This(), page_id: ?PageId) Error!void {
+        self.last_block_id = page_id;
+    }
+
+    pub fn getSizeClassRoot(self: *const @This(), class: u16) Error!?PageId {
+        return self.fsm_roots[class];
+    }
+
+    pub fn setSizeClassRoot(self: *@This(), class: u16, root: ?PageId) Error!void {
+        self.fsm_roots[class] = root;
+    }
+};
+
+const FsmSizePolicy = struct {
+    pub const SizeClass = u16;
+
+    pub fn getSizeClass(_: *const @This(), size: SizeClass) !SizeClass {
+        return size >> 8;
+    }
+
+    pub fn count(_: *const @This()) usize {
+        return 256;
     }
 };
 
@@ -237,4 +295,195 @@ test "SlotChain: insertUnordered uses FSM free-space index" {
     defer last_page.deinit();
     try std.testing.expectEqual(@as(usize, 2), try first_page.size());
     try std.testing.expectEqual(@as(usize, 1), try last_page.size());
+}
+
+test "SlotChain: pending removal keeps marked data alive" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+    _ = try hdl.append("first");
+    _ = try hdl.append("second");
+
+    var itr = (try hdl.iterator()).?;
+    const first = (try itr.next()).?;
+    var pending = try itr.markForRemoval();
+    defer pending.deinit();
+    try std.testing.expectEqualStrings("first", try pending.value());
+
+    try std.testing.expectEqualStrings("second", (try itr.next()).?.value);
+    itr.deinit();
+
+    try std.testing.expectEqualStrings("first", first.value);
+    try std.testing.expectEqualStrings("first", try pending.value());
+}
+
+test "SlotChain: pending removal cleans one slot idempotently" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+    _ = try hdl.append("first");
+    _ = try hdl.append("second");
+    _ = try hdl.append("third");
+
+    var itr = (try hdl.iterator()).?;
+    defer itr.deinit();
+    _ = (try itr.next()).?;
+    var pending = try itr.markForRemoval();
+    defer pending.deinit();
+
+    try std.testing.expect(try pending.clean());
+    try std.testing.expect(!(try pending.clean()));
+    try std.testing.expectError(error.InvalidIterator, pending.value());
+
+    var page = try hdl.loadPage(mgr.first_block_id.?);
+    defer page.deinit();
+    try std.testing.expectEqual(@as(usize, 2), try page.size());
+    try std.testing.expect(!try page.isTombstone(0));
+
+    var survivors = (try hdl.iterator()).?;
+    defer survivors.deinit();
+    const second = (try survivors.next()).?;
+    try std.testing.expectEqualStrings("second", second.value);
+    try std.testing.expectEqual(@as(usize, 0), second.pos);
+    const third = (try survivors.next()).?;
+    try std.testing.expectEqualStrings("third", third.value);
+    try std.testing.expectEqual(@as(usize, 1), third.pos);
+}
+
+test "SlotChain: pending removal updates FSM and total size" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const FsmModel = fsm.models.Memory(u32, u16);
+    const Fsm = fsm.Fsm(FsmModel);
+    const Handle = slot_chain.HandleImpl(Cache, NoneStorageManager, void, void, Fsm, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm_index = Fsm.init(&fsm_model);
+    defer fsm_index.deinit();
+
+    var hdl = try Handle.initWithFsm(&cache, &mgr, &fsm_index, .{});
+    defer hdl.deinit();
+
+    var value: [3500]u8 = undefined;
+    @memset(&value, 'x');
+    const page_id = try hdl.append(&value);
+    try std.testing.expect((try hdl.findFreeSlot(700)) == null);
+
+    var itr = (try hdl.iterator()).?;
+    defer itr.deinit();
+    _ = (try itr.next()).?;
+    var pending = try itr.markForRemoval();
+    defer pending.deinit();
+
+    try std.testing.expect(try pending.clean());
+    try std.testing.expectEqual(@as(usize, 0), try hdl.size());
+    try std.testing.expectEqual(@as(?u32, page_id), try hdl.findFreeSlot(700));
+}
+
+test "SlotChain: pending removal rejects iterator boundary states" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+    _ = try hdl.append("only");
+
+    var itr = (try hdl.iterator()).?;
+    defer itr.deinit();
+    try std.testing.expectError(error.InvalidIterator, itr.markForRemoval());
+
+    _ = (try itr.next()).?;
+    try std.testing.expect((try itr.next()) == null);
+    try std.testing.expectError(error.InvalidIterator, itr.markForRemoval());
+}
+
+test "SlotChain: paged FSM stores its location in the effective header" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const LocationTrait = fsm.location.Trait(u32, u16, .little);
+    const UserAdditional = extensions.Compose(.{
+        .version = 2,
+        .fields = .{
+            extensions.field("fsm", LocationTrait),
+        },
+    });
+    const SlotView = slot_chain.ViewImpl(u32, u16, UserAdditional, .little, false);
+    const LocationAccessor = fsm.HeaderLocationAccessor(
+        u32,
+        u16,
+        .little,
+        SlotView.Additional,
+        "fsm",
+    );
+    const FsmModel = fsm.models.paged.slab.Model(Cache, FsmStorageManager, FsmSizePolicy, LocationAccessor);
+    const Fsm = fsm.Fsm(FsmModel);
+    const Handle = slot_chain.HandleImpl(Cache, FsmStorageManager, UserAdditional, void, Fsm, .little);
+
+    var storage = FsmStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 32);
+    defer cache.deinit();
+    var fsm_model = FsmModel.init(&cache, &storage, FsmSizePolicy{}, .{ .page_kind = 0x62 });
+    var fsm_index = Fsm.init(&fsm_model);
+    defer fsm_index.deinit();
+
+    var hdl = try Handle.initWithFsm(&cache, &storage, &fsm_index, .{});
+    defer hdl.deinit();
+
+    var value: [3500]u8 = undefined;
+    @memset(&value, 'x');
+    const page_id = try hdl.append(&value);
+    try std.testing.expectEqual(@as(?u32, page_id), try fsm_index.find(1));
+    {
+        var page = try cache.fetch(page_id);
+        defer page.deinit();
+        try std.testing.expect((try LocationAccessor.read(try page.getData())) != null);
+    }
+
+    var itr = (try hdl.iterator()).?;
+    defer itr.deinit();
+    _ = (try itr.next()).?;
+    var pending = try itr.markForRemoval();
+    defer pending.deinit();
+    try std.testing.expect(try pending.clean());
+
+    try std.testing.expectEqual(@as(usize, 0), try hdl.size());
+    try std.testing.expectEqual(@as(?u32, page_id), try fsm_index.find(700));
+    {
+        var page = try cache.fetch(page_id);
+        defer page.deinit();
+        try std.testing.expect((try LocationAccessor.read(try page.getData())) != null);
+    }
 }
