@@ -146,49 +146,56 @@ pub fn HandleImpl(
 
         page_id: BlockIdType,
         slot_id: usize,
-        page: PageChainHandle.Chunk,
+        page: ?PageChainHandle.Chunk,
         fsm: ?*FsmT,
         manager: *StorageManager,
-        cleaned: bool = false,
 
         pub fn value(self: *const Self) Error![]const u8 {
-            if (self.cleaned) {
-                return Error.InvalidIterator;
+            if (self.page) |*p| {
+                const sd = try SlotsDirConst.init(try p.getData());
+                return sd.get(self.slot_id);
             }
-            const sd = try SlotsDirConst.init(try self.page.getData());
-            return sd.get(self.slot_id);
+            return Error.InvalidIterator;
         }
 
         pub fn clean(self: *Self) Error!bool {
-            if (self.cleaned) {
-                return false;
-            }
-
-            var sd = try SlotsDir.init(try self.page.getDataMut());
-            if (self.slot_id >= sd.size()) {
-                self.cleaned = true;
-                return false;
-            }
-            const flags = try sd.getFlags(self.slot_id);
-            if ((flags & @intFromEnum(SlotsFlags.tombstone)) == 0) {
-                self.cleaned = true;
-                return false;
-            }
-
-            try sd.remove(self.slot_id);
-            if (comptime FsmT != void) {
-                if (self.fsm) |fsm| {
-                    try fsm.update(self.page_id, @intCast(sd.availableSpace()));
+            if (self.page) |*p| {
+                var sd = try SlotsDir.init(try p.getDataMut());
+                if (self.slot_id >= sd.size()) {
+                    self.deinitPage();
+                    return false;
                 }
+                const flags = try sd.getFlags(self.slot_id);
+                if ((flags & @intFromEnum(SlotsFlags.tombstone)) == 0) {
+                    self.deinitPage();
+                    return false;
+                }
+
+                try sd.remove(self.slot_id);
+                errdefer self.deinitPage();
+                if (comptime FsmT != void) {
+                    if (self.fsm) |fsm| {
+                        try fsm.update(self.page_id, @intCast(sd.availableSpace()));
+                    }
+                }
+                const total = try self.manager.getTotalSize();
+                try self.manager.setTotalSize(total - 1);
+                self.deinitPage();
+                return true;
             }
-            const total = try self.manager.getTotalSize();
-            try self.manager.setTotalSize(total - 1);
-            self.cleaned = true;
-            return true;
+            return false;
         }
 
         pub fn deinit(self: *Self) void {
-            self.page.deinit();
+            self.deinitPage();
+            self.* = undefined;
+        }
+
+        fn deinitPage(self: *Self) void {
+            if (self.page) |*p| {
+                p.deinit();
+                self.page = null;
+            }
         }
     };
 
