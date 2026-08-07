@@ -1,11 +1,12 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
-const slot_chain = fullaz.storage.slot_chain;
 
-const page_cache = @import("fullaz").storage.page_cache;
-const devices = @import("fullaz").device;
-const fsm = @import("fullaz").storage.fsm;
-const extensions = @import("fullaz").page.extensions;
+const slot_chain = fullaz.storage.slot_chain;
+const page_cache = fullaz.storage.page_cache;
+const devices = fullaz.device;
+const fsm = fullaz.storage.fsm;
+const extensions = fullaz.page.extensions;
+
 const printer = @import("test_printer");
 
 const NoneStorageManager = struct {
@@ -16,7 +17,7 @@ const NoneStorageManager = struct {
 
     first_block_id: ?u32 = null,
     last_block_id: ?u32 = null,
-    total_sze: u32 = 0,
+    total_size: u32 = 0,
 
     pub fn destroyPage(_: *@This(), id: PageId) Error!void {
         _ = id;
@@ -24,11 +25,11 @@ const NoneStorageManager = struct {
     }
 
     pub fn getTotalSize(self: *const Self) Error!Size {
-        return self.total_sze;
+        return self.total_size;
     }
 
     pub fn setTotalSize(self: *Self, size: Size) Error!void {
-        self.total_sze = size;
+        self.total_size = size;
     }
 
     pub fn getFirst(self: *const Self) Error!?PageId {
@@ -55,17 +56,17 @@ const FsmStorageManager = struct {
 
     first_block_id: ?u32 = null,
     last_block_id: ?u32 = null,
-    total_sze: u32 = 0,
+    total_size: u32 = 0,
     fsm_roots: [256]?u32 = .{null} ** 256,
 
     pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
 
     pub fn getTotalSize(self: *const @This()) Error!Size {
-        return self.total_sze;
+        return self.total_size;
     }
 
     pub fn setTotalSize(self: *@This(), size: Size) Error!void {
-        self.total_sze = size;
+        self.total_size = size;
     }
 
     pub fn getFirst(self: *const @This()) Error!?PageId {
@@ -446,20 +447,42 @@ test "SlotChain: paged FSM stores its location in the effective header" {
         SlotView.Additional,
         "fsm",
     );
-    const FsmModel = fsm.models.paged.slab.Model(Cache, FsmStorageManager, FsmSizePolicy, LocationAccessor);
+    const FsmModel = fsm.models.paged.slab.Model(
+        Cache,
+        FsmStorageManager,
+        FsmSizePolicy,
+        LocationAccessor,
+    );
     const Fsm = fsm.Fsm(FsmModel);
-    const Handle = slot_chain.HandleImpl(Cache, FsmStorageManager, UserAdditional, void, Fsm, .little);
+    const Handle = slot_chain.HandleImpl(
+        Cache,
+        FsmStorageManager,
+        UserAdditional,
+        void,
+        Fsm,
+        .little,
+    );
 
     var storage = FsmStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
     defer dev.deinit();
     var cache = try Cache.init(&dev, std.testing.allocator, 32);
     defer cache.deinit();
-    var fsm_model = FsmModel.init(&cache, &storage, FsmSizePolicy{}, .{ .page_kind = 0x62 });
+    var fsm_model = FsmModel.init(
+        &cache,
+        &storage,
+        FsmSizePolicy{},
+        .{ .page_kind = 0x62 },
+    );
     var fsm_index = Fsm.init(&fsm_model);
     defer fsm_index.deinit();
 
-    var hdl = try Handle.initWithFsm(&cache, &storage, &fsm_index, .{});
+    var hdl = try Handle.initWithFsm(
+        &cache,
+        &storage,
+        &fsm_index,
+        .{},
+    );
     defer hdl.deinit();
 
     var value: [3500]u8 = undefined;

@@ -31,7 +31,14 @@ test "PageChain: Create" {
 
     //_ = FsmAdditional;
 
-    const View = page_chain.ViewImpl(u32, u32, FsmAdditional, .little, false);
+    const View = page_chain.ViewImpl(
+        u32,
+        u32,
+        FsmAdditional,
+        false,
+        .little,
+        false,
+    );
     const Chunk = View.Chunk;
 
     var page: [1000]u8 = @splat(0);
@@ -47,7 +54,7 @@ test "PageChain: Create" {
 }
 
 test "PageChain: void additional uses namespaced links" {
-    const View = page_chain.ViewImpl(u32, u32, void, .little, false);
+    const View = page_chain.ViewImpl(u32, u32, void, false, .little, false);
     const Additional = View.PageView.Additional;
 
     var page: [1000]u8 = @splat(0);
@@ -65,11 +72,34 @@ test "PageChain: void additional uses namespaced links" {
     try std.testing.expectEqual(@as(?u32, 5), chunk.getPrev());
 }
 
+test "PageChain: forward view stores only next links" {
+    const View = page_chain.ForwardView(u32, u32, .little, false);
+    const Additional = View.PageView.Additional;
+
+    comptime {
+        if (@hasDecl(View.Chunk, "getPrev") or @hasDecl(View.Chunk, "setPrev")) {
+            @compileError("forward page-chain chunks must not expose backward links");
+        }
+    }
+
+    var page: [1000]u8 = @splat(0);
+    var chunk = View.Chunk.init(&page);
+    chunk.formatPage(1, 42, 0, 0);
+
+    const chain = Additional.field(chunk.pageView().additional(), "page_chain");
+    try chunk.pageView().validateTyped();
+    try std.testing.expectEqual(@sizeOf(u32), @sizeOf(@TypeOf(chain.links)));
+    try std.testing.expectEqual(@as(?u32, null), chunk.getNext());
+
+    chunk.setNext(17);
+    try std.testing.expectEqual(@as(?u32, 17), chunk.getNext());
+}
+
 test "PageChain: user links do not conflict with chain links" {
     const UserAdditional = extensions.Compose(.{ .version = 1, .fields = .{
         extensions.field("links", TestTrait),
     } });
-    const View = page_chain.ViewImpl(u32, u32, UserAdditional, .little, false);
+    const View = page_chain.ViewImpl(u32, u32, UserAdditional, false, .little, false);
     const Additional = View.PageView.Additional;
 
     var page: [1000]u8 = @splat(0);
@@ -131,6 +161,29 @@ const NoneStorageManager = struct {
     }
 };
 
+const ForwardOnlyStorageManager = struct {
+    pub const Self = @This();
+    pub const PageId = u32;
+    pub const Size = u32;
+    pub const Error = error{};
+
+    first_block_id: ?u32 = null,
+    destroyed_count: usize = 0,
+
+    pub fn destroyPage(self: *Self, id: PageId) Error!void {
+        _ = id;
+        self.destroyed_count += 1;
+    }
+
+    pub fn getFirst(self: *const Self) Error!?PageId {
+        return self.first_block_id;
+    }
+
+    pub fn setFirst(self: *Self, page_id: ?PageId) Error!void {
+        self.first_block_id = page_id;
+    }
+};
+
 test "PageChain: handle" {
     const Subheader = extern struct {
         aa: [4]u8,
@@ -165,6 +218,120 @@ test "PageChain: handle" {
     printer.print("Header Len = {}\n", .{(try c.header()).header_size.get()});
     printer.print("SubHeader Len = {}\n", .{(try c.header()).subheader_size.get()});
     printer.print("Data len = {}\n", .{(try c.getData()).len});
+}
+
+test "PageChain: forward handle maintains an optional tail" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = page_chain.ForwardHandle(Cache, NoneStorageManager, void, .little);
+
+    comptime {
+        if (@hasDecl(Handle.Chunk, "getPrev") or @hasDecl(Handle.Chunk, "setPrev")) {
+            @compileError("forward page-chain handles must not expose backward links");
+        }
+    }
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var first = try hdl.createChunk();
+    defer first.deinit();
+    const first_id = try first.id();
+    try hdl.insertFirst(&first);
+    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getFirst());
+    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getLast());
+
+    var after = try hdl.createChunk();
+    defer after.deinit();
+    const after_id = try after.id();
+    try hdl.insertAfter(first_id, &after);
+    try std.testing.expectEqual(@as(?u32, after_id), try first.getNext());
+    try std.testing.expectEqual(@as(?u32, after_id), try mgr.getLast());
+
+    var new_first = try hdl.createChunk();
+    defer new_first.deinit();
+    const new_first_id = try new_first.id();
+    try hdl.insertFirst(&new_first);
+    try std.testing.expectEqual(@as(?u32, new_first_id), try mgr.getFirst());
+    try std.testing.expectEqual(@as(?u32, first_id), try new_first.getNext());
+    try std.testing.expectEqual(@as(?u32, after_id), try mgr.getLast());
+}
+
+test "PageChain: forward handle removes chunks with a root-only manager" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = page_chain.ForwardHandle(Cache, ForwardOnlyStorageManager, void, .little);
+
+    comptime {
+        if (@hasDecl(ForwardOnlyStorageManager, "getLast") or @hasDecl(ForwardOnlyStorageManager, "setLast")) {
+            @compileError("forward-only test manager must not have tail state");
+        }
+    }
+
+    var mgr = ForwardOnlyStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var first = try hdl.createChunk();
+    defer first.deinit();
+    const first_id = try first.id();
+    try hdl.insertLast(&first);
+
+    var middle = try hdl.createChunk();
+    defer middle.deinit();
+    const middle_id = try middle.id();
+    try hdl.insertLast(&middle);
+
+    var last = try hdl.createChunk();
+    defer last.deinit();
+    const last_id = try last.id();
+    try hdl.insertLast(&last);
+
+    var itr = try hdl.iterator();
+    defer itr.deinit();
+    try itr.next();
+    try std.testing.expectEqual(middle_id, (try itr.get()).?.page_id);
+
+    itr = try hdl.remove(itr);
+    try std.testing.expectEqual(last_id, (try itr.get()).?.page_id);
+    try std.testing.expectEqual(@as(?u32, last_id), try first.getNext());
+    try std.testing.expect((try middle.getNext()) == null);
+
+    var root_itr = try hdl.iterator();
+    defer root_itr.deinit();
+    try std.testing.expectEqual(first_id, (try root_itr.get()).?.page_id);
+    root_itr = try hdl.remove(root_itr);
+    try std.testing.expectEqual(last_id, (try root_itr.get()).?.page_id);
+    try std.testing.expectEqual(@as(?u32, last_id), try mgr.getFirst());
+
+    root_itr = try hdl.remove(root_itr);
+    try std.testing.expect((try root_itr.get()) == null);
+    try std.testing.expect((try mgr.getFirst()) == null);
+
+    var by_id = try hdl.createChunk();
+    defer by_id.deinit();
+    const by_id_pid = try by_id.id();
+    try hdl.insertFirst(&by_id);
+    var by_id_last = try hdl.createChunk();
+    defer by_id_last.deinit();
+    const by_id_last_pid = try by_id_last.id();
+    try hdl.insertLast(&by_id_last);
+    try std.testing.expect(try hdl.removeById(by_id_last_pid));
+    try std.testing.expectEqual(@as(?u32, by_id_pid), try mgr.getFirst());
+    try std.testing.expect((try by_id.getNext()) == null);
+    try std.testing.expect(!(try hdl.removeById(by_id_last_pid)));
+    try std.testing.expectEqual(@as(usize, 4), mgr.destroyed_count);
 }
 
 test "PageChain: evictChunk relinks neighbors and boundaries" {

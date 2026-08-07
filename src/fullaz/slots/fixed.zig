@@ -5,7 +5,21 @@ const bit_set = @import("../core/bitset.zig");
 
 const PackedInt = core.packed_int.PackedInt;
 
-pub fn Fixed(comptime BitSetDataType: type, comptime SizeT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+pub fn Fixed(
+    comptime BitSetDataType: type,
+    comptime SizeT: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
+    return FixedImpl(BitSetDataType, SizeT, Endian, read_only);
+}
+
+pub fn FixedImpl(
+    comptime BitSetDataType: type,
+    comptime SizeT: type,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
     const BufferType = if (read_only) []const u8 else []u8;
 
     const BitSet = bit_set.BitSet(BitSetDataType, Endian);

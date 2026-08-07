@@ -40,6 +40,7 @@ pub fn ViewImpl(
         PageIdT,
         IndexT,
         AdditionalT,
+        false,
         Endian,
         false,
     );
@@ -53,6 +54,7 @@ pub fn ViewImpl(
             PageIdT,
             IndexT,
             AdditionalT,
+            false,
             Endian,
             read_only,
         ).Chunk;
