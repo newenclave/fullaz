@@ -1823,7 +1823,12 @@ test "Bpt paged: FileBlock prefix persists across reopen" {
 
     const Device = dev.FileBlock(u32);
     const PageCache = PageCacheT(Device);
-    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+    const BptModel = bpt.models.PagedModel(
+        PageCache,
+        NoneStorageManager,
+        keyCmp,
+        void,
+    );
     const Tree = bpt.Bpt(BptModel);
     const block_size = 4096;
     const start_position = 13;
@@ -1864,9 +1869,13 @@ test "Bpt paged: FileBlock prefix persists across reopen" {
         var tree = Tree.init(&model, .neighbor_share);
         defer tree.deinit();
 
-        const entry = (try tree.find("beta")).?;
-        defer entry.deinit();
-        try std.testing.expectEqualStrings("second value", (try entry.get()).?.value);
+        const entrya = (try tree.find("alpha")).?;
+        defer entrya.deinit();
+        try std.testing.expectEqualStrings("first value", (try entrya.get()).?.value);
+
+        const entryb = (try tree.find("beta")).?;
+        defer entryb.deinit();
+        try std.testing.expectEqualStrings("second value", (try entryb.get()).?.value);
     }
 }
 
