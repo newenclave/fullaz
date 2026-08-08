@@ -90,6 +90,21 @@ const Model = fsm.models.paged.slab.Model(PageCache, NoneStorageManager, SizePol
 const Map = fsm.Fsm(Model);
 const HeaderView = fullaz.page.header.ViewImpl(u32, u16, Additional, .little, false);
 
+test "Fsm paged: slab pages store links in the page-chain header" {
+    const SlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, false).SlabPageView;
+
+    var page: [256]u8 = @splat(0);
+    var slab = SlabView.init(&page);
+    try slab.formatPage(77, 42, 0, 5);
+
+    try std.testing.expectEqual(@as(u8, 26), slab.pageHeader().header_size.get());
+    try std.testing.expectEqual(@as(u16, 2), slab.pageHeader().subheader_size.get());
+    try std.testing.expectEqual(@as(usize, 28), @as(usize, slab.pageHeader().header_size.get()) + @sizeOf(SlabView.SubheaderType));
+    try std.testing.expectEqual(@as(?u32, null), slab.getPrev());
+    try std.testing.expectEqual(@as(?u32, null), slab.getNext());
+    try std.testing.expectEqual(@as(u16, 5), slab.sizeClass());
+}
+
 fn makeDataPage(cache: *PageCache) !u32 {
     var ph = try cache.create();
     defer ph.deinit();

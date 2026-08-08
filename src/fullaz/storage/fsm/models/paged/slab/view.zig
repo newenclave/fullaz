@@ -1,9 +1,9 @@
 const std = @import("std");
 
 const page = @import("page.zig");
-const header = @import("../../../../../page/header.zig");
 const slots = @import("../../../../../slots/fixed.zig");
 const errors = @import("../../../../../core/errors.zig");
+const page_chain = @import("../../../../page_chain/page_chain.zig");
 
 const SlotInfoImpl = @import("slot_info.zig").SlotInfo;
 
@@ -14,7 +14,9 @@ pub fn View(
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
-    const HeaderPageViewT = header.View(PageIdT, IndexT, Endian, read_only);
+    const PageChainViewT = page_chain.BidirectionalViewImpl(PageIdT, IndexT, void, Endian, read_only);
+    const HeaderPageViewT = PageChainViewT.PageView;
+    const PageChainChunkT = PageChainViewT.Chunk;
     const SlotsDirType = slots.Fixed(u16, IndexT, Endian, read_only);
     const ConstSlotsDirType = slots.Fixed(u16, IndexT, Endian, true);
 
@@ -30,7 +32,7 @@ pub fn View(
         const Self = @This();
         const DataType = if (read_only) []const u8 else []u8;
 
-        pub const PageHeader = Fsm.PageHeader;
+        pub const PageHeader = HeaderPageViewT.PageHeader;
         pub const PageView = HeaderPageViewT;
         pub const SubHeader = Fsm.Subheader;
         pub const Error = ErrorSet;
@@ -43,11 +45,11 @@ pub fn View(
         const PageViewType = PageView;
         const SlotHeaderType = Fsm.Subheader;
 
-        page_view: PageViewType,
+        page_chunk: PageChainChunkT,
 
         pub fn init(data: DataType) Self {
             return .{
-                .page_view = PageViewType.init(data),
+                .page_chunk = PageChainChunkT.init(data),
             };
         }
 
@@ -56,18 +58,18 @@ pub fn View(
         }
 
         pub fn page(self: *const Self) DataType {
-            return self.page_view.page;
+            return self.page_chunk.page();
         }
 
         pub fn pageHeaderMut(self: *Self) *PageViewType.PageHeader {
             if (read_only) {
                 @compileError("Cannot get mutable page from a read-only view");
             }
-            return self.page_view.headerMut();
+            return self.page_chunk.headerMut();
         }
 
         pub fn pageHeader(self: *const Self) *const PageViewType.PageHeader {
-            return self.page_view.header();
+            return self.page_chunk.header();
         }
 
         pub fn formatPage(
@@ -78,11 +80,10 @@ pub fn View(
             size_class: SizeClassT,
         ) ErrorSet!void {
             const subheader_size = @as(IndexT, @intCast(@sizeOf(SubheaderType)));
-            self.page_view.formatPage(kind, page_id, subheader_size, metadata_len);
-            const data = self.page_view.dataMut();
+            self.page_chunk.formatPage(kind, page_id, subheader_size, metadata_len);
+            const data = self.page_chunk.dataMut();
 
             var sh = self.subheaderMut();
-            sh.formatHeader();
             sh.size_class.set(size_class);
 
             var sl = try SlotsDirType.init(data);
@@ -90,7 +91,7 @@ pub fn View(
         }
 
         pub fn subheader(self: *const Self) *const SubheaderType {
-            const subhdr = self.page_view.subheader();
+            const subhdr = self.page_chunk.subheader();
             return @ptrCast(@alignCast(&subhdr[0]));
         }
 
@@ -98,12 +99,12 @@ pub fn View(
             if (read_only) {
                 @compileError("Cannot get mutable subheader from a read-only page");
             }
-            const subhdr = self.page_view.subheaderMut();
+            const subhdr = self.page_chunk.subheaderMut();
             return @ptrCast(@alignCast(&subhdr[0]));
         }
 
         pub fn slotsDir(self: *const Self) ErrorSet!ConstSlotsDirType {
-            const data = self.page_view.data();
+            const data = self.page_chunk.data();
             return try ConstSlotsDirType.init(data);
         }
 
@@ -111,7 +112,7 @@ pub fn View(
             if (read_only) {
                 @compileError("Cannot get mutable slots directory from a read-only page");
             }
-            const data = self.page_view.dataMut();
+            const data = self.page_chunk.dataMut();
             return try SlotsDirType.init(data);
         }
 
@@ -166,42 +167,22 @@ pub fn View(
             if (read_only) {
                 @compileError("Cannot set next page on a read-only page");
             }
-            var sh = self.subheaderMut();
-            if (next_page_id) |id| {
-                sh.next.set(id);
-            } else {
-                sh.next.setMax();
-            }
+            self.page_chunk.setNext(next_page_id);
         }
 
         pub fn setPrev(self: *Self, prev_page_id: ?PageIdT) ErrorSet!void {
             if (read_only) {
                 @compileError("Cannot set previous page on a read-only page");
             }
-            var sh = self.subheaderMut();
-            if (prev_page_id) |id| {
-                sh.prev.set(id);
-            } else {
-                sh.prev.setMax();
-            }
+            self.page_chunk.setPrev(prev_page_id);
         }
 
         pub fn getNext(self: *const Self) ?PageIdT {
-            const sh = self.subheader();
-            const next_id = sh.next.get();
-            if (sh.next.isMax()) {
-                return null;
-            }
-            return next_id;
+            return self.page_chunk.getNext();
         }
 
         pub fn getPrev(self: *const Self) ?PageIdT {
-            const sh = self.subheader();
-            const prev_id = sh.prev.get();
-            if (sh.prev.isMax()) {
-                return null;
-            }
-            return prev_id;
+            return self.page_chunk.getPrev();
         }
 
         pub fn sizeClass(self: *const Self) SizeClassT {
