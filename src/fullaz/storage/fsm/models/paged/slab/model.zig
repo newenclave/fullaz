@@ -124,11 +124,11 @@ pub fn Paged(
         pub fn add(self: *Self, pid: Pid, free: Size) Error!void {
             const c = try self.policy.getSizeClass(free);
             var slab = try self.slabWithRoom(c);
-            defer slab.ph.deinit();
-            var v = View.init(try slab.ph.getDataMut());
+            defer slab.chunk.deinit();
+            var v = View.init(try slab.chunk.getPageMut());
             const si = try v.insert(pid, free);
             try self.writeLocation(pid, .{
-                .page_id = slab.pid,
+                .page_id = try slab.chunk.id(),
                 .slot_id = @intCast(si.slot_id),
             });
         }
@@ -155,8 +155,7 @@ pub fn Paged(
 
         // --- helpers ---
         const SlabRef = struct {
-            pid: PidT,
-            ph: PageHandle,
+            chunk: PageChainHandle.Chunk,
         };
 
         fn fetchSlab(self: *Self, pid: PidT) Error!PageHandle {
@@ -169,51 +168,36 @@ pub fn Paged(
             return ph;
         }
 
-        fn createSlab(self: *Self, c: SizeClassT) Error!SlabRef {
-            var ph = try self.cache.create();
-            errdefer ph.deinit();
-            const pid = try ph.pid();
-            var v = View.init(try ph.getDataMut());
-            try v.formatPage(self.settings.page_kind, pid, 0, c);
-            return .{ .pid = pid, .ph = ph };
+        fn createSlab(chain: *PageChainHandle, c: SizeClassT) Error!SlabRef {
+            var chunk = try chain.createChunk();
+            errdefer chunk.deinit();
+            var v = View.init(try chunk.getPageMut());
+            try v.formatPayload(c);
+            return .{ .chunk = chunk };
         }
 
         fn slabWithRoom(self: *Self, c: SizeClassT) Error!SlabRef {
-            const root_opt = try self.sm.getSizeClassRoot(c);
-            if (root_opt) |root_pid| {
-                var cur_pid = root_pid;
-                while (true) {
-                    var ph = try self.fetchSlab(cur_pid);
-                    const cv = ConstView.init(try ph.getData());
-                    if (!try cv.isFull()) {
-                        return .{ .pid = cur_pid, .ph = ph };
-                    }
-                    const nxt = cv.getNext();
-                    ph.deinit();
-                    if (nxt) |n| {
-                        cur_pid = n;
-                        continue;
-                    }
-                    var created = try self.createSlab(c);
-                    errdefer created.ph.deinit();
-                    {
-                        var nv = View.init(try created.ph.getDataMut());
-                        try nv.setNext(root_pid);
-                        try nv.setPrev(null);
-                    }
-                    {
-                        var rph = try self.fetchSlab(root_pid);
-                        defer rph.deinit();
-                        var rv = View.init(try rph.getDataMut());
-                        try rv.setPrev(created.pid);
-                    }
-                    try self.sm.setSizeClassRoot(c, created.pid);
-                    return created;
+            var manager = self.initClassChainManager(c);
+            var chain = try self.initClassChain(&manager);
+            defer chain.deinit();
+            var itr = try chain.iterator();
+            defer itr.deinit();
+
+            while ((try itr.get()) != null) {
+                const slab = itr.chunkPtr().?;
+                const cv = ConstView.init(try slab.getPage());
+                if (cv.sizeClass() != c) {
+                    return Error.BadData;
                 }
+                if (!try cv.isFull()) {
+                    return .{ .chunk = (try itr.cloneChunk()).? };
+                }
+                try itr.next();
             }
-            var created = try self.createSlab(c);
-            errdefer created.ph.deinit();
-            try self.sm.setSizeClassRoot(c, created.pid);
+
+            var created = try createSlab(&chain, c);
+            errdefer created.chunk.deinit();
+            try chain.insertFirst(&created.chunk);
             return created;
         }
 

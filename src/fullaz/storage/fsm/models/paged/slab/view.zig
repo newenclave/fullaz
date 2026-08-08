@@ -14,7 +14,13 @@ pub fn View(
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
-    const PageChainViewT = page_chain.BidirectionalViewImpl(PageIdT, IndexT, void, Endian, read_only);
+    const PageChainViewT = page_chain.BidirectionalViewImpl(
+        PageIdT,
+        IndexT,
+        void,
+        Endian,
+        read_only,
+    );
     const HeaderPageViewT = PageChainViewT.PageView;
     const PageChainChunkT = PageChainViewT.Chunk;
     const SlotsDirType = slots.Fixed(u16, IndexT, Endian, read_only);
@@ -81,6 +87,13 @@ pub fn View(
         ) ErrorSet!void {
             const subheader_size = @as(IndexT, @intCast(@sizeOf(SubheaderType)));
             self.page_chunk.formatPage(kind, page_id, subheader_size, metadata_len);
+            try self.formatPayload(size_class);
+        }
+
+        pub fn formatPayload(self: *Self, size_class: SizeClassT) ErrorSet!void {
+            if (read_only) {
+                @compileError("Cannot format a read-only page");
+            }
             const data = self.page_chunk.dataMut();
 
             var sh = self.subheaderMut();
