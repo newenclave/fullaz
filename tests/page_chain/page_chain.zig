@@ -243,6 +243,62 @@ test "PageChain: handle" {
     printer.print("Data len = {}\n", .{(try c.getData()).len});
 }
 
+test "PageChain: loadChunk rejects a plain page with the same kind" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+    const PlainView = fullaz.page.header.View(u32, u16, .little, false);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var page = try cache.create();
+    defer page.deinit();
+    const pid = try page.pid();
+    var plain = PlainView.init(try page.getDataMut());
+    plain.formatPage(0x51, pid, 0, 0);
+
+    try std.testing.expectError(error.InvalidHeaderSize, hdl.loadChunk(pid));
+}
+
+test "PageChain: iterator rejects a linked page with another kind" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var first = try hdl.createChunk();
+    defer first.deinit();
+    const first_id = try first.id();
+    try hdl.insertFirst(&first);
+
+    var other = try hdl.createChunk();
+    defer other.deinit();
+    const other_id = try other.id();
+    (try other.headerMut()).kind.set(0x52);
+    try first.setNext(other_id);
+
+    var itr = try hdl.iterator();
+    defer itr.deinit();
+    try std.testing.expectEqual(first_id, (try itr.get()).?.page_id);
+    try std.testing.expectError(error.BadType, itr.next());
+    try std.testing.expectEqual(first_id, (try itr.get()).?.page_id);
+}
+
 test "PageChain: forward handle maintains an optional tail" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);

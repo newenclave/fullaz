@@ -179,9 +179,27 @@ pub fn HandleForwardImpl(
         }
     };
 
+    const Loader = struct {
+        const Error = errors.PageError ||
+            ChunkHandle.Error ||
+            PageCacheType.Error ||
+            ViewTypeConst.PageView.Error;
+
+        fn load(page_cache: *PageCacheType, page_kind: u16, pid: BlockIdType) Error!ChunkHandle {
+            var page_handle = try page_cache.fetch(pid);
+            errdefer page_handle.deinit();
+            const cv = ViewTypeConst.Chunk.init(try page_handle.getData());
+            try cv.pageView().validateTyped();
+            if (cv.header().kind.get() != page_kind) {
+                return Error.BadType;
+            }
+            return ChunkHandle.init(page_handle);
+        }
+    };
+
     const IteratorImpl = struct {
         const Self = @This();
-        pub const Error = ChunkHandle.Error;
+        pub const Error = Loader.Error;
 
         const Cursor = union(enum) {
             before_first,
@@ -195,22 +213,25 @@ pub fn HandleForwardImpl(
         };
 
         page_cache: *PageCacheType,
+        page_kind: u16,
         prev: ?ChunkHandle,
         page: ?ChunkHandle,
         cursor: Cursor,
 
-        fn init(page_cache: *PageCacheType, page_id: BlockIdType, cursor: Cursor) Error!Self {
+        fn init(page_cache: *PageCacheType, page_kind: u16, page_id: BlockIdType, cursor: Cursor) Error!Self {
             return .{
                 .page_cache = page_cache,
+                .page_kind = page_kind,
                 .prev = null,
-                .page = ChunkHandle.init(try page_cache.fetch(page_id)),
+                .page = try Loader.load(page_cache, page_kind, page_id),
                 .cursor = cursor,
             };
         }
 
-        fn initEmpty(page_cache: *PageCacheType) Self {
+        fn initEmpty(page_cache: *PageCacheType, page_kind: u16) Self {
             return .{
                 .page_cache = page_cache,
+                .page_kind = page_kind,
                 .prev = null,
                 .page = null,
                 .cursor = .after_last,
@@ -247,7 +268,7 @@ pub fn HandleForwardImpl(
 
             const next_pid = if (self.page) |*page| try page.getNext() else return;
             if (next_pid) |pid| {
-                var next_page = ChunkHandle.init(try self.page_cache.fetch(pid));
+                var next_page = try Loader.load(self.page_cache, self.page_kind, pid);
                 errdefer next_page.deinit();
                 if (self.prev) |*prev| {
                     prev.deinit();
@@ -277,7 +298,8 @@ pub fn HandleForwardImpl(
             errors.IteratorError ||
             ChunkHandle.Error ||
             StorageManager.Error ||
-            PageCacheType.Error;
+            PageCacheType.Error ||
+            ViewTypeConst.PageView.Error;
 
         pub const PageId = BlockIdType;
         pub const Chunk = ChunkHandle;
@@ -322,12 +344,12 @@ pub fn HandleForwardImpl(
             if (try self.mgr.getFirst()) |page_id| {
                 return self.iteratorOn(page_id);
             } else {
-                return IteratorImpl.initEmpty(self.page_cache);
+                return IteratorImpl.initEmpty(self.page_cache, self.settings.chunk_page_kind);
             }
         }
 
         fn iteratorOn(self: *const Self, page_id: PageId) Error!IteratorImpl {
-            return IteratorImpl.init(self.page_cache, page_id, .{ .on = 0 });
+            return IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, page_id, .{ .on = 0 });
         }
 
         /// Takes ownership of itr. On success, the returned iterator replaces it.
@@ -341,9 +363,9 @@ pub fn HandleForwardImpl(
             const next = try current.getNext();
 
             var replacement = if (next) |next_id|
-                try IteratorImpl.init(self.page_cache, next_id, .{ .on = 0 })
+                try IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, next_id, .{ .on = 0 })
             else
-                IteratorImpl.initEmpty(self.page_cache);
+                IteratorImpl.initEmpty(self.page_cache, self.settings.chunk_page_kind);
             errdefer replacement.deinit();
 
             var previous = current_itr.prev;
@@ -395,12 +417,7 @@ pub fn HandleForwardImpl(
         }
 
         pub fn loadChunk(self: *const Self, pid: PageId) Error!ChunkHandle {
-            const page_handle = try self.page_cache.fetch(pid);
-            const cv = ViewTypeConst.Chunk.init(try page_handle.getData());
-            if (cv.header().kind.get() != self.settings.chunk_page_kind) {
-                return Error.BadType;
-            }
-            return ChunkHandle.init(page_handle);
+            return Loader.load(self.page_cache, self.settings.chunk_page_kind, pid);
         }
 
         pub fn createChunk(self: *Self) Error!ChunkHandle {
@@ -660,9 +677,27 @@ pub fn HandleBidirectionalImpl(
         }
     };
 
+    const Loader = struct {
+        const Error = errors.PageError ||
+            ChunkHandle.Error ||
+            PageCacheType.Error ||
+            ViewTypeConst.PageView.Error;
+
+        fn load(page_cache: *PageCacheType, page_kind: u16, pid: BlockIdType) Error!ChunkHandle {
+            var page_handle = try page_cache.fetch(pid);
+            errdefer page_handle.deinit();
+            const cv = ViewTypeConst.Chunk.init(try page_handle.getData());
+            try cv.pageView().validateTyped();
+            if (cv.header().kind.get() != page_kind) {
+                return Error.BadType;
+            }
+            return ChunkHandle.init(page_handle);
+        }
+    };
+
     const IteratorImpl = struct {
         const Self = @This();
-        pub const Error = ChunkHandle.Error;
+        pub const Error = Loader.Error;
 
         const Cursor = union(enum) {
             before_first,
@@ -676,20 +711,23 @@ pub fn HandleBidirectionalImpl(
         };
 
         page_cache: *PageCacheType,
+        page_kind: u16,
         page: ?ChunkHandle,
         cursor: Cursor,
 
-        fn init(page_cache: *PageCacheType, page_id: BlockIdType, cursor: Cursor) Error!Self {
+        fn init(page_cache: *PageCacheType, page_kind: u16, page_id: BlockIdType, cursor: Cursor) Error!Self {
             return .{
                 .page_cache = page_cache,
-                .page = ChunkHandle.init(try page_cache.fetch(page_id)),
+                .page_kind = page_kind,
+                .page = try Loader.load(page_cache, page_kind, page_id),
                 .cursor = cursor,
             };
         }
 
-        fn initEmpty(page_cache: *PageCacheType) Self {
+        fn initEmpty(page_cache: *PageCacheType, page_kind: u16) Self {
             return .{
                 .page_cache = page_cache,
+                .page_kind = page_kind,
                 .page = null,
                 .cursor = .after_last,
             };
@@ -725,7 +763,7 @@ pub fn HandleBidirectionalImpl(
 
             const next_pid = if (self.page) |*page| try page.getNext() else return;
             if (next_pid) |pid| {
-                var next_page = ChunkHandle.init(try self.page_cache.fetch(pid));
+                var next_page = try Loader.load(self.page_cache, self.page_kind, pid);
                 errdefer next_page.deinit();
                 if (self.page) |*page| {
                     page.deinit();
@@ -750,7 +788,7 @@ pub fn HandleBidirectionalImpl(
 
             const prev_pid = if (self.page) |*page| try page.getPrev() else return;
             if (prev_pid) |pid| {
-                var prev_page = ChunkHandle.init(try self.page_cache.fetch(pid));
+                var prev_page = try Loader.load(self.page_cache, self.page_kind, pid);
                 errdefer prev_page.deinit();
                 if (self.page) |*page| {
                     page.deinit();
@@ -775,7 +813,8 @@ pub fn HandleBidirectionalImpl(
             errors.IteratorError ||
             ChunkHandle.Error ||
             StorageManager.Error ||
-            PageCacheType.Error;
+            PageCacheType.Error ||
+            ViewTypeConst.PageView.Error;
 
         pub const PageId = BlockIdType;
         pub const Chunk = ChunkHandle;
@@ -820,15 +859,15 @@ pub fn HandleBidirectionalImpl(
             if (try self.mgr.getFirst()) |page_id| {
                 return self.iteratorOn(page_id);
             } else {
-                return IteratorImpl.initEmpty(self.page_cache);
+                return IteratorImpl.initEmpty(self.page_cache, self.settings.chunk_page_kind);
             }
         }
 
         pub fn iteratorFromEnd(self: *const Self) Error!Iterator {
             if (try self.lastId()) |page_id| {
-                return IteratorImpl.init(self.page_cache, page_id, .{ .on = 0 });
+                return IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, page_id, .{ .on = 0 });
             }
-            return IteratorImpl.initEmpty(self.page_cache);
+            return IteratorImpl.initEmpty(self.page_cache, self.settings.chunk_page_kind);
         }
 
         fn lastId(self: *const Self) Error!?PageId {
@@ -845,7 +884,7 @@ pub fn HandleBidirectionalImpl(
         }
 
         fn iteratorOn(self: *const Self, page_id: PageId) Error!IteratorImpl {
-            return IteratorImpl.init(self.page_cache, page_id, .{ .on = 0 });
+            return IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, page_id, .{ .on = 0 });
         }
 
         /// Takes ownership of itr. On success, the returned iterator replaces it.
@@ -858,11 +897,11 @@ pub fn HandleBidirectionalImpl(
                 const next = try current.getNext();
                 const prev = try current.getPrev();
                 var replacement = if (next) |next_id|
-                    try IteratorImpl.init(self.page_cache, next_id, .{ .on = 0 })
+                    try IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, next_id, .{ .on = 0 })
                 else if (prev) |prev_id|
-                    try IteratorImpl.init(self.page_cache, prev_id, .after_last)
+                    try IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, prev_id, .after_last)
                 else
-                    IteratorImpl.initEmpty(self.page_cache);
+                    IteratorImpl.initEmpty(self.page_cache, self.settings.chunk_page_kind);
                 errdefer replacement.deinit();
 
                 try self.evictChunk(current);
@@ -875,12 +914,7 @@ pub fn HandleBidirectionalImpl(
         }
 
         pub fn loadChunk(self: *const Self, pid: PageId) Error!ChunkHandle {
-            const page_handle = try self.page_cache.fetch(pid);
-            const cv = ViewTypeConst.Chunk.init(try page_handle.getData());
-            if (cv.header().kind.get() != self.settings.chunk_page_kind) {
-                return Error.BadType;
-            }
-            return ChunkHandle.init(page_handle);
+            return Loader.load(self.page_cache, self.settings.chunk_page_kind, pid);
         }
 
         pub fn createChunk(self: *Self) Error!ChunkHandle {
