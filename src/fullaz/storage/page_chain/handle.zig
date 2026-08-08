@@ -535,6 +535,8 @@ pub fn HandleBidirectionalImpl(
     const EmptyStruct = extern struct {};
     const SubheaderType = if (SubheaderT == void) EmptyStruct else SubheaderT;
 
+    const has_tail = @hasDecl(StorageManager, "getLast") and @hasDecl(StorageManager, "setLast");
+
     _ = PosType;
 
     const ViewType = view.ViewImpl(
@@ -823,10 +825,22 @@ pub fn HandleBidirectionalImpl(
         }
 
         pub fn iteratorFromEnd(self: *const Self) Error!Iterator {
-            if (try self.mgr.getLast()) |page_id| {
+            if (try self.lastId()) |page_id| {
                 return IteratorImpl.init(self.page_cache, page_id, .{ .on = 0 });
-            } else {
-                return IteratorImpl.initEmpty(self.page_cache);
+            }
+            return IteratorImpl.initEmpty(self.page_cache);
+        }
+
+        fn lastId(self: *const Self) Error!?PageId {
+            if (comptime has_tail) {
+                return self.mgr.getLast();
+            }
+
+            var current_id = (try self.mgr.getFirst()) orelse return null;
+            while (true) {
+                var current = try self.loadChunk(current_id);
+                defer current.deinit();
+                current_id = (try current.getNext()) orelse return current_id;
             }
         }
 
@@ -900,7 +914,9 @@ pub fn HandleBidirectionalImpl(
                 var first_view = try first_ch.getViewMut();
                 first_view.setPrev(chunk_id);
             } else {
-                try self.mgr.setLast(chunk_id);
+                if (comptime has_tail) {
+                    try self.mgr.setLast(chunk_id);
+                }
             }
             try ch.setNext(first);
             try ch.setPrev(null);
@@ -908,19 +924,43 @@ pub fn HandleBidirectionalImpl(
         }
 
         pub fn insertLast(self: *Self, ch: *ChunkHandle) Error!void {
-            const last = try self.mgr.getLast();
-            const chunk_id = try ch.id();
-            if (last) |last_pid| {
-                var last_ch = try self.loadChunk(last_pid);
-                defer last_ch.deinit();
-                var last_view = try last_ch.getViewMut();
-                last_view.setNext(chunk_id);
+            if (comptime has_tail) {
+                const last = try self.mgr.getLast();
+                const chunk_id = try ch.id();
+                if (last) |last_pid| {
+                    var last_ch = try self.loadChunk(last_pid);
+                    defer last_ch.deinit();
+                    var last_view = try last_ch.getViewMut();
+                    last_view.setNext(chunk_id);
+                } else {
+                    try self.mgr.setFirst(chunk_id);
+                }
+                try ch.setPrev(last);
+                try ch.setNext(null);
+                try self.mgr.setLast(chunk_id);
             } else {
-                try self.mgr.setFirst(chunk_id);
+                const chunk_id = try ch.id();
+                var current_id = (try self.mgr.getFirst()) orelse {
+                    try ch.setPrev(null);
+                    try ch.setNext(null);
+                    try self.mgr.setFirst(chunk_id);
+                    return;
+                };
+
+                while (true) {
+                    current_id = blk: {
+                        var current = try self.loadChunk(current_id);
+                        defer current.deinit();
+                        if (try current.getNext()) |next_id| {
+                            break :blk next_id;
+                        }
+                        try current.setNext(chunk_id);
+                        try ch.setPrev(current_id);
+                        try ch.setNext(null);
+                        return;
+                    };
+                }
             }
-            try ch.setPrev(last);
-            try ch.setNext(null);
-            try self.mgr.setLast(chunk_id);
         }
 
         pub fn insertBefore(self: *Self, before_id: PageId, ch: *ChunkHandle) Error!void {
@@ -953,7 +993,9 @@ pub fn HandleBidirectionalImpl(
                 defer next_ch.deinit();
                 try next_ch.setPrev(chunk_id);
             } else {
-                try self.mgr.setLast(chunk_id);
+                if (comptime has_tail) {
+                    try self.mgr.setLast(chunk_id);
+                }
             }
 
             try ch.setNext(next);
@@ -980,7 +1022,9 @@ pub fn HandleBidirectionalImpl(
                 var next_view = try next_ch.getViewMut();
                 next_view.setPrev(prev);
             } else {
-                try self.mgr.setLast(prev);
+                if (comptime has_tail) {
+                    try self.mgr.setLast(prev);
+                }
             }
 
             try ch.setNext(null);

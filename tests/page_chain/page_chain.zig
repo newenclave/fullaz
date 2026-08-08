@@ -184,6 +184,29 @@ const ForwardOnlyStorageManager = struct {
     }
 };
 
+const RootOnlyBidirectionalStorageManager = struct {
+    pub const Self = @This();
+    pub const PageId = u32;
+    pub const Size = u32;
+    pub const Error = error{};
+
+    first_block_id: ?u32 = null,
+    destroyed_count: usize = 0,
+
+    pub fn destroyPage(self: *Self, id: PageId) Error!void {
+        _ = id;
+        self.destroyed_count += 1;
+    }
+
+    pub fn getFirst(self: *const Self) Error!?PageId {
+        return self.first_block_id;
+    }
+
+    pub fn setFirst(self: *Self, page_id: ?PageId) Error!void {
+        self.first_block_id = page_id;
+    }
+};
+
 test "PageChain: handle" {
     const Subheader = extern struct {
         aa: [4]u8,
@@ -332,6 +355,132 @@ test "PageChain: forward handle removes chunks with a root-only manager" {
     try std.testing.expect((try by_id.getNext()) == null);
     try std.testing.expect(!(try hdl.removeById(by_id_last_pid)));
     try std.testing.expectEqual(@as(usize, 4), mgr.destroyed_count);
+}
+
+test "PageChain: bidirectional handle works with a root-only manager" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = page_chain.BidirectionalHandle(
+        Cache,
+        RootOnlyBidirectionalStorageManager,
+        void,
+        .little,
+    );
+
+    comptime {
+        if (@hasDecl(RootOnlyBidirectionalStorageManager, "getLast") or
+            @hasDecl(RootOnlyBidirectionalStorageManager, "setLast"))
+        {
+            @compileError("root-only bidirectional test manager must not have tail state");
+        }
+    }
+
+    var mgr = RootOnlyBidirectionalStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var first = try hdl.createChunk();
+    defer first.deinit();
+    const first_id = try first.id();
+    try hdl.insertFirst(&first);
+
+    var middle = try hdl.createChunk();
+    defer middle.deinit();
+    const middle_id = try middle.id();
+    try hdl.insertLast(&middle);
+
+    var last = try hdl.createChunk();
+    defer last.deinit();
+    const last_id = try last.id();
+    try hdl.insertLast(&last);
+
+    try std.testing.expectEqual(@as(?u32, middle_id), try first.getNext());
+    try std.testing.expect((try first.getPrev()) == null);
+    try std.testing.expectEqual(@as(?u32, first_id), try middle.getPrev());
+    try std.testing.expectEqual(@as(?u32, last_id), try middle.getNext());
+    try std.testing.expectEqual(@as(?u32, middle_id), try last.getPrev());
+    try std.testing.expect((try last.getNext()) == null);
+
+    var reverse_itr = try hdl.iteratorFromEnd();
+    defer reverse_itr.deinit();
+    try std.testing.expectEqual(last_id, (try reverse_itr.get()).?.page_id);
+    try reverse_itr.prev();
+    try std.testing.expectEqual(middle_id, (try reverse_itr.get()).?.page_id);
+
+    try hdl.evictChunk(&middle);
+    try std.testing.expectEqual(@as(?u32, last_id), try first.getNext());
+    try std.testing.expectEqual(@as(?u32, first_id), try last.getPrev());
+
+    try hdl.evictChunk(&last);
+    try std.testing.expect((try first.getNext()) == null);
+
+    try hdl.evictChunk(&first);
+    try std.testing.expect((try mgr.getFirst()) == null);
+}
+
+test "PageChain: bidirectional remove works with a root-only manager" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = page_chain.BidirectionalHandle(
+        Cache,
+        RootOnlyBidirectionalStorageManager,
+        void,
+        .little,
+    );
+
+    var mgr = RootOnlyBidirectionalStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var first = try hdl.createChunk();
+    defer first.deinit();
+    const first_id = try first.id();
+    try hdl.insertFirst(&first);
+
+    var middle = try hdl.createChunk();
+    defer middle.deinit();
+    const middle_id = try middle.id();
+    try hdl.insertLast(&middle);
+
+    var last = try hdl.createChunk();
+    defer last.deinit();
+    const last_id = try last.id();
+    try hdl.insertLast(&last);
+
+    var itr = try hdl.iterator();
+    defer itr.deinit();
+    try itr.next();
+    try std.testing.expectEqual(middle_id, (try itr.get()).?.page_id);
+
+    itr = try hdl.remove(itr);
+    try std.testing.expectEqual(last_id, (try itr.get()).?.page_id);
+    try std.testing.expectEqual(@as(?u32, last_id), try first.getNext());
+    try std.testing.expectEqual(@as(?u32, first_id), try last.getPrev());
+    try std.testing.expect((try middle.getPrev()) == null);
+    try std.testing.expect((try middle.getNext()) == null);
+    try std.testing.expectEqual(@as(usize, 1), mgr.destroyed_count);
+
+    itr = try hdl.remove(itr);
+    try std.testing.expect((try itr.get()) == null);
+    try itr.prev();
+    try std.testing.expectEqual(first_id, (try itr.get()).?.page_id);
+    try std.testing.expect((try first.getNext()) == null);
+    try std.testing.expectEqual(@as(usize, 2), mgr.destroyed_count);
+
+    itr = try hdl.remove(itr);
+    try std.testing.expect((try itr.get()) == null);
+    try std.testing.expect((try mgr.getFirst()) == null);
+    try std.testing.expectEqual(@as(usize, 3), mgr.destroyed_count);
 }
 
 test "PageChain: evictChunk relinks neighbors and boundaries" {
