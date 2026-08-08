@@ -292,7 +292,7 @@ pub fn HandleImpl(
                 .on => |index| index,
                 else => return Error.InvalidIterator,
             };
-            var page = (try self.page_itr.chunk()) orelse return Error.InvalidIterator;
+            var page = (try self.page_itr.cloneChunk()) orelse return Error.InvalidIterator;
             errdefer page.deinit();
 
             var sd = try SlotsDir.init(try page.getDataMut());

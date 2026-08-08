@@ -107,8 +107,7 @@ pub fn Paged(
                 defer itr.deinit();
 
                 while ((try itr.get()) != null) {
-                    var slab = (try itr.chunk()).?;
-                    defer slab.deinit();
+                    var slab = itr.chunkPtr().?;
                     const cv = ConstView.init(try slab.getPage());
                     if (cv.sizeClass() != c) {
                         return Error.BadData;

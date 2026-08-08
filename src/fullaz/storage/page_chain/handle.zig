@@ -744,7 +744,21 @@ pub fn HandleBidirectionalImpl(
             };
         }
 
-        pub fn chunk(self: *const Self) Error!?ChunkHandle {
+        pub fn chunkPtrMut(self: *Self) ?*ChunkHandle {
+            if (self.page) |*page| {
+                return page;
+            }
+            return null;
+        }
+
+        pub fn chunkPtr(self: *const Self) ?*const ChunkHandle {
+            if (self.page) |*page| {
+                return page;
+            }
+            return null;
+        }
+
+        pub fn cloneChunk(self: *const Self) Error!?ChunkHandle {
             const page = self.page orelse return null;
             return @as(?ChunkHandle, try page.clone());
         }

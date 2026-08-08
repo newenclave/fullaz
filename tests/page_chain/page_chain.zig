@@ -675,7 +675,7 @@ test "PageChain: iterator traverses linked chunks in both directions" {
     defer itr.deinit();
     try std.testing.expectEqual(first_id, (try itr.get()).?.page_id);
 
-    var cloned = (try itr.chunk()).?;
+    var cloned = (try itr.cloneChunk()).?;
     defer cloned.deinit();
     try std.testing.expectEqual(first_id, try cloned.id());
 
@@ -723,7 +723,7 @@ test "PageChain: iterator is empty for an empty chain" {
     var itr = try hdl.iterator();
     defer itr.deinit();
     try std.testing.expect((try itr.get()) == null);
-    try std.testing.expect((try itr.chunk()) == null);
+    try std.testing.expect((try itr.cloneChunk()) == null);
     try itr.next();
     try itr.prev();
     try std.testing.expect((try itr.get()) == null);
