@@ -16,6 +16,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
         block_size: usize,
         block_count: usize,
         physical_blocks: usize,
+        start_position: usize,
         is_open_flag: bool,
 
         pub fn create(io: Io, path: []const u8, block_size: usize) Error!Self {
@@ -31,6 +32,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
                 .block_size = block_size,
                 .block_count = 0,
                 .physical_blocks = 0,
+                .start_position = 0,
                 .is_open_flag = true,
             };
         }
@@ -52,6 +54,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
                 .block_size = block_size,
                 .block_count = blocks,
                 .physical_blocks = blocks,
+                .start_position = 0,
                 .is_open_flag = true,
             };
         }
@@ -92,7 +95,8 @@ pub fn FileBlock(comptime BlockIdT: type) type {
             }
             const new_count = self.block_count - count;
             if (self.physical_blocks > new_count) {
-                self.file.setLength(self.io, @as(u64, @intCast(new_count * self.block_size))) catch {
+                const new_length = @as(u64, @intCast(new_count * self.block_size + self.start_position));
+                self.file.setLength(self.io, new_length) catch {
                     return Error.IoError;
                 };
                 self.physical_blocks = new_count;
@@ -110,7 +114,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
                 @memset(output[0..len], 0);
                 return;
             }
-            const offset = @as(u64, @intCast(idx * self.block_size));
+            const offset = @as(u64, @intCast(idx * self.block_size + self.start_position));
             _ = self.file.readPositionalAll(self.io, output[0..len], offset) catch {
                 return Error.IoError;
             };
@@ -122,13 +126,14 @@ pub fn FileBlock(comptime BlockIdT: type) type {
                 return Error.InvalidId;
             }
             if (idx >= self.physical_blocks) {
-                self.file.setLength(self.io, @as(u64, @intCast((idx + 1) * self.block_size))) catch {
+                const offset = @as(u64, @intCast(idx * self.block_size + self.start_position));
+                self.file.setLength(self.io, offset + self.block_size) catch {
                     return Error.IoError;
                 };
                 self.physical_blocks = idx + 1;
             }
             const len = @min(output.len, self.block_size);
-            const offset = @as(u64, @intCast(idx * self.block_size));
+            const offset = @as(u64, @intCast(idx * self.block_size + self.start_position));
             self.file.writePositionalAll(self.io, output[0..len], offset) catch {
                 return Error.IoError;
             };

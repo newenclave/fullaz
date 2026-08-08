@@ -260,6 +260,38 @@ test "Fsm paged: find rejects a class root with another persisted class" {
     try std.testing.expectError(Model.Error.BadData, map.find(100));
 }
 
+test "Fsm paged: remove rejects a plain page with the slab kind" {
+    const allocator = std.testing.allocator;
+    var sm = try NoneStorageManager.init(allocator);
+    defer sm.deinit();
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+
+    var model = Model.init(&cache, &sm, SizePolicy{}, .{});
+    var map = Map.init(&model);
+    defer map.deinit();
+
+    const data_pid = try makeDataPage(&cache);
+    var plain_page = try cache.create();
+    defer plain_page.deinit();
+    const plain_pid = try plain_page.pid();
+    var plain_view = fullaz.page.header.View(u32, u16, .little, false).init(try plain_page.getDataMut());
+    plain_view.formatPage(1, plain_pid, 0, 0);
+
+    {
+        var data_page = try cache.fetch(data_pid);
+        defer data_page.deinit();
+        try LocationAccessor.write(try data_page.getDataMut(), .{
+            .page_id = plain_pid,
+            .slot_id = 0,
+        });
+    }
+
+    try std.testing.expectError(error.InvalidHeaderSize, map.remove(data_pid));
+}
+
 test "Fsm paged: a full slab page spills into a second chain page" {
     const allocator = std.testing.allocator;
     var sm = try NoneStorageManager.init(allocator);
@@ -370,6 +402,77 @@ test "Fsm paged: removing the head page advances the class root to next" {
     // root advances to the surviving tail page; its entries still findable
     try std.testing.expectEqual(@as(?u32, sp.page1), try sm.getSizeClassRoot(0));
     try std.testing.expect((try map.find(100)) != null);
+}
+
+test "Fsm paged: removing a middle slab reconnects its neighbors" {
+    const allocator = std.testing.allocator;
+    var sm = try NoneStorageManager.init(allocator);
+    defer sm.deinit();
+    var device = try Device.init(allocator, 256);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 128);
+    defer cache.deinit();
+
+    var model = Model.init(&cache, &sm, SizePolicy{}, .{});
+    var map = Map.init(&model);
+    defer map.deinit();
+
+    var pids: [512]u32 = undefined;
+    var len: usize = 0;
+    var tail: ?u32 = null;
+    var middle: ?u32 = null;
+    var head: ?u32 = null;
+    while (head == null) {
+        const pid = try makeDataPage(&cache);
+        pids[len] = pid;
+        len += 1;
+        try map.add(pid, 100);
+
+        const root = (try sm.getSizeClassRoot(0)).?;
+        if (tail == null) {
+            tail = root;
+        } else if (root != tail.?) {
+            if (middle == null) {
+                middle = root;
+            } else if (root != middle.?) {
+                head = root;
+            }
+        }
+    }
+
+    const head_id = head.?;
+    const middle_id = middle.?;
+    const tail_id = tail.?;
+
+    for (pids[0..len]) |pid| {
+        var data_page = try cache.fetch(pid);
+        defer data_page.deinit();
+        const location = (try LocationAccessor.read(try data_page.getData())).?;
+        if (location.page_id == middle_id) {
+            try map.remove(pid);
+        }
+    }
+
+    try std.testing.expect(sm.wasDestroyed(middle_id));
+    try std.testing.expect(!sm.wasDestroyed(head_id));
+    try std.testing.expect(!sm.wasDestroyed(tail_id));
+    try std.testing.expectEqual(@as(?u32, head_id), try sm.getSizeClassRoot(0));
+
+    const ConstSlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, true).SlabPageView;
+    {
+        var page = try cache.fetch(head_id);
+        defer page.deinit();
+        const slab = ConstSlabView.init(try page.getData());
+        try std.testing.expectEqual(@as(?u32, tail_id), slab.getNext());
+        try std.testing.expect((slab.getPrev()) == null);
+    }
+    {
+        var page = try cache.fetch(tail_id);
+        defer page.deinit();
+        const slab = ConstSlabView.init(try page.getData());
+        try std.testing.expectEqual(@as(?u32, head_id), slab.getPrev());
+        try std.testing.expect((slab.getNext()) == null);
+    }
 }
 
 test "Fsm paged: find walks the chain to a non-root page" {

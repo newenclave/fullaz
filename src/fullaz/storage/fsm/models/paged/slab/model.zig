@@ -141,7 +141,8 @@ pub fn Paged(
         pub fn remove(self: *Self, pid: Pid) Error!void {
             const location = (try self.readLocation(pid)) orelse return Error.BadData;
             var ph = try self.fetchSlab(location.page_id);
-            defer ph.deinit();
+            var owns_page_handle = true;
+            defer if (owns_page_handle) ph.deinit();
             var v = View.init(try ph.getDataMut());
             const slot = (try v.get(@intCast(location.slot_id))) orelse return Error.BadData;
             if (slot.pid != pid) {
@@ -149,7 +150,17 @@ pub fn Paged(
             }
             try v.remove(slot.slot_id);
             if (try v.isEmpty()) {
-                try self.unlinkAndDestroy(&v, location.page_id);
+                var manager = self.initClassChainManager(v.sizeClass());
+                var chain = try self.initClassChain(&manager);
+                defer chain.deinit();
+
+                var chunk = PageChainHandle.Chunk.init(ph);
+                owns_page_handle = false;
+                chain.evictChunk(&chunk) catch |err| {
+                    chunk.deinit();
+                    return err;
+                };
+                try chain.destroyChunk(chunk);
             }
         }
 
@@ -162,6 +173,7 @@ pub fn Paged(
             var ph = try self.cache.fetch(pid);
             errdefer ph.deinit();
             const cv = ConstView.init(try ph.getData());
+            try cv.validateTyped();
             if (cv.pageHeader().kind.get() != self.settings.page_kind) {
                 return Error.InvalidId;
             }
@@ -199,30 +211,6 @@ pub fn Paged(
             errdefer created.chunk.deinit();
             try chain.insertFirst(&created.chunk);
             return created;
-        }
-
-        fn unlinkAndDestroy(self: *Self, v: *View, slab_pid: PidT) Error!void {
-            const c = v.sizeClass();
-            const prev = v.getPrev();
-            const next = v.getNext();
-            if (prev) |p| {
-                var pph = try self.fetchSlab(p);
-                defer pph.deinit();
-                var pv = View.init(try pph.getDataMut());
-                try pv.setNext(next);
-            }
-            if (next) |nx| {
-                var nph = try self.fetchSlab(nx);
-                defer nph.deinit();
-                var nv = View.init(try nph.getDataMut());
-                try nv.setPrev(prev);
-            }
-            if (try self.sm.getSizeClassRoot(c)) |root| {
-                if (root == slab_pid) {
-                    try self.sm.setSizeClassRoot(c, next);
-                }
-            }
-            try self.sm.destroyPage(slab_pid);
         }
 
         fn writeLocation(self: *Self, data_pid: PidT, location: LocationAccessorT.Location) Error!void {

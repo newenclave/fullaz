@@ -489,6 +489,8 @@ test "SlotChain: paged FSM stores its location in the effective header" {
     @memset(&value, 'x');
     const page_id = try hdl.append(&value);
     try std.testing.expectEqual(@as(?u32, page_id), try fsm_index.find(1));
+    try std.testing.expectEqual(@as(?u32, page_id), try storage.getFirst());
+    try std.testing.expectEqual(@as(?u32, page_id), try storage.getLast());
     {
         var page = try cache.fetch(page_id);
         defer page.deinit();
@@ -504,6 +506,8 @@ test "SlotChain: paged FSM stores its location in the effective header" {
 
     try std.testing.expectEqual(@as(usize, 0), try hdl.size());
     try std.testing.expectEqual(@as(?u32, page_id), try fsm_index.find(700));
+    try std.testing.expectEqual(@as(?u32, page_id), try storage.getFirst());
+    try std.testing.expectEqual(@as(?u32, page_id), try storage.getLast());
     {
         var page = try cache.fetch(page_id);
         defer page.deinit();

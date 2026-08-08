@@ -30,6 +30,7 @@ pub fn View(
     const Slot = Fsm.Slot;
 
     const ErrorSet = ConstSlotsDirType.Error ||
+        HeaderPageViewT.Error ||
         errors.OrderError ||
         errors.PageError ||
         errors.SlotsError;
@@ -76,6 +77,13 @@ pub fn View(
 
         pub fn pageHeader(self: *const Self) *const PageViewType.PageHeader {
             return self.page_chunk.header();
+        }
+
+        pub fn validateTyped(self: *const Self) Error!void {
+            try self.page_chunk.pageView().validateTyped();
+            if (self.page_chunk.subheader().len != @sizeOf(SubheaderType)) {
+                return Error.InconsistentLayout;
+            }
         }
 
         pub fn formatPage(
