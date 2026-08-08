@@ -47,7 +47,7 @@ const el = {
   pageDetail: document.getElementById("page-detail"), mapStats: document.getElementById("map-stats"),
 };
 let wasm, ex, currentPath = "/", selected = null, pages = [], ownership = new Map(), selectedPage = null;
-const demoDirectories = ["/docs", "/docs/guides", "/docs/design", "/projects", "/projects/nebula", "/notes", "/archive"];
+const baseDemoDirectories = ["/docs", "/docs/guides", "/docs/design", "/projects", "/projects/nebula", "/notes", "/archive"];
 const demoFiles = {
   "/README.txt": "Welcome to the fsx demo image. Explore the directories, then edit a file in the browser demo.",
   "/docs/welcome.txt": "Documentation lives in a paged B+ tree. Each directory entry is stored in a leaf page.",
@@ -56,6 +56,7 @@ const demoFiles = {
   "/projects/nebula/ideas.txt": "Nebula project notes:\n- build a star catalog\n- preserve page locality\n- make the inspector useful",
   "/notes/today.txt": "Try creating a directory, adding a file, and replacing this text from the editor.",
   "/archive/README.txt": "This directory is intentionally quiet. Delete it after removing this file to exercise reclamation.",
+  "/this/is/a/very/long/long/path/with space/and/it/shows/that/paths/are/logically/infinite/and-then-it-keeps-going-through-even-more-directory-levels/where-each-component-is-longer-than-a-normal-project-name/to-make-the-tree-view-scroll-far-beyond-its-usual-width/and-exercise-path-handling-without-any-shortcuts/until-reading-the-full-location-becomes-slightly-ridiculous/while-the-file-system-still-treats-it-as-an-ordinary-file/nested-inside-another-clearly-and-deliberately-named-folder/with-enough-characters-to-be-noticeable-in-the-demo/so-the-browser-version-matches-the-native-image-perfectly/eventually-arriving-at-the-final-destination/the-file-at-the-end-of-this-extraordinarily-long-example.txt": "File content at the end of the extraordinarily long path",
 };
 
 function setStatus(message, bad = false) { el.status.textContent = message; el.status.style.color = bad ? "#fb7185" : ""; }
@@ -72,6 +73,9 @@ function bytesCall(name, path, content) {
 }
 function join(base, name) { return base === "/" ? "/" + name : base + "/" + name; }
 function parent(path) { if (path === "/") return "/"; const i = path.lastIndexOf("/"); return i <= 0 ? "/" : path.slice(0, i); }
+const demoDirectories = [...new Set([...baseDemoDirectories, ...Object.keys(demoFiles).flatMap(path => {
+  const directories = []; for (let directory = parent(path); directory !== "/"; directory = parent(directory)) directories.push(directory); return directories;
+})])].sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
 
 const db = new Promise((resolve, reject) => { const req = indexedDB.open("fullaz-fsx", 1); req.onupgradeneeded = () => req.result.createObjectStore("images"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
 async function dbGet() { const store = (await db).transaction("images", "readonly").objectStore("images"); return new Promise((resolve, reject) => { const req = store.get("default"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); }); }

@@ -27,6 +27,7 @@ FILES = {
     "/projects/nebula/ideas.txt": "Nebula project notes:\n- build a star catalog\n- preserve page locality\n- make the inspector useful",
     "/notes/today.txt": "Try creating a directory, adding a file, and replacing this text from the editor.",
     "/archive/README.txt": "This directory is intentionally quiet. Delete it after removing this file to exercise reclamation.",
+    "/this/is/a/very/long/long/path/with space/and/it/shows/that/paths/are/logically/infinite/and-then-it-keeps-going-through-even-more-directory-levels/where-each-component-is-longer-than-a-normal-project-name/to-make-the-tree-view-scroll-far-beyond-its-usual-width/and-exercise-path-handling-without-any-shortcuts/until-reading-the-full-location-becomes-slightly-ridiculous/while-the-file-system-still-treats-it-as-an-ordinary-file/nested-inside-another-clearly-and-deliberately-named-folder/with-enough-characters-to-be-noticeable-in-the-demo/so-the-browser-version-matches-the-native-image-perfectly/eventually-arriving-at-the-final-destination/the-file-at-the-end-of-this-extraordinarily-long-example.txt": "File content at the end of the extraordinarily long path",
 }
 
 
@@ -55,7 +56,12 @@ def main() -> int:
         args.image.with_name(args.image.name + ".wal").unlink(missing_ok=True)
     args.image.parent.mkdir(parents=True, exist_ok=True)
 
-    first, *remaining = DIRECTORIES
+    directories = set(DIRECTORIES)
+    for path in FILES:
+        parts = path.strip("/").split("/")[:-1]
+        for depth in range(1, len(parts) + 1):
+            directories.add("/" + "/".join(parts[:depth]))
+    first, *remaining = sorted(directories, key=lambda path: (path.count("/"), path))
     run(args.fsx, args.image, "mkdir", first, format_image=True)
     for directory in remaining:
         run(args.fsx, args.image, "mkdir", directory)
