@@ -127,6 +127,114 @@ test "FileBlock: non-zero start position maps block zero after the prefix" {
     }
 }
 
+test "FileBlock: truncate preserves the prefix and shrinks to the region boundary" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_start_truncate.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    const Dev = FileBlock(u32);
+    const block_size = 16;
+    const start_position = 21;
+    var dev = try Dev.createWithOptions(io, path, block_size, .{ .start_position = start_position });
+    defer dev.deinit();
+
+    var prefix: [start_position]u8 = .{0xEE} ** start_position;
+    try dev.file.writePositionalAll(io, &prefix, 0);
+    for (0..3) |_| {
+        _ = try dev.appendBlock();
+    }
+    var block0: [block_size]u8 = .{0xA0} ** block_size;
+    var block2: [block_size]u8 = .{0xC2} ** block_size;
+    try dev.writeBlock(0, &block0);
+    try dev.writeBlock(2, &block2);
+
+    try dev.truncateBlocks(1);
+    try std.testing.expectEqual(@as(usize, 2), dev.blocksCount());
+    try std.testing.expectEqual(@as(u64, start_position + 2 * block_size), try dev.file.length(io));
+    var retained: [start_position + 2 * block_size]u8 = undefined;
+    _ = try dev.file.readPositionalAll(io, &retained, 0);
+    try std.testing.expectEqualSlices(u8, &prefix, retained[0..start_position]);
+    try std.testing.expectEqualSlices(u8, &block0, retained[start_position .. start_position + block_size]);
+
+    try dev.truncateBlocks(2);
+    try std.testing.expectEqual(@as(usize, 0), dev.blocksCount());
+    try std.testing.expectEqual(@as(u64, start_position), try dev.file.length(io));
+    var remaining_prefix: [start_position]u8 = undefined;
+    _ = try dev.file.readPositionalAll(io, &remaining_prefix, 0);
+    try std.testing.expectEqualSlices(u8, &prefix, &remaining_prefix);
+}
+
+test "FileBlock: truncating lazy blocks does not change the prefix" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_start_lazy_truncate.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    const Dev = FileBlock(u32);
+    const start_position = 13;
+    var dev = try Dev.createWithOptions(io, path, 16, .{ .start_position = start_position });
+    defer dev.deinit();
+
+    var prefix: [start_position]u8 = .{0xD3} ** start_position;
+    try dev.file.writePositionalAll(io, &prefix, 0);
+    for (0..3) |_| {
+        _ = try dev.appendBlock();
+    }
+    try dev.truncateBlocks(3);
+
+    try std.testing.expectEqual(@as(u64, start_position), try dev.file.length(io));
+    var actual_prefix: [start_position]u8 = undefined;
+    _ = try dev.file.readPositionalAll(io, &actual_prefix, 0);
+    try std.testing.expectEqualSlices(u8, &prefix, &actual_prefix);
+}
+
+test "FileBlock: open with start position rejects an invalid region layout" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_start_invalid_layout.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    const Dev = FileBlock(u32);
+    {
+        const file = try std.Io.Dir.cwd().createFile(io, path, .{ .read = true, .truncate = true });
+        defer file.close(io);
+        try file.setLength(io, 20);
+    }
+    try std.testing.expectError(Dev.Error.BadData, Dev.openWithOptions(io, path, 16, .{ .start_position = 21 }));
+
+    {
+        const file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
+        defer file.close(io);
+        try file.setLength(io, 22);
+    }
+    try std.testing.expectError(Dev.Error.BadData, Dev.openWithOptions(io, path, 16, .{ .start_position = 21 }));
+}
+
+test "FileBlock: zero block size leaves an existing file unchanged" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_zero_block_size.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    const Dev = FileBlock(u32);
+    {
+        const file = try std.Io.Dir.cwd().createFile(io, path, .{ .read = true, .truncate = true });
+        defer file.close(io);
+        var marker: [3]u8 = .{ 0xAB, 0xCD, 0xEF };
+        try file.writePositionalAll(io, &marker, 0);
+    }
+
+    try std.testing.expectError(Dev.Error.BadData, Dev.createWithOptions(io, path, 0, .{ .start_position = 2 }));
+    try std.testing.expectError(Dev.Error.BadData, Dev.openWithOptions(io, path, 0, .{}));
+
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_only });
+    defer file.close(io);
+    var marker: [3]u8 = undefined;
+    _ = try file.readPositionalAll(io, &marker, 0);
+    try std.testing.expectEqualSlices(u8, &.{ 0xAB, 0xCD, 0xEF }, &marker);
+}
+
 test "FileBlock: PageCache round-trips a page to disk" {
     const io = std.testing.io;
     const path = ".zig-cache/fb_pagecache.img";
@@ -158,6 +266,49 @@ test "FileBlock: PageCache round-trips a page to disk" {
         defer ph.deinit();
         const data = try ph.getData();
         try std.testing.expectEqualSlices(u8, "hello", data[0..5]);
+    }
+}
+
+test "FileBlock: PageCache preserves a non-zero device prefix" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_pagecache_start_position.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    const Dev = FileBlock(u32);
+    const PageCache = PageCacheT(Dev);
+    const block_size = 64;
+    const start_position = 13;
+    const options: Dev.Options = .{ .start_position = start_position };
+    var prefix: [start_position]u8 = .{0xD3} ** start_position;
+
+    {
+        var dev = try Dev.createWithOptions(io, path, block_size, options);
+        defer dev.deinit();
+        try dev.file.writePositionalAll(io, &prefix, 0);
+
+        var cache = try PageCache.init(&dev, std.testing.allocator, 2);
+        defer cache.deinit();
+        var page = try cache.create();
+        defer page.deinit();
+        try std.testing.expectEqual(@as(u32, 0), try page.pid());
+        @memcpy((try page.getDataMut())[0..5], "hello");
+        try cache.flushAll();
+
+        var raw: [start_position + block_size]u8 = undefined;
+        _ = try dev.file.readPositionalAll(io, &raw, 0);
+        try std.testing.expectEqualSlices(u8, &prefix, raw[0..start_position]);
+        try std.testing.expectEqualSlices(u8, "hello", raw[start_position .. start_position + 5]);
+    }
+
+    {
+        var dev = try Dev.openWithOptions(io, path, block_size, options);
+        defer dev.deinit();
+        var cache = try PageCache.init(&dev, std.testing.allocator, 2);
+        defer cache.deinit();
+        var page = try cache.fetch(0);
+        defer page.deinit();
+        try std.testing.expectEqualSlices(u8, "hello", (try page.getData())[0..5]);
     }
 }
 

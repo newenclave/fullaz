@@ -6,6 +6,10 @@ const dev = @import("fullaz").device;
 const assertIsStorageManager = @import("fullaz").bpt.models.interfaces.assertIsStorageManager;
 const printer = @import("test_printer");
 
+fn prepFile(io: std.Io, path: []const u8) void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+}
+
 fn getRandomSeed() !u64 {
     const io = std.testing.io;
     var seed: u64 = undefined;
@@ -1808,6 +1812,62 @@ test "BtpTree: Create and insert" {
     val.?.deinit();
     const available_after = cache.availableFrames();
     try std.testing.expectEqual(available_before, available_after);
+}
+
+test "Bpt paged: FileBlock prefix persists across reopen" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const path = ".zig-cache/bpt_file_prefix.img";
+    prepFile(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    const Device = dev.FileBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+    const Tree = bpt.Bpt(BptModel);
+    const block_size = 4096;
+    const start_position = 13;
+    const options: Device.Options = .{ .start_position = start_position };
+    var prefix: [start_position]u8 = .{0xD3} ** start_position;
+    var root: ?u32 = null;
+
+    {
+        var device = try Device.createWithOptions(io, path, block_size, options);
+        defer device.deinit();
+        try device.file.writePositionalAll(io, &prefix, 0);
+
+        var cache = try PageCache.init(&device, allocator, 8);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+        var model = BptModel.init(&cache, &store_mgr, .{}, {});
+        var tree = Tree.init(&model, .neighbor_share);
+        defer tree.deinit();
+
+        try std.testing.expect(try tree.insert("alpha", "first value"));
+        try std.testing.expect(try tree.insert("beta", "second value"));
+        root = store_mgr.getRoot();
+        try std.testing.expect(root != null);
+        try cache.flushAll();
+
+        var actual_prefix: [start_position]u8 = undefined;
+        _ = try device.file.readPositionalAll(io, &actual_prefix, 0);
+        try std.testing.expectEqualSlices(u8, &prefix, &actual_prefix);
+    }
+
+    {
+        var device = try Device.openWithOptions(io, path, block_size, options);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 8);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{ .root_block_id = root };
+        var model = BptModel.init(&cache, &store_mgr, .{}, {});
+        var tree = Tree.init(&model, .neighbor_share);
+        defer tree.deinit();
+
+        const entry = (try tree.find("beta")).?;
+        defer entry.deinit();
+        try std.testing.expectEqualStrings("second value", (try entry.get()).?.value);
+    }
 }
 
 fn format(allocator: std.mem.Allocator, comptime fmt: []const u8, options: anytype) ![:0]u8 {

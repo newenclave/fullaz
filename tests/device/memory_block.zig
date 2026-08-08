@@ -1,5 +1,7 @@
 const std = @import("std");
-const device = @import("fullaz").device;
+const fullaz = @import("fullaz");
+const device = fullaz.device;
+const PageCacheT = fullaz.storage.page_cache.PageCache;
 
 test "DevMemBlock: Allocate and use device memory block" {
     const MemoryBlock = device.MemoryBlock;
@@ -146,4 +148,85 @@ test "DevMemBlock: truncate blocks reduces count and invalidates removed blocks"
     // Writing to block 3 and 4 should fail
     try std.testing.expectError(Error.InvalidId, mem_block.writeBlock(3, &buf));
     try std.testing.expectError(Error.InvalidId, mem_block.writeBlock(4, &buf));
+}
+
+test "DevMemBlock: non-zero start position isolates the prefix" {
+    const MemoryBlock = device.MemoryBlock(u32);
+    comptime device.interfaces.assertBlockDevice(MemoryBlock);
+
+    const block_size = 16;
+    const start_position = 13;
+    var mem_block = try MemoryBlock.initWithOptions(std.testing.allocator, block_size, .{
+        .start_position = start_position,
+    });
+    defer mem_block.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), mem_block.blocksCount());
+    try std.testing.expectEqual(@as(usize, start_position), mem_block.storage.items.len);
+    @memset(mem_block.storage.items, 0xD3);
+
+    const block0 = try mem_block.appendBlock();
+    const block1 = try mem_block.appendBlock();
+    try std.testing.expectEqual(@as(u32, 0), block0);
+    try std.testing.expectEqual(@as(u32, 1), block1);
+    try std.testing.expect(mem_block.isValidId(block0));
+    try std.testing.expect(mem_block.isValidId(block1));
+    try std.testing.expectEqual(@as(usize, 2), mem_block.blocksCount());
+
+    var block0_data: [block_size]u8 = .{0xA0} ** block_size;
+    var block1_data: [block_size]u8 = .{0xB1} ** block_size;
+    try mem_block.writeBlock(block0, &block0_data);
+    try mem_block.writeBlock(block1, &block1_data);
+
+    try std.testing.expectEqual(@as(usize, start_position + 2 * block_size), mem_block.storage.items.len);
+    try std.testing.expectEqualSlices(u8, &(.{0xD3} ** start_position), mem_block.storage.items[0..start_position]);
+    try std.testing.expectEqualSlices(u8, &block0_data, mem_block.storage.items[start_position .. start_position + block_size]);
+    try std.testing.expectEqualSlices(u8, &block1_data, mem_block.storage.items[start_position + block_size ..]);
+
+    var output: [block_size]u8 = undefined;
+    try mem_block.readBlock(block0, &output);
+    try std.testing.expectEqualSlices(u8, &block0_data, &output);
+    try mem_block.readBlock(block1, &output);
+    try std.testing.expectEqualSlices(u8, &block1_data, &output);
+
+    try mem_block.truncateBlocks(1);
+    try std.testing.expectEqual(@as(usize, 1), mem_block.blocksCount());
+    try std.testing.expectEqual(@as(usize, start_position + block_size), mem_block.storage.items.len);
+    try std.testing.expectError(MemoryBlock.Error.InvalidId, mem_block.readBlock(block1, &output));
+    try std.testing.expectEqualSlices(u8, &(.{0xD3} ** start_position), mem_block.storage.items[0..start_position]);
+
+    try mem_block.truncateBlocks(1);
+    try std.testing.expectEqual(@as(usize, 0), mem_block.blocksCount());
+    try std.testing.expectEqual(@as(usize, start_position), mem_block.storage.items.len);
+    try std.testing.expectEqualSlices(u8, &(.{0xD3} ** start_position), mem_block.storage.items);
+}
+
+test "DevMemBlock: zero block size is rejected" {
+    const MemoryBlock = device.MemoryBlock(u32);
+    try std.testing.expectError(MemoryBlock.Error.BadData, MemoryBlock.initWithOptions(std.testing.allocator, 0, .{
+        .start_position = 13,
+    }));
+}
+
+test "DevMemBlock: PageCache preserves a non-zero device prefix" {
+    const MemoryBlock = device.MemoryBlock(u32);
+    const PageCache = PageCacheT(MemoryBlock);
+    const block_size = 64;
+    const start_position = 13;
+    var mem_block = try MemoryBlock.initWithOptions(std.testing.allocator, block_size, .{
+        .start_position = start_position,
+    });
+    defer mem_block.deinit();
+    @memset(mem_block.storage.items, 0xD3);
+
+    var cache = try PageCache.init(&mem_block, std.testing.allocator, 2);
+    defer cache.deinit();
+    var page = try cache.create();
+    defer page.deinit();
+    try std.testing.expectEqual(@as(u32, 0), try page.pid());
+    @memcpy((try page.getDataMut())[0..5], "hello");
+    try cache.flushAll();
+
+    try std.testing.expectEqualSlices(u8, &(.{0xD3} ** start_position), mem_block.storage.items[0..start_position]);
+    try std.testing.expectEqualSlices(u8, "hello", mem_block.storage.items[start_position .. start_position + 5]);
 }
