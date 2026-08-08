@@ -2,6 +2,7 @@ const std = @import("std");
 const errors = @import("../../../../../core/errors.zig");
 const assertLocationAccessor = @import("../../../location_accessor.zig").assertAccessor;
 const view_mod = @import("view.zig");
+const page_chain = @import("../../../../page_chain/page_chain.zig");
 
 pub const Settings = struct {
     page_kind: u16 = 1,
@@ -22,13 +23,43 @@ pub fn Paged(
     const View = view_mod.View(PidT, u16, SizeClassT, .little, false).SlabPageView;
     const ConstView = view_mod.View(PidT, u16, SizeClassT, .little, true).SlabPageView;
 
+    const ClassChainManagerImpl = struct {
+        const Self = @This();
+        pub const Size = u0;
+        pub const Error = SlabStorageManagerT.Error;
+
+        sm: *SlabStorageManagerT,
+        class: SizeClassT,
+
+        pub fn getFirst(self: *Self) SlabStorageManagerT.Error!?PidT {
+            return self.sm.getSizeClassRoot(self.class);
+        }
+
+        pub fn setFirst(self: *Self, pid: ?PidT) SlabStorageManagerT.Error!void {
+            return self.sm.setSizeClassRoot(self.class, pid);
+        }
+
+        pub fn destroyPage(self: *Self, pid: PidT) SlabStorageManagerT.Error!void {
+            return self.sm.destroyPage(pid);
+        }
+    };
+
     return struct {
         const Self = @This();
 
+        const ClassChainManager = ClassChainManagerImpl;
+
+        const PageChainHandle = page_chain.BidirectionalHandleImpl(
+            PageCacheType,
+            ClassChainManager,
+            void,
+            View.SubheaderType,
+            .little,
+        );
+
         pub const Pid = PidT;
         pub const Size = u16;
-        pub const Error = PageCacheType.Error ||
-            SlabStorageManagerT.Error ||
+        pub const Error = PageChainHandle.Error ||
             LocationAccessorT.Error ||
             View.Error ||
             errors.PageError;
@@ -51,20 +82,41 @@ pub fn Paged(
             self.* = undefined;
         }
 
+        fn initClassChainManager(self: *Self, class: SizeClassT) ClassChainManager {
+            return .{
+                .sm = self.sm,
+                .class = class,
+            };
+        }
+
+        fn initClassChain(self: *Self, manager: *ClassChainManager) PageChainHandle.Error!PageChainHandle {
+            return PageChainHandle.init(self.cache, manager, .{
+                .chunk_page_kind = self.settings.page_kind,
+            });
+        }
+
         pub fn find(self: *Self, size: Size) Error!?Pid {
             const c0 = try self.policy.getSizeClass(size);
             const n = self.policy.count();
             var c: SizeClassT = c0;
             while (c < n) : (c += 1) {
-                var cur: ?Pid = try self.sm.getSizeClassRoot(c);
-                while (cur) |cur_pid| {
-                    var ph = try self.fetchSlab(cur_pid);
-                    defer ph.deinit();
-                    const cv = ConstView.init(try ph.getData());
+                var manager = self.initClassChainManager(c);
+                var chain = try self.initClassChain(&manager);
+                defer chain.deinit();
+                var itr = try chain.iterator();
+                defer itr.deinit();
+
+                while ((try itr.get()) != null) {
+                    var slab = (try itr.chunk()).?;
+                    defer slab.deinit();
+                    const cv = ConstView.init(try slab.getPage());
+                    if (cv.sizeClass() != c) {
+                        return Error.BadData;
+                    }
                     if (try cv.findBySize(size)) |si| {
                         return si.pid;
                     }
-                    cur = cv.getNext();
+                    try itr.next();
                 }
             }
             return null;

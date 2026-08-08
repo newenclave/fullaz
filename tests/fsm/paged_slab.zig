@@ -99,7 +99,10 @@ test "Fsm paged: slab pages store links in the page-chain header" {
 
     try std.testing.expectEqual(@as(u8, 26), slab.pageHeader().header_size.get());
     try std.testing.expectEqual(@as(u16, 2), slab.pageHeader().subheader_size.get());
-    try std.testing.expectEqual(@as(usize, 28), @as(usize, slab.pageHeader().header_size.get()) + @sizeOf(SlabView.SubheaderType));
+    try std.testing.expectEqual(
+        @as(usize, 28),
+        @as(usize, slab.pageHeader().header_size.get()) + @sizeOf(SlabView.SubheaderType),
+    );
     try std.testing.expectEqual(@as(?u32, null), slab.getPrev());
     try std.testing.expectEqual(@as(?u32, null), slab.getNext());
     try std.testing.expectEqual(@as(u16, 5), slab.sizeClass());
@@ -227,6 +230,34 @@ test "Fsm paged: remove rejects a location that points to another data page slot
     }
 
     try std.testing.expectError(Model.Error.BadData, map.remove(first));
+}
+
+test "Fsm paged: find rejects a class root with another persisted class" {
+    const allocator = std.testing.allocator;
+    var sm = try NoneStorageManager.init(allocator);
+    defer sm.deinit();
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+
+    var model = Model.init(&cache, &sm, SizePolicy{}, .{});
+    var map = Map.init(&model);
+    defer map.deinit();
+
+    const data_pid = try makeDataPage(&cache);
+    try map.add(data_pid, 100);
+    const root = (try sm.getSizeClassRoot(0)).?;
+
+    {
+        const SlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, false).SlabPageView;
+        var page = try cache.fetch(root);
+        defer page.deinit();
+        var slab = SlabView.init(try page.getDataMut());
+        slab.subheaderMut().size_class.set(1);
+    }
+
+    try std.testing.expectError(Model.Error.BadData, map.find(100));
 }
 
 test "Fsm paged: a full slab page spills into a second chain page" {
