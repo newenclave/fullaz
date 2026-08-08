@@ -79,6 +79,54 @@ test "FileBlock: data persists across deinit + reopen" {
     }
 }
 
+test "FileBlock: non-zero start position maps block zero after the prefix" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_start_position.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    const Dev = FileBlock(u32);
+    const block_size = 16;
+    const start_position = 21;
+    const options: Dev.Options = .{ .start_position = start_position };
+    var block0_data: [block_size]u8 = .{0xA0} ** block_size;
+    var block1_data: [block_size]u8 = .{0xB1} ** block_size;
+
+    {
+        var dev = try Dev.createWithOptions(io, path, block_size, options);
+        defer dev.deinit();
+
+        try std.testing.expectEqual(@as(u64, start_position), try dev.file.length(io));
+
+        var prefix: [start_position]u8 = .{0xEE} ** start_position;
+        try dev.file.writePositionalAll(io, &prefix, 0);
+
+        try std.testing.expectEqual(@as(u32, 0), try dev.appendBlock());
+        try std.testing.expectEqual(@as(u32, 1), try dev.appendBlock());
+        try dev.writeBlock(0, &block0_data);
+        try dev.writeBlock(1, &block1_data);
+
+        try std.testing.expectEqual(@as(u64, start_position + 2 * block_size), try dev.file.length(io));
+        var raw: [start_position + 2 * block_size]u8 = undefined;
+        _ = try dev.file.readPositionalAll(io, &raw, 0);
+        try std.testing.expectEqualSlices(u8, &prefix, raw[0..start_position]);
+        try std.testing.expectEqualSlices(u8, &block0_data, raw[start_position .. start_position + block_size]);
+        try std.testing.expectEqualSlices(u8, &block1_data, raw[start_position + block_size ..]);
+    }
+
+    {
+        var dev = try Dev.openWithOptions(io, path, block_size, options);
+        defer dev.deinit();
+
+        try std.testing.expectEqual(@as(usize, 2), dev.blocksCount());
+        var output: [block_size]u8 = undefined;
+        try dev.readBlock(0, &output);
+        try std.testing.expectEqualSlices(u8, &block0_data, &output);
+        try dev.readBlock(1, &output);
+        try std.testing.expectEqualSlices(u8, &block1_data, &output);
+    }
+}
+
 test "FileBlock: PageCache round-trips a page to disk" {
     const io = std.testing.io;
     const path = ".zig-cache/fb_pagecache.img";
