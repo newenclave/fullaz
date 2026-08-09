@@ -17,6 +17,7 @@ pub const Settings = struct {
     max_leaf_entries: usize,
     max_value_size: usize,
     max_tree_depth: usize = 32,
+    node_layout_id: u32,
     node_page_kind: u16 = 0,
     entry_page_kind: u16 = 1,
 };
@@ -24,6 +25,7 @@ pub const Settings = struct {
 pub fn PagedModel(
     comptime PageCacheType: type,
     comptime StorageManager: type,
+    comptime FsmT: type,
     comptime CoordT: type,
     comptime dims: usize,
     comptime Endian: std.builtin.Endian,
@@ -31,6 +33,7 @@ pub fn PagedModel(
     return PagedModelImpl(
         PageCacheType,
         StorageManager,
+        FsmT,
         CoordT,
         dims,
         traits.PagedEmpty,
@@ -41,6 +44,7 @@ pub fn PagedModel(
 pub fn PagedModelImpl(
     comptime PageCacheType: type,
     comptime StorageManager: type,
+    comptime FsmT: type,
     comptime CoordT: type,
     comptime dims: usize,
     comptime TraitT: fn (comptime type, comptime usize, comptime type) type,
@@ -53,16 +57,34 @@ pub fn PagedModelImpl(
     const PageHandle = PageCacheType.Handle;
     const BoxT = geometry.BoundingBox(CoordT, dims);
     const OrthtreePage = orthtree_page.Orthtree(Pid, u16, CoordT, dims, Endian);
+    const NativeNodeId = OrthtreePage.NodeId;
     const EntrySlotHeader = OrthtreePage.EntrySlotHeader;
     const entry_slot_header_size = @sizeOf(EntrySlotHeader);
-    const MutableView = view_mod.View(Pid, u16, CoordT, dims, TraitStorage, Endian, false).Node;
-    const ReadView = view_mod.View(Pid, u16, CoordT, dims, TraitStorage, Endian, true).Node;
+    const MutablePackedView = view_mod.PackedView(Pid, u16, CoordT, dims, TraitStorage, Endian, false);
+    const ReadPackedView = view_mod.PackedView(Pid, u16, CoordT, dims, TraitStorage, Endian, true);
+    const MutableNodePage = MutablePackedView.NodePage;
+    const ReadNodePage = ReadPackedView.NodePage;
+    const MutableNodeSlot = MutablePackedView.NodeSlot;
+    const ReadNodeSlot = ReadPackedView.NodeSlot;
 
     comptime {
         contracts.page_cache.requiresPageCache(PageCacheType);
-        orthtree_interfaces.requiresLegacyPagedStorageManager(StorageManager);
+        orthtree_interfaces.requiresPagedStorageManager(StorageManager, NativeNodeId);
+        requiresTypeDeclaration(FsmT, "Pid");
+        requiresTypeDeclaration(FsmT, "Size");
+        requiresErrorDeclaration(FsmT, "Error");
         if (StorageManager.PageId != Pid) {
             @compileError("Orthtree storage manager PageId must match page cache Pid");
+        }
+        if (FsmT.Pid != Pid) {
+            @compileError("Orthtree FSM Pid must match page cache Pid");
+        }
+        requiresFnSignature(FsmT, "find", fn (*FsmT, FsmT.Size) FsmT.Error!?FsmT.Pid);
+        requiresFnSignature(FsmT, "add", fn (*FsmT, FsmT.Pid, FsmT.Size) FsmT.Error!void);
+        requiresFnSignature(FsmT, "update", fn (*FsmT, FsmT.Pid, FsmT.Size) FsmT.Error!void);
+        requiresFnSignature(FsmT, "remove", fn (*FsmT, FsmT.Pid) FsmT.Error!void);
+        if (std.math.cast(FsmT.Size, MutablePackedView.node_slot_size) == null) {
+            @compileError("Orthtree FSM Size cannot represent a node slot");
         }
 
         requiresTypeDeclaration(TraitPolicy, "Storage");
@@ -91,7 +113,8 @@ pub fn PagedModelImpl(
         errors.IteratorError ||
         PageCacheType.Error ||
         StorageManager.Error ||
-        MutableView.Error ||
+        FsmT.Error ||
+        MutableNodePage.Error ||
         TraitPolicy.Error ||
         error{ AlreadyInitialized, InvalidSettings, ValueTooLarge };
 
@@ -372,7 +395,7 @@ pub fn PagedModelImpl(
         const Self = @This();
 
         pub const Error = ErrorSet;
-        pub const Id = Pid;
+        pub const Id = NativeNodeId;
         pub const PageId = Pid;
         pub const Size = u32;
         pub const Box = BoxT;
@@ -381,16 +404,18 @@ pub fn PagedModelImpl(
         pub const EntriesMut = EntriesMutWrapperType(Self);
 
         handle: PageHandle,
-        self_id: Pid,
+        self_id: NativeNodeId,
         cache: *PageCacheType,
         storage_manager: *StorageManager,
+        fsm: *FsmT,
         settings: Settings,
 
         fn init(
             handle: PageHandle,
-            self_id: Pid,
+            self_id: NativeNodeId,
             cache: *PageCacheType,
             storage_manager: *StorageManager,
+            fsm: *FsmT,
             settings: Settings,
         ) Self {
             return .{
@@ -398,20 +423,27 @@ pub fn PagedModelImpl(
                 .self_id = self_id,
                 .cache = cache,
                 .storage_manager = storage_manager,
+                .fsm = fsm,
                 .settings = settings,
             };
         }
 
-        fn readView(self: *const Self) Error!ReadView {
-            return ReadView.init(try self.handle.getData());
+        fn readView(self: *const Self) Error!ReadNodeSlot {
+            const page = ReadNodePage.init(try self.handle.getData());
+            try page.validatePage(self.self_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
+            const slot = try page.slot(self.self_id.slot_id);
+            try slot.validate();
+            return slot;
         }
 
-        fn readViewUnchecked(self: *const Self) ReadView {
+        fn readViewUnchecked(self: *const Self) ReadNodeSlot {
             return self.readView() catch unreachable;
         }
 
-        fn mutableView(self: *Self) Error!MutableView {
-            return MutableView.init(try self.handle.getDataMut());
+        fn mutableView(self: *Self) Error!MutableNodeSlot {
+            var page = MutableNodePage.init(try self.handle.getDataMut());
+            try page.validatePage(self.self_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
+            return try page.slotMut(self.self_id.slot_id);
         }
 
         pub fn deinit(self: *Self) void {
@@ -434,21 +466,21 @@ pub fn PagedModelImpl(
             return self.readViewUnchecked().bounds();
         }
 
-        pub fn getChild(self: *const Self, index: usize) ?Pid {
+        pub fn getChild(self: *const Self, index: usize) ?NativeNodeId {
             return self.readViewUnchecked().getChild(index) catch unreachable;
         }
 
-        pub fn setChild(self: *Self, index: usize, child: Pid) Error!void {
+        pub fn setChild(self: *Self, index: usize, child: NativeNodeId) Error!void {
             var view = try self.mutableView();
             try view.setChild(index, child);
         }
 
-        pub fn getParent(self: *const Self) Error!?Pid {
+        pub fn getParent(self: *const Self) Error!?NativeNodeId {
             const view = try self.readView();
             return view.getParent();
         }
 
-        pub fn setParent(self: *Self, parent: ?Pid) Error!void {
+        pub fn setParent(self: *Self, parent: ?NativeNodeId) Error!void {
             var view = try self.mutableView();
             view.setParent(parent);
         }
@@ -548,62 +580,90 @@ pub fn PagedModelImpl(
 
         cache: *PageCacheType,
         storage_manager: *StorageManager,
+        fsm: *FsmT,
         settings: Settings,
         trait_template: TraitStorage,
 
         fn init(
             cache: *PageCacheType,
             storage_manager: *StorageManager,
+            fsm: *FsmT,
             settings: Settings,
             trait_template: TraitStorage,
         ) Self {
             return .{
                 .cache = cache,
                 .storage_manager = storage_manager,
+                .fsm = fsm,
                 .settings = settings,
                 .trait_template = trait_template,
             };
         }
 
-        pub fn getRoot(self: *const Self) ?Pid {
+        pub fn getRoot(self: *const Self) ?NativeNodeId {
             return self.storage_manager.getRoot();
         }
 
-        pub fn setRoot(self: *Self, root: ?Pid) Error!void {
+        pub fn setRoot(self: *Self, root: ?NativeNodeId) Error!void {
             try self.storage_manager.setRoot(root);
         }
 
+        fn fsmSize(_: *const Self, slots_count: usize) Error!FsmT.Size {
+            const bytes = std.math.mul(usize, slots_count, MutablePackedView.node_slot_size) catch return Error.BadData;
+            return std.math.cast(FsmT.Size, bytes) orelse Error.BadData;
+        }
+
         pub fn createNode(self: *Self, bounds: BoxT) Error!NodeImpl {
-            var handle = try self.cache.create();
+            const required_size = try self.fsmSize(1);
+            const found_page = try self.fsm.find(required_size);
+            var handle = if (found_page) |page_id|
+                try self.cache.fetch(page_id)
+            else
+                try self.cache.create();
             errdefer handle.deinit();
             const page_id = try handle.pid();
-            var view = MutableView.init(try handle.getDataMut());
-            view.formatPage(self.settings.node_page_kind, page_id, bounds, &self.trait_template);
+            var page = MutableNodePage.init(try handle.getDataMut());
+            const is_new = found_page == null;
+            if (is_new) {
+                try page.formatPage(self.settings.node_page_kind, page_id, self.settings.node_layout_id);
+            } else {
+                try page.validatePage(page_id, self.settings.node_page_kind, self.settings.node_layout_id);
+            }
+            const slot_id = try page.allocateSlot() orelse return Error.BadData;
+            var slot = try page.slotMut(slot_id);
+            slot.formatSlot(bounds, &self.trait_template);
+            const free_size = try self.fsmSize(try page.freeSlots());
+            if (is_new) {
+                try self.fsm.add(page_id, free_size);
+            } else {
+                try self.fsm.update(page_id, free_size);
+            }
             return NodeImpl.init(
                 try handle.take(),
-                page_id,
+                .{ .page_id = page_id, .slot_id = @intCast(slot_id) },
                 self.cache,
                 self.storage_manager,
+                self.fsm,
                 self.settings,
             );
         }
 
-        pub fn loadNode(self: *Self, page_id: Pid) Error!NodeImpl {
-            var handle = try self.cache.fetch(page_id);
+        pub fn loadNode(self: *Self, node_id: NativeNodeId) Error!NodeImpl {
+            var handle = try self.cache.fetch(node_id.page_id);
             errdefer handle.deinit();
-            const view = ReadView.init(try handle.getData());
-            if (view.header().kind.get() != self.settings.node_page_kind) {
-                return Error.BadType;
-            }
-            try view.validatePage(page_id);
-            if (!TraitPolicy.validate(view.trait())) {
+            const page = ReadNodePage.init(try handle.getData());
+            try page.validatePage(node_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
+            const slot = try page.slot(node_id.slot_id);
+            try slot.validate();
+            if (!TraitPolicy.validate(slot.trait())) {
                 return Error.BadData;
             }
             return NodeImpl.init(
                 try handle.take(),
-                page_id,
+                node_id,
                 self.cache,
                 self.storage_manager,
+                self.fsm,
                 self.settings,
             );
         }
@@ -618,7 +678,7 @@ pub fn PagedModelImpl(
 
         pub const Node = NodeImpl;
         pub const Entry = EntryImpl;
-        pub const NodeId = Pid;
+        pub const NodeId = NativeNodeId;
         pub const Accessor = AccessorImpl;
         pub const Box = BoxT;
         pub const ValueIn = Value;
@@ -629,19 +689,27 @@ pub fn PagedModelImpl(
 
         accessor: Accessor,
 
-        pub fn init(cache: *PageCacheType, storage_manager: *StorageManager, settings: Settings) Error!Self {
+        pub fn init(cache: *PageCacheType, storage_manager: *StorageManager, fsm: *FsmT, settings: Settings) Error!Self {
             var trait_template: Trait = undefined;
             TraitPolicy.format(&trait_template);
-            return Self.initWithTrait(cache, storage_manager, settings, trait_template);
+            return Self.initWithTrait(cache, storage_manager, fsm, settings, trait_template);
         }
 
         pub fn initWithTrait(
             cache: *PageCacheType,
             storage_manager: *StorageManager,
+            fsm: *FsmT,
             settings: Settings,
             trait_template: Trait,
         ) Error!Self {
             if (settings.node_page_kind == settings.entry_page_kind) {
+                return Error.InvalidSettings;
+            }
+            const minimum_node_page_size = @sizeOf(MutableNodePage.PageHeader) +
+                @sizeOf(OrthtreePage.NodePageSubheader) +
+                (2 * @sizeOf(u64)) +
+                MutablePackedView.node_slot_size;
+            if (cache.pageSize() < minimum_node_page_size) {
                 return Error.InvalidSettings;
             }
             if (settings.max_leaf_entries == 0) {
@@ -654,7 +722,7 @@ pub fn PagedModelImpl(
                 return Error.BadData;
             }
             return .{
-                .accessor = Accessor.init(cache, storage_manager, settings, trait_template),
+                .accessor = Accessor.init(cache, storage_manager, fsm, settings, trait_template),
             };
         }
 

@@ -6,34 +6,10 @@ const Cache = fullaz.storage.page_cache.PageCache(Device);
 const TreeImpl = fullaz.spatial.orthtree.tree.TreeImpl;
 const PackedInt = fullaz.core.packed_int.PackedInt;
 const model_interfaces = fullaz.spatial.orthtree.models.interfaces;
+const FsmModel = fullaz.storage.fsm.models.Memory(u32, u16);
+const Fsm = fullaz.storage.fsm.Fsm(FsmModel);
 
 const StorageManager = struct {
-    pub const PageId = u32;
-    pub const Error = error{};
-
-    root: ?PageId = null,
-    entries_count: usize = 0,
-
-    pub fn getRoot(self: *const @This()) ?PageId {
-        return self.root;
-    }
-
-    pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
-        self.root = root;
-    }
-
-    pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
-
-    pub fn getEntriesCount(self: *const @This()) Error!usize {
-        return self.entries_count;
-    }
-
-    pub fn setEntriesCount(self: *@This(), count: usize) Error!void {
-        self.entries_count = count;
-    }
-};
-
-const NodeStorageManager = struct {
     pub const PageId = u32;
     pub const NodeId = fullaz.spatial.orthtree.models.paged.NodeId(PageId, u16);
     pub const Error = error{};
@@ -61,7 +37,7 @@ const NodeStorageManager = struct {
 };
 
 test "OrthTree paged model: storage manager contract uses NodeId roots" {
-    comptime model_interfaces.requiresPagedStorageManager(NodeStorageManager, NodeStorageManager.NodeId);
+    comptime model_interfaces.requiresPagedStorageManager(StorageManager, StorageManager.NodeId);
 }
 
 fn CountTrait(comptime CoordT: type, comptime dims: usize, comptime ValueT: type) type {
@@ -106,7 +82,7 @@ fn CountTrait(comptime CoordT: type, comptime dims: usize, comptime ValueT: type
 }
 
 test "OrthTree paged model: structural nodes persist through accessor loads" {
-    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, i32, 2, .little);
+    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, Fsm, i32, 2, .little);
     const Box = Model.Box;
 
     var device = try Device.init(std.testing.allocator, 1024);
@@ -114,9 +90,14 @@ test "OrthTree paged model: structural nodes persist through accessor loads" {
     var cache = try Cache.init(&device, std.testing.allocator, 8);
     defer cache.deinit();
     var storage_manager = StorageManager{};
-    var model = try Model.init(&cache, &storage_manager, .{
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+    var model = try Model.init(&cache, &storage_manager, &fsm, .{
         .max_leaf_entries = 4,
         .max_value_size = 64,
+        .node_layout_id = 0x1001,
         .node_page_kind = 0x71,
         .entry_page_kind = 0x72,
     });
@@ -130,6 +111,9 @@ test "OrthTree paged model: structural nodes persist through accessor loads" {
 
     var child = try accessor.createNode(Box.create(.{ 0, 0 }, .{ 5, 5 }));
     defer accessor.deinitNode(&child);
+    try std.testing.expectEqual(root.id().page_id, child.id().page_id);
+    try std.testing.expect(root.id().slot_id != child.id().slot_id);
+    try std.testing.expectEqual(@as(?u32, root.id().page_id), try fsm.find(1));
     try child.setParent(root_id);
     try child.setLevel(1);
     try root.beforeSplit();
@@ -144,38 +128,44 @@ test "OrthTree paged model: structural nodes persist through accessor loads" {
     var loaded_root = try accessor.loadNode(root_id);
     defer accessor.deinitNode(&loaded_root);
     try std.testing.expect(!loaded_root.isLeaf());
-    try std.testing.expectEqual(@as(?u32, child.id()), loaded_root.getChild(0));
+    try std.testing.expectEqualDeep(child.id(), loaded_root.getChild(0).?);
     try std.testing.expect(std.meta.eql(Box.create(.{ 0, 0 }, .{ 10, 10 }), loaded_root.bounds()));
 
     var loaded_child = try accessor.loadNode(child.id());
     defer accessor.deinitNode(&loaded_child);
-    try std.testing.expectEqual(@as(?u32, root_id), try loaded_child.getParent());
+    try std.testing.expectEqualDeep(root_id, (try loaded_child.getParent()).?);
     try std.testing.expectEqual(@as(usize, 1), loaded_child.getLevel());
 }
 
 test "OrthTree paged model: rejects incompatible runtime settings" {
-    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, i32, 2, .little);
+    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, Fsm, i32, 2, .little);
 
     var device = try Device.init(std.testing.allocator, 1024);
     defer device.deinit();
     var cache = try Cache.init(&device, std.testing.allocator, 8);
     defer cache.deinit();
     var storage_manager = StorageManager{};
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
 
-    try std.testing.expectError(error.InvalidSettings, Model.init(&cache, &storage_manager, .{
+    try std.testing.expectError(error.InvalidSettings, Model.init(&cache, &storage_manager, &fsm, .{
         .max_leaf_entries = 0,
         .max_value_size = 64,
+        .node_layout_id = 0x1001,
     }));
-    try std.testing.expectError(error.InvalidSettings, Model.init(&cache, &storage_manager, .{
+    try std.testing.expectError(error.InvalidSettings, Model.init(&cache, &storage_manager, &fsm, .{
         .max_leaf_entries = 4,
         .max_value_size = 64,
+        .node_layout_id = 0x1001,
         .node_page_kind = 7,
         .entry_page_kind = 7,
     }));
 }
 
 test "OrthTree paged model: inserts, queries, and removes byte values" {
-    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, i32, 2, .little);
+    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, Fsm, i32, 2, .little);
     const Tree = TreeImpl(Model);
     const Box = Model.Box;
     const Collector = struct {
@@ -202,9 +192,14 @@ test "OrthTree paged model: inserts, queries, and removes byte values" {
     var cache = try Cache.init(&device, std.testing.allocator, 8);
     defer cache.deinit();
     var storage_manager = StorageManager{};
-    var model = try Model.init(&cache, &storage_manager, .{
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+    var model = try Model.init(&cache, &storage_manager, &fsm, .{
         .max_leaf_entries = 4,
         .max_value_size = 64,
+        .node_layout_id = 0x1001,
         .node_page_kind = 0x71,
         .entry_page_kind = 0x72,
     });
@@ -232,7 +227,7 @@ test "OrthTree paged model: inserts, queries, and removes byte values" {
 }
 
 test "OrthTree paged model: center-crossing entries span entry chunks" {
-    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, i32, 2, .little);
+    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, Fsm, i32, 2, .little);
     const Tree = TreeImpl(Model);
     const Box = Model.Box;
     const Counter = struct {
@@ -248,9 +243,14 @@ test "OrthTree paged model: center-crossing entries span entry chunks" {
     var cache = try Cache.init(&device, std.testing.allocator, 32);
     defer cache.deinit();
     var storage_manager = StorageManager{};
-    var model = try Model.init(&cache, &storage_manager, .{
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+    var model = try Model.init(&cache, &storage_manager, &fsm, .{
         .max_leaf_entries = 1,
         .max_value_size = 24,
+        .node_layout_id = 0x1001,
         .node_page_kind = 0x71,
         .entry_page_kind = 0x72,
     });
@@ -284,7 +284,7 @@ test "OrthTree paged model: center-crossing entries span entry chunks" {
 }
 
 test "OrthTree paged model: trait, entries, and root persist across cache reopen" {
-    const Model = fullaz.spatial.orthtree.models.PagedImpl(Cache, StorageManager, i32, 2, CountTrait, .little);
+    const Model = fullaz.spatial.orthtree.models.PagedImpl(Cache, StorageManager, Fsm, i32, 2, CountTrait, .little);
     const Tree = TreeImpl(Model);
     const Box = Model.Box;
     const Counter = struct {
@@ -297,6 +297,7 @@ test "OrthTree paged model: trait, entries, and root persist across cache reopen
     const settings: fullaz.spatial.orthtree.models.paged.Settings = .{
         .max_leaf_entries = 4,
         .max_value_size = 64,
+        .node_layout_id = 0x1002,
         .node_page_kind = 0x71,
         .entry_page_kind = 0x72,
     };
@@ -304,11 +305,15 @@ test "OrthTree paged model: trait, entries, and root persist across cache reopen
     var device = try Device.init(std.testing.allocator, 1024);
     defer device.deinit();
     var storage_manager = StorageManager{};
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
 
     {
         var cache = try Cache.init(&device, std.testing.allocator, 8);
         defer cache.deinit();
-        var model = try Model.init(&cache, &storage_manager, settings);
+        var model = try Model.init(&cache, &storage_manager, &fsm, settings);
         defer model.deinit();
         var tree = Tree.init(&model);
         try tree.initRootBounds(Box.create(.{ 0, 0 }, .{ 100, 100 }));
@@ -321,7 +326,7 @@ test "OrthTree paged model: trait, entries, and root persist across cache reopen
     {
         var cache = try Cache.init(&device, std.testing.allocator, 8);
         defer cache.deinit();
-        var model = try Model.init(&cache, &storage_manager, settings);
+        var model = try Model.init(&cache, &storage_manager, &fsm, settings);
         defer model.deinit();
         var tree = Tree.init(&model);
         const available_before = cache.availableFrames();
@@ -347,7 +352,7 @@ test "OrthTree paged model: trait, entries, and root persist across cache reopen
 }
 
 test "OrthTree paged model: loader rejects a mismatched self pid without leaking frames" {
-    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, i32, 2, .little);
+    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, Fsm, i32, 2, .little);
     const Tree = TreeImpl(Model);
     const Box = Model.Box;
     const HeaderView = fullaz.page.header.View(u32, u16, .little, false);
@@ -357,9 +362,14 @@ test "OrthTree paged model: loader rejects a mismatched self pid without leaking
     var cache = try Cache.init(&device, std.testing.allocator, 8);
     defer cache.deinit();
     var storage_manager = StorageManager{};
-    var model = try Model.init(&cache, &storage_manager, .{
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+    var model = try Model.init(&cache, &storage_manager, &fsm, .{
         .max_leaf_entries = 4,
         .max_value_size = 64,
+        .node_layout_id = 0x1001,
         .node_page_kind = 0x71,
         .entry_page_kind = 0x72,
     });
@@ -368,10 +378,10 @@ test "OrthTree paged model: loader rejects a mismatched self pid without leaking
     try tree.initRootBounds(Box.create(.{ 0, 0 }, .{ 100, 100 }));
 
     const root_id = storage_manager.root.?;
-    var page = try cache.fetch(root_id);
+    var page = try cache.fetch(root_id.page_id);
     defer page.deinit();
     var header_view = HeaderView.init(try page.getDataMut());
-    header_view.headerMut().self_pid.set(root_id + 1);
+    header_view.headerMut().self_pid.set(root_id.page_id + 1);
 
     const available_before = cache.availableFrames();
     try std.testing.expectError(error.BadData, model.getAccessor().loadNode(root_id));
