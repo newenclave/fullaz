@@ -5,6 +5,7 @@ const Device = fullaz.device.MemoryBlock(u32);
 const Cache = fullaz.storage.page_cache.PageCache(Device);
 const TreeImpl = fullaz.spatial.orthtree.tree.TreeImpl;
 const PackedInt = fullaz.core.packed_int.PackedInt;
+const model_interfaces = fullaz.spatial.orthtree.models.interfaces;
 
 const StorageManager = struct {
     pub const PageId = u32;
@@ -31,6 +32,37 @@ const StorageManager = struct {
         self.entries_count = count;
     }
 };
+
+const NodeStorageManager = struct {
+    pub const PageId = u32;
+    pub const NodeId = fullaz.spatial.orthtree.models.paged.NodeId(PageId, u16);
+    pub const Error = error{};
+
+    root: ?NodeId = null,
+    entries_count: usize = 0,
+
+    pub fn getRoot(self: *const @This()) ?NodeId {
+        return self.root;
+    }
+
+    pub fn setRoot(self: *@This(), root: ?NodeId) Error!void {
+        self.root = root;
+    }
+
+    pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
+
+    pub fn getEntriesCount(self: *const @This()) Error!usize {
+        return self.entries_count;
+    }
+
+    pub fn setEntriesCount(self: *@This(), count: usize) Error!void {
+        self.entries_count = count;
+    }
+};
+
+test "OrthTree paged model: storage manager contract uses NodeId roots" {
+    comptime model_interfaces.requiresPagedStorageManager(NodeStorageManager, NodeStorageManager.NodeId);
+}
 
 fn CountTrait(comptime CoordT: type, comptime dims: usize, comptime ValueT: type) type {
     comptime {

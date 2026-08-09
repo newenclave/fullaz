@@ -164,10 +164,27 @@ pub fn assertModel(comptime M: type) void {
     requiresFnSignature(M, "deinitBorrowValue", fn (*M, *ValueBorrow) void);
 }
 
-pub fn requiresPagedStorageManager(comptime T: type) void {
+pub fn requiresLegacyPagedStorageManager(comptime T: type) void {
     contracts.storage_manager.requiresStorageManager(T);
 
     const Error = T.Error;
+    requiresFnSignature(T, "getEntriesCount", fn (*const T) Error!usize);
+    requiresFnSignature(T, "setEntriesCount", fn (*T, usize) Error!void);
+}
+
+pub fn requiresPagedStorageManager(comptime T: type, comptime ExpectedNodeId: type) void {
+    requiresErrorDeclaration(T, "Error");
+    requiresTypeDeclaration(T, "PageId");
+    requiresTypeDeclaration(T, "NodeId");
+
+    if (T.NodeId != ExpectedNodeId) {
+        @compileError(@typeName(T) ++ ".NodeId must match the paged Orthtree NodeId");
+    }
+
+    const Error = T.Error;
+    requiresFnSignature(T, "getRoot", fn (*const T) ?T.NodeId);
+    requiresFnSignature(T, "setRoot", fn (*T, ?T.NodeId) Error!void);
+    requiresFnSignature(T, "destroyPage", fn (*T, T.PageId) Error!void);
     requiresFnSignature(T, "getEntriesCount", fn (*const T) Error!usize);
     requiresFnSignature(T, "setEntriesCount", fn (*T, usize) Error!void);
 }

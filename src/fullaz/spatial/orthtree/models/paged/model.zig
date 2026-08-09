@@ -60,7 +60,7 @@ pub fn PagedModelImpl(
 
     comptime {
         contracts.page_cache.requiresPageCache(PageCacheType);
-        orthtree_interfaces.requiresPagedStorageManager(StorageManager);
+        orthtree_interfaces.requiresLegacyPagedStorageManager(StorageManager);
         if (StorageManager.PageId != Pid) {
             @compileError("Orthtree storage manager PageId must match page cache Pid");
         }
