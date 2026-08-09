@@ -38,3 +38,27 @@ pub fn Empty(comptime T: type, comptime dimention: usize, comptime ValueT: type)
         }
     };
 }
+
+pub fn PagedEmpty(comptime T: type, comptime dimention: usize, comptime ValueT: type) type {
+    return struct {
+        pub const Storage = extern struct {
+            reserved: [1]u8,
+        };
+        pub const Error = error{};
+        pub const Box = BoundingBox(T, dimention);
+        pub const Value = ValueT;
+
+        pub fn format(storage: *Storage) void {
+            storage.reserved[0] = 0;
+        }
+
+        pub fn validate(storage: *const Storage) bool {
+            return storage.reserved[0] == 0;
+        }
+
+        pub fn onInsert(_: *Storage, _: Box, _: []const u8) Error!void {}
+        pub fn onGrow(_: *Storage, _: *const Storage) Error!void {}
+        pub fn onAdopt(_: *Storage, _: Box, _: []const u8) Error!void {}
+        pub fn onRemove(_: *Storage, _: Box, _: []const u8) Error!void {}
+    };
+}

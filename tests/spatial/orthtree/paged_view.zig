@@ -5,6 +5,16 @@ const TraitStorage = extern struct {
     bytes: [4]u8,
 };
 
+test "OrthTree paged trait: empty storage is deterministic" {
+    const Trait = fullaz.spatial.orthtree.traits.PagedEmpty(i32, 2, []const u8);
+    var storage: Trait.Storage = undefined;
+
+    Trait.format(&storage);
+    try std.testing.expect(Trait.validate(&storage));
+    storage.reserved[0] = 1;
+    try std.testing.expect(!Trait.validate(&storage));
+}
+
 test "OrthTree paged view: formats and validates structural node metadata" {
     const MutableView = fullaz.spatial.orthtree.models.paged.View(u32, u16, i32, 2, TraitStorage, .little, false);
     const ReadView = fullaz.spatial.orthtree.models.paged.View(u32, u16, i32, 2, TraitStorage, .little, true);
