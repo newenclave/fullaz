@@ -119,9 +119,9 @@ pub fn View(
                 return Error.BadData;
             }
 
-            const entries_empty = node_subheader.entries_count.get() == 0;
-            const entries_unlinked = node_subheader.entries_first.isMax() and node_subheader.entries_last.isMax();
-            if (entries_empty != entries_unlinked) {
+            const first_unlinked = node_subheader.entries_first.isMax();
+            const last_unlinked = node_subheader.entries_last.isMax();
+            if (first_unlinked != last_unlinked) {
                 return Error.BadData;
             }
             if (self.isLeaf()) {
@@ -200,9 +200,13 @@ pub fn View(
         }
 
         pub fn setEntryChain(self: *Self, first: ?PageIdT, last: ?PageIdT, count: usize) Error!void {
-            if ((count == 0 and (first != null or last != null)) or (count != 0 and (first == null or last == null))) {
+            if ((first == null) != (last == null)) {
                 return Error.BadData;
             }
+            try self.setEntryChainUnchecked(first, last, count);
+        }
+
+        pub fn setEntryChainUnchecked(self: *Self, first: ?PageIdT, last: ?PageIdT, count: usize) Error!void {
             const stored_count = std.math.cast(u32, count) orelse return Error.BadData;
             const node_subheader = self.subheaderMut();
             if (first) |page_id| {
