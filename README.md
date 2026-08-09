@@ -116,7 +116,8 @@ If something can be made simpler for learning purposes, it probably will be.
 - [X]  **R*-tree split/reinsert experiments**
 - [ ]  **KD-tree**
 - [X]  **Quadtree** (dimension-parametric `Orthtree` with in-memory and paged
-  models; the in-memory 2D model powers the gravity demo)
+  models; paged nodes are fixed slots selected through a persistent FSM, while
+  the in-memory 2D model powers the gravity demo)
 - [ ]  **Octree** (shares the dimension-parametric `Orthtree` foundation and
   paged model; dedicated 3D coverage is pending)
 - [ ]  **Grid / hash-grid coarse spatial partitioning**
