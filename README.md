@@ -115,10 +115,10 @@ If something can be made simpler for learning purposes, it probably will be.
 - [X]  **R-tree**
 - [X]  **R*-tree split/reinsert experiments**
 - [ ]  **KD-tree**
-- [ ]  **Quadtree** (in progress: generic in-memory 2D `Orthtree` foundation;
-  used by the gravity demo, but no paged model yet)
-- [ ]  **Octree** (in progress: shares the dimension-parametric `Orthtree`
-  foundation; dedicated 3D coverage and a paged model are pending)
+- [X]  **Quadtree** (dimension-parametric `Orthtree` with in-memory and paged
+  models; the in-memory 2D model powers the gravity demo)
+- [ ]  **Octree** (shares the dimension-parametric `Orthtree` foundation and
+  paged model; dedicated 3D coverage is pending)
 - [ ]  **Grid / hash-grid coarse spatial partitioning**
 
 #### Point-cloud / spatial storage experiments
