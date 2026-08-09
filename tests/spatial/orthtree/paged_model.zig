@@ -16,6 +16,7 @@ const StorageManager = struct {
 
     root: ?NodeId = null,
     entries_count: usize = 0,
+    fsm_roots: [256]?PageId = .{null} ** 256,
 
     pub fn getRoot(self: *const @This()) ?NodeId {
         return self.root;
@@ -34,7 +35,31 @@ const StorageManager = struct {
     pub fn setEntriesCount(self: *@This(), count: usize) Error!void {
         self.entries_count = count;
     }
+
+    pub fn getSizeClassRoot(self: *const @This(), class: u16) Error!?PageId {
+        return self.fsm_roots[class];
+    }
+
+    pub fn setSizeClassRoot(self: *@This(), class: u16, root: ?PageId) Error!void {
+        self.fsm_roots[class] = root;
+    }
 };
+
+const FsmSizePolicy = struct {
+    pub const SizeClass = u16;
+
+    pub fn getSizeClass(_: *const @This(), size: SizeClass) !SizeClass {
+        return size >> 8;
+    }
+
+    pub fn count(_: *const @This()) usize {
+        return 256;
+    }
+};
+
+const NodeLocationAccessor = fullaz.spatial.orthtree.models.paged.NodePageLocationAccessor(u32, u16, .little);
+const PersistentFsmModel = fullaz.storage.fsm.models.paged.slab.Model(Cache, StorageManager, FsmSizePolicy, NodeLocationAccessor);
+const PersistentFsm = fullaz.storage.fsm.Fsm(PersistentFsmModel);
 
 test "OrthTree paged model: storage manager contract uses NodeId roots" {
     comptime model_interfaces.requiresPagedStorageManager(StorageManager, StorageManager.NodeId);
@@ -351,6 +376,94 @@ test "OrthTree paged model: trait, entries, and root persist across cache reopen
     }
 }
 
+test "OrthTree paged model: paged FSM reopens and reuses partially filled node pages" {
+    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, PersistentFsm, i32, 2, .little);
+    const Tree = TreeImpl(Model);
+    const Box = Model.Box;
+    const Counter = struct {
+        count: usize = 0,
+
+        fn collect(self: *@This(), _: Box, _: []const u8) !void {
+            self.count += 1;
+        }
+    };
+    const settings: fullaz.spatial.orthtree.models.paged.Settings = .{
+        .max_leaf_entries = 4,
+        .max_value_size = 64,
+        .node_layout_id = 0x2001,
+        .node_page_kind = 0x71,
+        .entry_page_kind = 0x72,
+    };
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var storage_manager = StorageManager{};
+    var spilled_page_id: u32 = undefined;
+
+    {
+        var cache = try Cache.init(&device, std.testing.allocator, 32);
+        defer cache.deinit();
+        var fsm_model = PersistentFsmModel.init(&cache, &storage_manager, FsmSizePolicy{}, .{ .page_kind = 0x73 });
+        var fsm = PersistentFsm.init(&fsm_model);
+        defer fsm.deinit();
+        var model = try Model.init(&cache, &storage_manager, &fsm, settings);
+        defer model.deinit();
+        const accessor = model.getAccessor();
+
+        {
+            var root = try accessor.createNode(Box.create(.{ 0, 0 }, .{ 100, 100 }));
+            defer accessor.deinitNode(&root);
+            try accessor.setRoot(root.id());
+            var node1 = try accessor.createNode(Box.create(.{ 0, 0 }, .{ 10, 10 }));
+            defer accessor.deinitNode(&node1);
+            var node2 = try accessor.createNode(Box.create(.{ 10, 10 }, .{ 20, 20 }));
+            defer accessor.deinitNode(&node2);
+            var node3 = try accessor.createNode(Box.create(.{ 20, 20 }, .{ 30, 30 }));
+            defer accessor.deinitNode(&node3);
+
+            try std.testing.expectEqual(root.id().page_id, node1.id().page_id);
+            try std.testing.expectEqual(root.id().page_id, node2.id().page_id);
+            try std.testing.expect(node3.id().page_id != root.id().page_id);
+            spilled_page_id = node3.id().page_id;
+
+            var tree = Tree.init(&model);
+            try tree.insert(Box.create(.{ 1, 1 }, .{ 2, 2 }), "persisted");
+        }
+
+        {
+            var root_page = try cache.fetch(storage_manager.root.?.page_id);
+            defer root_page.deinit();
+            try std.testing.expect((try NodeLocationAccessor.read(try root_page.getData())) != null);
+        }
+        try cache.flushAll();
+    }
+
+    {
+        var cache = try Cache.init(&device, std.testing.allocator, 32);
+        defer cache.deinit();
+        var fsm_model = PersistentFsmModel.init(&cache, &storage_manager, FsmSizePolicy{}, .{ .page_kind = 0x73 });
+        var fsm = PersistentFsm.init(&fsm_model);
+        defer fsm.deinit();
+        var model = try Model.init(&cache, &storage_manager, &fsm, settings);
+        defer model.deinit();
+        var tree = Tree.init(&model);
+        const available_before = cache.availableFrames();
+
+        var counter = Counter{};
+        try tree.query(Box.create(.{ 0, 0 }, .{ 100, 100 }), Counter.collect, &counter);
+        try std.testing.expectEqual(@as(usize, 1), counter.count);
+
+        const accessor = model.getAccessor();
+        try std.testing.expectError(error.OutOfBounds, accessor.loadNode(.{ .page_id = spilled_page_id, .slot_id = 1 }));
+        {
+            var reused = try accessor.createNode(Box.create(.{ 30, 30 }, .{ 40, 40 }));
+            defer accessor.deinitNode(&reused);
+            try std.testing.expectEqual(spilled_page_id, reused.id().page_id);
+        }
+        try std.testing.expectEqual(available_before, cache.availableFrames());
+    }
+}
+
 test "OrthTree paged model: loader rejects a mismatched self pid without leaking frames" {
     const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, Fsm, i32, 2, .little);
     const Tree = TreeImpl(Model);
@@ -384,6 +497,50 @@ test "OrthTree paged model: loader rejects a mismatched self pid without leaking
     header_view.headerMut().self_pid.set(root_id.page_id + 1);
 
     const available_before = cache.availableFrames();
+    try std.testing.expectError(error.BadData, model.getAccessor().loadNode(root_id));
+    try std.testing.expectEqual(available_before, cache.availableFrames());
+}
+
+test "OrthTree paged model: loader rejects incompatible node page metadata without leaking frames" {
+    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, Fsm, i32, 2, .little);
+    const Tree = TreeImpl(Model);
+    const Box = Model.Box;
+    const PackedView = fullaz.spatial.orthtree.models.paged.PackedView(u32, u16, i32, 2, Model.Trait, .little, false);
+    const layout_id: u32 = 0x1001;
+
+    var device = try Device.init(std.testing.allocator, 1024);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var storage_manager = StorageManager{};
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+    var model = try Model.init(&cache, &storage_manager, &fsm, .{
+        .max_leaf_entries = 4,
+        .max_value_size = 64,
+        .node_layout_id = layout_id,
+        .node_page_kind = 0x71,
+        .entry_page_kind = 0x72,
+    });
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    try tree.initRootBounds(Box.create(.{ 0, 0 }, .{ 100, 100 }));
+
+    const root_id = storage_manager.root.?;
+    var page = try cache.fetch(root_id.page_id);
+    defer page.deinit();
+    var node_page = PackedView.NodePage.init(try page.getDataMut());
+    node_page.subheaderMut().layout_id.set(layout_id + 1);
+
+    const available_before = cache.availableFrames();
+    try std.testing.expectError(error.BadData, model.getAccessor().loadNode(root_id));
+    try std.testing.expectEqual(available_before, cache.availableFrames());
+
+    node_page.subheaderMut().layout_id.set(layout_id);
+    node_page.subheaderMut().fsm_location.page_id.set(1);
+    node_page.subheaderMut().fsm_location.slot_id.setMax();
     try std.testing.expectError(error.BadData, model.getAccessor().loadNode(root_id));
     try std.testing.expectEqual(available_before, cache.availableFrames());
 }
