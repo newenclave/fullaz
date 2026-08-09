@@ -193,6 +193,9 @@ pub fn HandleForwardImpl(
             if (cv.header().kind.get() != page_kind) {
                 return Error.BadType;
             }
+            if (cv.header().self_pid.get() != pid) {
+                return Error.BadData;
+            }
             return ChunkHandle.init(page_handle);
         }
     };
@@ -690,6 +693,9 @@ pub fn HandleBidirectionalImpl(
             try cv.pageView().validateTyped();
             if (cv.header().kind.get() != page_kind) {
                 return Error.BadType;
+            }
+            if (cv.header().self_pid.get() != pid) {
+                return Error.BadData;
             }
             return ChunkHandle.init(page_handle);
         }
