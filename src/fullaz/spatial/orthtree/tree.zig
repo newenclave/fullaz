@@ -1,5 +1,3 @@
-const std = @import("std");
-const errors = @import("../../core/errors.zig");
 const interfaces = @import("models/interfaces.zig");
 
 pub const VisitorResult = enum {
@@ -29,6 +27,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         pub const Node = Model.Node;
         pub const Box = Model.Box;
         pub const Value = Model.ValueIn;
+        pub const ValueOut = Model.ValueOut;
         pub const ValueBorrow = Model.ValueBorrow;
         pub const dimension = Box.dimension;
         pub const child_count = 1 << dimension;
@@ -45,10 +44,10 @@ pub fn TreeImpl(comptime ModelT: type) type {
             return self.model.getAccessor();
         }
 
-        pub fn bounds(self: *const Self) ?Box {
+        pub fn bounds(self: *const Self) Error!?Box {
             const acc = self.getAccessor();
             if (acc.getRoot()) |root_id| {
-                var root_node = acc.loadNode(root_id) catch return null;
+                var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
                 return root_node.bounds();
             }
@@ -62,7 +61,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
             }
             var root_node = try acc.createNode(bbox);
             defer acc.deinitNode(&root_node);
-            acc.setRoot(root_node.id());
+            try acc.setRoot(root_node.id());
         }
 
         pub fn insert(self: *Self, child_box: Box, value: Value) Error!void {
@@ -196,7 +195,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
                 }
                 return;
             }
-            if (!node.canInsertEntry(child_box, value) and node.canSplit()) {
+            if (!(try node.canInsertEntry(child_box, value)) and node.canSplit()) {
                 const node_id = node.id();
                 try self.splitNode(node);
                 var split_node = try self.getAccessor().loadNode(node_id);
@@ -227,23 +226,28 @@ pub fn TreeImpl(comptime ModelT: type) type {
                 var child_node = try acc.loadNode(child_id);
                 defer acc.deinitNode(&child_node);
                 try child_node.setParent(parent_id);
-                child_node.setLevel(node.getLevel() + 1);
+                try child_node.setLevel(node.getLevel() + 1);
             }
 
             var entries = try node.entriesMut();
-            defer node.deinitEntries(&entries);
-            var cursor = entries.cursor();
+            defer entries.deinit();
+            var cursor = try entries.cursor();
             defer cursor.deinit();
 
-            while (cursor.next()) |entry| {
+            while (try cursor.next()) |entry| {
                 const entry_box = entry.box();
                 if (Self.childIndexFor(&parent_bounds, &entry_box)) |child_index| {
                     var child_node = try acc.loadNode(child_ids[child_index]);
                     defer acc.deinitNode(&child_node);
                     var child_entries = try child_node.entriesMut();
-                    defer child_node.deinitEntries(&child_entries);
+                    defer child_entries.deinit();
                     const moved_entry = try entries.moveCurrentTo(&cursor, &child_entries);
-                    try self.onAdopt(node, &child_node, moved_entry.box(), moved_entry.value());
+                    try self.onAdopt(
+                        node,
+                        &child_node,
+                        moved_entry.box(),
+                        self.model.valueOutAsIn(moved_entry.value()),
+                    );
                 }
             }
         }
@@ -297,7 +301,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
                     var old_root_node = try acc.loadNode(old_root_id);
                     defer acc.deinitNode(&old_root_node);
                     try rnode.setParent(new_root_node.id());
-                    acc.setRoot(new_root_node.id());
+                    try acc.setRoot(new_root_node.id());
                     rnode = try acc.loadNode(new_root_node.id());
                     defer acc.deinitNode(&rnode);
                     expanded_bounds = rnode.bounds();
@@ -308,7 +312,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
         pub fn queryNode(
             self: *const Self,
-            node: *const Node,
+            node: *Node,
             qbox: Box,
             comptime callback: anytype,
             ctx: anytype,
@@ -318,17 +322,15 @@ pub fn TreeImpl(comptime ModelT: type) type {
             }
 
             var entries = try node.entries();
-            defer node.deinitEntries(&entries);
-            var eitr = entries.iterator();
+            defer entries.deinit();
+            var eitr = try entries.iterator();
             defer eitr.deinit();
 
-            while (!eitr.done()) {
-                const entry = eitr.get() orelse break;
+            while (try eitr.next()) |entry| {
                 const entry_box = entry.box();
                 if (entry_box.overlaps(&qbox)) {
                     try callback(ctx, entry_box, entry.value());
                 }
-                _ = eitr.next();
             }
 
             if (node.isLeaf()) {
@@ -345,7 +347,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn visitNode(self: *Self, node: *Node, comptime callback: anytype, ctx: anytype) Error!void {
-            switch (try callback(ctx, node.id(), node.bounds(), node.getTraitMut())) {
+            switch (try callback(ctx, node.id(), node.bounds(), try node.getTraitMut())) {
                 .skip_children => return,
                 .descend => {},
             }
@@ -377,14 +379,12 @@ pub fn TreeImpl(comptime ModelT: type) type {
             }
 
             var entries = try node.entries();
-            defer node.deinitEntries(&entries);
-            var eitr = entries.iterator();
+            defer entries.deinit();
+            var eitr = try entries.iterator();
             defer eitr.deinit();
 
-            while (!eitr.done()) {
-                const entry = eitr.get() orelse break;
+            while (try eitr.next()) |entry| {
                 try on_entry(ctx, entry.box(), entry.value());
-                _ = eitr.next();
             }
 
             if (node.isLeaf()) {
@@ -421,10 +421,10 @@ pub fn TreeImpl(comptime ModelT: type) type {
                 return null;
             }
             var entries = try node.entriesMut();
-            defer node.deinitEntries(&entries);
-            var cursor = entries.cursor();
+            defer entries.deinit();
+            var cursor = try entries.cursor();
             defer cursor.deinit();
-            while (cursor.next()) |entry| {
+            while (try cursor.next()) |entry| {
                 const entry_box = entry.box();
                 if (entry_box.overlaps(&qbox)) {
                     if (try callback(ctx, entry_box, entry.value())) {

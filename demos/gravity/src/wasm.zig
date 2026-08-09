@@ -207,17 +207,25 @@ export fn bodyCount() u32 {
 }
 
 export fn rootLowX() f64 {
-    return if (ready) simulation.tree.bounds().?.low[0] else 0;
+    if (!ready) return 0;
+    const bounds = simulation.tree.bounds() catch return 0;
+    return if (bounds) |box| box.low[0] else 0;
 }
 
 export fn rootLowY() f64 {
-    return if (ready) simulation.tree.bounds().?.low[1] else 0;
+    if (!ready) return 0;
+    const bounds = simulation.tree.bounds() catch return 0;
+    return if (bounds) |box| box.low[1] else 0;
 }
 
 export fn rootHighX() f64 {
-    return if (ready) simulation.tree.bounds().?.high[0] else 0;
+    if (!ready) return 0;
+    const bounds = simulation.tree.bounds() catch return 0;
+    return if (bounds) |box| box.high[0] else 0;
 }
 
 export fn rootHighY() f64 {
-    return if (ready) simulation.tree.bounds().?.high[1] else 0;
+    if (!ready) return 0;
+    const bounds = simulation.tree.bounds() catch return 0;
+    return if (bounds) |box| box.high[1] else 0;
 }

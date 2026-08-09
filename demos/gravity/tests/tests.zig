@@ -80,8 +80,9 @@ test "gravity: advance uses symplectic Euler and rebuilds the tree" {
     try std.testing.expectApproxEqAbs(@as(f64, 0.004), bodies[0].velocity[0], 1e-12);
     try std.testing.expectApproxEqAbs(@as(f64, 0.0004), bodies[0].position[0], 1e-12);
     try std.testing.expectEqual(@as(usize, 2), try simulation.model.getEntriesCount());
-    try std.testing.expect(simulation.tree.bounds().?.containsBox(&gravity.bodyBounds(bodies[0])));
-    try std.testing.expect(simulation.tree.bounds().?.containsBox(&gravity.bodyBounds(bodies[1])));
+    const bounds = (try simulation.tree.bounds()).?;
+    try std.testing.expect(bounds.containsBox(&gravity.bodyBounds(bodies[0])));
+    try std.testing.expect(bounds.containsBox(&gravity.bodyBounds(bodies[1])));
 }
 
 test "gravity: galaxy generation is deterministic" {
