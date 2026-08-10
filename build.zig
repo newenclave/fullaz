@@ -65,14 +65,7 @@ pub fn build(b: *std.Build) void {
     mod_tests.root_module.addImport("test_printer", test_printer);
 
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
-    if (test_filter) |filter| {
-        const owned = b.allocator.dupe(u8, filter) catch @panic("OOM duping test-filter");
-
-        const filters = b.allocator.alloc([]const u8, 1) catch @panic("OOM alloc filters");
-        filters[0] = owned;
-
-        mod_tests.filters = filters;
-    }
+    applyTestFilter(b, mod_tests, test_filter);
 
     // Install test executable for debugging
     const install_tests = b.addInstallArtifact(mod_tests, .{});
@@ -95,269 +88,254 @@ pub fn build(b: *std.Build) void {
     const install_test_step = b.step("install-tests", "Install test executable for debugging");
     install_test_step.dependOn(&install_tests.step);
 
-    // --- fsx: filesystem-in-a-file example (separate exe + tests) ---
+    // --- demos: each one is an exe, a test step and a browser build ---
     const zigline_dep = b.dependency("zigline", .{
         .target = target,
         .optimize = optimize,
     });
     const zigline_mod = zigline_dep.module("zigline");
 
-    // The fsx library surface (demos/fsx/src/root.zig), imported by both the exe and
-    // the tests so fsx source is compiled once and testable across the tests/src
-    // module boundary.
-    const fsx_mod = b.addModule("fsx", .{
-        .root_source_file = b.path("demos/fsx/src/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "fullaz", .module = mod },
-            .{ .name = "zigline", .module = zigline_mod },
-        },
-    });
-
-    const fsx_exe = b.addExecutable(.{
-        .name = "fsx",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("demos/fsx/src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "fullaz", .module = mod },
-                .{ .name = "zigline", .module = zigline_mod },
-                .{ .name = "fsx", .module = fsx_mod },
-            },
-        }),
-    });
-    b.installArtifact(fsx_exe);
-
-    const run_fs_step = b.step("run-fs", "Run the fsx example");
-    const run_fs_cmd = b.addRunArtifact(fsx_exe);
-    run_fs_step.dependOn(&run_fs_cmd.step);
-    run_fs_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_fs_cmd.addArgs(args);
-    }
-
-    const fsx_tests_mod = b.addModule("fsx_tests", .{
-        .root_source_file = b.path("demos/fsx/tests/tests.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const fsx_tests = b.addTest(.{ .root_module = fsx_tests_mod });
-    fsx_tests.root_module.addImport("fullaz", mod);
-    fsx_tests.root_module.addImport("zigline", zigline_mod);
-    fsx_tests.root_module.addImport("fsx", fsx_mod);
-    if (test_filter) |filter| {
-        const owned = b.allocator.dupe(u8, filter) catch @panic("OOM duping fsx test-filter");
-        const filters = b.allocator.alloc([]const u8, 1) catch @panic("OOM alloc fsx filters");
-        filters[0] = owned;
-        fsx_tests.filters = filters;
-    }
-    const run_fsx_tests = b.addRunArtifact(fsx_tests);
-    const test_fs_step = b.step("test-fs", "Run fsx tests");
-    test_fs_step.dependOn(&run_fsx_tests.step);
-
-    // --- galaxy: R-tree galaxy-explorer demo (separate exe + tests) ---
-    const galaxy_mod = b.addModule("galaxy", .{
-        .root_source_file = b.path("demos/galaxy/src/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "fullaz", .module = mod },
-            .{ .name = "zigline", .module = zigline_mod },
-        },
-    });
-
-    const galaxy_exe = b.addExecutable(.{
-        .name = "galaxy",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("demos/galaxy/src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "fullaz", .module = mod },
-                .{ .name = "zigline", .module = zigline_mod },
-                .{ .name = "galaxy", .module = galaxy_mod },
-            },
-        }),
-    });
-    b.installArtifact(galaxy_exe);
-
-    const run_galaxy_step = b.step("run-galaxy", "Run the galaxy explorer demo");
-    const run_galaxy_cmd = b.addRunArtifact(galaxy_exe);
-    run_galaxy_step.dependOn(&run_galaxy_cmd.step);
-    run_galaxy_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_galaxy_cmd.addArgs(args);
-    }
-
-    const galaxy_tests_mod = b.addModule("galaxy_tests", .{
-        .root_source_file = b.path("demos/galaxy/tests/tests.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const galaxy_tests = b.addTest(.{ .root_module = galaxy_tests_mod });
-    galaxy_tests.root_module.addImport("fullaz", mod);
-    galaxy_tests.root_module.addImport("galaxy", galaxy_mod);
-    if (test_filter) |filter| {
-        const owned = b.allocator.dupe(u8, filter) catch @panic("OOM duping galaxy test-filter");
-        const filters = b.allocator.alloc([]const u8, 1) catch @panic("OOM alloc galaxy filters");
-        filters[0] = owned;
-        galaxy_tests.filters = filters;
-    }
-    const run_galaxy_tests = b.addRunArtifact(galaxy_tests);
-    const test_galaxy_step = b.step("test-galaxy", "Run galaxy tests");
-    test_galaxy_step.dependOn(&run_galaxy_tests.step);
-
-    // --- gravity: interactive Barnes-Hut orthtree demo ---
-    const gravity_mod = b.addModule("gravity", .{
-        .root_source_file = b.path("demos/gravity/src/root.zig"),
-        .target = target,
-        .imports = &.{
-            .{ .name = "fullaz", .module = mod },
-        },
-    });
-
-    const gravity_exe = b.addExecutable(.{
-        .name = "gravity",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("demos/gravity/src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "fullaz", .module = mod },
-                .{ .name = "zigline", .module = zigline_mod },
-                .{ .name = "gravity", .module = gravity_mod },
-            },
-        }),
-    });
-    b.installArtifact(gravity_exe);
-
-    const run_gravity_step = b.step("run-gravity", "Run the Barnes-Hut gravity demo");
-    const run_gravity_cmd = b.addRunArtifact(gravity_exe);
-    run_gravity_step.dependOn(&run_gravity_cmd.step);
-    run_gravity_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_gravity_cmd.addArgs(args);
-
-    const gravity_tests_mod = b.addModule("gravity_tests", .{
-        .root_source_file = b.path("demos/gravity/tests/tests.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const gravity_tests = b.addTest(.{ .root_module = gravity_tests_mod });
-    gravity_tests.root_module.addImport("fullaz", mod);
-    gravity_tests.root_module.addImport("gravity", gravity_mod);
-    if (test_filter) |filter| {
-        const owned = b.allocator.dupe(u8, filter) catch @panic("OOM duping gravity test-filter");
-        const filters = b.allocator.alloc([]const u8, 1) catch @panic("OOM alloc gravity filters");
-        filters[0] = owned;
-        gravity_tests.filters = filters;
-    }
-    const run_gravity_tests = b.addRunArtifact(gravity_tests);
-    const test_gravity_step = b.step("test-gravity", "Run gravity demo tests");
-    test_gravity_step.dependOn(&run_gravity_tests.step);
-
-    // --- galaxy WASM build: runs in a browser (wasm32-freestanding) ---
     // Fresh module instances targeting wasm (the ones above are pinned to the
     // host). The engine + MemoryBlock storage are I/O-free, so they compile for
     // freestanding wasm; only main.zig (std.process/std.Io/zigline) is excluded.
     const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
-
     const fullaz_wasm = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = wasm_target,
         .optimize = .ReleaseSmall,
     });
-    const galaxy_wasm_mod = b.createModule(.{
-        .root_source_file = b.path("demos/galaxy/src/root.zig"),
-        .target = wasm_target,
-        .optimize = .ReleaseSmall,
-        .imports = &.{
-            .{ .name = "fullaz", .module = fullaz_wasm },
+
+    // Shared terminal plumbing for the full-screen demos. Not a demo itself,
+    // so it gets a module and a test step rather than an addDemo call.
+    const demo_common = b.addModule("demo_common", .{
+        .root_source_file = b.path("demos/common/src/root.zig"),
+        .target = target,
+    });
+
+    const common_tests_mod = b.addModule("demo_common_tests", .{
+        .root_source_file = b.path("demos/common/tests/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const common_tests = b.addTest(.{ .root_module = common_tests_mod });
+    common_tests.root_module.addImport("demo_common", demo_common);
+    applyTestFilter(b, common_tests, test_filter);
+    const run_common_tests = b.addRunArtifact(common_tests);
+    b.step("test-common", "Run shared demo tests").dependOn(&run_common_tests.step);
+
+    const demo_ctx = DemoContext{
+        .target = target,
+        .optimize = optimize,
+        .wasm_target = wasm_target,
+        .fullaz = mod,
+        .fullaz_wasm = fullaz_wasm,
+        .zigline = zigline_mod,
+        .demo_common = demo_common,
+        .test_filter = test_filter,
+    };
+
+    addDemo(b, demo_ctx, .{
+        .name = "fsx",
+        .lib_source = "demos/fsx/src/root.zig",
+        .lib_needs_zigline = true,
+        .exe_source = "demos/fsx/src/main.zig",
+        .run_step = "run-fs",
+        .run_desc = "Run the fsx example",
+        .tests_source = "demos/fsx/tests/tests.zig",
+        .tests_need_zigline = true,
+        .test_step = "test-fs",
+        .test_desc = "Run fsx tests",
+        // The native root pulls in I/O, so the browser build has its own.
+        .wasm_lib_source = "demos/fsx/src/wasm_root.zig",
+        .wasm_source = "demos/fsx/src/wasm.zig",
+        .wasm_step = "wasm-fsx",
+        .wasm_desc = "Build the fsx WASM backend into zig-out/web-fsx",
+        .web_dir = "web-fsx",
+        .web_index = "demos/fsx/web/index.html",
+    });
+
+    addDemo(b, demo_ctx, .{
+        .name = "galaxy",
+        .lib_source = "demos/galaxy/src/root.zig",
+        .lib_needs_zigline = true,
+        .exe_source = "demos/galaxy/src/main.zig",
+        .run_step = "run-galaxy",
+        .run_desc = "Run the galaxy explorer demo",
+        .tests_source = "demos/galaxy/tests/tests.zig",
+        .test_step = "test-galaxy",
+        .test_desc = "Run galaxy tests",
+        .wasm_source = "demos/galaxy/src/wasm.zig",
+        .wasm_step = "wasm-galaxy",
+        .wasm_desc = "Build the galaxy WASM demo into zig-out/web",
+        .web_dir = "web",
+        .web_index = "demos/galaxy/web/index.html",
+    });
+
+    addDemo(b, demo_ctx, .{
+        .name = "cloud",
+        .lib_source = "demos/cloud/src/root.zig",
+        .exe_source = "demos/cloud/src/main.zig",
+        .exe_needs_common = true,
+        .run_step = "run-cloud",
+        .run_desc = "Run the point-cloud LOD viewer",
+        .tests_source = "demos/cloud/tests/tests.zig",
+        .test_step = "test-cloud",
+        .test_desc = "Run cloud demo tests",
+        .wasm_source = "demos/cloud/src/wasm.zig",
+        .wasm_step = "wasm-cloud",
+        .wasm_desc = "Build the cloud WASM demo into zig-out/web-cloud",
+        .web_dir = "web-cloud",
+        .web_index = "demos/cloud/web/index.html",
+    });
+
+    addDemo(b, demo_ctx, .{
+        .name = "gravity",
+        .lib_source = "demos/gravity/src/root.zig",
+        .exe_source = "demos/gravity/src/main.zig",
+        .exe_needs_common = true,
+        .run_step = "run-gravity",
+        .run_desc = "Run the Barnes-Hut gravity demo",
+        .tests_source = "demos/gravity/tests/tests.zig",
+        .test_step = "test-gravity",
+        .test_desc = "Run gravity demo tests",
+        .wasm_source = "demos/gravity/src/wasm.zig",
+        .wasm_step = "wasm-gravity",
+        .wasm_desc = "Build the gravity WASM demo into zig-out/web-gravity",
+        .web_dir = "web-gravity",
+        .web_index = "demos/gravity/web/index.html",
+    });
+}
+
+const DemoContext = struct {
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    wasm_target: std.Build.ResolvedTarget,
+    fullaz: *std.Build.Module,
+    fullaz_wasm: *std.Build.Module,
+    zigline: *std.Build.Module,
+    demo_common: *std.Build.Module,
+    test_filter: ?[]const u8,
+};
+
+// Every field earns its place: step names are irregular (run-fs, not run-fsx),
+// galaxy installs into web/ rather than web-galaxy/, fsx needs a separate wasm
+// root, and zigline is imported by a different set of modules in each demo.
+const Demo = struct {
+    name: []const u8,
+
+    lib_source: []const u8,
+    lib_needs_zigline: bool = false,
+
+    exe_source: []const u8,
+    // Only the demos that draw a full-screen frame need the shared terminal.
+    exe_needs_common: bool = false,
+    run_step: []const u8,
+    run_desc: []const u8,
+
+    tests_source: []const u8,
+    tests_need_zigline: bool = false,
+    test_step: []const u8,
+    test_desc: []const u8,
+
+    wasm_source: []const u8,
+    wasm_lib_source: ?[]const u8 = null,
+    wasm_step: []const u8,
+    wasm_desc: []const u8,
+    web_dir: []const u8,
+    web_index: []const u8,
+};
+
+fn applyTestFilter(b: *std.Build, compile: *std.Build.Step.Compile, filter: ?[]const u8) void {
+    const wanted = filter orelse return;
+    const owned = b.allocator.dupe(u8, wanted) catch @panic("OOM duping test-filter");
+    const filters = b.allocator.alloc([]const u8, 1) catch @panic("OOM alloc filters");
+    filters[0] = owned;
+    compile.filters = filters;
+}
+
+fn addDemo(b: *std.Build, ctx: DemoContext, demo: Demo) void {
+    // The library surface, imported by the exe and the tests alike so the demo
+    // source is compiled once and testable across the tests/src boundary.
+    const lib = b.addModule(demo.name, .{
+        .root_source_file = b.path(demo.lib_source),
+        .target = ctx.target,
+        .imports = if (demo.lib_needs_zigline) &.{
+            .{ .name = "fullaz", .module = ctx.fullaz },
+            .{ .name = "zigline", .module = ctx.zigline },
+        } else &.{
+            .{ .name = "fullaz", .module = ctx.fullaz },
         },
     });
-    const galaxy_wasm = b.addExecutable(.{
-        .name = "galaxy",
+
+    const exe_module = b.createModule(.{
+        .root_source_file = b.path(demo.exe_source),
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+        .imports = &.{
+            .{ .name = "fullaz", .module = ctx.fullaz },
+            .{ .name = "zigline", .module = ctx.zigline },
+            .{ .name = demo.name, .module = lib },
+        },
+    });
+    if (demo.exe_needs_common) {
+        exe_module.addImport("demo_common", ctx.demo_common);
+    }
+    const exe = b.addExecutable(.{ .name = demo.name, .root_module = exe_module });
+    b.installArtifact(exe);
+
+    const run_step = b.step(demo.run_step, demo.run_desc);
+    const run_cmd = b.addRunArtifact(exe);
+    run_step.dependOn(&run_cmd.step);
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_cmd.addArgs(args);
+
+    const tests_mod = b.addModule(b.fmt("{s}_tests", .{demo.name}), .{
+        .root_source_file = b.path(demo.tests_source),
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+    });
+    const tests = b.addTest(.{ .root_module = tests_mod });
+    tests.root_module.addImport("fullaz", ctx.fullaz);
+    if (demo.tests_need_zigline) {
+        tests.root_module.addImport("zigline", ctx.zigline);
+    }
+    tests.root_module.addImport(demo.name, lib);
+    applyTestFilter(b, tests, ctx.test_filter);
+
+    const run_tests = b.addRunArtifact(tests);
+    b.step(demo.test_step, demo.test_desc).dependOn(&run_tests.step);
+
+    const wasm_lib = b.createModule(.{
+        .root_source_file = b.path(demo.wasm_lib_source orelse demo.lib_source),
+        .target = ctx.wasm_target,
+        .optimize = .ReleaseSmall,
+        .imports = &.{
+            .{ .name = "fullaz", .module = ctx.fullaz_wasm },
+        },
+    });
+    const wasm = b.addExecutable(.{
+        .name = demo.name,
         .root_module = b.createModule(.{
-            .root_source_file = b.path("demos/galaxy/src/wasm.zig"),
-            .target = wasm_target,
+            .root_source_file = b.path(demo.wasm_source),
+            .target = ctx.wasm_target,
             .optimize = .ReleaseSmall,
             .imports = &.{
-                .{ .name = "fullaz", .module = fullaz_wasm },
-                .{ .name = "galaxy", .module = galaxy_wasm_mod },
+                .{ .name = "fullaz", .module = ctx.fullaz_wasm },
+                .{ .name = demo.name, .module = wasm_lib },
             },
         }),
     });
-    galaxy_wasm.entry = .disabled; // no _start; JS drives via the exports
-    galaxy_wasm.rdynamic = true; // export the `export fn`s
+    wasm.entry = .disabled; // no _start; JS drives via the exports
+    wasm.rdynamic = true; // export the `export fn`s
 
-    const wasm_step = b.step("wasm-galaxy", "Build the galaxy WASM demo into zig-out/web");
-    const install_wasm = b.addInstallArtifact(galaxy_wasm, .{
-        .dest_dir = .{ .override = .{ .custom = "web" } },
+    const wasm_step = b.step(demo.wasm_step, demo.wasm_desc);
+    const install_wasm = b.addInstallArtifact(wasm, .{
+        .dest_dir = .{ .override = .{ .custom = demo.web_dir } },
     });
     wasm_step.dependOn(&install_wasm.step);
-    const install_html = b.addInstallFile(b.path("demos/galaxy/web/index.html"), "web/index.html");
+    const install_html = b.addInstallFile(
+        b.path(demo.web_index),
+        b.fmt("{s}/index.html", .{demo.web_dir}),
+    );
     wasm_step.dependOn(&install_html.step);
-
-    // --- gravity WASM build: browser-driven Barnes-Hut animation ---
-    const gravity_wasm_mod = b.createModule(.{
-        .root_source_file = b.path("demos/gravity/src/root.zig"),
-        .target = wasm_target,
-        .optimize = .ReleaseSmall,
-        .imports = &.{
-            .{ .name = "fullaz", .module = fullaz_wasm },
-        },
-    });
-    const gravity_wasm = b.addExecutable(.{
-        .name = "gravity",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("demos/gravity/src/wasm.zig"),
-            .target = wasm_target,
-            .optimize = .ReleaseSmall,
-            .imports = &.{
-                .{ .name = "fullaz", .module = fullaz_wasm },
-                .{ .name = "gravity", .module = gravity_wasm_mod },
-            },
-        }),
-    });
-    gravity_wasm.entry = .disabled;
-    gravity_wasm.rdynamic = true;
-
-    const gravity_wasm_step = b.step("wasm-gravity", "Build the gravity WASM demo into zig-out/web-gravity");
-    const install_gravity_wasm = b.addInstallArtifact(gravity_wasm, .{
-        .dest_dir = .{ .override = .{ .custom = "web-gravity" } },
-    });
-    gravity_wasm_step.dependOn(&install_gravity_wasm.step);
-    const install_gravity_html = b.addInstallFile(b.path("demos/gravity/web/index.html"), "web-gravity/index.html");
-    gravity_wasm_step.dependOn(&install_gravity_html.step);
-
-    // --- fsx WASM build: browser filesystem explorer backend ---
-    const fsx_wasm_mod = b.createModule(.{
-        .root_source_file = b.path("demos/fsx/src/wasm_root.zig"),
-        .target = wasm_target,
-        .optimize = .ReleaseSmall,
-        .imports = &.{
-            .{ .name = "fullaz", .module = fullaz_wasm },
-        },
-    });
-    const fsx_wasm = b.addExecutable(.{
-        .name = "fsx",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("demos/fsx/src/wasm.zig"),
-            .target = wasm_target,
-            .optimize = .ReleaseSmall,
-            .imports = &.{
-                .{ .name = "fullaz", .module = fullaz_wasm },
-                .{ .name = "fsx", .module = fsx_wasm_mod },
-            },
-        }),
-    });
-    fsx_wasm.entry = .disabled;
-    fsx_wasm.rdynamic = true;
-
-    const fsx_wasm_step = b.step("wasm-fsx", "Build the fsx WASM backend into zig-out/web-fsx");
-    const install_fsx_wasm = b.addInstallArtifact(fsx_wasm, .{
-        .dest_dir = .{ .override = .{ .custom = "web-fsx" } },
-    });
-    fsx_wasm_step.dependOn(&install_fsx_wasm.step);
-    const install_fsx_html = b.addInstallFile(b.path("demos/fsx/web/index.html"), "web-fsx/index.html");
-    fsx_wasm_step.dependOn(&install_fsx_html.step);
 }

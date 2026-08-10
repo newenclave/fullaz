@@ -1,0 +1,368 @@
+const std = @import("std");
+const fullaz = @import("fullaz");
+const cloud = @import("cloud");
+const zigline = @import("zigline");
+const terminal = @import("demo_common").terminal;
+
+const Io = std.Io;
+
+const constants = cloud.constants;
+const Device = fullaz.device.FileBlock(constants.PageId);
+const PageCache = fullaz.storage.page_cache.PageCache(Device);
+const Cloud = cloud.Cloud(PageCache);
+
+const Options = struct {
+    image: []const u8 = "",
+    format: bool = false,
+    seed: u64 = 42,
+    points: u32 = 50_000,
+    clusters: u16 = 12,
+    // Per cent of the viewport height; see lod.Settings.detail_fraction.
+    detail_percent: f64 = constants.default_detail_fraction * 100.0,
+};
+
+const ParseResult = union(enum) {
+    run: Options,
+    help,
+    invalid,
+};
+
+const usage =
+    "usage: cloud <image> [--format] [--seed N] [--points N] [--clusters N] [--detail X]\n";
+
+const keys_hint = "h/l yaw  j/k pitch  +/- zoom  [/] detail  i add points  w write  q quit";
+
+// Rows reserved for the heads-up display above the viewport.
+const hud_rows: usize = 4;
+const insert_batch: u32 = 10_000;
+
+// Frame size used when stdout is not a terminal, chosen to fit a README block.
+const headless_columns: usize = 78;
+const headless_rows: usize = 24;
+
+fn parsePositiveFloat(text: []const u8) ?f64 {
+    const value = std.fmt.parseFloat(f64, text) catch return null;
+    return if (std.math.isFinite(value) and value > 0) value else null;
+}
+
+fn parseArgs(init: std.process.Init, allocator: std.mem.Allocator, err: *Io.Writer) !ParseResult {
+    var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+    defer args.deinit();
+    _ = args.skip();
+
+    var options = Options{};
+    while (args.next()) |argument| {
+        if (std.mem.eql(u8, argument, "--help")) return .help;
+        if (std.mem.eql(u8, argument, "--format")) {
+            options.format = true;
+            continue;
+        }
+        if (!std.mem.startsWith(u8, argument, "--")) {
+            if (options.image.len != 0) {
+                try err.print("unexpected argument: {s}\n", .{argument});
+                return .invalid;
+            }
+            options.image = argument;
+            continue;
+        }
+
+        const value = args.next() orelse {
+            try err.print("missing value for {s}\n", .{argument});
+            return .invalid;
+        };
+        if (std.mem.eql(u8, argument, "--seed")) {
+            options.seed = std.fmt.parseInt(u64, value, 10) catch {
+                try err.writeAll("--seed must be an unsigned integer\n");
+                return .invalid;
+            };
+        } else if (std.mem.eql(u8, argument, "--points")) {
+            const parsed = std.fmt.parseInt(u32, value, 10) catch 0;
+            if (parsed == 0 or parsed > 2_000_000) {
+                try err.writeAll("--points must be in the range 1..2000000\n");
+                return .invalid;
+            }
+            options.points = parsed;
+        } else if (std.mem.eql(u8, argument, "--clusters")) {
+            const parsed = std.fmt.parseInt(u16, value, 10) catch 0;
+            if (parsed == 0 or parsed > cloud.scene.max_clusters) {
+                try err.print("--clusters must be in the range 1..{d}\n", .{cloud.scene.max_clusters});
+                return .invalid;
+            }
+            options.clusters = parsed;
+        } else if (std.mem.eql(u8, argument, "--detail")) {
+            options.detail_percent = parsePositiveFloat(value) orelse {
+                try err.writeAll("--detail must be a positive finite number\n");
+                return .invalid;
+            };
+        } else {
+            try err.print("unknown option: {s}\n", .{argument});
+            return .invalid;
+        }
+    }
+
+    if (options.image.len == 0) {
+        try err.writeAll("an image path is required\n");
+        return .invalid;
+    }
+    return .{ .run = options };
+}
+
+const Viewport = struct {
+    cells: []cloud.ascii.Cell = &.{},
+    columns: usize = 0,
+    rows: usize = 0,
+
+    fn deinit(self: *Viewport, allocator: std.mem.Allocator) void {
+        allocator.free(self.cells);
+    }
+
+    // Returns true when the terminal changed shape, which invalidates the
+    // splat buffer just as surely as moving the camera does.
+    fn resize(self: *Viewport, allocator: std.mem.Allocator, size: terminal.Size) !bool {
+        const columns = size.columns;
+        const rows = if (size.rows > hud_rows) size.rows - hud_rows else 1;
+        if (columns == self.columns and rows == self.rows) return false;
+
+        const cells = try allocator.alloc(cloud.ascii.Cell, columns * rows);
+        allocator.free(self.cells);
+        self.cells = cells;
+        self.columns = columns;
+        self.rows = rows;
+        return true;
+    }
+};
+
+const Frame = struct {
+    grid: cloud.ascii.Grid,
+    stats: cloud.lod.Stats,
+    dropped: usize,
+};
+
+fn renderFrame(viewport: *Viewport, c: *Cloud, detail: f64) !Frame {
+    var grid = try cloud.ascii.Grid.init(viewport.cells, viewport.columns, viewport.rows);
+    grid.clear();
+
+    const projector = cloud.camera.Projector.init(&c.camera, .{
+        .width = @intCast(viewport.columns),
+        .height = @intCast(viewport.rows),
+        // A terminal cell is about twice as tall as it is wide.
+        .cell_aspect = 2.0,
+    });
+
+    var sink = cloud.ascii.GridSink{ .grid = &grid };
+    const stats = try cloud.lod.collect(&c.tree, &projector, .{ .detail_fraction = detail }, &sink);
+    return .{ .grid = grid, .stats = stats, .dropped = sink.dropped };
+}
+
+fn writeHud(
+    out: *Io.Writer,
+    c: *Cloud,
+    stats: cloud.lod.Stats,
+    detail_fraction: f64,
+    status: []const u8,
+) !void {
+    const points = try c.pointCount();
+    const bytes = c.imageBytes();
+    const per_point = if (points == 0) 0 else bytes / points;
+
+    try out.print("fullaz . cloud | points {d} | splats {d} | aggregates {d} | drawn {d}\x1b[K\r\n", .{
+        points,
+        stats.splats_emitted,
+        stats.nodes_accepted,
+        stats.points_visited,
+    });
+    try out.print("nodes visited {d} | empty {d} | culled {d} | detail {d:.2}% | dist {d:.0}\x1b[K\r\n", .{
+        stats.nodes_visited,
+        stats.nodes_empty,
+        stats.nodes_culled,
+        detail_fraction * 100.0,
+        c.camera.distance,
+    });
+    try out.print("image {d} KiB in {d} pages ({d} B/point) | seed {d}{s}{s}\x1b[K\r\n", .{
+        bytes / 1024,
+        bytes / constants.block_size,
+        per_point,
+        c.spec.seed,
+        if (status.len == 0) "" else " | ",
+        status,
+    });
+    try out.print("{s}\x1b[K\r\n", .{keys_hint});
+}
+
+fn run(init: std.process.Init, out: *Io.Writer, options: Options) !void {
+    const allocator = init.gpa;
+    const io = init.io;
+
+    var device = if (options.format)
+        try Device.create(io, options.image, constants.block_size)
+    else
+        try Device.open(io, options.image, constants.block_size);
+    defer device.deinit();
+
+    var cache = try PageCache.init(&device, allocator, constants.cache_frames);
+    defer cache.deinit();
+
+    var c = if (options.format)
+        try Cloud.format(allocator, &cache, constants.block_size, .{
+            .seed = options.seed,
+            .cluster_count = options.clusters,
+        }, options.points)
+    else
+        try Cloud.open(allocator, &cache, constants.block_size);
+    defer c.deinit();
+
+    if (options.format) c.detail_fraction = options.detail_percent / 100.0;
+
+    // Without a terminal there is nothing to drive, but building an image from
+    // a script is still worth doing, so report and exit rather than refuse.
+    if (!try Io.File.stdin().isTty(io) or !try Io.File.stdout().isTty(io)) {
+        try c.save();
+        try device.sync();
+
+        var viewport = Viewport{};
+        defer viewport.deinit(allocator);
+        _ = try viewport.resize(allocator, .{
+            .columns = headless_columns,
+            .rows = headless_rows + hud_rows,
+        });
+
+        var frame = try renderFrame(&viewport, &c, c.detail_fraction);
+        // Plain text, plain newlines: the frame is being piped somewhere.
+        try cloud.ascii.writeFrame(&frame.grid, out, .{
+            .colour = false,
+            .erase_line = false,
+            .newline = "\n",
+        });
+
+        const points = try c.pointCount();
+        const bytes = c.imageBytes();
+        try out.print("\n{s}: {d} points, {d} KiB in {d} pages ({d} B/point), seed {d}\n", .{
+            options.image,
+            points,
+            bytes / 1024,
+            bytes / constants.block_size,
+            if (points == 0) 0 else bytes / points,
+            c.spec.seed,
+        });
+        try out.print("{d} splats: {d} aggregates + {d} points, {d} nodes seen\n", .{
+            frame.stats.splats_emitted,
+            frame.stats.nodes_accepted,
+            frame.stats.points_visited,
+            frame.stats.nodes_visited,
+        });
+        try out.flush();
+        return;
+    }
+
+    var raw = zigline.terminal.RawMode.enable() catch {
+        try out.writeAll("cloud: failed to enable terminal raw mode\n");
+        try out.flush();
+        return;
+    };
+    defer raw.disable();
+    defer terminal.restore(out);
+    try terminal.clear(out);
+    try out.writeAll("\x1b[?25l");
+
+    var viewport = Viewport{};
+    defer viewport.deinit(allocator);
+
+    var stats = cloud.lod.Stats{};
+    var status: []const u8 = "";
+    var quit = false;
+    // The splat buffer only changes when the camera, the threshold, the point
+    // set or the terminal does. Four sources, all of them set this.
+    var dirty = true;
+
+    while (!quit) {
+        if (try viewport.resize(allocator, terminal.dimensions(io))) dirty = true;
+
+        if (dirty) {
+            var frame = try renderFrame(&viewport, &c, c.detail_fraction);
+            stats = frame.stats;
+            dirty = false;
+
+            try terminal.home(out);
+            try writeHud(out, &c, stats, c.detail_fraction, status);
+            try cloud.ascii.writeFrame(&frame.grid, out, .{});
+            try out.flush();
+            status = "";
+        }
+
+        while (terminal.pollByte()) |key| {
+            switch (key) {
+                'q', 'Q' => quit = true,
+                'h' => {
+                    c.camera.orbit(-0.08, 0);
+                    dirty = true;
+                },
+                'l' => {
+                    c.camera.orbit(0.08, 0);
+                    dirty = true;
+                },
+                'j' => {
+                    c.camera.orbit(0, -0.06);
+                    dirty = true;
+                },
+                'k' => {
+                    c.camera.orbit(0, 0.06);
+                    dirty = true;
+                },
+                '+', '=' => {
+                    c.camera.dolly(1.0 / 1.25);
+                    dirty = true;
+                },
+                '-', '_' => {
+                    c.camera.dolly(1.25);
+                    dirty = true;
+                },
+                '[' => {
+                    c.detail_fraction = @max(c.detail_fraction / 1.5, 0.002);
+                    dirty = true;
+                },
+                ']' => {
+                    c.detail_fraction = @min(c.detail_fraction * 1.5, 2.0);
+                    dirty = true;
+                },
+                'i', 'I' => {
+                    _ = try c.insertPoints(insert_batch);
+                    status = "points added";
+                    dirty = true;
+                },
+                'w', 'W' => {
+                    try c.save();
+                    try device.sync();
+                    status = "saved";
+                    dirty = true;
+                },
+                else => {},
+            }
+        }
+
+        try io.sleep(.fromNanoseconds(16 * std.time.ns_per_ms), .awake);
+    }
+
+    try c.save();
+    try device.sync();
+}
+
+pub fn main(init: std.process.Init) !void {
+    var stdout_buffer: [256 * 1024]u8 = undefined;
+    var stdout_writer: Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
+    const out = &stdout_writer.interface;
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer: Io.File.Writer = .init(.stderr(), init.io, &stderr_buffer);
+    const err = &stderr_writer.interface;
+
+    switch (try parseArgs(init, init.gpa, err)) {
+        .help => {
+            try out.writeAll(usage);
+            try out.flush();
+        },
+        .invalid => {
+            try err.writeAll(usage);
+            try err.flush();
+        },
+        .run => |options| try run(init, out, options),
+    }
+}
