@@ -13,7 +13,12 @@ pub const Settings = struct {
     inode_page_kind: u16 = 1,
 };
 
-pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, comptime cmp: anytype, comptime Ctx: type) type {
+pub fn PagedModel(
+    comptime PageCacheType: type,
+    comptime StorageManager: type,
+    comptime cmp: anytype,
+    comptime Ctx: type,
+) type {
     comptime {
         interfaces.requiresStorageManager(StorageManager);
         interfaces.requiresPageCache(PageCacheType);
@@ -23,8 +28,18 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
     const PageHandle = PageCacheType.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
-    const BptPage = bpt_page.View(BlockIdType, u16, .little, false);
-    const BptPageConst = bpt_page.View(BlockIdType, u16, .little, true);
+    const BptPage = bpt_page.View(
+        BlockIdType,
+        u16,
+        .little,
+        false,
+    );
+    const BptPageConst = bpt_page.View(
+        BlockIdType,
+        u16,
+        .little,
+        true,
+    );
 
     const KeyType = []const u8;
     const ValueType = []const u8;
