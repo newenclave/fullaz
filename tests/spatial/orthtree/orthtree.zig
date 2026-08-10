@@ -507,21 +507,21 @@ fn expectEntryCursor(comptime Coord: type) !void {
     try source.addEntry(Box.create(.{ 5, 5 }, .{ 6, 6 }), 3);
 
     var source_entries = try source.entriesMut();
-    defer source.deinitEntries(&source_entries);
-    var cursor = source_entries.cursor();
+    defer source_entries.deinit();
+    var cursor = try source_entries.cursor();
     defer cursor.deinit();
 
-    try std.testing.expectEqual(@as(u32, 1), cursor.next().?.value());
+    try std.testing.expectEqual(@as(u32, 1), (try cursor.next()).?.value());
     try std.testing.expectEqual(@as(u32, 1), try source_entries.removeCurrent(&cursor));
 
-    try std.testing.expectEqual(@as(u32, 2), cursor.next().?.value());
+    try std.testing.expectEqual(@as(u32, 2), (try cursor.next()).?.value());
     var target_entries = try target.entriesMut();
-    defer target.deinitEntries(&target_entries);
+    defer target_entries.deinit();
     const moved = try source_entries.moveCurrentTo(&cursor, &target_entries);
     try std.testing.expectEqual(@as(u32, 2), moved.value());
 
-    try std.testing.expectEqual(@as(u32, 3), cursor.next().?.value());
-    try std.testing.expect(cursor.next() == null);
+    try std.testing.expectEqual(@as(u32, 3), (try cursor.next()).?.value());
+    try std.testing.expect((try cursor.next()) == null);
     try std.testing.expectEqual(@as(usize, 1), source.size());
     try std.testing.expectEqual(@as(usize, 1), target.size());
     try std.testing.expectEqual(@as(u32, 3), (try source.getEntry(0)).value());

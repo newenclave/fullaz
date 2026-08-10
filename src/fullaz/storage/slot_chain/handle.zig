@@ -457,6 +457,7 @@ pub fn HandleImpl(
         }
 
         pub fn append(self: *Self, val: ValueIn) Error!PageId {
+            try self.hydrateLastChunk();
             if (self.last_chunk) |*last_c| {
                 const total = try self.ctx.page_chain.manager().getTotalSize();
                 var sd = try last_c.slotsDirMut();
@@ -501,6 +502,14 @@ pub fn HandleImpl(
                 self.last_chunk = page;
                 return page_id;
             }
+        }
+
+        fn hydrateLastChunk(self: *Self) Error!void {
+            if (self.last_chunk != null) {
+                return;
+            }
+            const last_id = try self.ctx.page_chain.manager().getLast() orelse return;
+            self.last_chunk = try self.loadPage(last_id);
         }
 
         pub fn size(self: *const Self) Error!usize {

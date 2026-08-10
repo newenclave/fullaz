@@ -85,7 +85,7 @@ pub fn MemoryImpl(
                 _ = self;
             }
 
-            pub fn next(self: *Itr) ?EntryImpl {
+            pub fn next(self: *Itr) ErrorSet!?EntryImpl {
                 if (self.index >= self.list.items.len) {
                     return null;
                 }
@@ -121,7 +121,7 @@ pub fn MemoryImpl(
                 _ = self;
             }
 
-            pub fn next(self: *CursorSelf) ?EntryImpl {
+            pub fn next(self: *CursorSelf) ErrorSet!?EntryImpl {
                 if (self.next_index >= self.storage.list.items.len) {
                     self.current_index = null;
                     return null;
@@ -180,10 +180,10 @@ pub fn MemoryImpl(
     const EntriesWrapper = struct {
         const Self = @This();
         pub const Entry = EntryImpl;
-        storage: *const EntriesStorage,
+        storage: *EntriesStorage,
         pub const Iterator = EntriesStorage.ReadIterator;
 
-        pub fn init(storage: *const EntriesStorage) Self {
+        pub fn init(storage: *EntriesStorage) Self {
             return Self{
                 .storage = storage,
             };
@@ -193,8 +193,12 @@ pub fn MemoryImpl(
             return self.storage.list.items.len;
         }
 
-        pub fn iterator(self: *const Self) Iterator {
+        pub fn iterator(self: *Self) ErrorSet!Iterator {
             return self.storage.readIterator();
+        }
+
+        pub fn deinit(self: *Self) void {
+            _ = self;
         }
 
         pub fn get(self: *const Self, index: usize) ?EntryImpl {
@@ -214,8 +218,12 @@ pub fn MemoryImpl(
             return .{ .storage = storage };
         }
 
-        pub fn cursor(self: *Self) Cursor {
+        pub fn cursor(self: *Self) ErrorSet!Cursor {
             return self.storage.cursor();
+        }
+
+        pub fn deinit(self: *Self) void {
+            _ = self;
         }
 
         pub fn moveCurrentTo(self: *Self, entry_cursor: *Cursor, target: *Self) ErrorSet!EntryImpl {
@@ -287,6 +295,9 @@ pub fn MemoryImpl(
         pub const Box = BoundingBoxT;
         pub const Value = ValueT;
         pub const Id = IdType;
+        pub const Entries = EntriesWrapper;
+        pub const EntriesMut = EntriesMutWrapper;
+        pub const Trait = TraitType;
 
         node: *NodeImpl,
         node_id: Id,
@@ -320,7 +331,7 @@ pub fn MemoryImpl(
             return null;
         }
 
-        pub fn entries(self: *const Self) ErrorSet!EntriesWrapper {
+        pub fn entries(self: *Self) ErrorSet!EntriesWrapper {
             return EntriesWrapper.init(&self.node.entries);
         }
 
@@ -353,7 +364,7 @@ pub fn MemoryImpl(
             _ = self.node.entries.list.orderedRemove(index);
         }
 
-        pub fn canInsertEntry(self: *const Self, box: Box, value: ValueT) bool {
+        pub fn canInsertEntry(self: *const Self, box: Box, value: ValueT) ErrorSet!bool {
             _ = box;
             _ = value;
             return self.node.entries.list.items.len < self.node.ctx.max_leaf_entries;
@@ -363,7 +374,7 @@ pub fn MemoryImpl(
             return self.node.level < max_tree_depth;
         }
 
-        pub fn setLevel(self: *Self, level: usize) void {
+        pub fn setLevel(self: *Self, level: usize) ErrorSet!void {
             self.node.level = level;
         }
 
@@ -375,7 +386,7 @@ pub fn MemoryImpl(
             return &self.node.trait;
         }
 
-        pub fn getTraitMut(self: *Self) *TraitType {
+        pub fn getTraitMut(self: *Self) ErrorSet!*TraitType {
             return &self.node.trait;
         }
 
@@ -455,7 +466,7 @@ pub fn MemoryImpl(
             return self.root_id;
         }
 
-        pub fn setRoot(self: *Self, id: ?IdType) void {
+        pub fn setRoot(self: *Self, id: ?IdType) ErrorSet!void {
             self.root_id = id;
         }
 
@@ -568,11 +579,16 @@ pub fn MemoryImpl(
             self.accessor.ctx.entries_count -= 1;
         }
 
-        pub fn getEntriesCount(self: *Self) ErrorSet!usize {
+        pub fn getEntriesCount(self: *const Self) ErrorSet!usize {
             return self.accessor.ctx.entries_count;
         }
 
-        pub fn valueBorrowAsIn(self: *Self, value: *const ValueBorrow) ValueIn {
+        pub fn valueOutAsIn(self: *const Self, value: ValueOut) ValueIn {
+            _ = self;
+            return value;
+        }
+
+        pub fn valueBorrowAsIn(self: *const Self, value: *const ValueBorrow) ValueIn {
             _ = self;
             return value.*;
         }

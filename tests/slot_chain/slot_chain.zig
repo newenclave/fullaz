@@ -188,6 +188,40 @@ test "SlotChain: iterator" {
     try std.testing.expect((try itr.prev()) == null);
 }
 
+test "SlotChain: append reuses persisted tail after handle reopen" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 1024);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+
+    {
+        var hdl = try Handle.init(&cache, &mgr, .{});
+        defer hdl.deinit();
+        _ = try hdl.append("first");
+    }
+    const blocks_after_first = dev.blocksCount();
+
+    {
+        var hdl = try Handle.init(&cache, &mgr, .{});
+        defer hdl.deinit();
+        _ = try hdl.append("second");
+    }
+
+    try std.testing.expectEqual(blocks_after_first, dev.blocksCount());
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+    var itr = (try hdl.iterator()).?;
+    defer itr.deinit();
+    try std.testing.expectEqualStrings("first", (try itr.next()).?.value);
+    try std.testing.expectEqualStrings("second", (try itr.next()).?.value);
+    try std.testing.expect((try itr.next()) == null);
+}
+
 test "SlotChain: iterator crosses chunks" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);

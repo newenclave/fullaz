@@ -145,7 +145,7 @@ fn render(
         if (body.id == 0) central[index] = true else density[index] += 1;
     }
 
-    const bounds = simulation.tree.bounds().?;
+    const bounds = (try simulation.tree.bounds()).?;
     try out.print("Barnes-Hut galaxy | {s} | step {d} | bodies {d} | nodes {d}\x1b[K\r\n", .{
         if (running) "RUNNING" else "PAUSED",
         step,

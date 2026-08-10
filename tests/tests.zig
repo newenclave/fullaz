@@ -51,9 +51,12 @@ test {
 
     _ = @import("spatial/geometry.zig");
     _ = @import("spatial/orthtree/orthtree.zig");
+    _ = @import("spatial/orthtree/paged_model.zig");
+    _ = @import("spatial/orthtree/paged_view.zig");
 
     _ = @import("page/extensions.zig");
     _ = @import("page/links.zig");
+    _ = @import("page/orthtree.zig");
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
     _ = @import("long_store.zig");

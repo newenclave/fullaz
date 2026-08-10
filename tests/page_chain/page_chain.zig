@@ -267,6 +267,52 @@ test "PageChain: loadChunk rejects a plain page with the same kind" {
     try std.testing.expectError(error.InvalidHeaderSize, hdl.loadChunk(pid));
 }
 
+test "PageChain: bidirectional loader rejects a mismatched self pid" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var chunk = try hdl.createChunk();
+    defer chunk.deinit();
+    const pid = try chunk.id();
+    (try chunk.headerMut()).self_pid.set(pid + 1);
+
+    const available_before = cache.availableFrames();
+    try std.testing.expectError(error.BadData, hdl.loadChunk(pid));
+    try std.testing.expectEqual(available_before, cache.availableFrames());
+}
+
+test "PageChain: forward loader rejects a mismatched self pid" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = page_chain.ForwardHandle(Cache, NoneStorageManager, void, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 4096);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+    var hdl = try Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var chunk = try hdl.createChunk();
+    defer chunk.deinit();
+    const pid = try chunk.id();
+    (try chunk.headerMut()).self_pid.set(pid + 1);
+
+    const available_before = cache.availableFrames();
+    try std.testing.expectError(error.BadData, hdl.loadChunk(pid));
+    try std.testing.expectEqual(available_before, cache.availableFrames());
+}
+
 test "PageChain: iterator rejects a linked page with another kind" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
