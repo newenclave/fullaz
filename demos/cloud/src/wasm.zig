@@ -41,6 +41,18 @@ pub const role_superblock: u8 = 1;
 pub const role_nodes: u8 = 2;
 pub const role_entries: u8 = 3;
 pub const role_fsm: u8 = 4;
+// A chunk page kept alive by a node's entries_first/entries_last, but with
+// every slot tombstoned. There is no destroyChunk for entry chains, so once a
+// split moves a node's entries to its children, that chain's pages are
+// permanently linked and permanently empty -- reachable, just pure waste.
+pub const role_entries_dead: u8 = 5;
+
+// Once a chunk page is found to hold zero live entries it stays that way
+// forever: nothing ever un-tombstones a slot or relinks a chain (see
+// markLiveChunks below). So this is safe to cache indefinitely instead of
+// recomputing it -- the expensive pass only ever adds to it, never removes.
+var dead_chunk_marks: [max_mapped_pages]bool = @splat(false);
+var dead_chunk_pages: usize = 0;
 
 fn fail(err: anyerror) u32 {
     last_error = @errorName(err);
@@ -48,6 +60,10 @@ fn fail(err: anyerror) u32 {
 }
 
 fn teardown() void {
+    // A fresh device reuses page ids from zero, so marks from the outgoing
+    // one would misclassify pages in the new one if left in place.
+    dead_chunk_marks = @splat(false);
+    dead_chunk_pages = 0;
     if (!ready) return;
     world.deinit();
     cache.deinit();
@@ -232,7 +248,33 @@ fn roleOf(pid: usize, bytes: []const u8) u8 {
     };
 }
 
-export fn snapshotPages() u32 {
+// Marks every chunk page reachable through a live entry. This walks the whole
+// tree and every entry chain, which is O(points) -- too slow to run on a
+// camera-driven frame, so the caller only asks for it when the point set
+// itself just changed (see snapshotPages' `include_waste`).
+fn markLiveChunks(live: *std.AutoHashMap(u32, void), node_id: Cloud.NodeId) !void {
+    const accessor = world.model.getAccessor();
+    var node = try accessor.loadNode(node_id);
+    defer accessor.deinitNode(&node);
+
+    var entries = try node.entries();
+    defer entries.deinit();
+    if (try entries.chain.iterator()) |iterator_value| {
+        var iterator = iterator_value;
+        defer iterator.deinit();
+        while (try iterator.next()) |result| {
+            try live.put(result.page_id, {});
+        }
+    }
+
+    inline for (0..8) |i| {
+        if (node.getChild(i)) |child_id| {
+            try markLiveChunks(live, child_id);
+        }
+    }
+}
+
+export fn snapshotPages(include_waste: u32) u32 {
     if (!ready) return 0;
     cache.flushAll() catch |err| return fail(err);
 
@@ -241,11 +283,43 @@ export fn snapshotPages() u32 {
     var pid: usize = 0;
     while (pid < total) : (pid += 1) {
         const start = pid * block_size;
-        page_roles[pid] = roleOf(pid, device.storage.items[start..][0..block_size]);
+        var role = roleOf(pid, device.storage.items[start..][0..block_size]);
+        // Consult the cache rather than recomputing it: this runs every dirty
+        // frame while dragging, and without this a cheap-only call would
+        // paint every chunk page blue again, erasing the last expensive pass.
+        if (role == role_entries and dead_chunk_marks[pid]) role = role_entries_dead;
+        page_roles[pid] = role;
     }
+
+    if (include_waste != 0) {
+        var live = std.AutoHashMap(u32, void).init(allocator);
+        defer live.deinit();
+        if (world.manager.root) |root_id| {
+            markLiveChunks(&live, root_id) catch |err| return fail(err);
+        }
+
+        pid = 0;
+        while (pid < total) : (pid += 1) {
+            if (page_roles[pid] == role_entries and !live.contains(@intCast(pid))) {
+                page_roles[pid] = role_entries_dead;
+                dead_chunk_marks[pid] = true;
+            }
+        }
+
+        dead_chunk_pages = 0;
+        pid = 0;
+        while (pid < total) : (pid += 1) {
+            if (dead_chunk_marks[pid]) dead_chunk_pages += 1;
+        }
+    }
+
     mapped_pages = total;
     last_error = "";
     return @intCast(total);
+}
+
+export fn deadChunkPages() u32 {
+    return @intCast(dead_chunk_pages);
 }
 
 export fn pageRolesPtr() usize {

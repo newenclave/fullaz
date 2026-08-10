@@ -47,6 +47,7 @@
     <span><i style="background:#ffb86c"></i>tree nodes</span>
     <span><i style="background:#7dd3fc"></i>point chunks</span>
     <span><i style="background:#86efac"></i>free-space map</span>
+    <span><i style="background:#4b5563"></i>wasted (split leftovers)</span>
   </div>
 </div>
 
@@ -75,10 +76,13 @@ const el = {
   toggleMap: document.getElementById("toggle-map"), invertMouse: document.getElementById("invert-mouse"),
 };
 
-const ROLE_COLOURS = ["#f87171", "#d946ef", "#ffb86c", "#7dd3fc", "#86efac"];
-const ROLE_NAMES = ["unknown", "superblock", "nodes", "chunks", "fsm"];
+const ROLE_COLOURS = ["#f87171", "#d946ef", "#ffb86c", "#7dd3fc", "#86efac", "#4b5563"];
+const ROLE_NAMES = ["unknown", "superblock", "nodes", "chunks", "fsm", "wasted"];
 
 let ex = null, dpr = 1, dirty = true, failure = "", seed = 0;
+// Chunk waste only changes when the point set does, not when the camera does:
+// finding it walks every entry in the tree, so it stays off the per-frame path.
+let storageDirty = true;
 
 function resize() {
   dpr = Math.min(devicePixelRatio || 1, 2);
@@ -190,7 +194,10 @@ function drawHud(splats) {
 function refreshMap() {
   if (el.storage.classList.contains("hidden")) return;
   let total = 0;
-  try { total = ex.snapshotPages(); } catch (error) { return; }
+  try {
+    total = ex.snapshotPages(storageDirty ? 1 : 0);
+    if (storageDirty && total) storageDirty = false;
+  } catch (error) { return; }
   const roles = new Uint8Array(ex.memory.buffer, ex.pageRolesPtr(), total);
 
   // One pixel per page, laid out row-major, then scaled up by the canvas CSS.
@@ -199,7 +206,7 @@ function refreshMap() {
   mapCanvas.width = columns;
   mapCanvas.height = rows;
   const image = mapCtx.createImageData(columns, rows);
-  const tally = [0, 0, 0, 0, 0];
+  const tally = new Array(ROLE_NAMES.length).fill(0);
   for (let i = 0; i < total; i++) {
     const role = roles[i];
     tally[role] = (tally[role] || 0) + 1;
@@ -299,11 +306,12 @@ function newCloud() {
     failure = `${error}`;
   }
   dirty = true;
+  storageDirty = true;
   persist();
 }
 
 el.reset.onclick = newCloud;
-el.add.onclick = () => { ex.insertPoints(10000); dirty = true; persist(); };
+el.add.onclick = () => { ex.insertPoints(10000); dirty = true; storageDirty = true; persist(); };
 el.invertMouse.checked = localStorage.getItem("cloud-invert-mouse") === "1";
 el.invertMouse.onchange = () => {
   localStorage.setItem("cloud-invert-mouse", el.invertMouse.checked ? "1" : "0");
@@ -331,6 +339,7 @@ el.upload.onchange = async () => {
   try { importBytes(await file.arrayBuffer()); failure = ""; }
   catch (error) { failure = `${error}`; }
   dirty = true;
+  storageDirty = true;
   persist();
 };
 
