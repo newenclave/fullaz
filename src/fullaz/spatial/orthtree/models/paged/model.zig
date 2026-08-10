@@ -334,9 +334,13 @@ pub fn PagedModelImpl(
                 pub fn init(node: *NodeT) ErrorSet!Self {
                     return .{
                         .node = node,
-                        .chain = try ChainHandle.init(node.cache, node, .{
-                            .chunk_page_kind = node.settings.entry_page_kind,
-                        }),
+                        .chain = try ChainHandle.init(
+                            node.cache,
+                            node,
+                            .{
+                                .chunk_page_kind = node.settings.entry_page_kind,
+                            },
+                        ),
                     };
                 }
 
