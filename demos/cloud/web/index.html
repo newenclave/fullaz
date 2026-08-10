@@ -231,8 +231,9 @@ let dragging = false, lastX = 0, lastY = 0;
 
 function orbitBy(ddx, ddy) {
   if (!ex) return;
-  const sign = el.invertMouse.checked ? -1 : 1;
-  ex.orbit(sign * ddx * 0.006, sign * ddy * 0.006);
+  // Screen Y grows downward while positive camera pitch moves upward.
+  const pitchSign = el.invertMouse.checked ? 1 : -1;
+  ex.orbit(-ddx * 0.006, pitchSign * ddy * 0.006);
   dirty = true;
 }
 function dollyBy(factor) {
