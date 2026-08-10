@@ -73,6 +73,52 @@ test "BoundingBox: center" {
     try testing.expectEqual(BB.Point{ 1, 2 }, box(0, 0, 2, 4).center());
 }
 
+const FB = BoundingBox(f64, 2);
+
+fn fbox(x0: f64, y0: f64, x1: f64, y1: f64) FB {
+    return FB.initWith(.{ x0, y0 }, .{ x1, y1 });
+}
+
+test "BoundingBox: center of a float box is the true midpoint" {
+    try testing.expectEqual(FB.Point{ 0.5, 0.5 }, fbox(0, 0, 1, 1).center());
+    try testing.expectEqual(FB.Point{ 1.5, 1.5 }, fbox(0, 0, 3, 3).center());
+    try testing.expectEqual(FB.Point{ 0, 0 }, fbox(-1, -1, 1, 1).center());
+    try testing.expectEqual(FB.Point{ 5, 5 }, fbox(0, 0, 10, 10).center());
+}
+
+test "BoundingBox: center stays strictly inside a tiny float box" {
+    const b = fbox(0, 0, 1e-6, 1e-6);
+    const c = b.center();
+
+    try testing.expectEqual(FB.Point{ 5e-7, 5e-7 }, c);
+    // @divTrunc collapsed this onto `low`. Orthtree subdivision then produced a
+    // child box identical to its parent and recursed to the depth limit.
+    try testing.expect(c[0] > b.low[0] and c[0] < b.high[0]);
+    try testing.expect(c[1] > b.low[1] and c[1] < b.high[1]);
+}
+
+test "BoundingBox: center of a float box below extent two still splits" {
+    const b = fbox(0, 0, 1.5, 1.5);
+    const c = b.center();
+
+    try testing.expectEqual(FB.Point{ 0.75, 0.75 }, c);
+    try testing.expect(c[0] > b.low[0] and c[0] < b.high[0]);
+}
+
+test "BoundingBox: center of an integer box still truncates toward low" {
+    try testing.expectEqual(BB.Point{ 1, 1 }, box(0, 0, 3, 3).center());
+    try testing.expectEqual(BB.Point{ -2, -2 }, box(-3, -3, 0, 0).center());
+    try testing.expectEqual(BB.Point{ 0, 0 }, box(-1, -1, 1, 1).center());
+}
+
+test "BoundingBox: center of a large float box stays within the box" {
+    const b = fbox(1e30, 1e30, 3e30, 3e30);
+    const c = b.center();
+
+    try testing.expectEqual(FB.Point{ 2e30, 2e30 }, c);
+    try testing.expect(c[0] >= b.low[0] and c[0] <= b.high[0]);
+}
+
 test "spatial BoundingBox satisfies rtree key contract" {
     comptime fullaz.spatial.rtree.models.interfaces.assertKey(BB);
 }

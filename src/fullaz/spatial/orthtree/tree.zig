@@ -254,59 +254,64 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
         pub fn growRootToContain(self: *Self, box: Box) Error!void {
             var acc = self.getAccessor();
-            if (acc.getRoot()) |rid| {
-                var rnode = try acc.loadNode(rid);
-                defer acc.deinitNode(&rnode);
-                var expanded_bounds = rnode.bounds();
+            var current_root_id = acc.getRoot() orelse return;
 
-                while (!expanded_bounds.containsBox(&box)) {
-                    var low = expanded_bounds.low;
-                    var high = expanded_bounds.high;
-                    inline for (0..dimension) |axis| {
-                        const extend = high[axis] - low[axis];
-                        if (extend <= 0) {
-                            return ErrorSet.InvalidId;
-                        }
-                        // A new root divides every axis in half. Expand every
-                        // axis so the old root occupies exactly one child;
-                        // expanding only the overflowing axis leaves it
-                        // straddling the new root's center on the others.
-                        if (box.low[axis] < low[axis]) {
-                            low[axis] -= extend;
-                        } else {
-                            high[axis] += extend;
-                        }
-                    }
-                    expanded_bounds = Box.create(low, high);
-                    const old_root_bounds = rnode.bounds();
-                    const old_root_child_id = Self.childIndexFor(
-                        &expanded_bounds,
-                        &old_root_bounds,
-                    ) orelse
+            var expanded_bounds = blk: {
+                var root_node = try acc.loadNode(current_root_id);
+                defer acc.deinitNode(&root_node);
+                break :blk root_node.bounds();
+            };
+
+            while (!expanded_bounds.containsBox(&box)) {
+                var low = expanded_bounds.low;
+                var high = expanded_bounds.high;
+                inline for (0..dimension) |axis| {
+                    const extend = high[axis] - low[axis];
+                    if (extend <= 0) {
                         return ErrorSet.InvalidId;
-                    const old_root_id = rnode.id();
-                    var new_root_node = try acc.createNode(expanded_bounds);
-                    defer acc.deinitNode(&new_root_node);
-                    try new_root_node.beforeSplit();
-                    try new_root_node.setChild(old_root_child_id, old_root_id);
-                    inline for (0..child_count) |i| {
-                        if (i != old_root_child_id) {
-                            const child_bounds = Self.childBounds(&expanded_bounds, i);
-                            var child_node = try acc.createNode(child_bounds);
-                            defer acc.deinitNode(&child_node);
-                            try new_root_node.setChild(i, child_node.id());
-                            try child_node.setParent(new_root_node.id());
-                        }
                     }
-                    var old_root_node = try acc.loadNode(old_root_id);
-                    defer acc.deinitNode(&old_root_node);
-                    try rnode.setParent(new_root_node.id());
-                    try acc.setRoot(new_root_node.id());
-                    rnode = try acc.loadNode(new_root_node.id());
-                    defer acc.deinitNode(&rnode);
-                    expanded_bounds = rnode.bounds();
-                    try self.onGrow(&old_root_node, &new_root_node);
+                    // A new root divides every axis in half. Expand every
+                    // axis so the old root occupies exactly one child;
+                    // expanding only the overflowing axis leaves it
+                    // straddling the new root's center on the others.
+                    if (box.low[axis] < low[axis]) {
+                        low[axis] -= extend;
+                    } else {
+                        high[axis] += extend;
+                    }
                 }
+                const grown_bounds = Box.create(low, high);
+
+                var old_root_node = try acc.loadNode(current_root_id);
+                defer acc.deinitNode(&old_root_node);
+
+                const old_root_bounds = old_root_node.bounds();
+                const old_root_child_id = Self.childIndexFor(
+                    &grown_bounds,
+                    &old_root_bounds,
+                ) orelse
+                    return ErrorSet.InvalidId;
+
+                var new_root_node = try acc.createNode(grown_bounds);
+                defer acc.deinitNode(&new_root_node);
+                try new_root_node.beforeSplit();
+                try new_root_node.setChild(old_root_child_id, current_root_id);
+                inline for (0..child_count) |i| {
+                    if (i != old_root_child_id) {
+                        const child_bounds = Self.childBounds(&grown_bounds, i);
+                        var child_node = try acc.createNode(child_bounds);
+                        defer acc.deinitNode(&child_node);
+                        try new_root_node.setChild(i, child_node.id());
+                        try child_node.setParent(new_root_node.id());
+                    }
+                }
+
+                try old_root_node.setParent(new_root_node.id());
+                try acc.setRoot(new_root_node.id());
+                try self.onGrow(&old_root_node, &new_root_node);
+
+                current_root_id = new_root_node.id();
+                expanded_bounds = new_root_node.bounds();
             }
         }
 

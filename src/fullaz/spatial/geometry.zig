@@ -116,9 +116,11 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
         }
 
         pub fn center(self: *const Self) Point {
+            const is_float = comptime @typeInfo(Coord) == .float;
             var result: Point = undefined;
             inline for (0..dimension) |i| {
-                result[i] = self.low[i] + @divTrunc(self.high[i] - self.low[i], 2);
+                const extent = self.high[i] - self.low[i];
+                result[i] = self.low[i] + if (is_float) extent / 2 else @divTrunc(extent, 2);
             }
             return result;
         }
