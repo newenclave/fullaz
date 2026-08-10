@@ -19,6 +19,9 @@ const Options = struct {
     clusters: u16 = 12,
     // Per cent of the viewport height; see lod.Settings.detail_fraction.
     detail_percent: f64 = constants.default_detail_fraction * 100.0,
+    // Camera distance in world cubes. Only applied when formatting; reopening
+    // restores whatever the last session was looking at.
+    distance_cubes: f64 = constants.default_camera_distance / constants.root_side,
 };
 
 const ParseResult = union(enum) {
@@ -28,7 +31,8 @@ const ParseResult = union(enum) {
 };
 
 const usage =
-    "usage: cloud <image> [--format] [--seed N] [--points N] [--clusters N] [--detail X]\n";
+    "usage: cloud <image> [--format] [--seed N] [--points N] [--clusters N]\n" ++
+    "             [--detail PERCENT] [--distance CUBES]\n";
 
 const keys_hint = "h/l yaw  j/k pitch  +/- zoom  [/] detail  i add points  w write  q quit";
 
@@ -45,9 +49,9 @@ fn parsePositiveFloat(text: []const u8) ?f64 {
     return if (std.math.isFinite(value) and value > 0) value else null;
 }
 
-fn parseArgs(init: std.process.Init, allocator: std.mem.Allocator, err: *Io.Writer) !ParseResult {
-    var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
-    defer args.deinit();
+// Takes the iterator rather than owning one: Options.image borrows from it, so
+// it has to outlive the run, not just the parse.
+fn parseArgs(args: *std.process.Args.Iterator, err: *Io.Writer) !ParseResult {
     _ = args.skip();
 
     var options = Options{};
@@ -92,6 +96,11 @@ fn parseArgs(init: std.process.Init, allocator: std.mem.Allocator, err: *Io.Writ
         } else if (std.mem.eql(u8, argument, "--detail")) {
             options.detail_percent = parsePositiveFloat(value) orelse {
                 try err.writeAll("--detail must be a positive finite number\n");
+                return .invalid;
+            };
+        } else if (std.mem.eql(u8, argument, "--distance")) {
+            options.distance_cubes = parsePositiveFloat(value) orelse {
+                try err.writeAll("--distance must be a positive finite number\n");
                 return .invalid;
             };
         } else {
@@ -211,7 +220,10 @@ fn run(init: std.process.Init, out: *Io.Writer, options: Options) !void {
         try Cloud.open(allocator, &cache, constants.block_size);
     defer c.deinit();
 
-    if (options.format) c.detail_fraction = options.detail_percent / 100.0;
+    if (options.format) {
+        c.detail_fraction = options.detail_percent / 100.0;
+        c.camera.distance = options.distance_cubes * constants.root_side;
+    }
 
     // Without a terminal there is nothing to drive, but building an image from
     // a script is still worth doing, so report and exit rather than refuse.
@@ -354,7 +366,10 @@ pub fn main(init: std.process.Init) !void {
     var stderr_writer: Io.File.Writer = .init(.stderr(), init.io, &stderr_buffer);
     const err = &stderr_writer.interface;
 
-    switch (try parseArgs(init, init.gpa, err)) {
+    var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
+    defer args.deinit();
+
+    switch (try parseArgs(&args, err)) {
         .help => {
             try out.writeAll(usage);
             try out.flush();

@@ -139,6 +139,15 @@ pub fn Cloud(comptime PageCacheType: type) type {
             // point-sized box and the second fails growing a zero extent.
             try self.tree.initRootBounds(constants.rootBox());
             _ = try self.insertPoints(initial_points);
+            // Frame the cloud, not the cube: the root aggregate already knows
+            // where the points actually ended up.
+            if (self.manager.root) |root_id| {
+                var root = try self.model.getAccessor().loadNode(root_id);
+                defer self.model.getAccessor().deinitNode(&root);
+                if (trait.Splat.count(root.getTrait()) > 0) {
+                    self.camera.target = trait.Splat.centroid(root.getTrait());
+                }
+            }
             return self;
         }
 
