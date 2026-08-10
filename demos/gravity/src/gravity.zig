@@ -213,6 +213,17 @@ pub const Simulation = struct {
     const Self = @This();
     pub const initial_bounds = Box.create(.{ -128, -128 }, .{ 128, 128 });
     pub const max_leaf_entries = 4;
+    // Below the softening length the force law is smoothed, so cells finer than
+    // that separate nothing the simulation can feel. Without a floor the dense
+    // galactic core keeps subdividing until the depth limit stops it.
+    pub const min_cell_extent: f64 = (Config{}).softening;
+
+    fn modelSettings() Model.Settings {
+        return .{
+            .max_leaf_entries = max_leaf_entries,
+            .min_cell_extent = min_cell_extent,
+        };
+    }
 
     allocator: std.mem.Allocator,
     model: *Model,
@@ -221,7 +232,7 @@ pub const Simulation = struct {
     pub fn init(allocator: std.mem.Allocator, bodies: []const Body) !Self {
         const model = try allocator.create(Model);
         errdefer allocator.destroy(model);
-        model.* = try Model.init(allocator, max_leaf_entries);
+        model.* = try Model.initWithSettings(allocator, Trait.init(), modelSettings());
         errdefer model.deinit();
 
         var self = Self{
@@ -241,7 +252,7 @@ pub const Simulation = struct {
     pub fn rebuild(self: *Self, bodies: []const Body) !void {
         const new_model = try self.allocator.create(Model);
         errdefer self.allocator.destroy(new_model);
-        new_model.* = try Model.init(self.allocator, max_leaf_entries);
+        new_model.* = try Model.initWithSettings(self.allocator, Trait.init(), modelSettings());
         errdefer new_model.deinit();
 
         var new_tree = Tree.init(new_model);

@@ -119,6 +119,36 @@ test "BoundingBox: center of a large float box stays within the box" {
     try testing.expect(c[0] >= b.low[0] and c[0] <= b.high[0]);
 }
 
+test "BoundingBox: splittable rejects a box whose center does not separate" {
+    // An integer extent of 1 puts center() on `low`, so childBounds would hand
+    // back a child identical to the parent and subdivision would never progress.
+    try testing.expect(!box(0, 0, 1, 1).splittable(0));
+    try testing.expect(box(0, 0, 2, 2).splittable(0));
+    try testing.expect(box(0, 0, 3, 3).splittable(0));
+    // One degenerate axis is enough to refuse.
+    try testing.expect(!box(0, 0, 4, 0).splittable(0));
+}
+
+test "BoundingBox: splittable honours a minimum cell extent" {
+    try testing.expect(box(0, 0, 8, 8).splittable(4)); // children are 4x4
+    try testing.expect(!box(0, 0, 8, 8).splittable(5));
+    try testing.expect(!box(0, 0, 4, 4).splittable(4)); // children would be 2x2
+    try testing.expect(box(0, 0, 4, 4).splittable(2));
+}
+
+test "BoundingBox: splittable keeps float boxes below extent two usable" {
+    try testing.expect(fbox(0, 0, 1.5, 1.5).splittable(0));
+    try testing.expect(fbox(0, 0, 1e-6, 1e-6).splittable(0));
+    try testing.expect(!fbox(0, 0, 1e-6, 1e-6).splittable(1e-3));
+}
+
+test "BoundingBox: splittable refuses non-finite float bounds" {
+    const nan = std.math.nan(f64);
+
+    try testing.expect(!fbox(0, 0, nan, nan).splittable(0));
+    try testing.expect(!fbox(nan, nan, 1, 1).splittable(0));
+}
+
 test "spatial BoundingBox satisfies rtree key contract" {
     comptime fullaz.spatial.rtree.models.interfaces.assertKey(BB);
 }

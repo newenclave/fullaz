@@ -125,6 +125,22 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
             return result;
         }
 
+        pub fn splittable(self: *const Self, min_cell_extent: Coord) bool {
+            const mid = self.center();
+            inline for (0..dimension) |i| {
+                // Positive form on purpose: NaN bounds answer "not splittable".
+                if (!(mid[i] > self.low[i]) or !(mid[i] < self.high[i])) {
+                    return false;
+                }
+                if (!(mid[i] - self.low[i] >= min_cell_extent) or
+                    !(self.high[i] - mid[i] >= min_cell_extent))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         pub fn getLowAxis(self: *const Self, axis: usize) Coord {
             if (axis >= dimension) {
                 @panic("Axis out of bounds");

@@ -319,7 +319,7 @@ test "OrthTree paged model: trait, entries, and root persist across cache reopen
             self.count += 1;
         }
     };
-    const settings: fullaz.spatial.orthtree.models.paged.Settings = .{
+    const settings: Model.Settings = .{
         .max_leaf_entries = 4,
         .max_value_size = 64,
         .node_layout_id = 0x1002,
@@ -387,7 +387,7 @@ test "OrthTree paged model: paged FSM reopens and reuses partially filled node p
             self.count += 1;
         }
     };
-    const settings: fullaz.spatial.orthtree.models.paged.Settings = .{
+    const settings: Model.Settings = .{
         .max_leaf_entries = 4,
         .max_value_size = 64,
         .node_layout_id = 0x2001,
@@ -558,7 +558,7 @@ const Cube = struct {
     const page_size: usize = 1024;
     const frames: usize = 64;
 
-    const settings: fullaz.spatial.orthtree.models.paged.Settings = .{
+    const settings: Model.Settings = .{
         .max_leaf_entries = 24,
         .max_value_size = 16,
         .max_tree_depth = 16,

@@ -13,14 +13,18 @@ const requiresErrorDeclaration = contract_interfaces.requiresErrorDeclaration;
 const requiresFnSignature = contract_interfaces.requiresFnSignature;
 const requiresTypeDeclaration = contract_interfaces.requiresTypeDeclaration;
 
-pub const Settings = struct {
-    max_leaf_entries: usize,
-    max_value_size: usize,
-    max_tree_depth: usize = 32,
-    node_layout_id: u32,
-    node_page_kind: u16 = 0,
-    entry_page_kind: u16 = 1,
-};
+pub fn Settings(comptime CoordT: type) type {
+    return struct {
+        max_leaf_entries: usize,
+        max_value_size: usize,
+        // the max_tree_depth is just a backstop to prevent deep recorsion
+        max_tree_depth: usize = 32,
+        min_cell_extent: CoordT = 0,
+        node_layout_id: u32,
+        node_page_kind: u16 = 0,
+        entry_page_kind: u16 = 1,
+    };
+}
 
 pub fn PagedModel(
     comptime PageCacheType: type,
@@ -51,12 +55,19 @@ pub fn PagedModelImpl(
     comptime Endian: std.builtin.Endian,
 ) type {
     const Value = []const u8;
+    const SettingsT = Settings(CoordT);
     const TraitPolicy = TraitT(CoordT, dims, Value);
     const TraitStorage = TraitPolicy.Storage;
     const Pid = PageCacheType.Pid;
     const PageHandle = PageCacheType.Handle;
     const BoxT = geometry.BoundingBox(CoordT, dims);
-    const OrthtreePage = orthtree_page.Orthtree(Pid, u16, CoordT, dims, Endian);
+    const OrthtreePage = orthtree_page.Orthtree(
+        Pid,
+        u16,
+        CoordT,
+        dims,
+        Endian,
+    );
     const NativeNodeId = OrthtreePage.NodeId;
     const EntrySlotHeader = OrthtreePage.EntrySlotHeader;
     const entry_slot_header_size = @sizeOf(EntrySlotHeader);
@@ -428,7 +439,7 @@ pub fn PagedModelImpl(
         cache: *PageCacheType,
         storage_manager: *StorageManager,
         fsm: *FsmT,
-        settings: Settings,
+        settings: SettingsT,
 
         fn init(
             handle: PageHandle,
@@ -436,7 +447,7 @@ pub fn PagedModelImpl(
             cache: *PageCacheType,
             storage_manager: *StorageManager,
             fsm: *FsmT,
-            settings: Settings,
+            settings: SettingsT,
         ) Self {
             return .{
                 .handle = handle,
@@ -559,7 +570,10 @@ pub fn PagedModelImpl(
         }
 
         pub fn canSplit(self: *const Self) bool {
-            return self.getLevel() < self.settings.max_tree_depth;
+            if (self.getLevel() >= self.settings.max_tree_depth) {
+                return false;
+            }
+            return self.bounds().splittable(self.settings.min_cell_extent);
         }
 
         pub fn beforeSplit(self: *Self) Error!void {
@@ -601,14 +615,14 @@ pub fn PagedModelImpl(
         cache: *PageCacheType,
         storage_manager: *StorageManager,
         fsm: *FsmT,
-        settings: Settings,
+        settings: SettingsT,
         trait_template: TraitStorage,
 
         fn init(
             cache: *PageCacheType,
             storage_manager: *StorageManager,
             fsm: *FsmT,
-            settings: Settings,
+            settings: SettingsT,
             trait_template: TraitStorage,
         ) Self {
             return .{
@@ -706,10 +720,11 @@ pub fn PagedModelImpl(
         pub const ValueBorrow = BorrowT;
         pub const Trait = TraitStorage;
         pub const Error = ErrorSet;
+        pub const Settings = SettingsT;
 
         accessor: Accessor,
 
-        pub fn init(cache: *PageCacheType, storage_manager: *StorageManager, fsm: *FsmT, settings: Settings) Error!Self {
+        pub fn init(cache: *PageCacheType, storage_manager: *StorageManager, fsm: *FsmT, settings: SettingsT) Error!Self {
             var trait_template: Trait = undefined;
             TraitPolicy.format(&trait_template);
             return Self.initWithTrait(cache, storage_manager, fsm, settings, trait_template);
@@ -719,7 +734,7 @@ pub fn PagedModelImpl(
             cache: *PageCacheType,
             storage_manager: *StorageManager,
             fsm: *FsmT,
-            settings: Settings,
+            settings: SettingsT,
             trait_template: Trait,
         ) Error!Self {
             if (settings.node_page_kind == settings.entry_page_kind) {
