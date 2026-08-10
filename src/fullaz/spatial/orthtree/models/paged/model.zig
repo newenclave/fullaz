@@ -60,8 +60,24 @@ pub fn PagedModelImpl(
     const NativeNodeId = OrthtreePage.NodeId;
     const EntrySlotHeader = OrthtreePage.EntrySlotHeader;
     const entry_slot_header_size = @sizeOf(EntrySlotHeader);
-    const MutablePackedView = view_mod.PackedView(Pid, u16, CoordT, dims, TraitStorage, Endian, false);
-    const ReadPackedView = view_mod.PackedView(Pid, u16, CoordT, dims, TraitStorage, Endian, true);
+    const MutablePackedView = view_mod.PackedView(
+        Pid,
+        u16,
+        CoordT,
+        dims,
+        TraitStorage,
+        Endian,
+        false,
+    );
+    const ReadPackedView = view_mod.PackedView(
+        Pid,
+        u16,
+        CoordT,
+        dims,
+        TraitStorage,
+        Endian,
+        true,
+    );
     const MutableNodePage = MutablePackedView.NodePage;
     const ReadNodePage = ReadPackedView.NodePage;
     const MutableNodeSlot = MutablePackedView.NodeSlot;
