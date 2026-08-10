@@ -58,8 +58,9 @@
   <button id="download">download image</button>
   <label class="field"><span>open</span><input id="upload" type="file" accept=".cld,application/octet-stream" style="width:150px"></label>
   <button id="toggle-map">hide map</button>
+  <label><input id="invert-mouse" type="checkbox"> invert mouse</label>
   <span class="spacer"></span>
-  <span class="hint">drag to orbit · wheel to zoom</span>
+  <span class="hint">drag/touch to orbit · wheel/pinch to zoom</span>
 </div>
 
 <script>
@@ -71,7 +72,7 @@ const el = {
   detail: document.getElementById("detail"), detailValue: document.getElementById("detail-value"),
   download: document.getElementById("download"), upload: document.getElementById("upload"),
   storage: document.getElementById("storage"), mapStats: document.getElementById("map-stats"),
-  toggleMap: document.getElementById("toggle-map"),
+  toggleMap: document.getElementById("toggle-map"), invertMouse: document.getElementById("invert-mouse"),
 };
 
 const ROLE_COLOURS = ["#f87171", "#d946ef", "#ffb86c", "#7dd3fc", "#86efac"];
@@ -220,21 +221,72 @@ function refreshMap() {
 
 // --- input -----------------------------------------------------------------
 let dragging = false, lastX = 0, lastY = 0;
+
+function orbitBy(ddx, ddy) {
+  if (!ex) return;
+  const sign = el.invertMouse.checked ? -1 : 1;
+  ex.orbit(sign * ddx * 0.006, sign * ddy * 0.006);
+  dirty = true;
+}
+function dollyBy(factor) {
+  if (!ex) return;
+  ex.dolly(factor);
+  dirty = true;
+}
+
 canvas.addEventListener("mousedown", (e) => {
   dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.classList.add("drag");
 });
 addEventListener("mousemove", (e) => {
-  if (!dragging || !ex) return;
-  ex.orbit((e.clientX - lastX) * 0.006, (e.clientY - lastY) * 0.006);
-  lastX = e.clientX; lastY = e.clientY; dirty = true;
+  if (!dragging) return;
+  orbitBy(e.clientX - lastX, e.clientY - lastY);
+  lastX = e.clientX; lastY = e.clientY;
 });
 addEventListener("mouseup", () => { dragging = false; canvas.classList.remove("drag"); });
 canvas.addEventListener("wheel", (e) => {
   if (!ex) return;
   e.preventDefault();
-  ex.dolly(e.deltaY < 0 ? 1 / 1.15 : 1.15);
-  dirty = true;
+  dollyBy(e.deltaY < 0 ? 1 / 1.15 : 1.15);   // wheel up = zoom in
 }, { passive: false });
+
+// One finger orbits, same as a mouse drag; two fingers pinch to dolly. #sky has
+// touch-action: none, so these are the only handlers touch input reaches.
+let pinching = false, pinchDist = 0;
+function touchDist(e) {
+  const a = e.touches[0], b = e.touches[1];
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+canvas.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 1) {
+    dragging = true; pinching = false;
+    lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+  } else if (e.touches.length === 2) {
+    pinching = true; dragging = false;
+    pinchDist = touchDist(e);
+  }
+  e.preventDefault();
+}, { passive: false });
+addEventListener("touchmove", (e) => {
+  if (pinching && e.touches.length === 2) {
+    const d = touchDist(e);
+    // Spread fingers apart (d grows) to zoom in, same feel as scrolling up.
+    if (d > 0 && pinchDist > 0) dollyBy(pinchDist / d);
+    pinchDist = d;
+    e.preventDefault();
+  } else if (dragging && e.touches.length === 1) {
+    orbitBy(e.touches[0].clientX - lastX, e.touches[0].clientY - lastY);
+    lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+    e.preventDefault();
+  }
+}, { passive: false });
+addEventListener("touchend", (e) => {
+  if (e.touches.length === 0) {
+    dragging = false; pinching = false;
+  } else if (e.touches.length === 1) {
+    pinching = false; dragging = true;
+    lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+  }
+});
 
 function newCloud() {
   seed = (Math.random() * 4294967296) >>> 0;
@@ -252,6 +304,10 @@ function newCloud() {
 
 el.reset.onclick = newCloud;
 el.add.onclick = () => { ex.insertPoints(10000); dirty = true; persist(); };
+el.invertMouse.checked = localStorage.getItem("cloud-invert-mouse") === "1";
+el.invertMouse.onchange = () => {
+  localStorage.setItem("cloud-invert-mouse", el.invertMouse.checked ? "1" : "0");
+};
 el.detail.oninput = () => {
   el.detailValue.value = `${el.detail.value}%`;
   if (ex) { ex.setDetail(Number(el.detail.value) / 100); dirty = true; }
