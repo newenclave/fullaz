@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zigline = .{
-            .url = "git+https://github.com/newenclave/zigline.git#f4bd1138cf3b9ea33db7aabee8f28a2608b990ee",
-            .hash = "zigline-0.1.0-bq7gMRq6AACNQiXP4pXtxquzLkALcdIkiDr7-FuqtFRI",
+            .url = "git+https://github.com/newenclave/zigline.git#32c5c330ff8003051be78390b887876b7e871ba0",
+            .hash = "zigline-0.2.0-bq7gMefOAADw86vJRBShHkjB-0Rs-Z8nj3kCQ9G3gGHz",
         },
     },
     .paths = .{

@@ -147,6 +147,104 @@ const Frame = struct {
     dropped: usize,
 };
 
+const BrailleAttribute = struct {
+    depth: f64 = std.math.inf(f64),
+    colour: [3]u8 = .{ 0, 0, 0 },
+};
+
+// Braille gives the interactive viewer a 2x4 dot grid per terminal cell. The
+// scene stays here rather than in cloud's wasm-safe library surface because it
+// owns terminal-specific zigline storage.
+const BrailleViewport = struct {
+    scene: ?zigline.braille.DynamicScene = null,
+    attributes: []BrailleAttribute = &.{},
+    columns: usize = 0,
+    rows: usize = 0,
+
+    fn deinit(self: *BrailleViewport, allocator: std.mem.Allocator) void {
+        if (self.scene) |*scene| {
+            scene.deinit();
+        }
+        allocator.free(self.attributes);
+    }
+
+    fn resize(self: *BrailleViewport, allocator: std.mem.Allocator, size: terminal.Size) !bool {
+        const columns = size.columns;
+        const rows = if (size.rows > hud_rows) size.rows - hud_rows else 1;
+        if (columns == self.columns and rows == self.rows) {
+            return false;
+        }
+
+        const dot_width = try std.math.mul(usize, columns, 2);
+        const dot_height = try std.math.mul(usize, rows, 4);
+        var replacement = try zigline.braille.DynamicScene.init(
+            allocator,
+            dot_width,
+            dot_height,
+        );
+        errdefer replacement.deinit();
+        const attributes = try allocator.alloc(BrailleAttribute, try std.math.mul(usize, columns, rows));
+        if (self.scene) |*scene| {
+            scene.deinit();
+        }
+        allocator.free(self.attributes);
+        self.scene = replacement;
+        self.attributes = attributes;
+        self.columns = columns;
+        self.rows = rows;
+        return true;
+    }
+
+    fn beginFrame(self: *BrailleViewport) *zigline.braille.DynamicScene {
+        const scene = &self.scene.?;
+        scene.clean();
+        for (self.attributes) |*attribute| {
+            attribute.* = .{};
+        }
+        return scene;
+    }
+};
+
+const BrailleSink = struct {
+    scene: *zigline.braille.DynamicScene,
+    attributes: []BrailleAttribute,
+
+    pub fn push(self: *BrailleSink, splat: cloud.lod.Splat) void {
+        const width: f64 = @floatFromInt(self.scene.dot_width);
+        const height: f64 = @floatFromInt(self.scene.dot_height);
+        if (!(splat.x >= 0) or !(splat.x < width) or
+            !(splat.y >= 0) or !(splat.y < height) or
+            !(splat.depth > 0))
+        {
+            return;
+        }
+
+        const x: usize = @intFromFloat(splat.x);
+        const y: usize = @intFromFloat(splat.y);
+        _ = self.scene.setDot(x, y);
+
+        const attribute = &self.attributes[(y / 4) * self.scene.width_in_cells + x / 2];
+        if (splat.depth < attribute.depth) {
+            attribute.* = .{
+                .depth = splat.depth,
+                .colour = .{ splat.r, splat.g, splat.b },
+            };
+        }
+    }
+};
+
+const BrailleStyleContext = struct {
+    attributes: []const BrailleAttribute,
+    width: usize,
+
+    fn style(self: *const BrailleStyleContext, column: usize, row: usize, cell: u8) zigline.braille.Style {
+        if (cell == zigline.braille.empty()) {
+            return .{};
+        }
+        return .{ .foreground = self.attributes[row * self.width + column].colour };
+    }
+};
+
 fn renderFrame(viewport: *Viewport, c: *Cloud, detail: f64) !Frame {
     var grid = try cloud.ascii.Grid.init(viewport.cells, viewport.columns, viewport.rows);
     grid.clear();
@@ -161,6 +259,19 @@ fn renderFrame(viewport: *Viewport, c: *Cloud, detail: f64) !Frame {
     var sink = cloud.ascii.GridSink{ .grid = &grid };
     const stats = try cloud.lod.collect(&c.tree, &projector, .{ .detail_fraction = detail }, &sink);
     return .{ .grid = grid, .stats = stats, .dropped = sink.dropped };
+}
+
+fn renderBrailleFrame(viewport: *BrailleViewport, c: *Cloud, detail: f64) !cloud.lod.Stats {
+    const scene = viewport.beginFrame();
+
+    const projector = cloud.camera.Projector.init(&c.camera, .{
+        .width = @intCast(scene.dot_width),
+        .height = @intCast(scene.dot_height),
+        // A 2x4 Braille cell maps to roughly square dots on a 2:1 terminal.
+        .cell_aspect = 1.0,
+    });
+    var sink = BrailleSink{ .scene = scene, .attributes = viewport.attributes };
+    return cloud.lod.collect(&c.tree, &projector, .{ .detail_fraction = detail }, &sink);
 }
 
 fn writeHud(
@@ -276,7 +387,7 @@ fn run(init: std.process.Init, out: *Io.Writer, options: Options) !void {
     try terminal.clear(out);
     try out.writeAll("\x1b[?25l");
 
-    var viewport = Viewport{};
+    var viewport = BrailleViewport{};
     defer viewport.deinit(allocator);
 
     var stats = cloud.lod.Stats{};
@@ -290,13 +401,18 @@ fn run(init: std.process.Init, out: *Io.Writer, options: Options) !void {
         if (try viewport.resize(allocator, terminal.dimensions(io))) dirty = true;
 
         if (dirty) {
-            var frame = try renderFrame(&viewport, &c, c.detail_fraction);
-            stats = frame.stats;
+            stats = try renderBrailleFrame(&viewport, &c, c.detail_fraction);
             dirty = false;
 
             try terminal.home(out);
             try writeHud(out, &c, stats, c.detail_fraction, status);
-            try cloud.ascii.writeFrame(&frame.grid, out, .{});
+            try out.flush();
+            const scene = &viewport.scene.?;
+            const context = BrailleStyleContext{
+                .attributes = viewport.attributes,
+                .width = scene.width_in_cells,
+            };
+            try scene.renderStyledAt(out, 0, hud_rows, &context, BrailleStyleContext.style);
             try out.flush();
             status = "";
         }

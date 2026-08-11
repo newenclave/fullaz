@@ -42,7 +42,7 @@ test "FileBlock: satisfies the block-device contract + create/append/write/read"
     try dev.readBlock(b1, &rbuf);
     try std.testing.expectEqualSlices(u8, &wbuf, &rbuf);
 
-    // block 0 is zero-filled (setLength zero-fills; we never wrote it)
+    // block 0 is zero-filled by the unwritten gap before block 1.
     var zbuf: [64]u8 = undefined;
     @memset(&zbuf, 0xFF);
     try dev.readBlock(b0, &zbuf);

@@ -181,18 +181,23 @@ pub fn FileBlock(comptime BlockIdT: type) type {
             if (idx >= self.block_count) {
                 return Error.InvalidId;
             }
-            if (idx >= self.physical_blocks) {
-                const end = try self.blockEnd(idx);
-                self.file.setLength(self.io, end) catch {
-                    return Error.IoError;
-                };
-                self.physical_blocks = idx + 1;
-            }
             const len = @min(output.len, self.block_size);
             const offset = try self.blockOffset(idx);
             self.file.writePositionalAll(self.io, output[0..len], offset) catch {
                 return Error.IoError;
             };
+            if (idx >= self.physical_blocks) {
+                // A full positional write extends the file itself. Keep the
+                // explicit growth only for short writes so reopen still sees
+                // a complete final block.
+                if (len < self.block_size) {
+                    const end = try self.blockEnd(idx);
+                    self.file.setLength(self.io, end) catch {
+                        return Error.IoError;
+                    };
+                }
+                self.physical_blocks = idx + 1;
+            }
         }
 
         pub fn sync(self: *Self) Error!void {
