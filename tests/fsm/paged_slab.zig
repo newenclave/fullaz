@@ -112,7 +112,7 @@ fn makeDataPage(cache: *PageCache) !u32 {
     var ph = try cache.create();
     defer ph.deinit();
     const pid = try ph.pid();
-    var hv = HeaderView.init(try ph.getDataMut());
+    var hv = HeaderView.init(try ph.dataMut());
     hv.formatPage(999, pid, 0, 0);
     return pid;
 }
@@ -221,12 +221,12 @@ test "Fsm paged: remove rejects a location that points to another data page slot
     const second_location = blk: {
         var ph = try cache.fetch(second);
         defer ph.deinit();
-        break :blk (try LocationAccessor.read(try ph.getData())).?;
+        break :blk (try LocationAccessor.read(try ph.data())).?;
     };
     {
         var ph = try cache.fetch(first);
         defer ph.deinit();
-        try LocationAccessor.write(try ph.getDataMut(), second_location);
+        try LocationAccessor.write(try ph.dataMut(), second_location);
     }
 
     try std.testing.expectError(Model.Error.BadData, map.remove(first));
@@ -253,7 +253,7 @@ test "Fsm paged: find rejects a class root with another persisted class" {
         const SlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, false).SlabPageView;
         var page = try cache.fetch(root);
         defer page.deinit();
-        var slab = SlabView.init(try page.getDataMut());
+        var slab = SlabView.init(try page.dataMut());
         slab.subheaderMut().size_class.set(1);
     }
 
@@ -277,13 +277,13 @@ test "Fsm paged: remove rejects a plain page with the slab kind" {
     var plain_page = try cache.create();
     defer plain_page.deinit();
     const plain_pid = try plain_page.pid();
-    var plain_view = fullaz.page.header.View(u32, u16, .little, false).init(try plain_page.getDataMut());
+    var plain_view = fullaz.page.header.View(u32, u16, .little, false).init(try plain_page.dataMut());
     plain_view.formatPage(1, plain_pid, 0, 0);
 
     {
         var data_page = try cache.fetch(data_pid);
         defer data_page.deinit();
-        try LocationAccessor.write(try data_page.getDataMut(), .{
+        try LocationAccessor.write(try data_page.dataMut(), .{
             .page_id = plain_pid,
             .slot_id = 0,
         });
@@ -447,7 +447,7 @@ test "Fsm paged: removing a middle slab reconnects its neighbors" {
     for (pids[0..len]) |pid| {
         var data_page = try cache.fetch(pid);
         defer data_page.deinit();
-        const location = (try LocationAccessor.read(try data_page.getData())).?;
+        const location = (try LocationAccessor.read(try data_page.data())).?;
         if (location.page_id == middle_id) {
             try map.remove(pid);
         }
@@ -462,14 +462,14 @@ test "Fsm paged: removing a middle slab reconnects its neighbors" {
     {
         var page = try cache.fetch(head_id);
         defer page.deinit();
-        const slab = ConstSlabView.init(try page.getData());
+        const slab = ConstSlabView.init(try page.data());
         try std.testing.expectEqual(@as(?u32, tail_id), slab.getNext());
         try std.testing.expect((slab.getPrev()) == null);
     }
     {
         var page = try cache.fetch(tail_id);
         defer page.deinit();
-        const slab = ConstSlabView.init(try page.getData());
+        const slab = ConstSlabView.init(try page.data());
         try std.testing.expectEqual(@as(?u32, head_id), slab.getPrev());
         try std.testing.expect((slab.getNext()) == null);
     }

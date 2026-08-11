@@ -96,11 +96,11 @@ pub fn Indexed(
         }
 
         fn view(self: *const Self) Error!ViewTypeConst {
-            return ViewTypeConst.init(try self.handle.getData());
+            return ViewTypeConst.init(try self.handle.data());
         }
 
         fn viewMut(self: *Self) Error!ViewType {
-            return ViewType.init(try self.handle.getDataMut());
+            return ViewType.init(try self.handle.dataMut());
         }
 
         fn getLink(self: *const Self) Error!LinkTypeConst {
@@ -156,8 +156,8 @@ pub fn Indexed(
         }
 
         pub fn getMaximumDataSize(self: *const Self) Error!Index {
-            const data = try self.getData();
-            return @intCast(data.len);
+            const chunk_data = try self.data();
+            return @intCast(chunk_data.len);
         }
 
         pub fn currentDataSize(self: *const Self) Error!Index {
@@ -185,29 +185,29 @@ pub fn Indexed(
         }
 
         pub fn currentTail(self: *const Self) Error![]const u8 {
-            const data = try self.getData();
-            const data_size = data.len;
-            return data[self.pos..data_size];
+            const chunk_data = try self.data();
+            const data_size = chunk_data.len;
+            return chunk_data[self.pos..data_size];
         }
 
         pub fn currentTailMut(self: *Self) Error![]u8 {
-            const data = try self.getDataMut();
-            const data_size = data.len;
-            return data[self.pos..data_size];
+            const chunk_data = try self.dataMut();
+            const data_size = chunk_data.len;
+            return chunk_data[self.pos..data_size];
         }
 
         pub fn currentData(self: *const Self) Error![]const u8 {
             var link = try self.getLink();
             const data_size = link.getDataSize();
-            const data = try self.getData();
-            return data[@min(self.pos, data_size)..data_size];
+            const chunk_data = try self.data();
+            return chunk_data[@min(self.pos, data_size)..data_size];
         }
 
         pub fn currentDataMut(self: *Self) Error![]u8 {
             var link = try self.getLinkMut();
             const data_size = link.getDataSize();
-            const data = try self.getDataMut();
-            return data[@min(self.pos, data_size)..data_size];
+            const chunk_data = try self.dataMut();
+            return chunk_data[@min(self.pos, data_size)..data_size];
         }
 
         pub fn hasNext(self: *const Self) Error!bool {
@@ -229,7 +229,7 @@ pub fn Indexed(
             var prev_page = try self.ctx.cache.fetch(prev_pid.?);
             errdefer prev_page.deinit();
 
-            const v = CommonPageViewConst.init(try prev_page.getData());
+            const v = CommonPageViewConst.init(try prev_page.data());
             const hdr = v.header();
             const kind = hdr.kind.get();
             if (kind == self.ctx.settings.chunk_page_kind) {
@@ -250,7 +250,7 @@ pub fn Indexed(
             var next_page = try self.ctx.cache.fetch(next_pid.?);
             errdefer next_page.deinit();
 
-            const v = CommonPageViewConst.init(try next_page.getData());
+            const v = CommonPageViewConst.init(try next_page.data());
             const hdr = v.header();
             const kind = hdr.kind.get();
             if (kind == self.ctx.settings.chunk_page_kind) {
@@ -288,19 +288,19 @@ pub fn Indexed(
             return Error.InvalidHandle;
         }
 
-        fn getData(self: *const Self) Error![]const u8 {
+        fn data(self: *const Self) Error![]const u8 {
             try self.testPage();
             if (self.page) |ph| {
-                return (try ph.view()).getData();
+                return (try ph.view()).data();
             }
             return Error.InvalidHandle;
         }
 
-        fn getDataMut(self: *Self) Error![]u8 {
+        fn dataMut(self: *Self) Error![]u8 {
             try self.testPage();
             if (self.page) |*ph| {
                 var v = try ph.viewMut();
-                return v.getDataMut();
+                return v.dataMut();
             }
             return Error.InvalidHandle;
         }
@@ -419,7 +419,7 @@ pub fn Indexed(
             if (try self.ctx.mgr.getLast()) |last_page| {
                 var ph = try self.fetch(last_page);
                 errdefer ph.deinit();
-                const chunk_v = ViewTypesConst.Chunk.init(try ph.getData());
+                const chunk_v = ViewTypesConst.Chunk.init(try ph.data());
                 const chunk_size = chunk_v.getLink().getDataSize();
                 return Cursor.init(ph, chunk_size, &self.ctx);
             }
@@ -552,7 +552,7 @@ pub fn Indexed(
         fn fetch(self: *const Self, page_id: Pid) Error!PageHandle {
             var ph = try self.ctx.cache.fetch(page_id);
             errdefer ph.deinit();
-            const pv = CommonPageViewConst.init(try ph.getData());
+            const pv = CommonPageViewConst.init(try ph.data());
             if (pv.header().kind.get() != self.ctx.settings.chunk_page_kind) {
                 return Error.InvalidId;
             }
@@ -567,7 +567,7 @@ pub fn Indexed(
         pub fn createPage(self: *Self) Error!PageHandle {
             var ph = try self.ctx.cache.create();
             errdefer ph.deinit();
-            var pv = ViewTypes.Chunk.init(try ph.getDataMut());
+            var pv = ViewTypes.Chunk.init(try ph.dataMut());
             pv.formatPage(self.ctx.settings.chunk_page_kind, try ph.pid(), 0);
             return ph;
         }
@@ -577,19 +577,19 @@ pub fn Indexed(
 
             const ph_before = try self.fetch(pid_before);
             defer ph_before.deinit();
-            const pv_before_c = ViewTypesConst.Chunk.init(try ph_before.getData());
+            const pv_before_c = ViewTypesConst.Chunk.init(try ph_before.data());
 
             const prev = pv_before_c.getPrev();
             if (prev) |prev_id| {
                 const ph_prev = try self.fetch(prev_id);
                 defer ph_prev.deinit();
-                var pv_prev = ViewTypes.Chunk.init(try ph_prev.getDataMut());
+                var pv_prev = ViewTypes.Chunk.init(try ph_prev.dataMut());
                 pv_prev.setNext(pid);
             } else {
                 try self.ctx.mgr.setFirst(pid);
             }
-            var pv = ViewTypes.Chunk.init(try ph.getDataMut());
-            var pv_before = ViewTypes.Chunk.init(try ph_before.getDataMut());
+            var pv = ViewTypes.Chunk.init(try ph.dataMut());
+            var pv_before = ViewTypes.Chunk.init(try ph_before.dataMut());
             pv.setPrev(prev);
             pv.setNext(pid_before);
             pv_before.setPrev(pid);
@@ -600,32 +600,32 @@ pub fn Indexed(
 
             const ph_after = try self.fetch(pid_after);
             defer ph_after.deinit();
-            const pv_after_c = ViewTypesConst.Chunk.init(try ph_after.getData());
+            const pv_after_c = ViewTypesConst.Chunk.init(try ph_after.data());
 
             const next = pv_after_c.getNext();
             if (next) |next_id| {
                 const ph_next = try self.fetch(next_id);
                 defer ph_next.deinit();
-                var pv_next = ViewTypes.Chunk.init(try ph_next.getDataMut());
+                var pv_next = ViewTypes.Chunk.init(try ph_next.dataMut());
                 pv_next.setPrev(pid);
             } else {
                 try self.ctx.mgr.setLast(pid);
             }
-            var pv = ViewTypes.Chunk.init(try ph.getDataMut());
-            var pv_after = ViewTypes.Chunk.init(try ph_after.getDataMut());
+            var pv = ViewTypes.Chunk.init(try ph.dataMut());
+            var pv_after = ViewTypes.Chunk.init(try ph_after.dataMut());
             pv.setNext(next);
             pv.setPrev(pid_after);
             pv_after.setNext(pid);
         }
 
         fn removeChunk(self: *Self, ph: *PageHandle) Error!void {
-            var pv = ViewTypesConst.Chunk.init(try ph.getData());
+            var pv = ViewTypesConst.Chunk.init(try ph.data());
             const prev = pv.getPrev();
             const next = pv.getNext();
             if (prev) |prev_id| {
                 const ph_prev = try self.fetch(prev_id);
                 defer ph_prev.deinit();
-                var pv_prev = ViewTypes.Chunk.init(try ph_prev.getDataMut());
+                var pv_prev = ViewTypes.Chunk.init(try ph_prev.dataMut());
                 pv_prev.setNext(next);
             } else {
                 try self.ctx.mgr.setFirst(next);
@@ -633,7 +633,7 @@ pub fn Indexed(
             if (next) |next_id| {
                 const ph_next = try self.fetch(next_id);
                 defer ph_next.deinit();
-                var pv_next = ViewTypes.Chunk.init(try ph_next.getDataMut());
+                var pv_next = ViewTypes.Chunk.init(try ph_next.dataMut());
                 pv_next.setPrev(prev);
             } else {
                 try self.ctx.mgr.setLast(prev);
@@ -650,7 +650,7 @@ pub fn Indexed(
             var ph = try self.ctx.cache.create();
             errdefer ph.deinit();
 
-            var v = ViewTypes.Chunk.init(try ph.getDataMut());
+            var v = ViewTypes.Chunk.init(try ph.dataMut());
             v.formatPage(self.ctx.settings.chunk_page_kind, try ph.pid(), 0);
 
             const new_pid = try ph.pid();
@@ -666,7 +666,7 @@ pub fn Indexed(
                 try self.ctx.mgr.setLast(new_pid);
             } else {
                 var old_last_ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
-                const old_last_v = ViewTypesConst.Chunk.init(try old_last_ph.getData());
+                const old_last_v = ViewTypesConst.Chunk.init(try old_last_ph.data());
                 const old_last_size = old_last_v.getLink().getDataSize();
                 old_last_ph.deinit();
 
@@ -694,7 +694,7 @@ pub fn Indexed(
         fn loadPage(self: *const Self, pid: Pid, kind: u16) Error!PageHandle {
             var ph = try self.ctx.cache.fetch(pid);
             errdefer ph.deinit();
-            const v = CommonPageViewConst.init(try ph.getData());
+            const v = CommonPageViewConst.init(try ph.data());
             const hdr = v.header();
             if (hdr.kind.get() != kind) {
                 return Error.BadType;
@@ -777,9 +777,9 @@ pub fn Indexed(
         }
 
         pub fn writePage(self: *Self, ph: *PageHandle, pos: Index, data: []const u8) Error!usize {
-            const page_data = try ph.getDataMut();
+            const page_data = try ph.dataMut();
             var pv = ViewTypes.Chunk.init(page_data);
-            const chunk_data = pv.getDataMut();
+            const chunk_data = pv.dataMut();
             const max_size = chunk_data.len;
             if (pos > max_size) {
                 return Error.OutOfBounds;
@@ -799,7 +799,7 @@ pub fn Indexed(
         }
 
         pub fn readPage(_: *const Self, ph: *PageHandle, pos: Index, data: []u8) Error!usize {
-            const page_data = try ph.getDataMut();
+            const page_data = try ph.dataMut();
             var pv = ViewTypesConst.Chunk.init(page_data);
             const chunk_data = pv.getChunkData();
             const max_size = chunk_data.len;
@@ -850,12 +850,12 @@ pub fn Indexed(
         }
 
         pub fn getView(_: *const Self, ph: *PageHandle) Error!ViewTypesConst.Chunk {
-            const page_data = try ph.getData();
+            const page_data = try ph.data();
             return ViewTypesConst.Chunk.init(page_data);
         }
 
         pub fn getViewMut(_: *const Self, ph: *PageHandle) Error!ViewTypes.Chunk {
-            const page_data = try ph.getDataMut();
+            const page_data = try ph.dataMut();
             return ViewTypes.Chunk.init(page_data);
         }
     };

@@ -87,11 +87,11 @@ pub fn HandleImpl(
         }
 
         pub fn view(self: *const Self) Error!ChunkViewConst {
-            return ChunkViewConst.init(try self.ph.getPage());
+            return ChunkViewConst.init(try self.ph.page());
         }
 
         pub fn viewMut(self: *Self) Error!ChunkView {
-            return ChunkView.init(try self.ph.getPageMut());
+            return ChunkView.init(try self.ph.pageMut());
         }
 
         pub fn slotsDir(self: *const Self) Error!SlotsDirConst {
@@ -153,7 +153,7 @@ pub fn HandleImpl(
 
         pub fn value(self: *const Self) Error![]const u8 {
             if (self.page) |*p| {
-                const sd = try SlotsDirConst.init(try p.getData());
+                const sd = try SlotsDirConst.init(try p.data());
                 return sd.get(self.slot_id);
             }
             return Error.InvalidIterator;
@@ -161,7 +161,7 @@ pub fn HandleImpl(
 
         pub fn clean(self: *Self) Error!bool {
             if (self.page) |*p| {
-                var sd = try SlotsDir.init(try p.getDataMut());
+                var sd = try SlotsDir.init(try p.dataMut());
                 if (self.slot_id >= sd.size()) {
                     self.deinitPage();
                     return false;
@@ -295,7 +295,7 @@ pub fn HandleImpl(
             var page = (try self.page_itr.cloneChunk()) orelse return Error.InvalidIterator;
             errdefer page.deinit();
 
-            var sd = try SlotsDir.init(try page.getDataMut());
+            var sd = try SlotsDir.init(try page.dataMut());
             try sd.setFlags(slot_id, @intCast(@intFromEnum(SlotsFlags.tombstone)));
             return .{
                 .page_id = try page.id(),
@@ -423,7 +423,7 @@ pub fn HandleImpl(
                 return;
             };
             defer tmp.deinit();
-            sv.compactWithBuffer(try tmp.getDataMut()) catch {
+            sv.compactWithBuffer(try tmp.dataMut()) catch {
                 try sv.compactInPlace();
             };
         }

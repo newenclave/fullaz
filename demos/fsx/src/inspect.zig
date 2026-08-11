@@ -61,7 +61,7 @@ pub fn Inspector(comptime PageCacheType: type) type {
                 const pid: constants.PageId = @intCast(index);
                 var handle = try self.cache.fetch(pid);
                 defer handle.deinit();
-                try callback(ctx, inspectPage(pid, try handle.getData(), format_version));
+                try callback(ctx, inspectPage(pid, try handle.data(), format_version));
             }
         }
 
@@ -88,7 +88,7 @@ pub fn Inspector(comptime PageCacheType: type) type {
                 try callback(ctx, .{ .pid = pid, .role = .file_chunk });
                 var handle = try self.cache.fetch(pid);
                 defer handle.deinit();
-                const chunk = ChunkView.init(try handle.getData());
+                const chunk = ChunkView.init(try handle.data());
                 next = chunk.getLink().getFwd();
             }
             if (roots.index) |pid| {
@@ -105,7 +105,7 @@ pub fn Inspector(comptime PageCacheType: type) type {
             try callback(ctx, .{ .pid = pid, .role = .directory_tree });
             var handle = try self.cache.fetch(pid);
             defer handle.deinit();
-            const data = try handle.getData();
+            const data = try handle.data();
             const header = HeaderView.init(data);
             try header.validateCommon();
             if (header.header().kind.get() != constants.PageKind.dir_inode) {
@@ -134,7 +134,7 @@ pub fn Inspector(comptime PageCacheType: type) type {
             try callback(ctx, .{ .pid = pid, .role = .file_index });
             var handle = try self.cache.fetch(pid);
             defer handle.deinit();
-            const data = try handle.getData();
+            const data = try handle.data();
             const header = HeaderView.init(data);
             try header.validateCommon();
             if (header.header().kind.get() != constants.fileIndexInodeKind(format_version)) {

@@ -433,7 +433,7 @@ test "OrthTree paged model: paged FSM reopens and reuses partially filled node p
         {
             var root_page = try cache.fetch(storage_manager.root.?.page_id);
             defer root_page.deinit();
-            try std.testing.expect((try NodeLocationAccessor.read(try root_page.getData())) != null);
+            try std.testing.expect((try NodeLocationAccessor.read(try root_page.data())) != null);
         }
         try cache.flushAll();
     }
@@ -493,7 +493,7 @@ test "OrthTree paged model: loader rejects a mismatched self pid without leaking
     const root_id = storage_manager.root.?;
     var page = try cache.fetch(root_id.page_id);
     defer page.deinit();
-    var header_view = HeaderView.init(try page.getDataMut());
+    var header_view = HeaderView.init(try page.dataMut());
     header_view.headerMut().self_pid.set(root_id.page_id + 1);
 
     const available_before = cache.availableFrames();
@@ -531,7 +531,7 @@ test "OrthTree paged model: loader rejects incompatible node page metadata witho
     const root_id = storage_manager.root.?;
     var page = try cache.fetch(root_id.page_id);
     defer page.deinit();
-    var node_page = PackedView.NodePage.init(try page.getDataMut());
+    var node_page = PackedView.NodePage.init(try page.dataMut());
     node_page.subheaderMut().layout_id.set(layout_id + 1);
 
     const available_before = cache.availableFrames();

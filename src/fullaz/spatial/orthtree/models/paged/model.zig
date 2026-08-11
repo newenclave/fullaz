@@ -367,7 +367,7 @@ pub fn PagedModelImpl(
                     }
                     var temporary = try self.node.cache.getTemporaryPage();
                     defer temporary.deinit();
-                    const data = try temporary.getDataMut();
+                    const data = try temporary.dataMut();
                     const entry_len = entry_slot_header_size + value.len;
                     if (entry_len > data.len) {
                         return error.ValueTooLarge;
@@ -460,7 +460,7 @@ pub fn PagedModelImpl(
         }
 
         fn readView(self: *const Self) Error!ReadNodeSlot {
-            const page = ReadNodePage.init(try self.handle.getData());
+            const page = ReadNodePage.init(try self.handle.data());
             try page.validatePage(self.self_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
             const slot = try page.slot(self.self_id.slot_id);
             try slot.validate();
@@ -472,7 +472,7 @@ pub fn PagedModelImpl(
         }
 
         fn mutableView(self: *Self) Error!MutableNodeSlot {
-            var page = MutableNodePage.init(try self.handle.getDataMut());
+            var page = MutableNodePage.init(try self.handle.dataMut());
             try page.validatePage(self.self_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
             return try page.slotMut(self.self_id.slot_id);
         }
@@ -656,7 +656,7 @@ pub fn PagedModelImpl(
                 try self.cache.create();
             errdefer handle.deinit();
             const page_id = try handle.pid();
-            var page = MutableNodePage.init(try handle.getDataMut());
+            var page = MutableNodePage.init(try handle.dataMut());
             const is_new = found_page == null;
             if (is_new) {
                 try page.formatPage(self.settings.node_page_kind, page_id, self.settings.node_layout_id);
@@ -685,7 +685,7 @@ pub fn PagedModelImpl(
         pub fn loadNode(self: *Self, node_id: NativeNodeId) Error!NodeImpl {
             var handle = try self.cache.fetch(node_id.page_id);
             errdefer handle.deinit();
-            const page = ReadNodePage.init(try handle.getData());
+            const page = ReadNodePage.init(try handle.data());
             try page.validatePage(node_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
             const slot = try page.slot(node_id.slot_id);
             try slot.validate();

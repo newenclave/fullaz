@@ -528,7 +528,7 @@ test "SlotChain: paged FSM stores its location in the effective header" {
     {
         var page = try cache.fetch(page_id);
         defer page.deinit();
-        try std.testing.expect((try LocationAccessor.read(try page.getData())) != null);
+        try std.testing.expect((try LocationAccessor.read(try page.data())) != null);
     }
 
     var itr = (try hdl.iterator()).?;
@@ -545,6 +545,6 @@ test "SlotChain: paged FSM stores its location in the effective header" {
     {
         var page = try cache.fetch(page_id);
         defer page.deinit();
-        try std.testing.expect((try LocationAccessor.read(try page.getData())) != null);
+        try std.testing.expect((try LocationAccessor.read(try page.data())) != null);
     }
 }

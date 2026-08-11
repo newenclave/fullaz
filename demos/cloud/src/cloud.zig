@@ -116,7 +116,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
                 if (try handle.pid() != constants.superblock_pid) {
                     return error.NotFreshDevice;
                 }
-                var view = superblock.View(false).init(try handle.getDataMut());
+                var view = superblock.View(false).init(try handle.dataMut());
                 view.format(block_size, spec.seed, spec.cluster_count);
             }
             try cache.flush(constants.superblock_pid);
@@ -157,7 +157,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
             const restored = blk: {
                 var handle = try cache.fetch(constants.superblock_pid);
                 defer handle.deinit();
-                const view = superblock.View(true).init(try handle.getData());
+                const view = superblock.View(true).init(try handle.data());
                 try view.validate(block_size);
                 break :blk .{
                     .state = Manager.State{
@@ -209,7 +209,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
             {
                 var handle = try self.cache.fetch(constants.superblock_pid);
                 defer handle.deinit();
-                var view = superblock.View(false).init(try handle.getDataMut());
+                var view = superblock.View(false).init(try handle.dataMut());
                 view.setRoot(self.manager.root);
                 view.setEntriesCount(self.manager.entries_count);
                 view.setFsmClassRoot(self.manager.fsm_class_root);

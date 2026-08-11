@@ -252,7 +252,7 @@ test "FileBlock: PageCache round-trips a page to disk" {
         var ph = try cache.create();
         defer ph.deinit();
         page_id = try ph.pid();
-        const data = try ph.getDataMut();
+        const data = try ph.dataMut();
         @memset(data, 0);
         @memcpy(data[0..5], "hello");
         try ph.markDirty();
@@ -264,7 +264,7 @@ test "FileBlock: PageCache round-trips a page to disk" {
         defer cache.deinit();
         var ph = try cache.fetch(page_id);
         defer ph.deinit();
-        const data = try ph.getData();
+        const data = try ph.data();
         try std.testing.expectEqualSlices(u8, "hello", data[0..5]);
     }
 }
@@ -292,7 +292,7 @@ test "FileBlock: PageCache preserves a non-zero device prefix" {
         var page = try cache.create();
         defer page.deinit();
         try std.testing.expectEqual(@as(u32, 0), try page.pid());
-        @memcpy((try page.getDataMut())[0..5], "hello");
+        @memcpy((try page.dataMut())[0..5], "hello");
         try cache.flushAll();
 
         var raw: [start_position + block_size]u8 = undefined;
@@ -308,7 +308,7 @@ test "FileBlock: PageCache preserves a non-zero device prefix" {
         defer cache.deinit();
         var page = try cache.fetch(0);
         defer page.deinit();
-        try std.testing.expectEqualSlices(u8, "hello", (try page.getData())[0..5]);
+        try std.testing.expectEqualSlices(u8, "hello", (try page.data())[0..5]);
     }
 }
 

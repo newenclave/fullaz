@@ -108,7 +108,7 @@ pub fn Paged(
 
                 while ((try itr.get()) != null) {
                     var slab = itr.chunkPtr().?;
-                    const cv = ConstView.init(try slab.getPage());
+                    const cv = ConstView.init(try slab.page());
                     if (cv.sizeClass() != c) {
                         return Error.BadData;
                     }
@@ -125,7 +125,7 @@ pub fn Paged(
             const c = try self.policy.getSizeClass(free);
             var slab = try self.slabWithRoom(c);
             defer slab.chunk.deinit();
-            var v = View.init(try slab.chunk.getPageMut());
+            var v = View.init(try slab.chunk.pageMut());
             const si = try v.insert(pid, free);
             try self.writeLocation(pid, .{
                 .page_id = try slab.chunk.id(),
@@ -143,7 +143,7 @@ pub fn Paged(
             var ph = try self.fetchSlab(location.page_id);
             var owns_page_handle = true;
             defer if (owns_page_handle) ph.deinit();
-            var v = View.init(try ph.getDataMut());
+            var v = View.init(try ph.dataMut());
             const slot = (try v.get(@intCast(location.slot_id))) orelse return Error.BadData;
             if (slot.pid != pid) {
                 return Error.BadData;
@@ -172,7 +172,7 @@ pub fn Paged(
         fn fetchSlab(self: *Self, pid: PidT) Error!PageHandle {
             var ph = try self.cache.fetch(pid);
             errdefer ph.deinit();
-            const cv = ConstView.init(try ph.getData());
+            const cv = ConstView.init(try ph.data());
             try cv.validateTyped();
             if (cv.pageHeader().kind.get() != self.settings.page_kind) {
                 return Error.InvalidId;
@@ -183,7 +183,7 @@ pub fn Paged(
         fn createSlab(chain: *PageChainHandle, c: SizeClassT) Error!SlabRef {
             var chunk = try chain.createChunk();
             errdefer chunk.deinit();
-            var v = View.init(try chunk.getPageMut());
+            var v = View.init(try chunk.pageMut());
             try v.formatPayload(c);
             return .{ .chunk = chunk };
         }
@@ -197,7 +197,7 @@ pub fn Paged(
 
             while ((try itr.get()) != null) {
                 const slab = itr.chunkPtr().?;
-                const cv = ConstView.init(try slab.getPage());
+                const cv = ConstView.init(try slab.page());
                 if (cv.sizeClass() != c) {
                     return Error.BadData;
                 }
@@ -216,13 +216,13 @@ pub fn Paged(
         fn writeLocation(self: *Self, data_pid: PidT, location: LocationAccessorT.Location) Error!void {
             var ph = try self.cache.fetch(data_pid);
             defer ph.deinit();
-            try LocationAccessorT.write(try ph.getDataMut(), location);
+            try LocationAccessorT.write(try ph.dataMut(), location);
         }
 
         fn readLocation(self: *Self, data_pid: PidT) Error!?LocationAccessorT.Location {
             var ph = try self.cache.fetch(data_pid);
             defer ph.deinit();
-            return try LocationAccessorT.read(try ph.getData());
+            return try LocationAccessorT.read(try ph.data());
         }
     };
 }

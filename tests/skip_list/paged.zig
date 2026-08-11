@@ -207,7 +207,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     {
         var ph = try cache.fetch(ref.page_id);
         defer ph.deinit();
-        const v = View(u32, u16, void, std.builtin.Endian.little, true).init(try ph.getData());
+        const v = View(u32, u16, void, std.builtin.Endian.little, true).init(try ph.data());
         try std.testing.expectEqual(@as(usize, 1), try v.entries());
         const sw = try v.get(ref.slot_id);
         try std.testing.expect(std.mem.eql(u8, sw.key, "AAAA"));
@@ -238,7 +238,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     {
         var ph = try cache.fetch(ref.page_id);
         defer ph.deinit();
-        const v = View(u32, u16, void, std.builtin.Endian.little, true).init(try ph.getData());
+        const v = View(u32, u16, void, std.builtin.Endian.little, true).init(try ph.data());
         const used_after_destroy = try (try v.slotsDir()).usedSpace();
         try std.testing.expect(used_after_destroy < used_after_create); // slot reclaimed
     }
@@ -410,14 +410,14 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
     var ph = try cache.create();
     defer ph.deinit();
     {
-        var v = ViewT.init(try ph.getDataMut());
+        var v = ViewT.init(try ph.dataMut());
         try v.formatPage(1, try ph.pid(), 0);
     }
 
     // fill with small (level 0) slots until the contiguous free region is exhausted
     var count: usize = 0;
     while (true) {
-        var v = ViewT.init(try ph.getDataMut());
+        var v = ViewT.init(try ph.dataMut());
         const pos = try v.entries();
         if ((try v.canInsert(pos, "smal", "vvvv", 0)) != .enough) break;
         var scratch: [128]u8 = undefined;
@@ -433,7 +433,7 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
     // mark the last slot (never freed) so we can prove its index survives compaction
     const survivor = count - 1;
     {
-        var v = ViewT.init(try ph.getDataMut());
+        var v = ViewT.init(try ph.dataMut());
         const sw = try v.getMut(survivor);
         @memcpy(sw.key, "LAST");
     }
@@ -442,13 +442,13 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
     var reached = false;
     var f: usize = 0;
     while (f < survivor) : (f += 1) {
-        const vc = ViewT.init(try ph.getDataMut());
+        const vc = ViewT.init(try ph.dataMut());
         const pos = try vc.entries();
         if ((try vc.canInsert(pos, "bigk", "vvvv", 4)) == .need_compact) {
             reached = true;
             break;
         }
-        var vm = ViewT.init(try ph.getDataMut());
+        var vm = ViewT.init(try ph.dataMut());
         var sd = try vm.slotsDirMut();
         try sd.free(f);
     }
@@ -460,7 +460,7 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
 
     // post: the big slot fits contiguously now, and the survivor kept its index -> data
     {
-        const v = ViewT.init(try ph.getDataMut());
+        const v = ViewT.init(try ph.dataMut());
         const pos = try v.entries();
         try std.testing.expect((try v.canInsert(pos, "bigk", "vvvv", 4)) == .enough);
         try std.testing.expect(std.mem.eql(u8, (try v.get(survivor)).key, "LAST"));

@@ -79,7 +79,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             const result_weight = try self.weight() - pos;
             var tmp_page = try self.ctx.cache.getTemporaryPage();
             errdefer tmp_page.deinit();
-            const page_data = try tmp_page.getDataMut();
+            const page_data = try tmp_page.dataMut();
             const new_data = page_data[0..result_weight];
             @memcpy(new_data, self.val[self.val.len - result_weight ..]);
             self.val = self.val[0 .. self.val.len - result_weight];
@@ -94,7 +94,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             }
             var tmp_page = try self.ctx.cache.getTemporaryPage();
             errdefer tmp_page.deinit();
-            const page_data = try tmp_page.getDataMut();
+            const page_data = try tmp_page.dataMut();
             const new_data = page_data[0..pos];
             @memcpy(new_data, self.val[0..pos]);
             self.val = self.val[pos..];
@@ -174,17 +174,17 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn size(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.entries();
         }
 
         pub fn capacity(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.capacityFor(self.ctx.settings.maximum_value_size);
         }
 
         pub fn isUnderflowed(self: *const Self) Error!bool {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             const slots = try view.slotsDir();
             const page_cap = slots.capacitySpace();
             const page_used = try slots.usedSpace();
@@ -197,7 +197,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn totalWeight(self: *const Self) Error!Weight {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             var total: Weight = 0;
             for (0..try view.entries()) |idx| {
                 const entry = try view.get(idx);
@@ -207,43 +207,43 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn getParent(self: *const Self) Error!?BlockIdType {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParent();
         }
 
         pub fn setParent(self: *Self, parent: ?BlockIdType) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setParent(parent);
         }
 
         pub fn getPrev(self: *const Self) Error!?BlockIdType {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.getPrev();
         }
 
         pub fn setPrev(self: *Self, prev: ?BlockIdType) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setPrev(prev);
         }
 
         pub fn getNext(self: *const Self) Error!?BlockIdType {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.getNext();
         }
 
         pub fn setNext(self: *Self, next: ?BlockIdType) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setNext(next);
         }
 
         pub fn getValue(self: *const Self, pos: usize) Error!ValuePolicyType {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             const wv = try view.get(pos);
             return ValuePolicyType.init(self.ctx, wv.value);
         }
 
         fn compact(self: *Self, tmp_buf: []u8) Error!void {
-            var view_mut = PageViewType.init(try self.handle.getDataMut());
+            var view_mut = PageViewType.init(try self.handle.dataMut());
             var slots_dir = try view_mut.slotsDirMut();
             slots_dir.compactWithBuffer(tmp_buf) catch {
                 try slots_dir.compactInPlace();
@@ -251,7 +251,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         fn insertAtWithBuf(self: *Self, pos: usize, val: Value, tmp_buf: []u8) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
 
             var vp = ValuePolicyType.init(self.ctx, val);
             defer vp.deinit();
@@ -263,12 +263,12 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
                 try self.compact(tmp_buf);
             }
 
-            var view_mut = PageViewType.init(try self.handle.getDataMut());
+            var view_mut = PageViewType.init(try self.handle.dataMut());
             try view_mut.insert(pos, try vp.weight(), try vp.get());
         }
 
         pub fn insertAt(self: *Self, pos: usize, val: Value) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
 
             var vp = ValuePolicyType.init(self.ctx, val);
             defer vp.deinit();
@@ -279,17 +279,17 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             } else if (res == .need_compact) {
                 var tmp_page = try self.ctx.cache.getTemporaryPage();
                 defer tmp_page.deinit();
-                const tmp_buf = try tmp_page.getDataMut();
+                const tmp_buf = try tmp_page.dataMut();
                 try self.compact(tmp_buf);
             }
 
-            var view_mut = PageViewType.init(try self.handle.getDataMut());
+            var view_mut = PageViewType.init(try self.handle.dataMut());
             try view_mut.insert(pos, try vp.weight(), try vp.get());
         }
 
         // TODO: should be fixed. As we need to take in account the weight of values, that can be updated/removed
         pub fn canInsertWeight(self: *const Self, where: Weight, val: Value) Error!bool {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
 
             const pos = try self.selectPos(where);
 
@@ -315,7 +315,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn insertWeight(self: *Self, where: Weight, val: Value) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
 
             var vp = ValuePolicyType.init(self.ctx, val);
             defer vp.deinit();
@@ -335,7 +335,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
                 var tmp_page = try self.ctx.cache.getTemporaryPage();
                 defer tmp_page.deinit();
-                const tmp_buf = try tmp_page.getDataMut();
+                const tmp_buf = try tmp_page.dataMut();
 
                 try view.update(pos.pos, try policy.weight(), try policy.get(), tmp_buf);
                 try self.insertAtWithBuf(pos.pos + 1, try new_policy.get(), tmp_buf);
@@ -344,13 +344,13 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn removeAt(self: *Self, pos: usize) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             var slots_dir = try view.slotsDirMut();
             return slots_dir.remove(pos);
         }
 
         pub fn selectPos(self: *const Self, weight: Weight) Error!NodePosition {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             var accumulated: Weight = 0;
             const entries = try view.entries();
             for (0..entries) |idx| {
@@ -411,12 +411,12 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn size(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.entries();
         }
 
         pub fn capacity(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.capacityFor();
         }
 
@@ -427,22 +427,22 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn totalWeight(self: *const Self) Error!Weight {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return view.subheader().total_weight.get();
         }
 
         pub fn getParent(self: *const Self) Error!?BlockIdType {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParent();
         }
 
         pub fn setParent(self: *Self, parent: ?BlockIdType) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setParent(parent);
         }
 
         fn compact(self: *Self, tmp_buf: []u8) Error!void {
-            var view_mut = PageViewType.init(try self.handle.getDataMut());
+            var view_mut = PageViewType.init(try self.handle.dataMut());
             var slots_dir = try view_mut.slotsDirMut();
             slots_dir.compactWithBuffer(tmp_buf) catch {
                 try slots_dir.compactInPlace();
@@ -450,7 +450,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn insertChild(self: *Self, pos: usize, child: BlockIdType, weight: Weight) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
 
             const available = try self.canInsertImpl(pos, weight);
             if (available == .not_enough) {
@@ -458,7 +458,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             } else if (available == .need_compact) {
                 var tmp_page = try self.ctx.cache.getTemporaryPage();
                 defer tmp_page.deinit();
-                const tmp_buf = try tmp_page.getDataMut();
+                const tmp_buf = try tmp_page.dataMut();
                 try self.compact(tmp_buf);
             }
 
@@ -466,32 +466,32 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn removeAt(self: *Self, pos: usize) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.remove(pos);
         }
 
         pub fn getChild(self: *const Self, pos: usize) Error!BlockIdType {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.get(pos)).child;
         }
 
         pub fn getWeight(self: *const Self, pos: usize) Error!Weight {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.get(pos)).weight;
         }
 
         pub fn updateWeight(self: *Self, pos: usize, new_weight: Weight) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.updateWeight(pos, new_weight);
         }
 
         pub fn updateChild(self: *Self, pos: usize, new_child: BlockIdType) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.updateChild(pos, new_child);
         }
 
         pub fn selectPos(self: *const Self, weight: Weight) Error!NodePosition {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             var accumulated: Weight = 0;
             const entries = try view.entries();
             if (entries == 0) {
@@ -530,7 +530,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         fn canInsertImpl(self: *const Self, pos: usize, weight: Weight) Error!AvailableStatus {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.canInsert(pos, weight);
         }
 
@@ -573,7 +573,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            var page_view = LeafImpl.PageViewType.init(try ph.getDataMut());
+            var page_view = LeafImpl.PageViewType.init(try ph.dataMut());
             try page_view.formatPage(self.ctx.settings.leaf_page_kind, pid, 0);
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
         }
@@ -582,7 +582,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const pid = try ph.pid();
-            var view = LeafImpl.PageViewTypeConst.init(try ph.getData());
+            var view = LeafImpl.PageViewTypeConst.init(try ph.data());
             if (view.page_view.header().kind.get() != self.ctx.settings.leaf_page_kind) {
                 return Error.BadType;
             }
@@ -598,7 +598,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            var page_view = InodeImpl.PageViewType.init(try ph.getDataMut());
+            var page_view = InodeImpl.PageViewType.init(try ph.dataMut());
             try page_view.formatPage(self.ctx.settings.inode_page_kind, pid, 0);
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
@@ -607,7 +607,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const pid = try ph.pid();
-            var view = InodeImpl.PageViewTypeConst.init(try ph.getData());
+            var view = InodeImpl.PageViewTypeConst.init(try ph.data());
             if (view.page_view.header().kind.get() != self.ctx.settings.inode_page_kind) {
                 return Error.BadType;
             }
@@ -620,16 +620,16 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         }
 
         pub fn canMergeLeafs(_: *const Self, dst: *const LeafImpl, src: *const LeafImpl) Error!bool {
-            const view_a = LeafImpl.PageViewTypeConst.init(try dst.handle.getData());
-            const view_b = LeafImpl.PageViewTypeConst.init(try src.handle.getData());
+            const view_a = LeafImpl.PageViewTypeConst.init(try dst.handle.data());
+            const view_b = LeafImpl.PageViewTypeConst.init(try src.handle.data());
             const slots_dir_a = try view_a.slotsDir();
             const slots_dir_b = try view_b.slotsDir();
             return try slots_dir_a.canMergeWith(&slots_dir_b) != .not_enough;
         }
 
         pub fn canMergeInodes(_: *Self, left: *const InodeImpl, right: *const InodeImpl) ErrorSet!bool {
-            const view_a = InodeImpl.PageViewTypeConst.init(try left.handle.getData());
-            const view_b = InodeImpl.PageViewTypeConst.init(try right.handle.getData());
+            const view_a = InodeImpl.PageViewTypeConst.init(try left.handle.data());
+            const view_b = InodeImpl.PageViewTypeConst.init(try right.handle.data());
             const slots_dir_a = try view_a.slotsDir();
             const slots_dir_b = try view_b.slotsDir();
             return try slots_dir_a.canMergeWith(&slots_dir_b) != .not_enough;
@@ -638,7 +638,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
         pub fn isLeaf(self: *const Self, id: BlockIdType) Error!bool {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
-            var view = InodeImpl.PageViewTypeConst.init(try ph.getData());
+            var view = InodeImpl.PageViewTypeConst.init(try ph.data());
             return view.page_view.header().kind.get() == self.ctx.settings.leaf_page_kind;
         }
     };

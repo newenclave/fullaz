@@ -35,9 +35,9 @@ pub fn View(
         pub const Error = error{} || CommonErrorSet;
         page_view: SubheaderView = undefined,
 
-        pub fn init(data: DataType) Self {
+        pub fn init(bytes: DataType) Self {
             return .{
-                .page_view = SubheaderView.init(data),
+                .page_view = SubheaderView.init(bytes),
             };
         }
 
@@ -65,12 +65,12 @@ pub fn View(
         }
 
         // returns the PAGE data; Doesn't include header, subheader, or metadata
-        pub fn getData(self: *const Self) []const u8 {
+        pub fn data(self: *const Self) []const u8 {
             return self.page_view.page().data();
         }
 
         // returns the PAGE mutable data; Doesn't include header, subheader, or metadata
-        pub fn getDataMut(self: *Self) []u8 {
+        pub fn dataMut(self: *Self) []u8 {
             var page = self.page_view.pageMut();
             return page.dataMut();
         }
@@ -134,13 +134,13 @@ pub fn View(
         }
 
         pub fn getChunkData(self: *const Self) []const u8 {
-            const full_data = self.getData();
+            const full_data = self.data();
             const data_size = self.getSize();
             return full_data[0..data_size];
         }
 
         pub fn getChunkDataMut(self: *Self) []u8 {
-            const full_data = self.getDataMut();
+            const full_data = self.dataMut();
             const data_size = self.getSize();
             return full_data[0..data_size];
         }

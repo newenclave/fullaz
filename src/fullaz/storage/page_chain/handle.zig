@@ -109,27 +109,27 @@ pub fn HandleForwardImpl(
         }
 
         fn getViewMut(self: *Self) Error!ChunkView {
-            return ChunkView.init(try self.ph.getDataMut());
+            return ChunkView.init(try self.ph.dataMut());
         }
 
         fn getView(self: *const Self) Error!ChunkViewConst {
-            return ChunkViewConst.init(try self.ph.getData());
+            return ChunkViewConst.init(try self.ph.data());
         }
 
-        pub fn getPage(self: *const Self) Error![]const u8 {
-            return self.ph.getData();
+        pub fn page(self: *const Self) Error![]const u8 {
+            return self.ph.data();
         }
 
-        pub fn getPageMut(self: *Self) Error![]u8 {
-            return self.ph.getDataMut();
+        pub fn pageMut(self: *Self) Error![]u8 {
+            return self.ph.dataMut();
         }
 
-        pub fn getData(self: *const Self) Error![]const u8 {
+        pub fn data(self: *const Self) Error![]const u8 {
             const cv = try self.getView();
             return cv.data();
         }
 
-        pub fn getDataMut(self: *Self) Error![]u8 {
+        pub fn dataMut(self: *Self) Error![]u8 {
             var cv = try self.getViewMut();
             return cv.dataMut();
         }
@@ -188,7 +188,7 @@ pub fn HandleForwardImpl(
         fn load(page_cache: *PageCacheType, page_kind: u16, pid: BlockIdType) Error!ChunkHandle {
             var page_handle = try page_cache.fetch(pid);
             errdefer page_handle.deinit();
-            const cv = ViewTypeConst.Chunk.init(try page_handle.getData());
+            const cv = ViewTypeConst.Chunk.init(try page_handle.data());
             try cv.pageView().validateTyped();
             if (cv.header().kind.get() != page_kind) {
                 return Error.BadType;
@@ -247,7 +247,7 @@ pub fn HandleForwardImpl(
             }
             const page = self.page orelse return null;
             return .{
-                .value = try page.getData(),
+                .value = try page.data(),
                 .page_id = try page.id(),
             };
         }
@@ -600,27 +600,27 @@ pub fn HandleBidirectionalImpl(
         }
 
         fn getViewMut(self: *Self) Error!ChunkView {
-            return ChunkView.init(try self.ph.getDataMut());
+            return ChunkView.init(try self.ph.dataMut());
         }
 
         fn getView(self: *const Self) Error!ChunkViewConst {
-            return ChunkViewConst.init(try self.ph.getData());
+            return ChunkViewConst.init(try self.ph.data());
         }
 
-        pub fn getPage(self: *const Self) Error![]const u8 {
-            return self.ph.getData();
+        pub fn page(self: *const Self) Error![]const u8 {
+            return self.ph.data();
         }
 
-        pub fn getPageMut(self: *Self) Error![]u8 {
-            return self.ph.getDataMut();
+        pub fn pageMut(self: *Self) Error![]u8 {
+            return self.ph.dataMut();
         }
 
-        pub fn getData(self: *const Self) Error![]const u8 {
+        pub fn data(self: *const Self) Error![]const u8 {
             const cv = try self.getView();
             return cv.data();
         }
 
-        pub fn getDataMut(self: *Self) Error![]u8 {
+        pub fn dataMut(self: *Self) Error![]u8 {
             var cv = try self.getViewMut();
             return cv.dataMut();
         }
@@ -689,7 +689,7 @@ pub fn HandleBidirectionalImpl(
         fn load(page_cache: *PageCacheType, page_kind: u16, pid: BlockIdType) Error!ChunkHandle {
             var page_handle = try page_cache.fetch(pid);
             errdefer page_handle.deinit();
-            const cv = ViewTypeConst.Chunk.init(try page_handle.getData());
+            const cv = ViewTypeConst.Chunk.init(try page_handle.data());
             try cv.pageView().validateTyped();
             if (cv.header().kind.get() != page_kind) {
                 return Error.BadType;
@@ -745,7 +745,7 @@ pub fn HandleBidirectionalImpl(
             }
             const page = self.page orelse return null;
             return .{
-                .value = try page.getData(),
+                .value = try page.data(),
                 .page_id = try page.id(),
             };
         }

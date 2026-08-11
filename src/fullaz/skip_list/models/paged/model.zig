@@ -130,25 +130,25 @@ pub fn Paged(
         }
 
         pub fn getKey(self: *const Self) Error!KeyOut {
-            const view = NodeViewConst.init(try self.ph.getData());
+            const view = NodeViewConst.init(try self.ph.data());
             const sw = try view.get(self.pid.slot_id);
             return sw.key;
         }
 
         pub fn getValue(self: *const Self) Error!ValueOut {
-            const view = NodeViewConst.init(try self.ph.getData());
+            const view = NodeViewConst.init(try self.ph.data());
             const sw = try view.get(self.pid.slot_id);
             return sw.value;
         }
 
         pub fn getLevel(self: *const Self) Error!usize {
-            const view = NodeViewConst.init(try self.ph.getData());
+            const view = NodeViewConst.init(try self.ph.data());
             const sw = try view.get(self.pid.slot_id);
             return @as(usize, sw.header().level);
         }
 
         fn getLevelRef(self: *const Self, level: usize) Error!*const SlotWrapperConst.LevelRef {
-            const view = NodeViewConst.init(try self.ph.getData());
+            const view = NodeViewConst.init(try self.ph.data());
             const sw = try view.get(self.pid.slot_id);
             const current_level = @as(usize, sw.header().level);
             if (level >= current_level) {
@@ -158,7 +158,7 @@ pub fn Paged(
         }
 
         fn getLevelRefMut(self: *Self, level: usize) Error!*SlotWrapper.LevelRef {
-            var view = NodeViewMut.init(try self.ph.getDataMut());
+            var view = NodeViewMut.init(try self.ph.dataMut());
             const sw = try view.getMut(self.pid.slot_id);
             const current_level = @as(usize, sw.header().level);
             if (level >= current_level) {
@@ -260,7 +260,7 @@ pub fn Paged(
         }
 
         pub fn checkCompactPage(self: *Self, ph: *PageHandle, key: KeyT, value: ValueT, level_field: usize) Error!bool {
-            var fview = NodeViewMut.init(try ph.getDataMut());
+            var fview = NodeViewMut.init(try ph.dataMut());
             const pos = try fview.entries();
             const available = try fview.canInsert(pos, key, value, level_field);
             if (available == .need_compact) {
@@ -269,7 +269,7 @@ pub fn Paged(
                     return true;
                 };
                 defer tmp_page.deinit();
-                try fview.compact(try tmp_page.getDataMut());
+                try fview.compact(try tmp_page.dataMut());
                 return true;
             }
             return available == .enough;
@@ -306,7 +306,7 @@ pub fn Paged(
             }
             errdefer ph.deinit();
 
-            var view = NodeViewMut.init(try ph.getDataMut());
+            var view = NodeViewMut.init(try ph.dataMut());
             const slot_id = try view.entries();
             const sbytes = try view.reserveGet(slot_id, slot_bytes);
 
@@ -334,7 +334,7 @@ pub fn Paged(
             var ph = try self.context.cache.fetch(pid.page_id);
             errdefer ph.deinit();
 
-            const view = NodeViewConst.init(try ph.getData());
+            const view = NodeViewConst.init(try ph.data());
             if (view.header().kind.get() != self.context.settings.node_page_kind) {
                 return Error.BadType;
             }
@@ -371,7 +371,7 @@ pub fn Paged(
         fn destroyImpl(self: *Self, pid: PidImpl) Error!void {
             var ph = try self.context.cache.fetch(pid.page_id);
             defer ph.deinit();
-            var view = NodeViewMut.init(try ph.getDataMut());
+            var view = NodeViewMut.init(try ph.dataMut());
             var sdir = try view.slotsDirMut();
             try sdir.free(pid.slot_id);
             const free: u16 = @intCast(try sdir.availableAfterCompact());
@@ -386,7 +386,7 @@ pub fn Paged(
             var ph = try self.context.cache.create();
             errdefer ph.deinit();
             const pid = try ph.pid();
-            var view = NodeViewMut.init(try ph.getDataMut());
+            var view = NodeViewMut.init(try ph.dataMut());
             try view.formatPage(self.context.settings.node_page_kind, pid, 0);
             return ph;
         }

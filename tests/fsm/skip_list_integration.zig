@@ -116,12 +116,12 @@ test "paged SkipList tracks node pages through paged FSM header locations" {
     {
         var ph = try cache.fetch(data_page_id);
         defer ph.deinit();
-        try std.testing.expect((try LocationAccessor.read(try ph.getData())) != null);
+        try std.testing.expect((try LocationAccessor.read(try ph.data())) != null);
     }
     {
         var ph = try cache.fetch(data_page_id);
         defer ph.deinit();
-        var page_view = HeaderViewMut.init(try ph.getDataMut());
+        var page_view = HeaderViewMut.init(try ph.dataMut());
         const links = Additional.fieldMut(page_view.additionalMut(), "links");
         LinksTrait.setPrev(links, 11);
         LinksTrait.setNext(links, 22);
@@ -137,8 +137,8 @@ test "paged SkipList tracks node pages through paged FSM header locations" {
     {
         var ph = try cache.fetch(data_page_id);
         defer ph.deinit();
-        try std.testing.expect((try LocationAccessor.read(try ph.getData())) != null);
-        const page_view = HeaderViewConst.init(try ph.getData());
+        try std.testing.expect((try LocationAccessor.read(try ph.data())) != null);
+        const page_view = HeaderViewConst.init(try ph.data());
         const links = Additional.field(page_view.additional(), "links");
         try std.testing.expectEqual(@as(?u32, 11), LinksTrait.getPrev(links));
         try std.testing.expectEqual(@as(?u32, 22), LinksTrait.getNext(links));

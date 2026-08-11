@@ -23,7 +23,7 @@ pub fn RootStorage(comptime PageCacheType: type) type {
             self.root = pid;
             var ph = try self.cache.fetch(constants.superblock_pid);
             defer ph.deinit();
-            var sb = superblock.View(false).init(try ph.getDataMut());
+            var sb = superblock.View(false).init(try ph.dataMut());
             sb.setRoot(pid);
             try self.cache.flush(constants.superblock_pid);
         }

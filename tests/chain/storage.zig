@@ -53,9 +53,9 @@ test "ChainStore View Test" {
 
     const sh = view.subheader();
     _ = sh;
-    const data = view.getData();
+    const data = view.data();
     try std.testing.expect(data.len == (1024 - view.page_view.page().allHeadersSize()));
-    const dataMut = view.getDataMut();
+    const dataMut = view.dataMut();
     try std.testing.expect(dataMut.len == (1024 - view.page_view.page().allHeadersSize()));
 }
 

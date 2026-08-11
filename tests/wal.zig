@@ -142,7 +142,7 @@ test "WAL cache: commit applies to home and checkpoints the log" {
     {
         var h = try cache.create(); // pid 0
         defer h.deinit();
-        (try h.getDataMut())[0] = 0xAB;
+        (try h.dataMut())[0] = 0xAB;
     }
     try wb.commit();
 

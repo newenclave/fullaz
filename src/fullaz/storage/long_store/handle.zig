@@ -55,12 +55,12 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         }
 
         fn view(self: *const Self) Error!ViewTypeConst {
-            const data = try self.handle.getData();
+            const data = try self.handle.data();
             return ViewTypeConst.init(data);
         }
 
         fn viewMut(self: *Self) Error!ViewType {
-            const data = try self.handle.getDataMut();
+            const data = try self.handle.dataMut();
             return ViewType.init(data);
         }
     };
@@ -85,11 +85,11 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         }
 
         fn view(self: *const Self) Error!ViewTypeConst {
-            return ViewTypeConst.init(try self.handle.getData());
+            return ViewTypeConst.init(try self.handle.data());
         }
 
         fn viewMut(self: *Self) Error!ViewType {
-            return ViewType.init(try self.handle.getDataMut());
+            return ViewType.init(try self.handle.dataMut());
         }
     };
 
@@ -146,8 +146,8 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         }
 
         pub fn getMaximumDataSize(self: *const Self) Error!Index {
-            const data = try self.getData();
-            return @intCast(data.len);
+            const chunk_data = try self.data();
+            return @intCast(chunk_data.len);
         }
 
         pub fn currentDataSize(self: *const Self) Error!Index {
@@ -175,29 +175,29 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         }
 
         pub fn currentTail(self: *const Self) Error![]const u8 {
-            const data = try self.getData();
-            const data_size = data.len;
-            return data[self.pos..data_size];
+            const chunk_data = try self.data();
+            const data_size = chunk_data.len;
+            return chunk_data[self.pos..data_size];
         }
 
         pub fn currentTailMut(self: *Self) Error![]u8 {
-            const data = try self.getDataMut();
-            const data_size = data.len;
-            return data[self.pos..data_size];
+            const chunk_data = try self.dataMut();
+            const data_size = chunk_data.len;
+            return chunk_data[self.pos..data_size];
         }
 
         pub fn currentData(self: *const Self) Error![]const u8 {
             var link = try self.getLink();
             const data_size = link.getDataSize();
-            const data = try self.getData();
-            return data[@min(self.pos, data_size)..data_size];
+            const chunk_data = try self.data();
+            return chunk_data[@min(self.pos, data_size)..data_size];
         }
 
         pub fn currentDataMut(self: *Self) Error![]u8 {
             var link = try self.getLinkMut();
             const data_size = link.getDataSize();
-            const data = try self.getDataMut();
-            return data[@min(self.pos, data_size)..data_size];
+            const chunk_data = try self.dataMut();
+            return chunk_data[@min(self.pos, data_size)..data_size];
         }
 
         pub fn hasNext(self: *const Self) Error!bool {
@@ -222,7 +222,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             var prev_page = try self.ctx.cache.fetch(prev_pid.?);
             errdefer prev_page.deinit();
 
-            const v = CommonPageViewConst.init(try prev_page.getData());
+            const v = CommonPageViewConst.init(try prev_page.data());
             const hdr = v.header();
             const kind = hdr.kind.get();
             if (kind == self.ctx.settings.header_page_kind) {
@@ -246,7 +246,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             var next_page = try self.ctx.cache.fetch(next_pid.?);
             errdefer next_page.deinit();
 
-            const v = CommonPageViewConst.init(try next_page.getData());
+            const v = CommonPageViewConst.init(try next_page.data());
             const hdr = v.header();
             const kind = hdr.kind.get();
             if (kind == self.ctx.settings.chunk_page_kind) {
@@ -316,7 +316,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             }
         }
 
-        fn getData(self: *const Self) Error![]const u8 {
+        fn data(self: *const Self) Error![]const u8 {
             try self.testPage();
             switch (self.page.?) {
                 .header => |hdr| {
@@ -330,7 +330,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             }
         }
 
-        fn getDataMut(self: *Self) Error![]u8 {
+        fn dataMut(self: *Self) Error![]u8 {
             try self.testPage();
             switch (self.page.?) {
                 .header => |hdr_const| {
@@ -393,7 +393,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            var v = ViewTypes.HeaderView.init(try ph.getDataMut());
+            var v = ViewTypes.HeaderView.init(try ph.dataMut());
             v.formatPage(self.ctx.settings.header_page_kind, pid, 0);
             v.subheaderMut().link.back.set(pid);
             try self.ctx.mgr.setRoot(pid);
@@ -408,7 +408,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             const header_pid = header_pid_opt.?;
             var ph = try self.ctx.cache.fetch(header_pid);
             defer ph.deinit();
-            const v = CommonPageViewConst.init(try ph.getData());
+            const v = CommonPageViewConst.init(try ph.data());
             const hdr = v.header();
             if (hdr.kind.get() != self.ctx.settings.header_page_kind) {
                 return Error.BadType;
@@ -564,7 +564,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             } else {
                 var ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
                 defer ph.deinit();
-                const chunk_v = ViewTypesConst.ChunkView.init(try ph.getData());
+                const chunk_v = ViewTypesConst.ChunkView.init(try ph.data());
                 const chunk_size = chunk_v.getLink().getDataSize();
                 return Cursor.init(.{
                     .chunk = ChunkImpl.init(try ph.take()),
@@ -690,7 +690,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
             var ph = try self.ctx.cache.create();
             errdefer ph.deinit();
 
-            var v = ViewTypes.ChunkView.init(try ph.getDataMut());
+            var v = ViewTypes.ChunkView.init(try ph.dataMut());
             v.formatPage(self.ctx.settings.chunk_page_kind, try ph.pid(), 0);
             var hdr_ph = try self.loadHeader();
             defer hdr_ph.deinit();
@@ -772,7 +772,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         fn loadPage(self: *const Self, pid: Pid, kind: u16) Error!PageHandle {
             var ph = try self.ctx.cache.fetch(pid);
             errdefer ph.deinit();
-            const v = CommonPageViewConst.init(try ph.getData());
+            const v = CommonPageViewConst.init(try ph.data());
             const hdr = v.header();
             if (hdr.kind.get() != kind) {
                 return Error.BadType;
@@ -783,7 +783,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         fn fetch(self: *const Self, pid: Pid) Error!PageVariant {
             var ph = try self.ctx.cache.fetch(pid);
             errdefer ph.deinit();
-            const v = CommonPageViewConst.init(try ph.getData());
+            const v = CommonPageViewConst.init(try ph.data());
             const hdr = v.header();
             const kind = hdr.kind.get();
             if (kind == self.ctx.settings.header_page_kind) {

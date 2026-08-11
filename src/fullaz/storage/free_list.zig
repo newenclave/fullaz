@@ -48,7 +48,7 @@ pub fn FreeList(comptime PageCacheType: type, comptime StoreManager: type, compt
             const next: PageId = if (self.store.getRoot()) |r| r else NIL;
             var ph = try self.cache.fetch(pid);
             defer ph.deinit();
-            var view = FreedView.init(try ph.getDataMut());
+            var view = FreedView.init(try ph.dataMut());
             view.formatPage(next);
             try self.store.setRoot(pid);
         }
@@ -58,7 +58,7 @@ pub fn FreeList(comptime PageCacheType: type, comptime StoreManager: type, compt
             var ph = try self.cache.fetch(head);
             defer ph.deinit();
 
-            const view = FreedViewConst.init(try ph.getData());
+            const view = FreedViewConst.init(try ph.data());
             const next = view.header().next.get();
             try self.store.setRoot(if (next == NIL) null else next);
             return head;

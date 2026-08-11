@@ -39,7 +39,7 @@ const Fixture = struct {
         var handle = try self.cache.create();
         defer handle.deinit();
         std.debug.assert(try handle.pid() == constants.superblock_pid);
-        var view = superblock.View(false).init(try handle.getDataMut());
+        var view = superblock.View(false).init(try handle.dataMut());
         view.format(common.block_size, 1, 4);
     }
 
