@@ -110,8 +110,8 @@ test "paged SkipList tracks node pages through paged FSM header locations" {
     try list.insert("BBBB", "2222");
     try list.insert("CCCC", "3333");
 
-    const data_page_id = (try model.getAccessor().getRoot(0)).?.page_id;
-    const skip_root_before = (try model.getAccessor().getRoot(0)).?;
+    const data_page_id = (try model.accessor().getRoot(0)).?.page_id;
+    const skip_root_before = (try model.accessor().getRoot(0)).?;
     try std.testing.expectEqual(@as(?u32, data_page_id), try fsm_index.find(1));
     {
         var ph = try cache.fetch(data_page_id);
@@ -132,7 +132,7 @@ test "paged SkipList tracks node pages through paged FSM header locations" {
 
     try list.insert("DDDD", "4444");
     try std.testing.expect(try list.contains("DDDD"));
-    try std.testing.expectEqual(skip_root_before, (try model.getAccessor().getRoot(0)).?);
+    try std.testing.expectEqual(skip_root_before, (try model.accessor().getRoot(0)).?);
     try std.testing.expectEqual(@as(?u32, data_page_id), try fsm_index.find(1));
     {
         var ph = try cache.fetch(data_page_id);

@@ -51,7 +51,7 @@ fn valueDumper(_: *const u32) void {
 }
 
 fn collectLevel0(comptime SL: type, sl: *SL, allocator: std.mem.Allocator) !std.ArrayList(SL.KeyIn) {
-    const acc = sl.getModel().getAccessor();
+    const acc = sl.getModel().accessor();
     var list = try std.ArrayList(SL.KeyIn).initCapacity(allocator, 0);
     errdefer list.deinit(allocator);
     var curr_pid = try acc.getRoot(0);
@@ -94,7 +94,7 @@ test "SkipList: random levels generation" {
     defer map.deinit();
 
     for (0..1_000_000) |_| {
-        const level = try model.getAccessor().generateLevel(2);
+        const level = try model.accessor().generateLevel(2);
         if (map.get(level)) |v| {
             _ = try map.fetchPut(level, v + 1);
         } else {

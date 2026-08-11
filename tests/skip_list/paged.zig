@@ -167,7 +167,7 @@ test "SkipList paged: interfaces" {
     const PageCache = PageCacheT(Device);
     const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
 
-    comptime interfaces.assertPath(Model.Accessor.Path);
+    comptime interfaces.assertPath(Model.AccessorType.Path);
 }
 
 test "SkipList paged: createNode allocates a slot + tracks the page; destroy frees it" {
@@ -199,7 +199,7 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     }, {}, rand, allocator);
     defer model.deinit();
 
-    var node = try model.accessor.createNode("AAAA", "BBBB");
+    var node = try model.accessor().createNode("AAAA", "BBBB");
     const ref = node.id();
 
     // the data page now carries our slot (inspect via a read-only View)
@@ -231,10 +231,10 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     try std.testing.expectEqual(@as(?u32, ref.page_id), try fsm_inst.find(1));
 
     // deinit = release the handle only (page + slot stay)
-    model.accessor.deinitNode(&node);
+    model.accessor().deinitNode(&node);
 
     // destroy = free the slot and return the page to the fsm
-    model.accessor.destroy(ref);
+    model.accessor().destroy(ref);
     {
         var ph = try cache.fetch(ref.page_id);
         defer ph.deinit();
@@ -282,10 +282,10 @@ test "SkipList paged: node next/prev links round-trip per level" {
     defer model.deinit();
 
     // two real nodes on the page; n2 is the link target (its slot_id is non-zero)
-    var n1 = try model.accessor.createNode("K1AA", "V1BB");
-    defer model.accessor.deinitNode(&n1);
-    var n2 = try model.accessor.createNode("K2AA", "V2BB");
-    defer model.accessor.deinitNode(&n2);
+    var n1 = try model.accessor().createNode("K1AA", "V1BB");
+    defer model.accessor().deinitNode(&n1);
+    var n2 = try model.accessor().createNode("K2AA", "V2BB");
+    defer model.accessor().deinitNode(&n2);
 
     const id2 = n2.id();
 
@@ -455,7 +455,7 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
     try std.testing.expect(reached); // we actually constructed the .need_compact state
 
     // the user's method: sees .need_compact, compacts (via a temp page), reports it now fits
-    const fits = try model.accessor.checkCompactPage(&ph, "bigk", "vvvv", 4);
+    const fits = try model.accessor().checkCompactPage(&ph, "bigk", "vvvv", 4);
     try std.testing.expect(fits);
 
     // post: the big slot fits contiguously now, and the survivor kept its index -> data
@@ -553,7 +553,7 @@ fn keyCmpU32(_: anytype, k1: u32, k2: u32) std.math.Order {
 
 /// Collect the level-0 key sequence of a memory-backed list as u32s.
 fn collectMemLevel0(comptime SL: type, sl: *SL, allocator: std.mem.Allocator) !std.ArrayList(u32) {
-    const acc = sl.getModel().getAccessor();
+    const acc = sl.getModel().accessor();
     var list = try std.ArrayList(u32).initCapacity(allocator, 0);
     errdefer list.deinit(allocator);
     var curr = try acc.getRoot(0);
@@ -569,7 +569,7 @@ fn collectMemLevel0(comptime SL: type, sl: *SL, allocator: std.mem.Allocator) !s
 
 /// Collect the level-0 key sequence of a paged-backed list as u32s (keys are 4-byte big-endian).
 fn collectPagedLevel0(comptime SL: type, sl: *SL, allocator: std.mem.Allocator) !std.ArrayList(u32) {
-    const acc = sl.getModel().getAccessor();
+    const acc = sl.getModel().accessor();
     var list = try std.ArrayList(u32).initCapacity(allocator, 0);
     errdefer list.deinit(allocator);
     var curr = try acc.getRoot(0);

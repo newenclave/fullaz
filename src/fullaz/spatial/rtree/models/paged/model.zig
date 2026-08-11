@@ -415,11 +415,11 @@ pub fn PagedModel(
         pub const BlockDeviceType = BlockDevice;
         pub const max_entries = max_entries_v;
 
-        accessor: AccessorImpl,
+        accessor_state: AccessorType,
 
         pub fn init(cache: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Self {
             return .{
-                .accessor = AccessorImpl.init(.{
+                .accessor_state = AccessorImpl.init(.{
                     .cache = cache,
                     .storage_mgr = storage_mgr,
                     .settings = settings,
@@ -429,8 +429,8 @@ pub fn PagedModel(
 
         pub fn deinit(_: *Self) void {}
 
-        pub fn getAccessor(self: *Self) *AccessorImpl {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn valueOutAsIn(_: *const Self, value: ValueOutType) ValueInType {

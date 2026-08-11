@@ -463,20 +463,20 @@ pub fn Model(
         pub const AccessorType = AccessorImpl;
         pub const max_entries: usize = max_entries_v;
 
-        accessor: AccessorImpl,
+        accessor_state: AccessorType,
 
         pub fn init(allocator: std.mem.Allocator) Error!Self {
             return .{
-                .accessor = try AccessorImpl.init(allocator),
+                .accessor_state = try AccessorImpl.init(allocator),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor.deinit();
+            self.accessor_state.deinit();
         }
 
-        pub fn getAccessor(self: *Self) *AccessorImpl {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn valueOutAsIn(_: *const Self, value: ValueOutType) ValueInType {
@@ -493,7 +493,7 @@ pub fn Model(
 
         pub fn isValidId(self: *const Self, id: ?Pid) bool {
             const pid = id orelse return false;
-            return pid < self.accessor.values.items.len;
+            return pid < self.accessor_state.values.items.len;
         }
 
         pub fn maxEntries(_: *const Self) usize {

@@ -11,7 +11,7 @@ pub const requiresStorageManager = contracts.storage_manager.requiresStorageMana
 pub const requiresPageCache = contracts.page_cache.requiresPageCache;
 
 pub fn assertModelAccessor(comptime Model: type) void {
-    const A = Model.Accessor;
+    const A = Model.AccessorType;
     assertAccessor(A);
 
     requiresErrorDeclaration(Model, "Error");
@@ -27,7 +27,7 @@ pub fn assertModelAccessor(comptime Model: type) void {
     requiresTypeDeclaration(Model, "Path");
 
     requiresFnSignature(Model, "getMaxLevel", fn (*const Model) Error!usize);
-    requiresFnSignature(Model, "getAccessor", fn (*Model) *A);
+    requiresFnSignature(Model, "accessor", fn (*Model) *A);
 
     const KeyIn = Model.KeyIn;
     requiresFnSignature(Model, "keysCompare", fn (*const Model, KeyIn, KeyIn) std.math.Order);

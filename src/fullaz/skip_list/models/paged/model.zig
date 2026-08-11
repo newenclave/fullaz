@@ -410,7 +410,7 @@ pub fn Paged(
             errors.NotFoundError ||
             errors.SetError;
 
-        pub const Accessor = AccessorImpl;
+        pub const AccessorType = AccessorImpl;
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
 
@@ -421,7 +421,7 @@ pub fn Paged(
         pub const ValueOut = ValueIn;
         pub const Path = PathImpl;
 
-        accessor: AccessorImpl,
+        accessor_state: AccessorType,
 
         pub fn init(
             device: *PageCacheT,
@@ -433,7 +433,7 @@ pub fn Paged(
             allocator: std.mem.Allocator,
         ) Self {
             return Self{
-                .accessor = AccessorImpl.init(ContextImpl{
+                .accessor_state = AccessorImpl.init(ContextImpl{
                     .settings = settings,
                     .rng = rng,
                     .cache = device,
@@ -446,26 +446,26 @@ pub fn Paged(
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor = undefined; // Clear the accessor to release references to resources.
+            self.accessor_state = undefined; // Clear the accessor to release references to resources.
         }
 
         pub fn getMaxLevel(self: *const Self) Error!usize {
-            return self.accessor.context.settings.max_level;
+            return self.accessor_state.context.settings.max_level;
         }
 
-        pub fn getAccessor(self: *Self) *AccessorImpl {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn keysCompare(self: *const Self, k1: KeyIn, k2: KeyIn) std.math.Order {
-            const CmpReturnType = @TypeOf(cmp(self.accessor.context.cmp_ctx, k1, k2));
+            const CmpReturnType = @TypeOf(cmp(self.accessor_state.context.cmp_ctx, k1, k2));
             const is_error_union = @typeInfo(CmpReturnType) == .error_union;
 
             const order = blk: {
                 if (comptime is_error_union) {
-                    break :blk cmp(self.accessor.context.cmp_ctx, k1, k2) catch return .eq;
+                    break :blk cmp(self.accessor_state.context.cmp_ctx, k1, k2) catch return .eq;
                 } else {
-                    break :blk cmp(self.accessor.context.cmp_ctx, k1, k2);
+                    break :blk cmp(self.accessor_state.context.cmp_ctx, k1, k2);
                 }
             };
             return order;

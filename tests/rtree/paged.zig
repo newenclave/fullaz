@@ -313,7 +313,7 @@ fn keyEq(a: Key, b: Key) bool {
 
 const PagedInvariant = struct {
     fn checkAll(model: *Model) !void {
-        const acc = model.getAccessor();
+        const acc = model.accessor();
         if (acc.getRoot()) |root| {
             _ = try check(acc, root);
         }
