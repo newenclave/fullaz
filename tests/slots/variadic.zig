@@ -35,7 +35,7 @@ test "Slot Variadic: initialization" {
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
 
-    try testing.expectEqual(@as(usize, 0), slots.entriesConst().len);
+    try testing.expectEqual(@as(usize, 0), slots.entries().len);
     try testing.expect(slots.availableSpace() > 0);
 }
 
@@ -61,7 +61,7 @@ test "Slot Variadic: aligned layout excludes trailing bytes" {
 
     _ = try slots.insert("a");
     _ = try slots.insert("bbb");
-    for (slots.entriesConst()) |entry| {
+    for (slots.entries()) |entry| {
         try testing.expectEqual(@as(u16, 0), entry.offset.get() & 3);
     }
 }
@@ -77,7 +77,7 @@ test "Slot Variadic: compaction preserves aligned offsets" {
     _ = try in_place.insert("ccccc");
     try in_place.free(1);
     try in_place.compactInPlace();
-    for (in_place.entriesConst()) |entry| {
+    for (in_place.entries()) |entry| {
         if (entry.offset.get() != 0) {
             try testing.expectEqual(@as(u16, 0), entry.offset.get() & 1);
         }
@@ -92,7 +92,7 @@ test "Slot Variadic: compaction preserves aligned offsets" {
     _ = try with_buffer.insert("ccccc");
     try with_buffer.free(1);
     try with_buffer.compactWithBuffer(&compact_buffer);
-    for (with_buffer.entriesConst()) |entry| {
+    for (with_buffer.entries()) |entry| {
         if (entry.offset.get() != 0) {
             try testing.expectEqual(@as(u16, 0), entry.offset.get() & 1);
         }
@@ -116,9 +116,9 @@ test "Slot Variadic: flags mask offsets and survive mutation" {
     try testing.expectEqual(@as(u16, 1), try slots.getFlags(0));
     try testing.expectEqual(@as(u16, 1), try slots.getFlags(2));
     try testing.expectEqualSlices(u8, "one", try slots.get(0));
-    try testing.expectEqualSlices(u8, "three", try slots.getByEntry(&slots.entriesConst()[2]));
+    try testing.expectEqualSlices(u8, "three", try slots.getByEntry(&slots.entries()[2]));
 
-    const first = try slots.getMutByEntry(&slots.entriesConst()[0]);
+    const first = try slots.getMutByEntry(&slots.entries()[0]);
     first[0] = 'O';
     try testing.expectEqualSlices(u8, "One", try slots.get(0));
     const third = try slots.getMut(2);
@@ -263,7 +263,7 @@ test "Slot Variadic: remove entry" {
     try slots.free(1);
 
     // Entry 1 should be marked invalid
-    const entries = slots.entriesConst();
+    const entries = slots.entries();
     try testing.expectEqual(@as(u16, 0), entries[1].offset.get());
 
     // Other entries should still be accessible
@@ -280,9 +280,9 @@ test "Slot Variadic: removeShrink" {
     _ = try slots.insert("Second");
     _ = try slots.insert("Third");
 
-    const before_count = slots.entriesConst().len;
+    const before_count = slots.entries().len;
     try slots.remove(1);
-    const after_count = slots.entriesConst().len;
+    const after_count = slots.entries().len;
 
     try testing.expectEqual(before_count - 1, after_count);
     try verifyData(&slots, 0, "First");
@@ -325,7 +325,7 @@ test "Slot Variadic: removeIf filters by flags and preserves survivor order" {
     try testing.expectEqualSlices(usize, &.{ 0, 1, 3, 4 }, context.seen[0..context.seen_len]);
     try testing.expectEqual(@as(usize, 3), slots.size());
     try testing.expectEqualSlices(u8, "zero", try slots.get(0));
-    try testing.expectEqual(@as(u16, 0), slots.entriesConst()[1].offset.get());
+    try testing.expectEqual(@as(u16, 0), slots.entries()[1].offset.get());
     try testing.expectEqualSlices(u8, "four", try slots.get(2));
     try testing.expectEqual(@as(u16, 2), try slots.getFlags(2));
     try testing.expect(try slots.availableAfterCompact() > available_before);
@@ -567,7 +567,7 @@ test "Slot Variadic: free slot reuse" {
     // Next insert should potentially reuse freed space
     _ = try slots.insert(&makeSeq(15));
 
-    try testing.expectEqual(@as(usize, 4), slots.entriesConst().len);
+    try testing.expectEqual(@as(usize, 4), slots.entries().len);
 }
 
 test "Slot Variadic: boundary conditions - empty" {
@@ -576,7 +576,7 @@ test "Slot Variadic: boundary conditions - empty" {
     var slots = try TestVariadic.init(&buffer);
     slots.formatHeader();
 
-    try testing.expectEqual(@as(usize, 0), slots.entriesConst().len);
+    try testing.expectEqual(@as(usize, 0), slots.entries().len);
 
     // Getting from empty should fail
     const result = slots.get(0);
@@ -664,7 +664,7 @@ test "Slot Variadic: stress test - many operations" {
     try slots.compactInPlace();
 
     // Verify remaining entries still accessible
-    try testing.expect(slots.entriesConst().len > 0);
+    try testing.expect(slots.entries().len > 0);
 }
 
 test "Slot Variadic: sequential operations" {
@@ -686,7 +686,7 @@ test "Slot Variadic: sequential operations" {
             _ = try slots.insert(temp_data[0..size]);
         }
 
-        if (slots.entriesConst().len >= 2) {
+        if (slots.entries().len >= 2) {
             try slots.remove(0);
         }
 
@@ -695,7 +695,7 @@ test "Slot Variadic: sequential operations" {
 
     // Should still be functional
     _ = try slots.insert("Final");
-    try verifyData(&slots, slots.entriesConst().len - 1, "Final");
+    try verifyData(&slots, slots.entries().len - 1, "Final");
 }
 
 test "Slot Variadic: data integrity after operations" {

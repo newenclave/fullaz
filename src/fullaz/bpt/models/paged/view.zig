@@ -151,7 +151,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
 
             const slot_dir = try self.slotsDir();
             const wrapper = Wrapper{ .slot_dir = slot_dir, .user_ctx = ctx };
-            return try algorithm.lowerBound(ConstSlotsDirType.Entry, slot_dir.entriesConst(), key, Wrapper.less, &wrapper);
+            return try algorithm.lowerBound(ConstSlotsDirType.Entry, slot_dir.entries(), key, Wrapper.less, &wrapper);
         }
 
         pub fn canInsert(self: *const Self, pos: usize, key: []const u8, value: []const u8) ErrorSet!AvailableStatus {
@@ -373,7 +373,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
 
             const slot_dir = try self.slotsDir();
             const wrapper = Wrapper{ .slot_dir = slot_dir, .user_ctx = ctx };
-            return try algorithm.upperBound(ConstSlotsDirType.Entry, slot_dir.entriesConst(), key, Wrapper.less, &wrapper);
+            return try algorithm.upperBound(ConstSlotsDirType.Entry, slot_dir.entries(), key, Wrapper.less, &wrapper);
         }
 
         pub fn get(self: *const Self, pos: usize) ErrorSet!KeyChild {
