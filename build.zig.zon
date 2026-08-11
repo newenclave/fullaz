@@ -1,12 +1,12 @@
 .{
     .name = .fullaz,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .fingerprint = 0xa2569a60576cf985, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zigline = .{
-            .url = "git+https://github.com/newenclave/zigline.git#b0a5e2ed7f04e28b28a3b039887694ee41ac1c20",
-            .hash = "zigline-0.0.0-bq7gMZegAACL0KxPN7g8qe9NvraUO6hhJPz18CxueSAr",
+            .url = "git+https://github.com/newenclave/zigline.git#f4bd1138cf3b9ea33db7aabee8f28a2608b990ee",
+            .hash = "zigline-0.1.0-bq7gMRq6AACNQiXP4pXtxquzLkALcdIkiDr7-FuqtFRI",
         },
     },
     .paths = .{
