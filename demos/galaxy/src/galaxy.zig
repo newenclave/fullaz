@@ -130,7 +130,7 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
                 const sb = superblock.View(true).init(try ph.data());
                 try sb.validate(block_size);
                 const p = sb.getPlayer();
-                const v = sb.getView();
+                const v = sb.view();
                 break :blk .{
                     .root = sb.getRoot(),
                     .seed = sb.getSeed(),

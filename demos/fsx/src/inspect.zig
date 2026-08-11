@@ -89,7 +89,7 @@ pub fn Inspector(comptime PageCacheType: type) type {
                 var handle = try self.cache.fetch(pid);
                 defer handle.deinit();
                 const chunk = ChunkView.init(try handle.data());
-                next = chunk.getLink().getFwd();
+                next = chunk.link().getFwd();
             }
             if (roots.index) |pid| {
                 try self.traceIndexNode(pid, format_version, ctx, callback);

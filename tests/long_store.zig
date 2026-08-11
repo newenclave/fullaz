@@ -68,16 +68,16 @@ test "HeaderView getNext/setNext" {
     view.formatPage(1, 42, 0);
 
     // Test null next
-    try std.testing.expect(view.getLink().getFwd() == null);
+    try std.testing.expect(view.link().getFwd() == null);
 
     // Test set next
-    var link = view.getLinkMut();
+    var link = view.linkMut();
     link.setFwd(100);
-    try std.testing.expect(view.getLink().getFwd() == 100);
+    try std.testing.expect(view.link().getFwd() == 100);
 
     // Test set next to null
     link.setFwd(null);
-    try std.testing.expect(view.getLink().getFwd() == null);
+    try std.testing.expect(view.link().getFwd() == null);
 }
 
 test "HeaderView getLast/setLast" {
@@ -87,15 +87,15 @@ test "HeaderView getLast/setLast" {
     view.formatPage(1, 42, 0);
 
     // Test null last
-    try std.testing.expect(view.getLink().getBack() == null);
+    try std.testing.expect(view.link().getBack() == null);
 
     // Test set last
-    var link = view.getLinkMut();
+    var link = view.linkMut();
     link.setBack(200);
-    try std.testing.expect(view.getLink().getBack() == 200);
+    try std.testing.expect(view.link().getBack() == 200);
     // Test set last to null
     link.setBack(null);
-    try std.testing.expect(view.getLink().getBack() == null);
+    try std.testing.expect(view.link().getBack() == null);
 }
 
 test "HeaderView getTotalSize/setTotalSize" {
@@ -133,12 +133,12 @@ test "HeaderView getDataSize/setDataSize" {
     view.formatPage(1, 42, 0);
 
     // Test initial data size is 0
-    try std.testing.expect(view.getLink().getDataSize() == 0);
+    try std.testing.expect(view.link().getDataSize() == 0);
 
     // Test set data size
-    var link = view.getLinkMut();
+    var link = view.linkMut();
     link.setDataSize(256);
-    try std.testing.expect(view.getLink().getDataSize() == 256);
+    try std.testing.expect(view.link().getDataSize() == 256);
 }
 
 test "HeaderView incrementDataSize/decrementDataSize" {
@@ -147,15 +147,15 @@ test "HeaderView incrementDataSize/decrementDataSize" {
     var view = HeaderViewType.init(buffer[0..]);
     view.formatPage(1, 42, 0);
 
-    var link = view.getLinkMut();
+    var link = view.linkMut();
 
     link.setDataSize(100);
 
     link.incrementDataSize(25);
-    try std.testing.expect(view.getLink().getDataSize() == 125);
+    try std.testing.expect(view.link().getDataSize() == 125);
 
     link.decrementDataSize(15);
-    try std.testing.expect(view.getLink().getDataSize() == 110);
+    try std.testing.expect(view.link().getDataSize() == 110);
 }
 
 test "ChunkView getNext/setNext" {
@@ -165,16 +165,16 @@ test "ChunkView getNext/setNext" {
     view.formatPage(1, 42, 0);
 
     // Test null next
-    try std.testing.expect(view.getLink().getFwd() == null);
+    try std.testing.expect(view.link().getFwd() == null);
 
     // Test set next
-    var link = view.getLinkMut();
+    var link = view.linkMut();
     link.setFwd(150);
-    try std.testing.expect(view.getLink().getFwd() == 150);
+    try std.testing.expect(view.link().getFwd() == 150);
 
     // Test set next to null
     link.setFwd(null);
-    try std.testing.expect(view.getLink().getFwd() == null);
+    try std.testing.expect(view.link().getFwd() == null);
 }
 
 test "ChunkView getPrev/setPrev" {
@@ -184,16 +184,16 @@ test "ChunkView getPrev/setPrev" {
     view.formatPage(1, 42, 0);
 
     // Test null prev
-    try std.testing.expect(view.getLink().getBack() == null);
+    try std.testing.expect(view.link().getBack() == null);
 
     // Test set prev
-    var link = view.getLinkMut();
+    var link = view.linkMut();
     link.setBack(99);
-    try std.testing.expect(view.getLink().getBack() == 99);
+    try std.testing.expect(view.link().getBack() == 99);
 
     // Test set prev to null
     link.setBack(null);
-    try std.testing.expect(view.getLink().getBack() == null);
+    try std.testing.expect(view.link().getBack() == null);
 }
 
 test "ChunkView getDataSize/setDataSize" {
@@ -203,12 +203,12 @@ test "ChunkView getDataSize/setDataSize" {
     view.formatPage(1, 42, 0);
 
     // Test initial data size is 0
-    try std.testing.expect(view.getLink().getDataSize() == 0);
+    try std.testing.expect(view.link().getDataSize() == 0);
 
     // Test set data size
-    var link = view.getLinkMut();
+    var link = view.linkMut();
     link.setDataSize(512);
-    try std.testing.expect(view.getLink().getDataSize() == 512);
+    try std.testing.expect(view.link().getDataSize() == 512);
 }
 
 test "ChunkView incrementDataSize/decrementDataSize" {
@@ -217,14 +217,14 @@ test "ChunkView incrementDataSize/decrementDataSize" {
     var view = ChunkViewType.init(buffer[0..]);
     view.formatPage(1, 42, 0);
 
-    var link = view.getLinkMut();
+    var link = view.linkMut();
 
     link.setDataSize(100);
     link.incrementDataSize(40);
-    try std.testing.expect(view.getLink().getDataSize() == 140);
+    try std.testing.expect(view.link().getDataSize() == 140);
 
     link.decrementDataSize(20);
-    try std.testing.expect(view.getLink().getDataSize() == 120);
+    try std.testing.expect(view.link().getDataSize() == 120);
 }
 
 test "ChunkView hasFlag/setFlag/clearFlag" {

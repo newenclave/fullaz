@@ -1,5 +1,5 @@
 const std = @import("std");
-const view = @import("view.zig");
+const chain_view = @import("view.zig");
 const page_header = @import("../../page/header.zig");
 const interfaces = @import("../../contracts/contracts.zig");
 const errors = @import("../../core/errors.zig");
@@ -61,8 +61,8 @@ pub fn Indexed(
     const BlockIdType = BlockDevice.BlockId;
 
     const CommonPageViewConst = page_header.View(BlockIdType, Index, Endian, true);
-    const ViewTypes = view.View(BlockIdType, Index, PosType, Endian, false);
-    const ViewTypesConst = view.View(BlockIdType, Index, PosType, Endian, true);
+    const ViewTypes = chain_view.View(BlockIdType, Index, PosType, Endian, false);
+    const ViewTypesConst = chain_view.View(BlockIdType, Index, PosType, Endian, true);
 
     const CommonErrors = PageCacheT.Error ||
         StorageManagerT.Error ||
@@ -103,14 +103,14 @@ pub fn Indexed(
             return ViewType.init(try self.handle.dataMut());
         }
 
-        fn getLink(self: *const Self) Error!LinkTypeConst {
+        fn link(self: *const Self) Error!LinkTypeConst {
             var v = try self.view();
-            return v.getLink();
+            return v.link();
         }
 
-        fn getLinkMut(self: *Self) Error!LinkType {
+        fn linkMut(self: *Self) Error!LinkType {
             var v = try self.viewMut();
-            return v.getLinkMut();
+            return v.linkMut();
         }
 
         fn pid(self: *const Self) Error!BlockIdType {
@@ -161,8 +161,8 @@ pub fn Indexed(
         }
 
         pub fn currentDataSize(self: *const Self) Error!Index {
-            const link = try self.getLink();
-            return link.getDataSize();
+            const link_view = try self.link();
+            return link_view.getDataSize();
         }
 
         pub fn extendToPos(self: *Self) Error!Index {
@@ -174,14 +174,14 @@ pub fn Indexed(
             if (self.pos <= current_pos) {
                 return 0;
             }
-            var link = try self.getLinkMut();
-            link.setDataSize(self.pos);
+            var link_view = try self.linkMut();
+            link_view.setDataSize(self.pos);
             return self.pos - current_pos;
         }
 
         pub fn setCurrentDataSize(self: *Self, size: Index) Error!void {
-            var link = try self.getLinkMut();
-            link.setDataSize(size);
+            var link_view = try self.linkMut();
+            link_view.setDataSize(size);
         }
 
         pub fn currentTail(self: *const Self) Error![]const u8 {
@@ -197,32 +197,32 @@ pub fn Indexed(
         }
 
         pub fn currentData(self: *const Self) Error![]const u8 {
-            var link = try self.getLink();
-            const data_size = link.getDataSize();
+            var link_view = try self.link();
+            const data_size = link_view.getDataSize();
             const chunk_data = try self.data();
             return chunk_data[@min(self.pos, data_size)..data_size];
         }
 
         pub fn currentDataMut(self: *Self) Error![]u8 {
-            var link = try self.getLinkMut();
-            const data_size = link.getDataSize();
+            var link_view = try self.linkMut();
+            const data_size = link_view.getDataSize();
             const chunk_data = try self.dataMut();
             return chunk_data[@min(self.pos, data_size)..data_size];
         }
 
         pub fn hasNext(self: *const Self) Error!bool {
-            const link = try self.getLink();
-            return link.getFwd() != null;
+            const link_view = try self.link();
+            return link_view.getFwd() != null;
         }
 
         pub fn hasPrev(self: *const Self) Error!bool {
-            const link = try self.getLink();
-            return link.getBack() != null;
+            const link_view = try self.link();
+            return link_view.getBack() != null;
         }
 
         pub fn movePrev(self: *Self) Error!void {
-            const link = try self.getLink();
-            const prev_pid = link.getBack();
+            const link_view = try self.link();
+            const prev_pid = link_view.getBack();
             if (prev_pid == null) {
                 return Error.InvalidId;
             }
@@ -242,8 +242,8 @@ pub fn Indexed(
         }
 
         pub fn moveNext(self: *Self) Error!void {
-            const link = try self.getLink();
-            const next_pid = link.getFwd();
+            const link_view = try self.link();
+            const next_pid = link_view.getFwd();
             if (next_pid == null) {
                 return Error.InvalidId;
             }
@@ -272,18 +272,18 @@ pub fn Indexed(
             }
         }
 
-        fn getLink(self: *const Self) Error!LinkConst {
+        fn link(self: *const Self) Error!LinkConst {
             try self.testPage();
             if (self.page) |ph| {
-                return ph.getLink();
+                return ph.link();
             }
             return Error.InvalidHandle;
         }
 
-        fn getLinkMut(self: *Self) Error!Link {
+        fn linkMut(self: *Self) Error!Link {
             try self.testPage();
             if (self.page) |*ph| {
-                return ph.getLinkMut();
+                return ph.linkMut();
             }
             return Error.InvalidHandle;
         }
@@ -329,7 +329,7 @@ pub fn Indexed(
         ctx: Context,
         index: IndexT,
 
-        pub const View = view.View;
+        pub const View = chain_view.View;
         pub fn init(cache: *PageCacheT, mgr: *StorageManagerT, settings: Settings) Self {
             const ctx = Context{
                 .cache = cache,
@@ -420,7 +420,7 @@ pub fn Indexed(
                 var ph = try self.fetch(last_page);
                 errdefer ph.deinit();
                 const chunk_v = ViewTypesConst.Chunk.init(try ph.data());
-                const chunk_size = chunk_v.getLink().getDataSize();
+                const chunk_size = chunk_v.link().getDataSize();
                 return Cursor.init(ph, chunk_size, &self.ctx);
             }
             return Error.InvalidHandle;
@@ -667,7 +667,7 @@ pub fn Indexed(
             } else {
                 var old_last_ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
                 const old_last_v = ViewTypesConst.Chunk.init(try old_last_ph.data());
-                const old_last_size = old_last_v.getLink().getDataSize();
+                const old_last_size = old_last_v.link().getDataSize();
                 old_last_ph.deinit();
 
                 try self.pushChunkImpl(&result, last);
@@ -713,13 +713,13 @@ pub fn Indexed(
                 const can_extend = max_size - current_size;
                 if (can_extend >= left) {
                     const ileft = @as(Index, @intCast(left));
-                    var link = try cursor.getLinkMut();
-                    link.setDataSize(current_size + ileft);
+                    var link_view = try cursor.linkMut();
+                    link_view.setDataSize(current_size + ileft);
                     try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManagerT.Size, ileft));
                     break;
                 } else {
-                    var link = try cursor.getLinkMut();
-                    link.setDataSize(max_size);
+                    var link_view = try cursor.linkMut();
+                    link_view.setDataSize(max_size);
                     try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManagerT.Size, @intCast(can_extend)));
                     left -= @intCast(can_extend);
                     if (try cursor.hasNext()) {
@@ -801,7 +801,7 @@ pub fn Indexed(
         pub fn readPage(_: *const Self, ph: *PageHandle, pos: Index, data: []u8) Error!usize {
             const page_data = try ph.dataMut();
             var pv = ViewTypesConst.Chunk.init(page_data);
-            const chunk_data = pv.getChunkData();
+            const chunk_data = pv.chunkData();
             const max_size = chunk_data.len;
             if (pos > max_size) {
                 return Error.OutOfBounds;
@@ -831,7 +831,7 @@ pub fn Indexed(
 
             var last_chunk = ChunkImpl.init(last_chunk_ph);
             var last_chunk_v = try last_chunk.viewMut();
-            var last_chunk_l = last_chunk_v.getLinkMut();
+            var last_chunk_l = last_chunk_v.linkMut();
             const prev = last_chunk_l.link.back.get();
 
             try self.ctx.mgr.setLast(prev);
@@ -845,16 +845,16 @@ pub fn Indexed(
             defer prev_h.deinit();
             var prev_chunk = ChunkImpl.init(prev_h);
             var prev_v = try prev_chunk.viewMut();
-            var prev_l = prev_v.getLinkMut();
+            var prev_l = prev_v.linkMut();
             prev_l.setFwd(null);
         }
 
-        pub fn getView(_: *const Self, ph: *PageHandle) Error!ViewTypesConst.Chunk {
+        pub fn view(_: *const Self, ph: *PageHandle) Error!ViewTypesConst.Chunk {
             const page_data = try ph.data();
             return ViewTypesConst.Chunk.init(page_data);
         }
 
-        pub fn getViewMut(_: *const Self, ph: *PageHandle) Error!ViewTypes.Chunk {
+        pub fn viewMut(_: *const Self, ph: *PageHandle) Error!ViewTypes.Chunk {
             const page_data = try ph.dataMut();
             return ViewTypes.Chunk.init(page_data);
         }

@@ -352,7 +352,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn visitNode(self: *Self, node: *Node, comptime callback: anytype, ctx: anytype) Error!void {
-            switch (try callback(ctx, node.id(), node.bounds(), try node.getTraitMut())) {
+            switch (try callback(ctx, node.id(), node.bounds(), try node.traitMut())) {
                 .skip_children => return,
                 .descend => {},
             }
@@ -377,7 +377,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
             comptime on_entry: anytype,
             ctx: anytype,
         ) Error!void {
-            switch (try on_node(ctx, node.id(), node.bounds(), node.getTrait(), node.isLeaf())) {
+            switch (try on_node(ctx, node.id(), node.bounds(), node.trait(), node.isLeaf())) {
                 .accept => return,
                 .skip => return,
                 .descend => {},

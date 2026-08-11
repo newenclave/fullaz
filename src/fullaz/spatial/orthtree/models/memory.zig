@@ -391,11 +391,11 @@ pub fn MemoryImpl(
             return self.node.level;
         }
 
-        pub fn getTrait(self: *const Self) *const TraitType {
+        pub fn trait(self: *const Self) *const TraitType {
             return &self.node.trait;
         }
 
-        pub fn getTraitMut(self: *Self) ErrorSet!*TraitType {
+        pub fn traitMut(self: *Self) ErrorSet!*TraitType {
             return &self.node.trait;
         }
 

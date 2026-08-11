@@ -116,8 +116,8 @@ fn assertNode(comptime M: type) void {
     requiresFnSignature(N, "addEntry", fn (*N, M.Box, M.ValueIn) M.Error!void);
     requiresFnSignature(N, "entries", fn (*N) M.Error!N.Entries);
     requiresFnSignature(N, "entriesMut", fn (*N) M.Error!N.EntriesMut);
-    requiresFnSignature(N, "getTrait", fn (*const N) *const M.Trait);
-    requiresFnSignature(N, "getTraitMut", fn (*N) M.Error!*M.Trait);
+    requiresFnSignature(N, "trait", fn (*const N) *const M.Trait);
+    requiresFnSignature(N, "traitMut", fn (*N) M.Error!*M.Trait);
 }
 
 fn assertAccessor(comptime M: type) void {

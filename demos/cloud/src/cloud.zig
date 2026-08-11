@@ -144,8 +144,8 @@ pub fn Cloud(comptime PageCacheType: type) type {
             if (self.manager.root) |root_id| {
                 var root = try self.model.accessor().loadNode(root_id);
                 defer self.model.accessor().deinitNode(&root);
-                if (trait.Splat.count(root.getTrait()) > 0) {
-                    self.camera.target = trait.Splat.centroid(root.getTrait());
+                if (trait.Splat.count(root.trait()) > 0) {
+                    self.camera.target = trait.Splat.centroid(root.trait());
                 }
             }
             return self;

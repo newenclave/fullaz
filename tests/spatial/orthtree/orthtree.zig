@@ -168,12 +168,12 @@ fn expectSplitAdoptsEntries(comptime Coord: type) !void {
     }
     try tree.splitNode(&parent);
 
-    try std.testing.expectEqual(@as(u32, 10), parent.getTrait().mass);
+    try std.testing.expectEqual(@as(u32, 10), parent.trait().mass);
     try std.testing.expectEqual(@as(usize, 0), parent.size());
     inline for (0..TreeType.child_count) |i| {
         var child = try acc.loadNode(parent.getChild(i).?);
         defer acc.deinitNode(&child);
-        try std.testing.expectEqual(@as(u32, @intCast(i + 1)), child.getTrait().mass);
+        try std.testing.expectEqual(@as(u32, @intCast(i + 1)), child.trait().mass);
         try std.testing.expectEqual(@as(usize, 1), child.size());
     }
 }
@@ -328,11 +328,11 @@ fn expectInsertHooks(comptime Coord: type) !void {
 
     var root = try acc.loadNode(acc.getRoot().?);
     defer acc.deinitNode(&root);
-    try std.testing.expectEqual(@as(u32, 12), root.getTrait().mass);
+    try std.testing.expectEqual(@as(u32, 12), root.trait().mass);
 
     var child = try acc.loadNode(root.getChild(0).?);
     defer acc.deinitNode(&child);
-    try std.testing.expectEqual(@as(u32, 7), child.getTrait().mass);
+    try std.testing.expectEqual(@as(u32, 7), child.trait().mass);
 
     var growth_model = try Model.init(std.testing.allocator, 8);
     defer growth_model.deinit();
@@ -344,11 +344,11 @@ fn expectInsertHooks(comptime Coord: type) !void {
 
     var grown_root = try growth_acc.loadNode(growth_acc.getRoot().?);
     defer growth_acc.deinitNode(&grown_root);
-    try std.testing.expectEqual(@as(u32, 12), grown_root.getTrait().mass);
+    try std.testing.expectEqual(@as(u32, 12), grown_root.trait().mass);
 
     var old_root = try growth_acc.loadNode(grown_root.getChild(0).?);
     defer growth_acc.deinitNode(&old_root);
-    try std.testing.expectEqual(@as(u32, 5), old_root.getTrait().mass);
+    try std.testing.expectEqual(@as(u32, 5), old_root.trait().mass);
 }
 
 fn expectVisitNodes(comptime Coord: type) !void {
@@ -403,12 +403,12 @@ fn expectVisitNodes(comptime Coord: type) !void {
     var root = try acc.loadNode(acc.getRoot().?);
     defer acc.deinitNode(&root);
     try std.testing.expect(std.meta.eql(root_bounds, root.bounds()));
-    try std.testing.expectEqual(@as(usize, 1), root.getTrait().visits);
+    try std.testing.expectEqual(@as(usize, 1), root.trait().visits);
     inline for (0..TreeType.child_count) |i| {
         var child = try acc.loadNode(root.getChild(i).?);
         defer acc.deinitNode(&child);
         try std.testing.expect(std.meta.eql(TreeType.childBounds(&root_bounds, i), child.bounds()));
-        try std.testing.expectEqual(@as(usize, 1), child.getTrait().visits);
+        try std.testing.expectEqual(@as(usize, 1), child.trait().visits);
     }
 
     var prune_visit = VisitContext{ .root_bounds = root_bounds };
@@ -572,12 +572,12 @@ fn expectRemove(comptime Coord: type) !void {
 
     var root = try acc.loadNode(acc.getRoot().?);
     defer acc.deinitNode(&root);
-    try std.testing.expectEqual(@as(u32, 16), root.getTrait().mass);
+    try std.testing.expectEqual(@as(u32, 16), root.trait().mass);
 
     var child = try acc.loadNode(root.getChild(0).?);
     defer acc.deinitNode(&child);
     try std.testing.expectEqual(@as(usize, 0), child.size());
-    try std.testing.expectEqual(@as(u32, 0), child.getTrait().mass);
+    try std.testing.expectEqual(@as(u32, 0), child.trait().mass);
 
     var query_ctx = QueryContext{};
     try tree.query(Box.create(.{ 0, 0 }, .{ 10, 10 }), QueryContext.collect, &query_ctx);

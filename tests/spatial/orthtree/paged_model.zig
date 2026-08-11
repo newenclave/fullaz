@@ -364,7 +364,7 @@ test "OrthTree paged model: trait, entries, and root persist across cache reopen
         {
             var root = try model.accessor().loadNode(storage_manager.root.?);
             defer model.accessor().deinitNode(&root);
-            try std.testing.expectEqual(@as(u32, 2), root.getTrait().count.get());
+            try std.testing.expectEqual(@as(u32, 2), root.trait().count.get());
         }
 
         try tree.insert(Box.create(.{ 5, 5 }, .{ 6, 6 }), "third");
@@ -680,7 +680,7 @@ test "OrthTree paged model: three dimensional f32 insert, split, and reopen" {
 
         var root = try model.accessor().loadNode(storage_manager.root.?);
         defer model.accessor().deinitNode(&root);
-        try std.testing.expectEqual(count, root.getTrait().count.get());
+        try std.testing.expectEqual(count, root.trait().count.get());
 
         try cache.flushAll();
     }
@@ -707,7 +707,7 @@ test "OrthTree paged model: three dimensional f32 insert, split, and reopen" {
 
         var root = try model.accessor().loadNode(storage_manager.root.?);
         defer model.accessor().deinitNode(&root);
-        try std.testing.expectEqual(count, root.getTrait().count.get());
+        try std.testing.expectEqual(count, root.trait().count.get());
     }
 }
 
@@ -723,7 +723,7 @@ const GrowthFixture = struct {
     fn rootTraitCount(model: *Model, root_id: StorageManager.NodeId) !u32 {
         var root = try model.accessor().loadNode(root_id);
         defer model.accessor().deinitNode(&root);
-        return root.getTrait().count.get();
+        return root.trait().count.get();
     }
 };
 

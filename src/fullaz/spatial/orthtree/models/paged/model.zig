@@ -595,11 +595,11 @@ pub fn PagedModelImpl(
             return try EntriesMut.init(self);
         }
 
-        pub fn getTrait(self: *const Self) *const Trait {
+        pub fn trait(self: *const Self) *const Trait {
             return self.readViewUnchecked().trait();
         }
 
-        pub fn getTraitMut(self: *Self) Error!*Trait {
+        pub fn traitMut(self: *Self) Error!*Trait {
             var view = try self.mutableView();
             return view.traitMut();
         }
@@ -803,22 +803,22 @@ pub fn PagedModelImpl(
 
         pub fn onInsert(self: *Self, node: *Node, bounds: Box, value: ValueIn) Error!void {
             _ = self;
-            try TraitPolicy.onInsert(try node.getTraitMut(), bounds, value);
+            try TraitPolicy.onInsert(try node.traitMut(), bounds, value);
         }
 
         pub fn onGrow(self: *Self, node: *Node, new_root: *Node) Error!void {
             _ = self;
-            try TraitPolicy.onGrow(try new_root.getTraitMut(), node.getTrait());
+            try TraitPolicy.onGrow(try new_root.traitMut(), node.trait());
         }
 
         pub fn onAdopt(self: *Self, _: *Node, target: *Node, bounds: Box, value: ValueIn) Error!void {
             _ = self;
-            try TraitPolicy.onAdopt(try target.getTraitMut(), bounds, value);
+            try TraitPolicy.onAdopt(try target.traitMut(), bounds, value);
         }
 
         pub fn onRemove(self: *Self, node: *Node, bounds: Box, value: ValueIn) Error!void {
             _ = self;
-            try TraitPolicy.onRemove(try node.getTraitMut(), bounds, value);
+            try TraitPolicy.onRemove(try node.traitMut(), bounds, value);
         }
     };
 }

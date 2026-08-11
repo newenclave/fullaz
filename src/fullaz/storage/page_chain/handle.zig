@@ -108,11 +108,11 @@ pub fn HandleForwardImpl(
             self.ph.deinit();
         }
 
-        fn getViewMut(self: *Self) Error!ChunkView {
+        fn viewMut(self: *Self) Error!ChunkView {
             return ChunkView.init(try self.ph.dataMut());
         }
 
-        fn getView(self: *const Self) Error!ChunkViewConst {
+        fn view(self: *const Self) Error!ChunkViewConst {
             return ChunkViewConst.init(try self.ph.data());
         }
 
@@ -125,22 +125,22 @@ pub fn HandleForwardImpl(
         }
 
         pub fn data(self: *const Self) Error![]const u8 {
-            const cv = try self.getView();
+            const cv = try self.view();
             return cv.data();
         }
 
         pub fn dataMut(self: *Self) Error![]u8 {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             return cv.dataMut();
         }
 
         pub fn getNext(self: *Self) Error!?BlockIdType {
-            const cv = try self.getView();
+            const cv = try self.view();
             return cv.getNext();
         }
 
         pub fn setNext(self: *Self, pid: ?BlockIdType) Error!void {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             cv.setNext(pid);
         }
 
@@ -149,32 +149,32 @@ pub fn HandleForwardImpl(
         }
 
         pub fn subheader(self: *Self) Error!*const SubheaderType {
-            const cv = try self.getView();
+            const cv = try self.view();
             return @ptrCast(cv.subheader());
         }
 
         pub fn header(self: *const Self) Error!*const ViewTypeConst.PageHeader {
-            const cv = try self.getView();
+            const cv = try self.view();
             return @ptrCast(cv.header());
         }
 
         pub fn headerMut(self: *Self) Error!*ViewType.PageHeader {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             return @ptrCast(cv.headerMut());
         }
 
         pub fn subheaderMut(self: *Self) Error!*SubheaderType {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             return @ptrCast(cv.subheaderMut());
         }
 
         pub fn metadata(self: *Self) Error![]const u8 {
-            const cv = try self.getView();
+            const cv = try self.view();
             return cv.metadata();
         }
 
         pub fn metadataMut(self: *Self) Error![]u8 {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             return cv.metadataMut();
         }
     };
@@ -428,7 +428,7 @@ pub fn HandleForwardImpl(
             errdefer ph.deinit();
 
             var ch = ChunkHandle.init(ph);
-            var v = try ch.getViewMut();
+            var v = try ch.viewMut();
             v.formatPage(
                 self.settings.chunk_page_kind,
                 try ph.pid(),
@@ -465,7 +465,7 @@ pub fn HandleForwardImpl(
                 if (last) |last_pid| {
                     var last_ch = try self.loadChunk(last_pid);
                     defer last_ch.deinit();
-                    var last_view = try last_ch.getViewMut();
+                    var last_view = try last_ch.viewMut();
                     last_view.setNext(chunk_id);
                 } else {
                     try self.mgr.setFirst(chunk_id);
@@ -599,11 +599,11 @@ pub fn HandleBidirectionalImpl(
             self.ph.deinit();
         }
 
-        fn getViewMut(self: *Self) Error!ChunkView {
+        fn viewMut(self: *Self) Error!ChunkView {
             return ChunkView.init(try self.ph.dataMut());
         }
 
-        fn getView(self: *const Self) Error!ChunkViewConst {
+        fn view(self: *const Self) Error!ChunkViewConst {
             return ChunkViewConst.init(try self.ph.data());
         }
 
@@ -616,32 +616,32 @@ pub fn HandleBidirectionalImpl(
         }
 
         pub fn data(self: *const Self) Error![]const u8 {
-            const cv = try self.getView();
+            const cv = try self.view();
             return cv.data();
         }
 
         pub fn dataMut(self: *Self) Error![]u8 {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             return cv.dataMut();
         }
 
         pub fn getNext(self: *Self) Error!?BlockIdType {
-            const cv = try self.getView();
+            const cv = try self.view();
             return cv.getNext();
         }
 
         pub fn getPrev(self: *Self) Error!?BlockIdType {
-            const cv = try self.getView();
+            const cv = try self.view();
             return cv.getPrev();
         }
 
         pub fn setNext(self: *Self, pid: ?BlockIdType) Error!void {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             cv.setNext(pid);
         }
 
         pub fn setPrev(self: *Self, pid: ?BlockIdType) Error!void {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             cv.setPrev(pid);
         }
 
@@ -650,32 +650,32 @@ pub fn HandleBidirectionalImpl(
         }
 
         pub fn subheader(self: *Self) Error!*const SubheaderType {
-            const cv = try self.getView();
+            const cv = try self.view();
             return @ptrCast(cv.subheader());
         }
 
         pub fn header(self: *const Self) Error!*const ViewTypeConst.PageHeader {
-            const cv = try self.getView();
+            const cv = try self.view();
             return @ptrCast(cv.header());
         }
 
         pub fn headerMut(self: *Self) Error!*ViewType.PageHeader {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             return @ptrCast(cv.headerMut());
         }
 
         pub fn subheaderMut(self: *Self) Error!*SubheaderType {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             return @ptrCast(cv.subheaderMut());
         }
 
         pub fn metadata(self: *Self) Error![]const u8 {
-            const cv = try self.getView();
+            const cv = try self.view();
             return cv.metadata();
         }
 
         pub fn metadataMut(self: *Self) Error![]u8 {
-            var cv = try self.getViewMut();
+            var cv = try self.viewMut();
             return cv.metadataMut();
         }
     };
@@ -942,7 +942,7 @@ pub fn HandleBidirectionalImpl(
             errdefer ph.deinit();
 
             var ch = ChunkHandle.init(ph);
-            var v = try ch.getViewMut();
+            var v = try ch.viewMut();
             v.formatPage(
                 self.settings.chunk_page_kind,
                 try ph.pid(),
@@ -965,7 +965,7 @@ pub fn HandleBidirectionalImpl(
             if (first) |first_pid| {
                 var first_ch = try self.loadChunk(first_pid);
                 defer first_ch.deinit();
-                var first_view = try first_ch.getViewMut();
+                var first_view = try first_ch.viewMut();
                 first_view.setPrev(chunk_id);
             } else {
                 if (comptime has_tail) {
@@ -984,7 +984,7 @@ pub fn HandleBidirectionalImpl(
                 if (last) |last_pid| {
                     var last_ch = try self.loadChunk(last_pid);
                     defer last_ch.deinit();
-                    var last_view = try last_ch.getViewMut();
+                    var last_view = try last_ch.viewMut();
                     last_view.setNext(chunk_id);
                 } else {
                     try self.mgr.setFirst(chunk_id);
@@ -1064,7 +1064,7 @@ pub fn HandleBidirectionalImpl(
             if (prev) |prev_pid| {
                 var prev_ch = try self.loadChunk(prev_pid);
                 defer prev_ch.deinit();
-                var prev_view = try prev_ch.getViewMut();
+                var prev_view = try prev_ch.viewMut();
                 prev_view.setNext(next);
             } else {
                 try self.mgr.setFirst(next);
@@ -1073,7 +1073,7 @@ pub fn HandleBidirectionalImpl(
             if (next) |next_pid| {
                 var next_ch = try self.loadChunk(next_pid);
                 defer next_ch.deinit();
-                var next_view = try next_ch.getViewMut();
+                var next_view = try next_ch.viewMut();
                 next_view.setPrev(prev);
             } else {
                 if (comptime has_tail) {
