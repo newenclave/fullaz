@@ -142,8 +142,8 @@ pub fn Cloud(comptime PageCacheType: type) type {
             // Frame the cloud, not the cube: the root aggregate already knows
             // where the points actually ended up.
             if (self.manager.root) |root_id| {
-                var root = try self.model.getAccessor().loadNode(root_id);
-                defer self.model.getAccessor().deinitNode(&root);
+                var root = try self.model.accessor().loadNode(root_id);
+                defer self.model.accessor().deinitNode(&root);
                 if (trait.Splat.count(root.getTrait()) > 0) {
                     self.camera.target = trait.Splat.centroid(root.getTrait());
                 }

@@ -14,8 +14,8 @@ const testing = std.testing;
 const spec = scene.Spec{ .seed = 0xC0FFEE, .cluster_count = 8 };
 
 fn rootTraitCount(c: *C) !u32 {
-    var root = try c.model.getAccessor().loadNode(c.manager.root.?);
-    defer c.model.getAccessor().deinitNode(&root);
+    var root = try c.model.accessor().loadNode(c.manager.root.?);
+    defer c.model.accessor().deinitNode(&root);
     return cloud.trait.Splat.count(root.getTrait());
 }
 

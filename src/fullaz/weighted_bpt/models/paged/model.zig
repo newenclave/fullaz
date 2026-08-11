@@ -659,7 +659,7 @@ pub fn PagedModel(comptime PageCacheT: type, comptime StorageManagerT: type, com
 
         pub const NodeIdType = BlockIdType;
 
-        accessor: AccessorType,
+        accessor_state: AccessorType,
 
         pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Self {
             const context = Context{
@@ -668,15 +668,15 @@ pub fn PagedModel(comptime PageCacheT: type, comptime StorageManagerT: type, com
                 .settings = settings,
             };
             return .{
-                .accessor = AccessorImpl.init(context),
+                .accessor_state = AccessorImpl.init(context),
             };
         }
         pub fn deinit(self: *Self) void {
-            self.accessor.deinit();
+            self.accessor_state.deinit();
         }
 
-        pub fn getAccessor(self: *Self) *AccessorType {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
     };
 }

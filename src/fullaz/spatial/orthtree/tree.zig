@@ -22,7 +22,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         const Self = @This();
         pub const Error = ErrorSet;
         pub const Model = ModelT;
-        pub const Accessor = Model.Accessor;
+        pub const AccessorType = Model.AccessorType;
         pub const NodeId = Model.NodeId;
         pub const Node = Model.Node;
         pub const Box = Model.Box;
@@ -40,12 +40,12 @@ pub fn TreeImpl(comptime ModelT: type) type {
             };
         }
 
-        fn getAccessor(self: *const Self) *Accessor {
-            return self.model.getAccessor();
+        fn accessor(self: *const Self) *AccessorType {
+            return self.model.accessor();
         }
 
         pub fn bounds(self: *const Self) Error!?Box {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             if (acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
@@ -55,7 +55,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn initRootBounds(self: *Self, bbox: Box) ErrorSet!void {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             if (acc.getRoot()) |_| {
                 return ErrorSet.AlreadyInitialized;
             }
@@ -65,7 +65,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn insert(self: *Self, child_box: Box, value: Value) Error!void {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             if (acc.getRoot()) |root_id| {
                 const needs_growth = blk: {
                     var root_node = try acc.loadNode(root_id);
@@ -90,7 +90,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn query(self: *const Self, qbox: Box, comptime callback: anytype, ctx: anytype) Error!void {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             if (acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
@@ -99,7 +99,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn remove(self: *Self, qbox: Box, comptime predicate: anytype, ctx: anytype) Error!bool {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             if (acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
@@ -114,7 +114,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn visitNodes(self: *Self, comptime callback: anytype, ctx: anytype) Error!void {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             if (acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
@@ -128,7 +128,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
             comptime on_entry: anytype,
             ctx: anytype,
         ) Error!void {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             if (acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
@@ -184,8 +184,8 @@ pub fn TreeImpl(comptime ModelT: type) type {
             if (!node.isLeaf()) {
                 const node_box = node.bounds();
                 if (Self.childIndexFor(&node_box, &child_box)) |child_id| {
-                    var next_node = try self.getAccessor().loadNode(node.getChild(child_id).?);
-                    defer self.getAccessor().deinitNode(&next_node);
+                    var next_node = try self.accessor().loadNode(node.getChild(child_id).?);
+                    defer self.accessor().deinitNode(&next_node);
                     try self.insertIntoNode(&next_node, child_box, value);
                     try self.onInsert(node, child_box, value);
                     return;
@@ -198,8 +198,8 @@ pub fn TreeImpl(comptime ModelT: type) type {
             if (!(try node.canInsertEntry(child_box, value)) and node.canSplit()) {
                 const node_id = node.id();
                 try self.splitNode(node);
-                var split_node = try self.getAccessor().loadNode(node_id);
-                defer self.getAccessor().deinitNode(&split_node);
+                var split_node = try self.accessor().loadNode(node_id);
+                defer self.accessor().deinitNode(&split_node);
                 try self.insertIntoNode(&split_node, child_box, value);
                 return;
             }
@@ -209,7 +209,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
         pub fn splitNode(self: *Self, node: *Node) Error!void {
             try node.beforeSplit();
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             const parent_id = node.id();
             const parent_bounds = node.bounds();
             var child_ids: [child_count]NodeId = undefined;
@@ -253,7 +253,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn growRootToContain(self: *Self, box: Box) Error!void {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var current_root_id = acc.getRoot() orelse return;
 
             var expanded_bounds = blk: {
@@ -344,8 +344,8 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
             inline for (0..child_count) |i| {
                 if (node.getChild(i)) |child_id| {
-                    var child_node = try self.getAccessor().loadNode(child_id);
-                    defer self.getAccessor().deinitNode(&child_node);
+                    var child_node = try self.accessor().loadNode(child_id);
+                    defer self.accessor().deinitNode(&child_node);
                     try self.queryNode(&child_node, qbox, callback, ctx);
                 }
             }
@@ -363,8 +363,8 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
             inline for (0..child_count) |i| {
                 if (node.getChild(i)) |child_id| {
-                    var child_node = try self.getAccessor().loadNode(child_id);
-                    defer self.getAccessor().deinitNode(&child_node);
+                    var child_node = try self.accessor().loadNode(child_id);
+                    defer self.accessor().deinitNode(&child_node);
                     try self.visitNode(&child_node, callback, ctx);
                 }
             }
@@ -398,8 +398,8 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
             inline for (0..child_count) |i| {
                 if (node.getChild(i)) |child_id| {
-                    var child_node = try self.getAccessor().loadNode(child_id);
-                    defer self.getAccessor().deinitNode(&child_node);
+                    var child_node = try self.accessor().loadNode(child_id);
+                    defer self.accessor().deinitNode(&child_node);
                     try self.traverseNode(
                         &child_node,
                         on_node,
@@ -461,8 +461,8 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
             inline for (0..child_count) |i| {
                 if (node.getChild(i)) |child_id| {
-                    var child_node = try self.getAccessor().loadNode(child_id);
-                    defer self.getAccessor().deinitNode(&child_node);
+                    var child_node = try self.accessor().loadNode(child_id);
+                    defer self.accessor().deinitNode(&child_node);
                     if (try self.removeFromNode(&child_node, qbox, callback, ctx)) |result_const| {
                         var result = result_const;
                         errdefer self.model.deinitBorrowValue(&result.value);

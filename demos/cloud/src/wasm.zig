@@ -253,7 +253,7 @@ fn roleOf(pid: usize, bytes: []const u8) u8 {
 // camera-driven frame, so the caller only asks for it when the point set
 // itself just changed (see snapshotPages' `include_waste`).
 fn markLiveChunks(live: *std.AutoHashMap(u32, void), node_id: Cloud.NodeId) !void {
-    const accessor = world.model.getAccessor();
+    const accessor = world.model.accessor();
     var node = try accessor.loadNode(node_id);
     defer accessor.deinitNode(&node);
 

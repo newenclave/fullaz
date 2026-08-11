@@ -121,7 +121,7 @@ fn assertNode(comptime M: type) void {
 }
 
 fn assertAccessor(comptime M: type) void {
-    const A = M.Accessor;
+    const A = M.AccessorType;
 
     requiresFnSignature(A, "getRoot", fn (*const A) ?M.NodeId);
     requiresFnSignature(A, "setRoot", fn (*A, ?M.NodeId) M.Error!void);
@@ -134,7 +134,7 @@ pub fn assertModel(comptime M: type) void {
     requiresErrorDeclaration(M, "Error");
     requiresTypeDeclaration(M, "NodeId");
     requiresTypeDeclaration(M, "Box");
-    requiresTypeDeclaration(M, "Accessor");
+    requiresTypeDeclaration(M, "AccessorType");
     requiresTypeDeclaration(M, "Entry");
     requiresTypeDeclaration(M, "Node");
     requiresTypeDeclaration(M, "ValueIn");
@@ -143,7 +143,7 @@ pub fn assertModel(comptime M: type) void {
     requiresTypeDeclaration(M, "Trait");
 
     const Box = M.Box;
-    const Accessor = M.Accessor;
+    const AccessorType = M.AccessorType;
     const ValueIn = M.ValueIn;
     const ValueOut = M.ValueOut;
     const ValueBorrow = M.ValueBorrow;
@@ -154,7 +154,7 @@ pub fn assertModel(comptime M: type) void {
     assertNode(M);
     assertAccessor(M);
 
-    requiresFnSignature(M, "getAccessor", fn (*M) *Accessor);
+    requiresFnSignature(M, "accessor", fn (*M) *AccessorType);
     requiresFnSignature(M, "incrementEntriesCount", fn (*M) Error!void);
     requiresFnSignature(M, "decrementEntriesCount", fn (*M) Error!void);
     requiresFnSignature(M, "getEntriesCount", fn (*const M) Error!usize);

@@ -713,7 +713,7 @@ pub fn PagedModelImpl(
         pub const Node = NodeImpl;
         pub const Entry = EntryImpl;
         pub const NodeId = NativeNodeId;
-        pub const Accessor = AccessorImpl;
+        pub const AccessorType = AccessorImpl;
         pub const Box = BoxT;
         pub const ValueIn = Value;
         pub const ValueOut = Value;
@@ -722,7 +722,7 @@ pub fn PagedModelImpl(
         pub const Error = ErrorSet;
         pub const Settings = SettingsT;
 
-        accessor: Accessor,
+        accessor_state: AccessorType,
 
         pub fn init(cache: *PageCacheT, storage_manager: *StorageManagerT, fsm: *FsmT, settings: SettingsT) Error!Self {
             var trait_template: Trait = undefined;
@@ -757,30 +757,30 @@ pub fn PagedModelImpl(
                 return Error.BadData;
             }
             return .{
-                .accessor = Accessor.init(cache, storage_manager, fsm, settings, trait_template),
+                .accessor_state = AccessorType.init(cache, storage_manager, fsm, settings, trait_template),
             };
         }
 
         pub fn deinit(_: *Self) void {}
 
-        pub fn getAccessor(self: *Self) *Accessor {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn incrementEntriesCount(self: *Self) Error!void {
-            const count = try self.accessor.storage_manager.getEntriesCount();
+            const count = try self.accessor_state.storage_manager.getEntriesCount();
             const next = std.math.add(usize, count, 1) catch return Error.BadData;
-            try self.accessor.storage_manager.setEntriesCount(next);
+            try self.accessor_state.storage_manager.setEntriesCount(next);
         }
 
         pub fn decrementEntriesCount(self: *Self) Error!void {
-            const count = try self.accessor.storage_manager.getEntriesCount();
+            const count = try self.accessor_state.storage_manager.getEntriesCount();
             const next = std.math.sub(usize, count, 1) catch return Error.BadData;
-            try self.accessor.storage_manager.setEntriesCount(next);
+            try self.accessor_state.storage_manager.setEntriesCount(next);
         }
 
         pub fn getEntriesCount(self: *const Self) Error!usize {
-            return self.accessor.storage_manager.getEntriesCount();
+            return self.accessor_state.storage_manager.getEntriesCount();
         }
 
         pub fn valueOutAsIn(_: *const Self, value: ValueOut) ValueIn {

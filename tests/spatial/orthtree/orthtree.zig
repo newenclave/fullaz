@@ -105,7 +105,7 @@ fn expectSplitNode(comptime Coord: type) !void {
     defer model.deinit();
 
     var tree = TreeType.init(&model);
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     var node = try acc.createNode(Box.create(.{ 0, 0 }, .{ 10, 10 }));
     const parent_id = node.id();
     const parent_bounds = node.bounds();
@@ -151,7 +151,7 @@ fn expectSplitAdoptsEntries(comptime Coord: type) !void {
     defer model.deinit();
 
     var tree = TreeType.init(&model);
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     var parent = try acc.createNode(Box.create(.{ 0, 0 }, .{ 10, 10 }));
     defer acc.deinitNode(&parent);
     const entries = [_]Box{
@@ -187,7 +187,7 @@ fn expectInsert(comptime Coord: type) !void {
     defer model.deinit();
 
     var tree = TreeType.init(&model);
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     const first = Box.create(.{ 0, 0 }, .{ 10, 10 });
     const second = Box.create(.{ 1, 1 }, .{ 2, 2 });
 
@@ -218,7 +218,7 @@ fn expectInsertGrowsRoot(comptime Coord: type) !void {
     defer model.deinit();
 
     var tree = TreeType.init(&model);
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     const first = Box.create(.{ 0, 0 }, .{ 2, 2 });
     const second = Box.create(.{ 3, 3 }, .{ 4, 4 });
 
@@ -253,7 +253,7 @@ fn expectInsertGrowsRootAlongSingleAxis(comptime Coord: type) !void {
     defer model.deinit();
 
     var tree = TreeType.init(&model);
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     try tree.insert(Box.create(.{ 0, 0 }, .{ 2, 2 }), 1);
     try tree.insert(Box.create(.{ 3, 1 }, .{ 4, 2 }), 2);
 
@@ -322,7 +322,7 @@ fn expectInsertHooks(comptime Coord: type) !void {
     defer model.deinit();
 
     var tree = TreeType.init(&model);
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     try tree.insert(Box.create(.{ 0, 0 }, .{ 10, 10 }), 5);
     try tree.insert(Box.create(.{ 1, 1 }, .{ 2, 2 }), 7);
 
@@ -338,7 +338,7 @@ fn expectInsertHooks(comptime Coord: type) !void {
     defer growth_model.deinit();
 
     var growth_tree = TreeType.init(&growth_model);
-    const growth_acc = growth_model.getAccessor();
+    const growth_acc = growth_model.accessor();
     try growth_tree.insert(Box.create(.{ 0, 0 }, .{ 2, 2 }), 5);
     try growth_tree.insert(Box.create(.{ 3, 3 }, .{ 4, 4 }), 7);
 
@@ -389,7 +389,7 @@ fn expectVisitNodes(comptime Coord: type) !void {
     defer model.deinit();
 
     var tree = TreeType.init(&model);
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     try tree.insert(Box.create(.{ 0, 0 }, .{ 2, 2 }), 5);
     try tree.insert(Box.create(.{ 3, 3 }, .{ 4, 4 }), 7);
 
@@ -496,7 +496,7 @@ fn expectEntryCursor(comptime Coord: type) !void {
     var model = try Model.init(std.testing.allocator, 8);
     defer model.deinit();
 
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     var source = try acc.createNode(Box.create(.{ 0, 0 }, .{ 10, 10 }));
     defer acc.deinitNode(&source);
     var target = try acc.createNode(Box.create(.{ 0, 0 }, .{ 10, 10 }));
@@ -555,7 +555,7 @@ fn expectRemove(comptime Coord: type) !void {
     defer model.deinit();
 
     var tree = TreeType.init(&model);
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     try tree.insert(Box.create(.{ 0, 0 }, .{ 10, 10 }), 5);
     try tree.insert(Box.create(.{ 1, 1 }, .{ 2, 2 }), 7);
     try tree.insert(Box.create(.{ 6, 6 }, .{ 7, 7 }), 11);
@@ -617,7 +617,7 @@ fn expectRemoveHookError(comptime Coord: type) !void {
     );
     try std.testing.expectEqual(@as(usize, 0), try model.getEntriesCount());
 
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     var root = try acc.loadNode(acc.getRoot().?);
     defer acc.deinitNode(&root);
     try std.testing.expectEqual(@as(usize, 0), root.size());
@@ -640,7 +640,7 @@ test "OrthTree: memory model" {
     const tree = TreeType.init(&model);
 
     _ = tree;
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     const node = try acc.createNode(Box.create(
         .{ 0, 0 },
         .{ 10, 10 },

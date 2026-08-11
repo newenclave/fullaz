@@ -14,7 +14,7 @@ test "WBpt: Create with Memory model" {
     const allocator = std.testing.allocator;
     var model = try Model.init(allocator);
     defer model.deinit();
-    var acc = model.getAccessor();
+    var acc = model.accessor();
     var tree = Tree.init(&model, .neighbor_share);
     defer tree.deinit();
 
@@ -34,7 +34,7 @@ test "WBpt: insertion weight into a list" {
     const allocator = std.testing.allocator;
     var model = try Model.init(allocator);
     defer model.deinit();
-    var acc = model.getAccessor();
+    var acc = model.accessor();
 
     var leaf = try acc.createLeaf();
     defer acc.deinitLeaf(&leaf);
@@ -54,7 +54,7 @@ test "WBpt: create inode" {
     const allocator = std.testing.allocator;
     var model = try Model.init(allocator);
     defer model.deinit();
-    var acc = model.getAccessor();
+    var acc = model.accessor();
 
     var inode = try acc.createInode();
     defer acc.deinitInode(&inode);
@@ -82,7 +82,7 @@ test "WBpt: insertion" {
     //_ = try tree.insert(1000, "end");
     //try tree.removeEntry(0);
 
-    var acc = model.getAccessor();
+    var acc = model.accessor();
     var leaf = try acc.loadLeaf(0);
     defer acc.deinitLeaf(&leaf);
     for (0..try leaf.size()) |i| {
@@ -173,7 +173,7 @@ test "WBpt: stress test - random insertions" {
     const allocator = std.testing.allocator;
     var model = try Model.init(allocator);
     defer model.deinit();
-    const acc = model.getAccessor();
+    const acc = model.accessor();
 
     var tree = Tree.init(&model, rebalance_policy);
     defer tree.deinit();
@@ -980,7 +980,7 @@ test "WBpt remove: insert remove leaks" {
     var model = try Model.init(std.testing.allocator);
     defer model.deinit();
 
-    var acc = model.getAccessor();
+    var acc = model.accessor();
     var leaf = try acc.createLeaf();
     defer acc.deinitLeaf(&leaf);
 

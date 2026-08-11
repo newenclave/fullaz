@@ -9,7 +9,7 @@ pub const RebalancePolicy = enum {
 
 pub fn WeightedBpt(comptime ModelT: type) type {
     const Model = ModelT;
-    const Accessor = Model.AccessorType;
+    const AccessorType = Model.AccessorType;
     const Weight = Model.WeightType;
     const ValueView = Model.ValueViewType;
     const Value = Model.ValueType;
@@ -61,11 +61,11 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             after_end,
         };
 
-        accessor: *Accessor,
+        accessor: *AccessorType,
         leaf: ?Leaf = null,
         cur: Cursor,
 
-        fn init(acc: *Accessor, leaf: Leaf, on: usize) !Self {
+        fn init(acc: *AccessorType, leaf: Leaf, on: usize) !Self {
             var res = Self{
                 .accessor = acc,
                 .leaf = leaf,
@@ -190,7 +190,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         pub fn deinit(_: *Self) void {}
 
         pub fn iterator(self: *Self) Error!Iterator {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             const root = try acc.getRoot();
             if (root) |root_pid| {
                 const leaf = try self.getLeftmostLeaf(root_pid);
@@ -205,7 +205,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         pub fn totalWeight(self: *Self) Error!Weight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             const root = try acc.getRoot();
             if (root) |root_pid| {
                 if (try acc.isLeaf(root_pid)) {
@@ -223,11 +223,11 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         pub fn insert(self: *Self, where: Weight, value: Value) Error!bool {
-            var accessor = self.getAccessor();
-            const root = try accessor.getRoot();
+            var acc = self.accessor();
+            const root = try acc.getRoot();
             if (root) |rpid| {
                 var find_result = try self.findLeafForWeight(rpid, where);
-                defer accessor.deinitLeaf(&find_result.leaf);
+                defer acc.deinitLeaf(&find_result.leaf);
 
                 var value_view = try ValueView.init(value);
                 defer value_view.deinit();
@@ -244,16 +244,16 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 }
                 return true;
             } else {
-                var leaf = try accessor.createLeaf();
-                defer accessor.deinitLeaf(&leaf);
+                var leaf = try acc.createLeaf();
+                defer acc.deinitLeaf(&leaf);
                 try leaf.insertAt(0, value);
-                try accessor.setRoot(leaf.id());
+                try acc.setRoot(leaf.id());
                 return true;
             }
         }
 
         pub fn removeEntry(self: *Self, where: Weight) Error!void {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             if (try acc.getRoot()) |root| {
                 var find_result = try self.findLeafForWeight(root, where);
                 defer acc.deinitLeaf(&find_result.leaf);
@@ -269,7 +269,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         pub fn findByWeight(self: *Self, weight: Weight, out: []u8) Error!?FoundAt {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             const root = (try acc.getRoot()) orelse return null;
             var find_result = try self.findLeafForWeight(root, weight);
             defer acc.deinitLeaf(&find_result.leaf);
@@ -294,7 +294,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         pub fn dump(self: *Self) void {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             const root = acc.getRoot() catch |err| {
                 std.debug.print("Error getting root: {any}\n", .{err});
                 return;
@@ -309,12 +309,12 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         /// implementation fns. non public
-        fn getAccessor(self: *Self) *Accessor {
-            return self.model.getAccessor();
+        fn accessor(self: *Self) *AccessorType {
+            return self.model.accessor();
         }
 
         fn leafFixParentWeight(self: *Self, leaf: *const Leaf) Error!void {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var pinfo = try self.leafParentInfo(leaf);
             if (pinfo) |*parent_info| {
                 defer acc.deinitInode(&parent_info.inode);
@@ -325,7 +325,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeFixParentWeight(self: *Self, inode: *const Inode) Error!void {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var pinfo = try self.inodeParentInfo(inode);
             if (pinfo) |*parent_info| {
                 defer acc.deinitInode(&parent_info.inode);
@@ -336,7 +336,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn findLeafForWeight(self: *Self, from: Pid, weight: Weight) Error!FindResult {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var current_pid = from;
             var accumulated: Weight = 0;
             var parent_pos: usize = 0;
@@ -363,7 +363,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn leafParentInfo(self: *Self, leaf: *const Leaf) Error!?ParentInfo {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             if (try leaf.getParent()) |ppid| {
                 var parent = try acc.loadInode(ppid);
                 errdefer acc.deinitInode(&parent);
@@ -377,7 +377,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeParentInfo(self: *Self, inode: *const Inode) Error!?ParentInfo {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             if (try inode.getParent()) |ppid| {
                 var parent = try acc.loadInode(ppid);
                 errdefer acc.deinitInode(&parent);
@@ -391,7 +391,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn leafFindRightSibling(self: *Self, leaf: *const Leaf) Error!?ParentInfo {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var pinfo = try self.leafParentInfo(leaf);
             if (pinfo) |*parent_info| {
                 errdefer acc.deinitInode(&parent_info.inode);
@@ -405,7 +405,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn leafFindLeftSibling(self: *Self, leaf: *const Leaf) Error!?ParentInfo {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var pinfo = try self.leafParentInfo(leaf);
             if (pinfo) |*parent_info| {
                 errdefer acc.deinitInode(&parent_info.inode);
@@ -419,7 +419,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeFindRightSibling(self: *Self, inode: *const Inode) Error!?ParentInfo {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var pinfo = try self.inodeParentInfo(inode);
             if (pinfo) |*parent_info| {
                 errdefer acc.deinitInode(&parent_info.inode);
@@ -433,7 +433,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeFindLeftSibling(self: *Self, inode: *const Inode) Error!?ParentInfo {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var pinfo = try self.inodeParentInfo(inode);
             if (pinfo) |*parent_info| {
                 errdefer acc.deinitInode(&parent_info.inode);
@@ -448,7 +448,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
         /// split, handle overflow
         fn leafHandleOverflowImpl(self: *Self, leaf: *Leaf, leaf_weight: Weight, val: Value) Error!void {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var sres = try self.leafHandleOverflow(leaf);
             defer acc.deinitLeaf(&sres.right);
             if (leaf_weight < sres.left_weight) {
@@ -461,7 +461,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn leafHandleOverflow(self: *Self, leaf: *Leaf) Error!LeafSplitResult {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var split_result = try self.leafSplit(leaf);
             errdefer acc.deinitLeaf(&split_result.right);
 
@@ -502,7 +502,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             const cur_sz = try leaf.size();
             const mid = cur_sz / 2;
             const to_reduce = cur_sz - mid;
-            var acc = self.getAccessor();
+            var acc = self.accessor();
 
             var right = try acc.createLeaf();
             errdefer acc.deinitLeaf(&right);
@@ -537,7 +537,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeHandleOverflow(self: *Self, inode: *Inode) Error!void {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             const ppid = try inode.getParent();
             const old_weight = try inode.totalWeight();
             _ = old_weight;
@@ -580,7 +580,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             const cur_sz = try inode.size();
             const mid = cur_sz / 2;
             const to_reduce = cur_sz - mid;
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var right = try acc.createInode();
             errdefer acc.deinitInode(&right);
             var rweight: Weight = 0;
@@ -607,7 +607,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         // borrowing and giving values between neighbors for rebalancing
 
         fn leafTryBorrowFromRight(self: *Self, leaf: *Leaf) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var pinfo = try self.leafFindRightSibling(leaf);
             if (pinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -650,7 +650,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn leafTryBorrowFromLeft(self: *Self, leaf: *Leaf) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var pinof = try self.leafFindLeftSibling(leaf);
             if (pinof) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -691,7 +691,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn leafTryGiveToRight(self: *Self, leaf: *Leaf, additional_entry: usize) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var parent_info = try self.leafFindRightSibling(leaf);
             if (parent_info) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -720,7 +720,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn leafTryGiveToLeft(self: *Self, leaf: *Leaf, additional_entry: usize) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var parent_info = try self.leafFindLeftSibling(leaf);
             if (parent_info) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -762,7 +762,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 return false;
             }
 
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             const pos_in_leaf = fres.node_pos.pos;
             const diff_in_leaf = fres.node_pos.diff;
             const is_first = pos_in_leaf == 0;
@@ -810,7 +810,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeTryBorrowFromRight(self: *Self, inode: *Inode) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var pinfo = try self.inodeFindRightSibling(inode);
             if (pinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -852,7 +852,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeTryBorrowFromLeft(self: *Self, inode: *Inode) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var pinfo = try self.inodeFindLeftSibling(inode);
             if (pinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -893,7 +893,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeTryGiveToRight(self: *Self, inode: *Inode, additional_entry: usize) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var parent_info = try self.inodeFindRightSibling(inode);
             if (parent_info) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -922,7 +922,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeTryGiveToLeft(self: *Self, inode: *Inode, additional_entry: usize) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var parent_info = try self.inodeFindLeftSibling(inode);
             if (parent_info) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -977,7 +977,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
                 return;
             }
 
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             if (try acc.getRoot()) |root| {
                 if (root == leaf.id() and try leaf.size() == 0) {
                     try acc.setRoot(null);
@@ -1011,7 +1011,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             if (!try inode.isUnderflowed()) {
                 return;
             }
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             if (try acc.getRoot()) |root| {
                 if (root == inode.id() and try inode.size() == 1) {
                     const c = try inode.getChild(0);
@@ -1043,7 +1043,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn leafTryMergeWithRight(self: *Self, leaf: *Leaf) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var sinfo = try self.leafFindRightSibling(leaf);
             if (sinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -1093,7 +1093,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn leafTryMergeWithLeft(self: *Self, leaf: *Leaf) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var sinfo = try self.leafFindLeftSibling(leaf);
             if (sinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -1141,7 +1141,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn leafDestroy(self: *Self, leaf: *Leaf) Error!void {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             const root = try acc.getRoot();
             const leaf_id = leaf.id();
 
@@ -1152,7 +1152,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeTryMergeWithRight(self: *Self, inode: *Inode) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var sinfo = try self.inodeFindRightSibling(inode);
             if (sinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -1196,7 +1196,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn inodeTryMergeWithLeft(self: *Self, inode: *Inode) Error!?MovedWeight {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var sinfo = try self.inodeFindRightSibling(inode);
             if (sinfo) |*sibling_info| {
                 defer acc.deinitInode(&sibling_info.inode);
@@ -1243,7 +1243,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
 
         ///
         fn setChildParent(self: *Self, child_pid: Pid, parent_pid: ?Pid) Error!void {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             if (try acc.isLeaf(child_pid)) {
                 var leaf = try acc.loadLeaf(child_pid);
                 defer acc.deinitLeaf(&leaf);
@@ -1265,7 +1265,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn getLeftmostLeaf(self: *Self, from: Pid) Error!Leaf {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             var current_pid = from;
             while (true) {
                 if (try acc.isLeaf(current_pid)) {
@@ -1285,7 +1285,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         fn dumpNode(self: *Self, pid: Pid, depth: usize) Error!void {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             if (try acc.isLeaf(pid)) {
                 var leaf = try acc.loadLeaf(pid);
                 defer acc.deinitLeaf(&leaf);

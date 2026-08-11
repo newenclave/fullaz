@@ -712,20 +712,20 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             InodeImpl.Error ||
             std.mem.Allocator.Error;
 
-        accessor: AccessorImpl,
+        accessor_state: AccessorType,
 
         pub fn init(allocator: std.mem.Allocator) Error!Self {
             return .{
-                .accessor = try AccessorImpl.init(allocator),
+                .accessor_state = try AccessorType.init(allocator),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor.deinit();
+            self.accessor_state.deinit();
         }
 
-        pub fn getAccessor(self: *Self) *AccessorImpl {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
     };
 }
