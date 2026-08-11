@@ -116,11 +116,29 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
         }
 
         pub fn center(self: *const Self) Point {
+            const is_float = comptime @typeInfo(Coord) == .float;
             var result: Point = undefined;
             inline for (0..dimension) |i| {
-                result[i] = self.low[i] + @divTrunc(self.high[i] - self.low[i], 2);
+                const extent = self.high[i] - self.low[i];
+                result[i] = self.low[i] + if (is_float) extent / 2 else @divTrunc(extent, 2);
             }
             return result;
+        }
+
+        pub fn splittable(self: *const Self, min_cell_extent: Coord) bool {
+            const mid = self.center();
+            inline for (0..dimension) |i| {
+                // Positive form on purpose: NaN bounds answer "not splittable".
+                if (!(mid[i] > self.low[i]) or !(mid[i] < self.high[i])) {
+                    return false;
+                }
+                if (!(mid[i] - self.low[i] >= min_cell_extent) or
+                    !(self.high[i] - mid[i] >= min_cell_extent))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         pub fn getLowAxis(self: *const Self, axis: usize) Coord {

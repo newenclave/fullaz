@@ -759,3 +759,77 @@ test "OrthTree: remove hook error for u32 coordinates" {
 test "OrthTree: remove hook error for f32 coordinates" {
     try expectRemoveHookError(f32);
 }
+
+fn countNodes(tree: anytype) !usize {
+    const T = @TypeOf(tree.*);
+    const Counter = struct {
+        nodes: usize = 0,
+
+        fn visit(
+            self: *@This(),
+            _: T.NodeId,
+            _: T.Box,
+            _: *T.Model.Trait,
+        ) !orthtree.tree.VisitorResult {
+            self.nodes += 1;
+            return .descend;
+        }
+    };
+    var counter = Counter{};
+    try tree.visitNodes(Counter.visit, &counter);
+    return counter.nodes;
+}
+
+// Coincident points used to drive subdivision to max_tree_depth: with an
+// integer extent of 1 the center lands on `low`, so one child came back
+// identical to its parent and the split "succeeded" without progress.
+test "OrthTree: coincident integer points stop splitting once the center stops separating" {
+    const Model = orthtree.models.Memory(i32, 2, u32);
+    const Tree = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+
+    var model = try Model.init(std.testing.allocator, 2);
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    try tree.initRootBounds(Box.create(.{ 0, 0 }, .{ 4, 4 }));
+
+    var i: u32 = 0;
+    while (i < 8) : (i += 1) {
+        try tree.insert(Box.create(.{ 1, 1 }, .{ 1, 1 }), i);
+    }
+
+    try std.testing.expectEqual(@as(usize, 8), try model.getEntriesCount());
+    // 4 -> 2 -> 1, and a cell of extent 1 refuses to split: one root plus two
+    // rounds of four children. The old behaviour walked 32 levels deep.
+    try std.testing.expectEqual(@as(usize, 9), try countNodes(&tree));
+}
+
+test "OrthTree: min_cell_extent stops subdivision at the requested cell size" {
+    const Model = orthtree.models.Memory(i32, 2, u32);
+    const Tree = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+
+    var coarse = try Model.initWithSettings(std.testing.allocator, Model.Trait.init(), .{
+        .max_leaf_entries = 2,
+        .min_cell_extent = 4,
+    });
+    defer coarse.deinit();
+    var coarse_tree = Tree.init(&coarse);
+    try coarse_tree.initRootBounds(Box.create(.{ 0, 0 }, .{ 16, 16 }));
+
+    var fine = try Model.init(std.testing.allocator, 2);
+    defer fine.deinit();
+    var fine_tree = Tree.init(&fine);
+    try fine_tree.initRootBounds(Box.create(.{ 0, 0 }, .{ 16, 16 }));
+
+    var i: u32 = 0;
+    while (i < 8) : (i += 1) {
+        try coarse_tree.insert(Box.create(.{ 1, 1 }, .{ 1, 1 }), i);
+        try fine_tree.insert(Box.create(.{ 1, 1 }, .{ 1, 1 }), i);
+    }
+
+    // 16 -> 8 -> 4, then a 4x4 cell refuses because its children would be 2x2.
+    try std.testing.expectEqual(@as(usize, 9), try countNodes(&coarse_tree));
+    // Unbounded: 16 -> 8 -> 4 -> 2 -> 1.
+    try std.testing.expectEqual(@as(usize, 17), try countNodes(&fine_tree));
+}

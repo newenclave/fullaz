@@ -1,7 +1,7 @@
 const std = @import("std");
 const gravity = @import("gravity");
 const zigline = @import("zigline");
-const terminal = @import("terminal.zig");
+const terminal = @import("demo_common").terminal;
 
 const Io = std.Io;
 

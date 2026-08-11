@@ -22,7 +22,12 @@ pub fn MemoryImpl(
     const TraitType = TraitT(T, dimention, ValueT);
     const BoundingBoxT = BoundingBox(T, dimention);
     const child_count = 1 << dimention;
-    const max_tree_depth = 32;
+
+    const SettingsT = struct {
+        max_leaf_entries: usize,
+        max_tree_depth: usize = 32,
+        min_cell_extent: T = 0,
+    };
 
     const ErrorSet = std.mem.Allocator.Error ||
         TraitType.Error ||
@@ -57,7 +62,7 @@ pub fn MemoryImpl(
 
     const Context = struct {
         allocator: std.mem.Allocator,
-        max_leaf_entries: usize,
+        settings: SettingsT,
         entries_count: usize = 0,
         level: usize = 0,
         trait: TraitType,
@@ -367,11 +372,15 @@ pub fn MemoryImpl(
         pub fn canInsertEntry(self: *const Self, box: Box, value: ValueT) ErrorSet!bool {
             _ = box;
             _ = value;
-            return self.node.entries.list.items.len < self.node.ctx.max_leaf_entries;
+            return self.node.entries.list.items.len < self.node.ctx.settings.max_leaf_entries;
         }
 
         pub fn canSplit(self: *const Self) bool {
-            return self.node.level < max_tree_depth;
+            const settings = self.node.ctx.settings;
+            if (self.node.level >= settings.max_tree_depth) {
+                return false;
+            }
+            return self.bounds().splittable(settings.min_cell_extent);
         }
 
         pub fn setLevel(self: *Self, level: usize) ErrorSet!void {
@@ -438,11 +447,11 @@ pub fn MemoryImpl(
         nodes: NodeList,
         root_id: ?IdType = null,
 
-        pub fn init(allocator: std.mem.Allocator, trait: TraitType, max_leaf_entries: usize) ErrorSet!Self {
+        pub fn init(allocator: std.mem.Allocator, trait: TraitType, settings: SettingsT) ErrorSet!Self {
             const ctx = Context{
                 .allocator = allocator,
                 .trait = trait,
-                .max_leaf_entries = max_leaf_entries,
+                .settings = settings,
                 .entries_count = 0,
             };
             return .{
@@ -540,26 +549,29 @@ pub fn MemoryImpl(
         pub const ValueBorrow = ValueT;
         pub const Error = ErrorSet;
         pub const Trait = TraitType;
+        pub const Settings = SettingsT;
 
         accessor: Accessor,
 
         pub fn init(allocator: std.mem.Allocator, max_leaf_entries: usize) ErrorSet!Self {
-            return Self{
-                .accessor = try Accessor.init(
-                    allocator,
-                    Trait.init(),
-                    max_leaf_entries,
-                ),
-            };
+            return initWithSettings(allocator, Trait.init(), .{
+                .max_leaf_entries = max_leaf_entries,
+            });
         }
 
         pub fn initWithTrait(allocator: std.mem.Allocator, trait: Trait, max_leaf_entries: usize) ErrorSet!Self {
+            return initWithSettings(allocator, trait, .{
+                .max_leaf_entries = max_leaf_entries,
+            });
+        }
+
+        pub fn initWithSettings(
+            allocator: std.mem.Allocator,
+            trait: Trait,
+            settings: SettingsT,
+        ) ErrorSet!Self {
             return Self{
-                .accessor = try Accessor.init(
-                    allocator,
-                    trait,
-                    max_leaf_entries,
-                ),
+                .accessor = try Accessor.init(allocator, trait, settings),
             };
         }
 

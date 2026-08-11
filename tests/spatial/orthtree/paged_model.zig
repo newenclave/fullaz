@@ -319,7 +319,7 @@ test "OrthTree paged model: trait, entries, and root persist across cache reopen
             self.count += 1;
         }
     };
-    const settings: fullaz.spatial.orthtree.models.paged.Settings = .{
+    const settings: Model.Settings = .{
         .max_leaf_entries = 4,
         .max_value_size = 64,
         .node_layout_id = 0x1002,
@@ -387,7 +387,7 @@ test "OrthTree paged model: paged FSM reopens and reuses partially filled node p
             self.count += 1;
         }
     };
-    const settings: fullaz.spatial.orthtree.models.paged.Settings = .{
+    const settings: Model.Settings = .{
         .max_leaf_entries = 4,
         .max_value_size = 64,
         .node_layout_id = 0x2001,
@@ -543,4 +543,280 @@ test "OrthTree paged model: loader rejects incompatible node page metadata witho
     node_page.subheaderMut().fsm_location.slot_id.setMax();
     try std.testing.expectError(error.BadData, model.getAccessor().loadNode(root_id));
     try std.testing.expectEqual(available_before, cache.availableFrames());
+}
+
+// Every other paged-model test here is (i32, 2). These two are the first to put
+// three dimensions and a float coordinate through the page layout, the trait
+// contract and the entry codec.
+const Cube = struct {
+    const Model = fullaz.spatial.orthtree.models.PagedImpl(Cache, StorageManager, Fsm, f32, 3, CountTrait, .little);
+    const Tree = TreeImpl(Model);
+    const Box = Model.Box;
+    const Format = fullaz.page.orthtree.Orthtree(u32, u16, f32, 3, .little);
+
+    const side: f32 = 65536.0;
+    const page_size: usize = 1024;
+    const frames: usize = 64;
+
+    const settings: Model.Settings = .{
+        .max_leaf_entries = 24,
+        .max_value_size = 16,
+        .max_tree_depth = 16,
+        .node_layout_id = 0x3D01,
+        .node_page_kind = 0x75,
+        .entry_page_kind = 0x76,
+    };
+
+    fn rootBox() Box {
+        return Box.create(.{ 0, 0, 0 }, .{ side, side, side });
+    }
+
+    fn point(p: [3]f32) Box {
+        return Box.create(p, p);
+    }
+
+    // Strictly inside the cube: a coordinate of exactly 0 would make the
+    // degenerate entry box fail the half-open overlap test in queryNode.
+    fn sample(index: u32) [3]f32 {
+        var prng = std.Random.DefaultPrng.init(0x5EED0000 + @as(u64, index));
+        const r = prng.random();
+        const span = side - 2.0;
+        return .{
+            1.0 + r.float(f32) * span,
+            1.0 + r.float(f32) * span,
+            1.0 + r.float(f32) * span,
+        };
+    }
+};
+
+test "OrthTree paged model: three dimensional f32 nodes round-trip through pages" {
+    const C = Cube;
+
+    try std.testing.expectEqual(@as(usize, 94), @sizeOf(C.Format.NodeSlotSubheader));
+    try std.testing.expectEqual(@as(usize, 8), C.Tree.child_count);
+
+    var device = try Device.init(std.testing.allocator, C.page_size);
+    defer device.deinit();
+    var storage_manager = StorageManager{};
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, C.frames);
+    defer cache.deinit();
+    var model = try C.Model.init(&cache, &storage_manager, &fsm, C.settings);
+    defer model.deinit();
+
+    const accessor = model.getAccessor();
+    const bounds = C.Box.create(.{ 1.5, -2.25, 3.125 }, .{ 9.5, 10.75, 11.0 });
+    const node_id = blk: {
+        var node = try accessor.createNode(bounds);
+        defer accessor.deinitNode(&node);
+        break :blk node.id();
+    };
+
+    var loaded = try accessor.loadNode(node_id);
+    defer accessor.deinitNode(&loaded);
+
+    // PackedFloat is bit-preserving, so the page round-trip must be exact.
+    try std.testing.expectEqual(bounds.low, loaded.bounds().low);
+    try std.testing.expectEqual(bounds.high, loaded.bounds().high);
+}
+
+test "OrthTree paged model: three dimensional f32 insert, split, and reopen" {
+    const C = Cube;
+    const count: u32 = 2000;
+
+    var device = try Device.init(std.testing.allocator, C.page_size);
+    defer device.deinit();
+    var storage_manager = StorageManager{};
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+
+    {
+        var cache = try Cache.init(&device, std.testing.allocator, C.frames);
+        defer cache.deinit();
+        var model = try C.Model.init(&cache, &storage_manager, &fsm, C.settings);
+        defer model.deinit();
+        var tree = C.Tree.init(&model);
+        try tree.initRootBounds(C.rootBox());
+
+        const available_before = cache.availableFrames();
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            try tree.insert(C.point(C.sample(i)), "p");
+        }
+        try std.testing.expectEqual(available_before, cache.availableFrames());
+        try std.testing.expectEqual(@as(usize, count), try model.getEntriesCount());
+
+        const Probe = struct {
+            nodes: usize = 0,
+            min_extent: f32 = C.side,
+
+            fn onNode(
+                self: *@This(),
+                _: anytype,
+                b: C.Box,
+                _: *const C.Model.Trait,
+                _: bool,
+            ) !fullaz.spatial.orthtree.tree.TraverseDecision {
+                self.nodes += 1;
+                self.min_extent = @min(self.min_extent, b.high[0] - b.low[0]);
+                return .descend;
+            }
+
+            fn onEntry(_: *@This(), _: C.Box, _: []const u8) !void {}
+        };
+        var probe = Probe{};
+        try tree.traverse(Probe.onNode, Probe.onEntry, &probe);
+
+        // It must have split (8 children per level), and it must not have
+        // bottomed out: 2000 uniform points in a 65536 cube never need
+        // sub-unit cells, so reaching them would mean subdivision degenerated.
+        try std.testing.expect(probe.nodes > C.Tree.child_count);
+        try std.testing.expect(probe.min_extent > 1.0);
+
+        var root = try model.getAccessor().loadNode(storage_manager.root.?);
+        defer model.getAccessor().deinitNode(&root);
+        try std.testing.expectEqual(count, root.getTrait().count.get());
+
+        try cache.flushAll();
+    }
+
+    {
+        var cache = try Cache.init(&device, std.testing.allocator, C.frames);
+        defer cache.deinit();
+        var model = try C.Model.init(&cache, &storage_manager, &fsm, C.settings);
+        defer model.deinit();
+        var tree = C.Tree.init(&model);
+
+        const Counter = struct {
+            count: usize = 0,
+
+            fn collect(self: *@This(), _: C.Box, _: []const u8) !void {
+                self.count += 1;
+            }
+        };
+        var counter = Counter{};
+        try tree.query(C.rootBox(), Counter.collect, &counter);
+
+        try std.testing.expectEqual(@as(usize, count), counter.count);
+        try std.testing.expectEqual(@as(usize, count), try model.getEntriesCount());
+
+        var root = try model.getAccessor().loadNode(storage_manager.root.?);
+        defer model.getAccessor().deinitNode(&root);
+        try std.testing.expectEqual(count, root.getTrait().count.get());
+    }
+}
+
+const GrowthFixture = struct {
+    const Model = fullaz.spatial.orthtree.models.PagedImpl(Cache, StorageManager, Fsm, i32, 2, CountTrait, .little);
+    const Tree = TreeImpl(Model);
+    const Box = Model.Box;
+
+    fn point(x: i32, y: i32) Box {
+        return Box.create(.{ x, y }, .{ x, y });
+    }
+
+    fn rootTraitCount(model: *Model, root_id: StorageManager.NodeId) !u32 {
+        var root = try model.getAccessor().loadNode(root_id);
+        defer model.getAccessor().deinitNode(&root);
+        return root.getTrait().count.get();
+    }
+};
+
+// The memory model's deinitNode is a no-op, so the growth tests in
+// tests/spatial/orthtree/orthtree.zig cannot observe frame accounting at all.
+// These two exercise growRootToContain against real page handles.
+test "OrthTree paged model: a single root growth releases every pinned frame" {
+    const F = GrowthFixture;
+
+    var device = try Device.init(std.testing.allocator, 1024);
+    defer device.deinit();
+    var storage_manager = StorageManager{};
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 32);
+    defer cache.deinit();
+    var model = try F.Model.init(&cache, &storage_manager, &fsm, .{
+        .max_leaf_entries = 4,
+        .max_value_size = 64,
+        .node_layout_id = 0x1010,
+        .node_page_kind = 0x71,
+        .entry_page_kind = 0x72,
+    });
+    defer model.deinit();
+
+    var tree = F.Tree.init(&model);
+    try tree.initRootBounds(F.Box.create(.{ 0, 0 }, .{ 100, 100 }));
+    try tree.insert(F.point(10, 10), "inside");
+
+    const available_before = cache.availableFrames();
+
+    // (150,150) needs exactly one doubling: [0,100] -> [0,200].
+    try tree.insert(F.point(150, 150), "outside");
+
+    try std.testing.expectEqual(available_before, cache.availableFrames());
+    try std.testing.expectEqual(@as(usize, 2), try model.getEntriesCount());
+
+    const bounds = (try tree.bounds()).?;
+    try std.testing.expectEqual(@as(i32, 200), bounds.high[0]);
+    try std.testing.expectEqual(@as(i32, 200), bounds.high[1]);
+}
+
+test "OrthTree paged model: repeated root growth keeps the tree usable" {
+    const F = GrowthFixture;
+
+    var device = try Device.init(std.testing.allocator, 1024);
+    defer device.deinit();
+    var storage_manager = StorageManager{};
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 32);
+    defer cache.deinit();
+    var model = try F.Model.init(&cache, &storage_manager, &fsm, .{
+        .max_leaf_entries = 4,
+        .max_value_size = 64,
+        .node_layout_id = 0x1011,
+        .node_page_kind = 0x71,
+        .entry_page_kind = 0x72,
+    });
+    defer model.deinit();
+
+    var tree = F.Tree.init(&model);
+    try tree.initRootBounds(F.Box.create(.{ 0, 0 }, .{ 100, 100 }));
+    try tree.insert(F.point(10, 10), "inside");
+
+    const available_before = cache.availableFrames();
+
+    // (1000,1000) needs four doublings: 100 -> 200 -> 400 -> 800 -> 1600.
+    try tree.insert(F.point(1000, 1000), "far");
+
+    try std.testing.expectEqual(available_before, cache.availableFrames());
+    try std.testing.expectEqual(@as(usize, 2), try model.getEntriesCount());
+    try std.testing.expectEqual(
+        @as(u32, 2),
+        try F.rootTraitCount(&model, storage_manager.root.?),
+    );
+
+    const bounds = (try tree.bounds()).?;
+    try std.testing.expectEqual(@as(i32, 1600), bounds.high[0]);
+    try std.testing.expectEqual(@as(i32, 1600), bounds.high[1]);
+
+    const Counter = struct {
+        count: usize = 0,
+
+        fn collect(self: *@This(), _: F.Box, _: []const u8) !void {
+            self.count += 1;
+        }
+    };
+    var counter = Counter{};
+    try tree.query(F.Box.create(.{ 0, 0 }, .{ 1600, 1600 }), Counter.collect, &counter);
+    try std.testing.expectEqual(@as(usize, 2), counter.count);
 }

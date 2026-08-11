@@ -118,15 +118,18 @@ If something can be made simpler for learning purposes, it probably will be.
 - [X]  **Quadtree** (dimension-parametric `Orthtree` with in-memory and paged
   models; paged nodes are fixed slots selected through a persistent FSM, while
   the in-memory 2D model powers the gravity demo)
-- [ ]  **Octree** (shares the dimension-parametric `Orthtree` foundation and
-  paged model; dedicated 3D coverage is pending)
+- [X]  **Octree** (the same `Orthtree` at three dimensions over the paged model;
+  the cloud demo is the first user, and the split policy is configurable through
+  `max_tree_depth` and `min_cell_extent`)
 - [ ]  **Grid / hash-grid coarse spatial partitioning**
 
 #### Point-cloud / spatial storage experiments
 
-- [ ]  **Chunked point storage**
-- [ ]  **Bounding-box metadata per chunk**
-- [ ]  **LOD-friendly chunk hierarchy**
+- [X]  **Chunked point storage** (each octree node owns a chain of entry pages)
+- [X]  **Bounding-box metadata per chunk** (node bounds plus a per-node
+  aggregate trait: how many points its subtree holds and where their centroid is)
+- [X]  **LOD-friendly chunk hierarchy** (a node smaller on screen than the
+  detail threshold is drawn as one splat standing for its whole subtree)
 - [ ]  **Spatial query prototype** (`bbox -> chunk refs`)
 
 #### Storage backends
@@ -323,6 +326,104 @@ Reopen later and you are right where you left off:
 $ galaxy world.gx where
 at (850921.8, 380720.3)  view 16x16
 ```
+
+---
+
+## cloud: a point cloud that draws itself at the right detail
+
+**cloud** is the third demo on top of fullaz, and the first user of the paged
+**octree**. It holds a 3-D point cloud in one image file and draws it by walking
+the tree with the same pruning traversal the gravity demo uses for Barnes-Hut —
+except here the per-node aggregate serves the renderer instead of the physics.
+
+- **The aggregate is the level of detail.** Every node carries how many points
+  its subtree holds and where their centroid is, maintained by the trait hooks
+  (`onInsert`, `onAdopt`, `onGrow`, `onRemove`). A node that covers less of the
+  screen than the detail threshold is drawn as a single splat standing for all
+  of them; anything bigger is descended into. Zoom out and thousands of points
+  collapse into a handful of blobs; zoom in and they resolve again.
+- **Every point is accounted for, exactly once.** Aggregated, culled or drawn
+  individually — the three counts always add up to the number of entries in the
+  tree, which is what the demo's central test asserts at every threshold.
+- **One traversal, two front ends.** The terminal renders into a per-cell depth
+  buffer, the browser composites additively onto a canvas. Only the final
+  rasterisation differs; the projection and the pruning are shared code, and the
+  threshold is a fraction of the viewport height so it means the same thing in an
+  80x24 grid and a 1200-pixel canvas.
+- **All of it in Zig.** The browser gets a flat buffer of already-projected
+  splats and stays a rasteriser; there is no 3-D library on the page, and no
+  external resource of any kind.
+- **One image, real persistence.** The tree, the free-space map and the camera
+  live in a single file. Reopening restores the view and does not regenerate or
+  regrow anything.
+
+### Building & running
+
+```sh
+zig build                                    # builds the fullaz library + the cloud exe
+zig build run-cloud -- <image> [--format] [--points N] [--detail PERCENT]
+zig build test-cloud                         # runs the cloud test suite
+```
+
+With a terminal it is a full-screen viewer: `h`/`l` and `j`/`k` orbit, `+`/`-`
+zoom, `[`/`]` change the detail threshold, `i` adds ten thousand points, `w`
+writes the image, `q` quits. Without one it builds the image, prints one frame
+and exits. Build it for the browser with `zig build wasm-cloud` and serve
+`zig-out/web-cloud` over HTTP.
+
+### Example session (real output)
+
+`--format` creates the image and generates the scene: a dozen Gaussian clusters
+plus a sparse uniform background, so the octree has something uneven to adapt to.
+Denser regions collapse into `•` and `◆`; single points stay `·`:
+
+```
+$ cloud world.cld --format --seed 11 --points 60000 --detail 25 --distance 3
+
+                            · ··············· ···
+                          ························
+                          ························
+                          ·······················
+                          ········•·········•·•··
+                          ········•◆·······•·•···
+                          ·····••·•◆•············
+                           ····••◆••·············
+                           ····•·••••···········
+                           ····• ••• ·········
+                                    •·······
+                                      ····
+
+world.cld: 60000 points, 4524 KiB in 4524 pages (77 B/point), seed 11
+6764 splats: 138 aggregates + 6626 points, 209 nodes seen
+```
+
+Sixty thousand points became 6764 things to draw, and 138 aggregates account for
+53 374 of them. Reopen and nothing is rebuilt — same numbers, same file size:
+
+```
+$ cloud world.cld
+world.cld: 60000 points, 4524 KiB in 4524 pages (77 B/point), seed 11
+6764 splats: 138 aggregates + 6626 points, 209 nodes seen
+```
+
+### What the image is made of
+
+The browser build draws a map of the physical pages beside the scene, which
+makes the storage layout hard to miss. For the image above:
+
+| pages | role |
+|-------|------|
+| 1 | superblock: tree root, entry count, free-space root, camera |
+| 158 | octree nodes, packed eight to a page through the persistent FSM |
+| 4357 | point chunks, one chain per node |
+| 8 | the free-space map itself |
+
+A point costs about 34 bytes on the page (24 of bounding box, 8 of payload, a
+slot-directory entry). The rest is chunk pages that leaves only partly fill,
+plus chains orphaned when a node splits and hands its entries to its children —
+`destroyPage` is a no-op here and the model always takes fresh pages, so nothing
+recycles them. `block_size` and `max_leaf_entries` are tuned together against
+that number: at 1 KiB pages it is 77 bytes per point, at 4 KiB it is 125.
 
 ---
 
