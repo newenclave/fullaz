@@ -12,7 +12,7 @@ pub const Settings = struct {
     inode_page_kind: u16 = 1,
 };
 
-pub fn PagedModel(comptime PageCacheT: type, comptime StorageManagerT: type, comptime WeightT: type, comptime ValuePolicy: type) type {
+pub fn PagedModel(comptime PageCacheT: type, comptime StorageManagerT: type, comptime WeightT: type, comptime ValuePolicyT: type) type {
     comptime {
         contracts.storage_manager.requiresStorageManager(StorageManagerT);
         contracts.page_cache.requiresPageCache(PageCacheT);
@@ -116,10 +116,10 @@ pub fn PagedModel(comptime PageCacheT: type, comptime StorageManagerT: type, com
         }
     };
 
-    const ValuePolicyType = comptime if (@typeInfo(ValuePolicy) == .void)
+    const ValuePolicyType = comptime if (@typeInfo(ValuePolicyT) == .void)
         ValuePolicyImplDefault
     else
-        ValuePolicy;
+        ValuePolicyT;
 
     const ValueViewImpl = struct {
         const Self = @This();

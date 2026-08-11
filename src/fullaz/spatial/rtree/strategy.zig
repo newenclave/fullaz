@@ -1,34 +1,34 @@
 const std = @import("std");
 const helpers = @import("../../contracts/interfaces.zig");
 
-fn assertChooseStrategy(comptime Strategy: type, comptime Key: type) void {
-    helpers.requiresFnSignature(Strategy, "chooseSubtree", fn ([]const Key, Key, bool) usize);
+fn assertChooseStrategy(comptime StrategyT: type, comptime KeyT: type) void {
+    helpers.requiresFnSignature(StrategyT, "chooseSubtree", fn ([]const KeyT, KeyT, bool) usize);
 }
 
-fn assertSplitStrategy(comptime Strategy: type, comptime Key: type) void {
-    helpers.requiresFnSignature(Strategy, "splitEntries", fn ([]const Key, usize, []u8) void);
+fn assertSplitStrategy(comptime StrategyT: type, comptime KeyT: type) void {
+    helpers.requiresFnSignature(StrategyT, "splitEntries", fn ([]const KeyT, usize, []u8) void);
 }
 
-fn assertReinsertStrategy(comptime Strategy: type, comptime Key: type) void {
-    if (!@hasDecl(Strategy, "wants_reinsert")) {
-        @compileError("Strategy missing decl: wants_reinsert");
+fn assertReinsertStrategy(comptime StrategyT: type, comptime KeyT: type) void {
+    if (!@hasDecl(StrategyT, "wants_reinsert")) {
+        @compileError("StrategyT missing decl: wants_reinsert");
     }
-    if (Strategy.wants_reinsert) {
-        helpers.requiresFnSignature(Strategy, "reinsertOrder", fn ([]const Key, Key, []usize) void);
+    if (StrategyT.wants_reinsert) {
+        helpers.requiresFnSignature(StrategyT, "reinsertOrder", fn ([]const KeyT, KeyT, []usize) void);
     }
 }
 
-pub fn assertStrategy(comptime Strategy: type, comptime Key: type) void {
-    assertChooseStrategy(Strategy, Key);
-    assertSplitStrategy(Strategy, Key);
-    assertReinsertStrategy(Strategy, Key);
+pub fn assertStrategy(comptime StrategyT: type, comptime KeyT: type) void {
+    assertChooseStrategy(StrategyT, KeyT);
+    assertSplitStrategy(StrategyT, KeyT);
+    assertReinsertStrategy(StrategyT, KeyT);
 }
 
-pub fn NoReinsertStrategy(comptime Key: type) type {
+pub fn NoReinsertStrategy(comptime KeyT: type) type {
     return struct {
         pub const wants_reinsert = false;
 
-        pub fn reinsertOrder(mbrs: []const Key, node_mbr: Key, out: []usize) void {
+        pub fn reinsertOrder(mbrs: []const KeyT, node_mbr: KeyT, out: []usize) void {
             _ = mbrs;
             _ = node_mbr;
             _ = out;
@@ -38,13 +38,13 @@ pub fn NoReinsertStrategy(comptime Key: type) type {
 }
 
 // the very original Guttman R-tree strategy, with quadratic split and no reinsert
-pub fn GuttmanStrategy(comptime Key: type) type {
-    const Coord = Key.Coord;
+pub fn GuttmanStrategy(comptime KeyT: type) type {
+    const Coord = KeyT.Coord;
 
     return struct {
         pub const wants_reinsert = false;
 
-        pub fn chooseSubtree(child_mbrs: []const Key, entry: Key, children_are_leaves: bool) usize {
+        pub fn chooseSubtree(child_mbrs: []const KeyT, entry: KeyT, children_are_leaves: bool) usize {
             _ = children_are_leaves;
             var best: usize = 0;
             var best_enl = child_mbrs[0].enlargement(&entry);
@@ -63,7 +63,7 @@ pub fn GuttmanStrategy(comptime Key: type) type {
             return best;
         }
 
-        pub fn splitEntries(mbrs: []const Key, min_fill: usize, assignment: []u8) void {
+        pub fn splitEntries(mbrs: []const KeyT, min_fill: usize, assignment: []u8) void {
             const n = mbrs.len;
             const unassigned: u8 = 2;
             for (assignment) |*a| {
@@ -141,7 +141,7 @@ pub fn GuttmanStrategy(comptime Key: type) type {
             }
         }
 
-        fn waste(a: *const Key, b: *const Key) Coord {
+        fn waste(a: *const KeyT, b: *const KeyT) Coord {
             return a.merged(b).measure() - a.measure() - b.measure();
         }
 
@@ -153,7 +153,7 @@ pub fn GuttmanStrategy(comptime Key: type) type {
             }
         }
 
-        fn pickGroup(d0: Coord, d1: Coord, mbr0: Key, mbr1: Key, cnt0: usize, cnt1: usize) u8 {
+        fn pickGroup(d0: Coord, d1: Coord, mbr0: KeyT, mbr1: KeyT, cnt0: usize, cnt1: usize) u8 {
             if (d0 < d1) {
                 return 0;
             }
@@ -174,16 +174,16 @@ pub fn GuttmanStrategy(comptime Key: type) type {
 }
 
 // Guttman linear split
-pub fn LinearStrategy(comptime Key: type) type {
-    const Coord = Key.Coord;
-    const dims = Key.dimension;
+pub fn LinearStrategy(comptime KeyT: type) type {
+    const Coord = KeyT.Coord;
+    const dims = KeyT.dimension;
 
     return struct {
         pub const wants_reinsert = false;
 
-        pub const chooseSubtree = GuttmanStrategy(Key).chooseSubtree;
+        pub const chooseSubtree = GuttmanStrategy(KeyT).chooseSubtree;
 
-        pub fn splitEntries(mbrs: []const Key, min_fill: usize, assignment: []u8) void {
+        pub fn splitEntries(mbrs: []const KeyT, min_fill: usize, assignment: []u8) void {
             const n = mbrs.len;
             const unassigned: u8 = 2;
             for (assignment) |*a| {
@@ -287,7 +287,7 @@ pub fn LinearStrategy(comptime Key: type) type {
             }
         }
 
-        fn pickGroup(d0: Coord, d1: Coord, mbr0: Key, mbr1: Key, cnt0: usize, cnt1: usize) u8 {
+        fn pickGroup(d0: Coord, d1: Coord, mbr0: KeyT, mbr1: KeyT, cnt0: usize, cnt1: usize) u8 {
             if (d0 < d1) {
                 return 0;
             }
@@ -308,23 +308,23 @@ pub fn LinearStrategy(comptime Key: type) type {
 }
 
 // R*-tree strategy porting
-pub fn RStarStrategy(comptime Key: type) type {
-    const Coord = Key.Coord;
-    const Point = Key.Point;
-    const dims = Key.dimension;
+pub fn RStarStrategy(comptime KeyT: type) type {
+    const Coord = KeyT.Coord;
+    const Point = KeyT.Point;
+    const dims = KeyT.dimension;
     const split_cap = 512;
 
     return struct {
         pub const wants_reinsert = true;
 
-        pub fn chooseSubtree(child_mbrs: []const Key, entry: Key, children_are_leaves: bool) usize {
+        pub fn chooseSubtree(child_mbrs: []const KeyT, entry: KeyT, children_are_leaves: bool) usize {
             if (children_are_leaves) {
                 return leastOverlap(child_mbrs, entry);
             }
             return leastEnlargement(child_mbrs, entry);
         }
 
-        fn leastEnlargement(child_mbrs: []const Key, entry: Key) usize {
+        fn leastEnlargement(child_mbrs: []const KeyT, entry: KeyT) usize {
             var best: usize = 0;
             var b_enl = child_mbrs[0].enlargement(&entry);
             var b_area = child_mbrs[0].measure();
@@ -340,7 +340,7 @@ pub fn RStarStrategy(comptime Key: type) type {
             return best;
         }
 
-        fn leastOverlap(child_mbrs: []const Key, entry: Key) usize {
+        fn leastOverlap(child_mbrs: []const KeyT, entry: KeyT) usize {
             var best: usize = 0;
             var found = false;
             var b_ovl: Coord = undefined;
@@ -366,7 +366,7 @@ pub fn RStarStrategy(comptime Key: type) type {
             return best;
         }
 
-        pub fn splitEntries(mbrs: []const Key, min_fill: usize, assignment: []u8) void {
+        pub fn splitEntries(mbrs: []const KeyT, min_fill: usize, assignment: []u8) void {
             const n = mbrs.len;
 
             var best_axis: usize = 0;
@@ -408,13 +408,13 @@ pub fn RStarStrategy(comptime Key: type) type {
             }
         }
 
-        pub fn reinsertOrder(mbrs: []const Key, node_mbr: Key, out: []usize) void {
+        pub fn reinsertOrder(mbrs: []const KeyT, node_mbr: KeyT, out: []usize) void {
             const c = node_mbr.center();
             for (out, 0..) |*o, i| {
                 o.* = i;
             }
             const Ctx = struct {
-                mbrs: []const Key,
+                mbrs: []const KeyT,
                 c: Point,
             };
             const cmp = struct {
@@ -431,7 +431,7 @@ pub fn RStarStrategy(comptime Key: type) type {
             }, cmp);
         }
 
-        fn axisMarginSum(mbrs: []const Key, min_fill: usize, axis: usize) Coord {
+        fn axisMarginSum(mbrs: []const KeyT, min_fill: usize, axis: usize) Coord {
             const n = mbrs.len;
             var order: [split_cap]usize = undefined;
             var total: Coord = 0;
@@ -442,7 +442,7 @@ pub fn RStarStrategy(comptime Key: type) type {
             return total;
         }
 
-        fn distMarginSum(mbrs: []const Key, order: []const usize, min_fill: usize) Coord {
+        fn distMarginSum(mbrs: []const KeyT, order: []const usize, min_fill: usize) Coord {
             const n = order.len;
             var sum: Coord = 0;
             var k: usize = min_fill;
@@ -453,7 +453,7 @@ pub fn RStarStrategy(comptime Key: type) type {
         }
 
         // the minimum box of the mbrs.
-        fn bboxOf(mbrs: []const Key, order: []const usize) Key {
+        fn bboxOf(mbrs: []const KeyT, order: []const usize) KeyT {
             var acc = mbrs[order[0]];
             for (order[1..]) |idx| {
                 acc = acc.merged(&mbrs[idx]);
@@ -461,12 +461,12 @@ pub fn RStarStrategy(comptime Key: type) type {
             return acc;
         }
 
-        fn sortByEdge(order: []usize, mbrs: []const Key, axis: usize, low: bool) void {
+        fn sortByEdge(order: []usize, mbrs: []const KeyT, axis: usize, low: bool) void {
             for (order, 0..) |*o, i| {
                 o.* = i;
             }
             const Ctx = struct {
-                mbrs: []const Key,
+                mbrs: []const KeyT,
                 axis: usize,
                 low: bool,
             };
@@ -507,40 +507,40 @@ pub fn RStarStrategy(comptime Key: type) type {
 }
 
 pub fn HybridStrategyBase(
-    comptime Key: type,
-    comptime ChooseStrategyT: fn (comptime Key: type) type,
-    comptime ReinsertStrategyT: fn (comptime Key: type) type,
-    comptime SplitStrategyT: fn (comptime Key: type) type,
+    comptime KeyT: type,
+    comptime ChooseStrategyT: fn (comptime KeyT: type) type,
+    comptime ReinsertStrategyT: fn (comptime KeyT: type) type,
+    comptime SplitStrategyT: fn (comptime KeyT: type) type,
 ) type {
     comptime {
-        assertChooseStrategy(ChooseStrategyT(Key), Key);
-        assertReinsertStrategy(ReinsertStrategyT(Key), Key);
-        assertSplitStrategy(SplitStrategyT(Key), Key);
+        assertChooseStrategy(ChooseStrategyT(KeyT), KeyT);
+        assertReinsertStrategy(ReinsertStrategyT(KeyT), KeyT);
+        assertSplitStrategy(SplitStrategyT(KeyT), KeyT);
     }
 
     return struct {
-        pub const ChooseStrategy = ChooseStrategyT(Key);
-        pub const ReinsertStrategy = ReinsertStrategyT(Key);
-        pub const SplitStrategy = SplitStrategyT(Key);
+        pub const ChooseStrategy = ChooseStrategyT(KeyT);
+        pub const ReinsertStrategy = ReinsertStrategyT(KeyT);
+        pub const SplitStrategy = SplitStrategyT(KeyT);
         pub const wants_reinsert = ReinsertStrategy.wants_reinsert;
 
-        pub fn chooseSubtree(child_mbrs: []const Key, entry: Key, children_are_leaves: bool) usize {
+        pub fn chooseSubtree(child_mbrs: []const KeyT, entry: KeyT, children_are_leaves: bool) usize {
             return ChooseStrategy.chooseSubtree(child_mbrs, entry, children_are_leaves);
         }
 
-        pub fn splitEntries(mbrs: []const Key, min_fill: usize, assignment: []u8) void {
+        pub fn splitEntries(mbrs: []const KeyT, min_fill: usize, assignment: []u8) void {
             SplitStrategy.splitEntries(mbrs, min_fill, assignment);
         }
 
-        pub fn reinsertOrder(mbrs: []const Key, node_mbr: Key, out: []usize) void {
+        pub fn reinsertOrder(mbrs: []const KeyT, node_mbr: KeyT, out: []usize) void {
             ReinsertStrategy.reinsertOrder(mbrs, node_mbr, out);
         }
     };
 }
 
-pub fn HybridStrategy(comptime Key: type) type {
+pub fn HybridStrategy(comptime KeyT: type) type {
     return HybridStrategyBase(
-        Key,
+        KeyT,
         RStarStrategy,
         NoReinsertStrategy,
         RStarStrategy,

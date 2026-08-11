@@ -14,7 +14,7 @@ pub const Settings = struct {
     leaf_base: u16 = 0,
 };
 
-pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime Key: type, comptime ValueSize: usize) type {
+pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime KeyT: type, comptime ValueSize: usize) type {
     comptime {
         contracts.storage_manager.requiresStorageManager(StorageManagerT);
         contracts.page_cache.requiresPageCache(PageCacheT);
@@ -41,10 +41,10 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
     const ValueInType = []const u8;
     const ValueOutType = ValueInType;
 
-    const ViewType = radix_page.View(PageId, Index, Key, ValueSize, .little, false);
-    const ConstViewType = radix_page.View(PageId, Index, Key, ValueSize, .little, true);
+    const ViewType = radix_page.View(PageId, Index, KeyT, ValueSize, .little, false);
+    const ConstViewType = radix_page.View(PageId, Index, KeyT, ValueSize, .little, true);
 
-    const SplitterType = KeySplitter(Key);
+    const SplitterType = KeySplitter(KeyT);
 
     const SplitKeyImpl = struct {
         const Self = @This();
@@ -128,22 +128,22 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             return PageViewTypeConst.calculateSlotCapacity(page_size, metadata_len);
         }
 
-        pub fn set(self: *Self, key: Key, value: ValueInType) Error!void {
+        pub fn set(self: *Self, key: KeyT, value: ValueInType) Error!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.set(key, value);
         }
 
-        pub fn get(self: *const Self, key: Key) Error!ValueOutType {
+        pub fn get(self: *const Self, key: KeyT) Error!ValueOutType {
             var view = PageViewTypeConst.init(try self.handle.data());
             return try view.get(key);
         }
 
-        pub fn isSet(self: *const Self, key: Key) Error!bool {
+        pub fn isSet(self: *const Self, key: KeyT) Error!bool {
             var view = PageViewTypeConst.init(try self.handle.data());
             return try view.isSet(key);
         }
 
-        pub fn free(self: *Self, key: Key) ErrorSet!void {
+        pub fn free(self: *Self, key: KeyT) ErrorSet!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.free(key);
         }
@@ -158,22 +158,22 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             return try view.getParent();
         }
 
-        pub fn setParentQuotient(self: *Self, quotient: Key) ErrorSet!void {
+        pub fn setParentQuotient(self: *Self, quotient: KeyT) ErrorSet!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.setParentQuotient(quotient);
         }
 
-        pub fn getParentQuotient(self: *const Self) ErrorSet!Key {
+        pub fn getParentQuotient(self: *const Self) ErrorSet!KeyT {
             var view = PageViewTypeConst.init(try self.handle.data());
             return view.subheader().parent_quotient.get();
         }
 
-        pub fn setParentId(self: *Self, idx: Key) ErrorSet!void {
+        pub fn setParentId(self: *Self, idx: KeyT) ErrorSet!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.setParentIdx(idx);
         }
 
-        pub fn getParentId(self: *const Self) ErrorSet!Key {
+        pub fn getParentId(self: *const Self) ErrorSet!KeyT {
             var view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParentIdx();
         }
@@ -221,22 +221,22 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             return PageViewTypeConst.calculateSlotCapacity(page_size, metadata_len);
         }
 
-        pub fn set(self: *Self, key: Key, child_id: PageId) Error!void {
+        pub fn set(self: *Self, key: KeyT, child_id: PageId) Error!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.set(key, child_id);
         }
 
-        pub fn get(self: *const Self, key: Key) Error!PageId {
+        pub fn get(self: *const Self, key: KeyT) Error!PageId {
             var view = PageViewTypeConst.init(try self.handle.data());
             return try view.get(key);
         }
 
-        pub fn isSet(self: *const Self, key: Key) Error!bool {
+        pub fn isSet(self: *const Self, key: KeyT) Error!bool {
             var view = PageViewTypeConst.init(try self.handle.data());
             return try view.isSet(key);
         }
 
-        pub fn free(self: *Self, key: Key) ErrorSet!void {
+        pub fn free(self: *Self, key: KeyT) ErrorSet!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.free(key);
         }
@@ -251,22 +251,22 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             return try view.getParent();
         }
 
-        pub fn setParentQuotient(self: *Self, quotient: Key) ErrorSet!void {
+        pub fn setParentQuotient(self: *Self, quotient: KeyT) ErrorSet!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.setParentQuotient(quotient);
         }
 
-        pub fn getParentQuotient(self: *const Self) ErrorSet!Key {
+        pub fn getParentQuotient(self: *const Self) ErrorSet!KeyT {
             var view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParentQuotient();
         }
 
-        pub fn setParentId(self: *Self, idx: Key) ErrorSet!void {
+        pub fn setParentId(self: *Self, idx: KeyT) ErrorSet!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.setParentIdx(idx);
         }
 
-        pub fn getParentId(self: *const Self) ErrorSet!Key {
+        pub fn getParentId(self: *const Self) ErrorSet!KeyT {
             var view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParentIdx();
         }
@@ -385,7 +385,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             inode.* = undefined;
         }
 
-        pub fn splitKey(self: *const Self, key: Key) Error!SplitKeyResult {
+        pub fn splitKey(self: *const Self, key: KeyT) Error!SplitKeyResult {
             const maximum_levels = self.splitter.maximum_levels;
             var tmp_page = try self.ctx.cache.getTemporaryPage();
             errdefer tmp_page.deinit();
@@ -419,8 +419,8 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         pub const Inode = InodeImpl;
         pub const Accessor = AccessorImpl;
         pub const SplitKeyResult = Accessor.SplitKeyResult;
-        pub const KeyIn = Key;
-        pub const KeyOut = Key;
+        pub const KeyIn = KeyT;
+        pub const KeyOut = KeyT;
         pub const ValueIn = ValueInType;
         pub const ValueOut = ValueOutType;
         pub const Pid = PageId;
