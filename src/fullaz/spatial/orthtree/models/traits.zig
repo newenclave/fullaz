@@ -2,12 +2,12 @@ const std = @import("std");
 
 const BoundingBox = @import("../../geometry.zig").BoundingBox;
 
-pub fn Empty(comptime T: type, comptime dimention: usize, comptime ValueT: type) type {
+pub fn Empty(comptime CoordT: type, comptime dimention: usize, comptime ValueT: type) type {
     return struct {
         const Self = @This();
         pub const Error = error{};
         pub const EntryData = void;
-        pub const Box = BoundingBox(T, dimention);
+        pub const Box = BoundingBox(CoordT, dimention);
         pub const Value = ValueT;
 
         pub fn init() Self {
@@ -39,13 +39,13 @@ pub fn Empty(comptime T: type, comptime dimention: usize, comptime ValueT: type)
     };
 }
 
-pub fn PagedEmpty(comptime T: type, comptime dimention: usize, comptime ValueT: type) type {
+pub fn PagedEmpty(comptime CoordT: type, comptime dimention: usize, comptime ValueT: type) type {
     return struct {
         pub const Storage = extern struct {
             reserved: [1]u8,
         };
         pub const Error = error{};
-        pub const Box = BoundingBox(T, dimention);
+        pub const Box = BoundingBox(CoordT, dimention);
         pub const Value = ValueT;
 
         pub fn format(storage: *Storage) void {

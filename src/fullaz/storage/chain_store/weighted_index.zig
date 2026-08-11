@@ -55,10 +55,10 @@ pub fn IndexValuePolicy(comptime PageIdT: type, comptime SizeT: type, comptime E
     };
 }
 
-pub fn Located(comptime Pid: type, comptime Size: type) type {
+pub fn Located(comptime PidT: type, comptime SizeT: type) type {
     return struct {
-        page_id: Pid,
-        chunk_start: Size,
+        page_id: PidT,
+        chunk_start: SizeT,
     };
 }
 

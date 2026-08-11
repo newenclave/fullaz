@@ -18,24 +18,24 @@ pub const Empty = struct {
     }
 };
 
-pub fn field(comptime name: [:0]const u8, comptime Trait: type) Field {
+pub fn field(comptime name: [:0]const u8, comptime TraitT: type) Field {
     comptime {
         if (name.len == 0) {
             @compileError("Page extension field name cannot be empty");
         }
-        if (!@hasDecl(Trait, "Storage")) {
-            @compileError("Page extension trait must declare Storage: " ++ @typeName(Trait));
+        if (!@hasDecl(TraitT, "Storage")) {
+            @compileError("Page extension trait must declare Storage: " ++ @typeName(TraitT));
         }
-        if (@TypeOf(Trait.Storage) != type) {
-            @compileError("Page extension trait Storage must be a type: " ++ @typeName(Trait));
+        if (@TypeOf(TraitT.Storage) != type) {
+            @compileError("Page extension trait Storage must be a type: " ++ @typeName(TraitT));
         }
-        requiresFnSignature(Trait, "format", fn (*Trait.Storage) void);
-        requiresFnSignature(Trait, "validate", fn (*const Trait.Storage) bool);
+        requiresFnSignature(TraitT, "format", fn (*TraitT.Storage) void);
+        requiresFnSignature(TraitT, "validate", fn (*const TraitT.Storage) bool);
     }
 
     return .{
         .name = name,
-        .Trait = Trait,
+        .Trait = TraitT,
     };
 }
 
@@ -168,28 +168,28 @@ pub fn Compose(comptime config: anytype) type {
     return composeFromFields(configured_version, descriptors);
 }
 
-fn assertExtendable(comptime Base: type) void {
+fn assertExtendable(comptime BaseT: type) void {
     comptime {
-        if (!@hasDecl(Base, "page_version") or @TypeOf(Base.page_version) != u8) {
+        if (!@hasDecl(BaseT, "page_version") or @TypeOf(BaseT.page_version) != u8) {
             @compileError("Page extension Extend base must declare page_version: u8");
         }
-        if (!@hasDecl(Base, "Storage") or @TypeOf(Base.Storage) != type) {
+        if (!@hasDecl(BaseT, "Storage") or @TypeOf(BaseT.Storage) != type) {
             @compileError("Page extension Extend base must declare Storage");
         }
-        if (!@hasDecl(Base, "fields")) {
+        if (!@hasDecl(BaseT, "fields")) {
             @compileError("Page extension Extend base must declare fields");
         }
-        const fields_info = @typeInfo(@TypeOf(Base.fields));
+        const fields_info = @typeInfo(@TypeOf(BaseT.fields));
         if (fields_info != .array or fields_info.array.child != Field) {
             @compileError("Page extension Extend base fields must be an array of Field");
         }
-        requiresFnSignature(Base, "format", fn (*Base.Storage) void);
-        requiresFnSignature(Base, "validate", fn (*const Base.Storage) bool);
+        requiresFnSignature(BaseT, "format", fn (*BaseT.Storage) void);
+        requiresFnSignature(BaseT, "validate", fn (*const BaseT.Storage) bool);
     }
 }
 
-pub fn Extend(comptime Base: type, comptime config: anytype) type {
-    assertExtendable(Base);
+pub fn Extend(comptime BaseT: type, comptime config: anytype) type {
+    assertExtendable(BaseT);
 
     const config_info = @typeInfo(@TypeOf(config));
     if (config_info != .@"struct" or config_info.@"struct".is_tuple) {
@@ -206,7 +206,7 @@ pub fn Extend(comptime Base: type, comptime config: anytype) type {
         @compileError("Page extension descriptors must be a tuple");
     }
 
-    const base_count = Base.fields.len;
+    const base_count = BaseT.fields.len;
     const field_count = fields_info.@"struct".fields.len;
     const extension_fields = comptime blk: {
         var result: [field_count]Field = undefined;
@@ -229,7 +229,7 @@ pub fn Extend(comptime Base: type, comptime config: anytype) type {
         const descriptors = comptime blk: {
             var result: [base_count + 1]Field = undefined;
             for (0..base_count) |index| {
-                result[index] = Base.fields[index];
+                result[index] = BaseT.fields[index];
             }
             result[base_count] = field(namespace, Namespace);
             break :blk result;
@@ -240,7 +240,7 @@ pub fn Extend(comptime Base: type, comptime config: anytype) type {
     const descriptors = comptime blk: {
         var result: [base_count + field_count]Field = undefined;
         for (0..base_count) |index| {
-            result[index] = Base.fields[index];
+            result[index] = BaseT.fields[index];
         }
         for (0..field_count) |index| {
             result[base_count + index] = extension_fields[index];
