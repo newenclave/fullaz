@@ -2,13 +2,13 @@ const std = @import("std");
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
 
 pub fn Freed(comptime PageIdT: type, comptime Endian: std.builtin.Endian) type {
-    const PageIdType = PackedInt(PageIdT, Endian);
+    const PackedPageId = PackedInt(PageIdT, Endian);
     const UInt16 = PackedInt(u16, Endian);
     const UInt32 = PackedInt(u32, Endian);
 
     return extern struct {
         kind: UInt16,
-        next: PageIdType,
+        next: PackedPageId,
         crc: UInt32,
     };
 }

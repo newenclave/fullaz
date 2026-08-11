@@ -3,7 +3,7 @@ const PackedInt = @import("../core/core.zig").packed_int.PackedInt;
 const header = @import("header.zig");
 
 pub fn LongStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type, comptime Endian: std.builtin.Endian) type {
-    const PageIdType = PackedInt(PageIdT, Endian);
+    const PackedPageId = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const SizeType = PackedInt(SizeT, Endian);
 
@@ -18,8 +18,8 @@ pub fn LongStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: 
     };
 
     const LinkHeaderType = extern struct {
-        back: PageIdType,
-        fwd: PageIdType,
+        back: PackedPageId,
+        fwd: PackedPageId,
         payload: PayloadHeaderType,
     };
 

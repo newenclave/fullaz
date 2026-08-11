@@ -4,7 +4,7 @@ const header = @import("header.zig");
 
 // This is almost identical to LongStore, but kept separate for clarity and potential future divergence.
 pub fn ChainStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT: type, comptime Endian: std.builtin.Endian) type {
-    const PageIdType = PackedInt(PageIdT, Endian);
+    const PackedPageId = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const SizeType = PackedInt(SizeT, Endian);
     _ = SizeType; // Currently unused, but reserved for potential future use.
@@ -15,8 +15,8 @@ pub fn ChainStore(comptime PageIdT: type, comptime IndexT: type, comptime SizeT:
     };
 
     const LinkHeaderType = extern struct {
-        back: PageIdType,
-        fwd: PageIdType,
+        back: PackedPageId,
+        fwd: PackedPageId,
         payload: PayloadHeaderType,
     };
 

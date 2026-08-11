@@ -3,12 +3,12 @@ const PackedInt = @import("../core/core.zig").packed_int.PackedInt;
 
 pub fn PageSlotRef(comptime PageIdT: type, comptime SlotIdT: type, comptime Endian: std.builtin.Endian) type {
     return extern struct {
-        pub const PageIdType = PackedInt(PageIdT, Endian);
-        pub const SlotIdType = PackedInt(SlotIdT, Endian);
+        pub const PackedPageId = PackedInt(PageIdT, Endian);
+        pub const PackedSlotId = PackedInt(SlotIdT, Endian);
 
         const Self = @This();
-        page_id: PageIdType,
-        slot_id: SlotIdType,
+        page_id: PackedPageId,
+        slot_id: PackedSlotId,
         pub fn format(self: *Self) void {
             self.page_id.setMax();
             self.slot_id.setMax();

@@ -2,7 +2,7 @@ const std = @import("std");
 const PackedInt = @import("../core/core.zig").packed_int.PackedInt;
 
 pub fn Fsm(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: type, comptime Endian: std.builtin.Endian) type {
-    const PageIdType = PackedInt(PageIdT, Endian);
+    const PackedPageId = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const SizeClassType = PackedInt(SizeClassT, Endian);
 
@@ -12,7 +12,7 @@ pub fn Fsm(comptime PageIdT: type, comptime IndexT: type, comptime SizeClassT: t
 
     const SlotImpl = extern struct {
         const Self = @This();
-        pid: PageIdType,
+        pid: PackedPageId,
         free_space: IndexType,
         pub fn format(self: *Self) void {
             self.pid.setMax();

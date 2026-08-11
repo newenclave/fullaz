@@ -5,14 +5,14 @@ const SubheaderView = @import("subheader.zig").View;
 const PackedInt = core.packed_int.PackedInt;
 
 pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian) type {
-    const PageIdType = PackedInt(PageIdT, Endian);
+    const PackedPageId = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
 
     const LeafSubheaderType = extern struct {
         const Self = @This();
-        parent: PageIdType,
-        prev: PageIdType,
-        next: PageIdType,
+        parent: PackedPageId,
+        prev: PackedPageId,
+        next: PackedPageId,
         pub fn formatHeader(self: *Self) void {
             self.parent.setMax();
             self.prev.setMax();
@@ -25,12 +25,12 @@ pub fn Bpt(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.b
     };
 
     const InodeSubheaderType = extern struct {
-        parent: PageIdType,
-        rightmost_child: PageIdType,
+        parent: PackedPageId,
+        rightmost_child: PackedPageId,
     };
 
     const InodeSlotHeaderType = extern struct {
-        child: PageIdType,
+        child: PackedPageId,
     };
 
     return struct {

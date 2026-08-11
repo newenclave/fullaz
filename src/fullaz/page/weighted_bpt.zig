@@ -5,7 +5,7 @@ const SubheaderView = @import("subheader.zig").View;
 const PackedInt = core.packed_int.PackedInt;
 
 pub fn WeightedBpt(comptime PageIdT: type, comptime IndexT: type, comptime WeightT: type, comptime Endian: std.builtin.Endian) type {
-    const PageIdType = PackedInt(PageIdT, Endian);
+    const PackedPageId = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const WeightType = PackedInt(WeightT, Endian);
 
@@ -13,9 +13,9 @@ pub fn WeightedBpt(comptime PageIdT: type, comptime IndexT: type, comptime Weigh
 
     const LeafSubheaderType = extern struct {
         const Self = @This();
-        parent: PageIdType,
-        prev: PageIdType,
-        next: PageIdType,
+        parent: PackedPageId,
+        prev: PackedPageId,
+        next: PackedPageId,
         weight: WeightType,
         pub fn formatHeader(self: *Self) void {
             self.parent.setMax();
@@ -31,7 +31,7 @@ pub fn WeightedBpt(comptime PageIdT: type, comptime IndexT: type, comptime Weigh
 
     const InodeSubheaderType = extern struct {
         const Self = @This();
-        parent: PageIdType,
+        parent: PackedPageId,
         total_weight: WeightType,
         pub fn formatHeader(self: *Self) void {
             self.parent.setMax();
@@ -40,7 +40,7 @@ pub fn WeightedBpt(comptime PageIdT: type, comptime IndexT: type, comptime Weigh
     };
 
     const InodeSlotType = extern struct {
-        child: PageIdType,
+        child: PackedPageId,
         weight: WeightType,
     };
 
