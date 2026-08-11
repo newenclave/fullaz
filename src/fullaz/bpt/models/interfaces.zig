@@ -126,7 +126,7 @@ pub fn assertModel(comptime T: type) void {
     assertModelAccessor(T);
 
     // calls:
-    requiresFnSignature(T, "getAccessor", fn (*T) *T.AccessorType);
+    requiresFnSignature(T, "accessor", fn (*T) *T.AccessorType);
     requiresFnSignature(T, "keyBorrowAsLike", fn (*const T, *const T.KeyBorrowType) T.KeyLikeType);
     requiresFnSignature(T, "keyOutAsLike", fn (*const T, T.KeyOutType) T.KeyLikeType);
     requiresFnSignature(T, "valueOutAsIn", fn (*const T, T.ValueOutType) T.ValueInType);

@@ -110,8 +110,8 @@ fn TestContext(comptime page_size: usize, comptime cache_frames: usize) type {
             return Tree.init(&self.model, .neighbor_share);
         }
 
-        pub fn getAccessor(self: *Self) *BptModel.AccessorType {
-            return self.model.getAccessor();
+        pub fn accessor(self: *Self) *BptModel.AccessorType {
+            return self.model.accessor();
         }
     };
 }
@@ -140,7 +140,7 @@ test "test models functionality" {
     var ctx = try TestContext(4096, 8).init(allocator);
     defer ctx.deinit();
 
-    var accessor = ctx.getAccessor();
+    var accessor = ctx.accessor();
     const available_before = ctx.cache.availableFrames();
 
     var leaf = try accessor.createLeaf();
@@ -184,7 +184,7 @@ test "LeafImpl: newly created leaf has size 0" {
     defer cache.deinit();
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -196,7 +196,7 @@ test "LeafImpl: capacity is greater than 0" {
     var ctx = try TestContext(4096, 8).init(allocator);
     defer ctx.deinit();
 
-    var accessor = ctx.getAccessor();
+    var accessor = ctx.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -217,7 +217,7 @@ test "LeafImpl: insertValue and getKey/getValue" {
     defer cache.deinit();
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -245,7 +245,7 @@ test "LeafImpl: insert multiple values and verify order" {
     defer cache.deinit();
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -279,7 +279,7 @@ test "LeafImpl: keysEqual compares correctly" {
     defer cache.deinit();
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -301,7 +301,7 @@ test "LeafImpl: keyPosition finds correct position" {
     defer cache.deinit();
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -345,7 +345,7 @@ test "LeafImpl: setNext/getNext and setPrev/getPrev" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -383,7 +383,7 @@ test "LeafImpl: setParent/getParent" {
     defer cache.deinit();
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -412,7 +412,7 @@ test "LeafImpl: id returns correct block id" {
     defer cache.deinit();
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -434,7 +434,7 @@ test "LeafImpl: canInsertValue checks capacity" {
     defer cache.deinit();
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -462,7 +462,7 @@ test "LeafImpl: isUnderflowed for empty leaf" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -483,7 +483,7 @@ test "LeafImpl: take transfers ownership" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     const leaf_id = leaf.id();
 
@@ -516,7 +516,7 @@ test "LeafImpl: linked list operations with multiple leaves" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     // Create three leaves
     var leaf1 = try accessor.createLeaf();
@@ -556,7 +556,7 @@ test "LeafImpl: updateValue modifies existing value" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -590,7 +590,7 @@ test "LeafImpl: updateValue triggers compaction when needed" {
         .maximum_value_size = 150,
     }, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -660,7 +660,7 @@ test "LeafImpl: erase removes entry and decreases size" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -694,7 +694,7 @@ test "LeafImpl: erase first element" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -720,7 +720,7 @@ test "LeafImpl: erase last element" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -746,7 +746,7 @@ test "LeafImpl: erase all elements one by one" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
 
@@ -780,7 +780,7 @@ test "InodeImpl: newly created inode has size 0" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -800,7 +800,7 @@ test "InodeImpl: capacity is greater than 0" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -821,7 +821,7 @@ test "InodeImpl: insertChild and getKey/getChild" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -849,7 +849,7 @@ test "InodeImpl: insert multiple children and verify order" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -883,7 +883,7 @@ test "InodeImpl: keysEqual compares correctly" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -905,7 +905,7 @@ test "InodeImpl: keyPosition finds correct position (upperBound)" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -943,7 +943,7 @@ test "InodeImpl: setParent/getParent" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -972,7 +972,7 @@ test "InodeImpl: id returns correct block id" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -994,7 +994,7 @@ test "InodeImpl: canInsertChild checks capacity" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -1015,7 +1015,7 @@ test "InodeImpl: isUnderflowed for empty inode" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -1036,7 +1036,7 @@ test "InodeImpl: take transfers ownership" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     const inode_id = inode.id();
 
@@ -1068,7 +1068,7 @@ test "InodeImpl: updateChild modifies existing child id" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -1096,7 +1096,7 @@ test "InodeImpl: canUpdateKey checks capacity" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -1122,7 +1122,7 @@ test "InodeImpl: erase removes entry and decreases size" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -1158,7 +1158,7 @@ test "InodeImpl: erase first element" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -1185,7 +1185,7 @@ test "InodeImpl: erase last element" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -1212,7 +1212,7 @@ test "InodeImpl: erase all elements one by one" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
 
@@ -1249,7 +1249,7 @@ test "PageCache: no frame leaks after mixed Leaf and Inode operations" {
 
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     // Test block 1: Create and deinit leaves
     {
@@ -1371,7 +1371,7 @@ test "Accessor: createLeaf and createInode create different page types" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
@@ -1396,7 +1396,7 @@ test "Accessor: loadLeaf returns null for inode page" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     // Create an inode
     var inode = try accessor.createInode();
@@ -1421,7 +1421,7 @@ test "Accessor: loadInode returns null for leaf page" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     // Create a leaf
     var leaf = try accessor.createLeaf();
@@ -1446,7 +1446,7 @@ test "Accessor: loadLeaf returns leaf for leaf page" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     // Create a leaf with data
     var leaf = try accessor.createLeaf();
@@ -1476,7 +1476,7 @@ test "Accessor: loadInode returns inode for inode page" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     // Create an inode with data
     var inode = try accessor.createInode();
@@ -1506,7 +1506,7 @@ test "Accessor: loadLeaf with null returns null" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     const loaded = try accessor.loadLeaf(null);
     try std.testing.expectEqual(@as(?BptModel.LeafType, null), loaded);
@@ -1525,7 +1525,7 @@ test "Accessor: loadInode with null returns null" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     const loaded = try accessor.loadInode(null);
     try std.testing.expectEqual(@as(?BptModel.InodeType, null), loaded);
@@ -1544,7 +1544,7 @@ test "Accessor: isLeafId returns true for leaf page" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     var leaf = try accessor.createLeaf();
     const leaf_id = leaf.id();
@@ -1566,7 +1566,7 @@ test "Accessor: isLeafId returns false for inode page" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     var inode = try accessor.createInode();
     const inode_id = inode.id();
@@ -1588,7 +1588,7 @@ test "Accessor: borrowKeyfromLeaf borrows key correctly" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     var leaf = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf);
@@ -1614,7 +1614,7 @@ test "Accessor: borrowKeyfromInode borrows key correctly" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     var inode = try accessor.createInode();
     defer accessor.deinitInode(inode);
@@ -1640,7 +1640,7 @@ test "Accessor: canMergeLeafs returns true for empty leaves" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     var leaf1 = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf1);
@@ -1665,7 +1665,7 @@ test "Accessor: canMergeInodes returns true for empty inodes" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     var inode1 = try accessor.createInode();
     defer accessor.deinitInode(inode1);
@@ -1690,7 +1690,7 @@ test "Accessor: canMergeLeafs with small data returns true" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     var leaf1 = try accessor.createLeaf();
     defer accessor.deinitLeaf(leaf1);
@@ -1717,7 +1717,7 @@ test "Accessor: deinitLeaf handles null gracefully" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     // Should not crash
     accessor.deinitLeaf(null);
@@ -1736,7 +1736,7 @@ test "Accessor: deinitInode handles null gracefully" {
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
 
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     // Should not crash
     accessor.deinitInode(null);
@@ -1757,7 +1757,7 @@ test "Accessor: no frame leaks with page type mismatch" {
 
     var store_mgr = NoneStorageManager{};
     var model = BptModel.init(&cache, &store_mgr, .{}, {});
-    var accessor = model.getAccessor();
+    var accessor = model.accessor();
 
     // Create an inode
     var inode = try accessor.createInode();

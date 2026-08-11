@@ -708,20 +708,20 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
 
         pub const Error = ErrorSet;
 
-        accessor: AccessorType = undefined,
+        accessor_state: AccessorType = undefined,
 
         pub fn init(allocator: std.mem.Allocator) Error!Self {
             return Self{
-                .accessor = try AccessorType.init(allocator),
+                .accessor_state = try AccessorType.init(allocator),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor.deinit();
+            self.accessor_state.deinit();
         }
 
-        pub fn getAccessor(self: *Self) *AccessorType {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn keyBorrowAsLike(_: *const Self, key: *const KeyBorrowType) KeyLikeType {

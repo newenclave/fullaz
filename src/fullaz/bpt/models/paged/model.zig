@@ -617,7 +617,7 @@ pub fn PagedModel(
 
         pub const NodeIdType = BlockIdType;
 
-        accessor: AccessorType,
+        accessor_state: AccessorType,
 
         pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings, ctx: Ctx) Self {
             const context = Context{
@@ -627,7 +627,7 @@ pub fn PagedModel(
                 .settings = settings,
             };
             return .{
-                .accessor = AccessorImpl.init(context),
+                .accessor_state = AccessorImpl.init(context),
             };
         }
 
@@ -635,8 +635,8 @@ pub fn PagedModel(
             // nothing to yet
         }
 
-        pub fn getAccessor(self: *Self) *AccessorType {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn keyBorrowAsLike(_: *const Self, key: *const KeyBorrowType) KeyLikeType {
