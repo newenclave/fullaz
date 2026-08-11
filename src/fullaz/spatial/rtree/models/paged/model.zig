@@ -322,7 +322,7 @@ pub fn PagedModel(
             return .{ .ctx = ctx };
         }
 
-        pub fn deinit(_: *Self) void {}
+        fn deinit(_: *Self) void {}
 
         pub fn getRoot(self: *const Self) ?BlockIdType {
             return self.ctx.storage_mgr.getRoot();

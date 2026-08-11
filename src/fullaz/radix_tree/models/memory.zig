@@ -497,31 +497,31 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
         pub const KeyOut = KeyT;
         pub const ValueOut = ValueT;
 
-        pub const Accessor = AccessorImpl;
+        pub const AccessorType = AccessorImpl;
         pub const Inode = InodeImpl;
         pub const Leaf = LeafImpl;
-        pub const SplitKeyResult = Accessor.SplitKeyResult;
+        pub const SplitKeyResult = AccessorType.SplitKeyResult;
 
         pub const Error = ErrorSet;
 
-        accessor: Accessor,
+        accessor_state: AccessorType,
 
         pub fn init(alloc: std.mem.Allocator, sett: Settings) !Self {
             return Self{
-                .accessor = try Accessor.init(alloc, sett),
+                .accessor_state = try AccessorType.init(alloc, sett),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor.deinit();
+            self.accessor_state.deinit();
         }
 
-        pub fn getAccessor(self: *Self) *Accessor {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn getSettings(self: *const Self) *const Settings {
-            return &self.accessor.sett;
+            return &self.accessor_state.sett;
         }
     };
 }

@@ -69,7 +69,7 @@ pub fn Model(
         ctx: *Context,
         sanitize_ptr: ?*u32 = null,
 
-        pub fn deinit(self: *Self) void {
+        fn deinit(self: *Self) void {
             if (IS_DEBUG) {
                 if (self.sanitize_ptr) |p| {
                     self.ctx.allocator.destroy(p);
@@ -292,7 +292,7 @@ pub fn Model(
             };
         }
 
-        pub fn deinit(self: *Self) void {
+        fn deinit(self: *Self) void {
             for (self.values.items) |maybe_node| {
                 if (maybe_node) |node| {
                     switch (node) {

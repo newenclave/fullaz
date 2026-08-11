@@ -501,7 +501,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             self.root = new_root;
         }
 
-        pub fn init(allocator: std.mem.Allocator) !Self {
+        fn init(allocator: std.mem.Allocator) !Self {
             return Self{
                 .root = null,
                 .nodes = try std.ArrayList(?*NodeType).initCapacity(allocator, 2),
@@ -509,7 +509,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             };
         }
 
-        pub fn deinit(self: *Self) void {
+        fn deinit(self: *Self) void {
             for (self.nodes.items) |node_ptr| {
                 if (node_ptr) |node| {
                     self.allocator.destroy(node);
@@ -638,7 +638,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
             return false;
         }
 
-        pub fn isInodeId(self: *Self, id: MemoryPidType) ErrorSet!bool {
+        fn isInodeId(self: *Self, id: MemoryPidType) ErrorSet!bool {
             if (id >= self.nodes.items.len) {
                 return ErrorSet.InvalidId;
             }

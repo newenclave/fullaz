@@ -417,8 +417,8 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         const Self = @This();
         pub const Leaf = LeafImpl;
         pub const Inode = InodeImpl;
-        pub const Accessor = AccessorImpl;
-        pub const SplitKeyResult = Accessor.SplitKeyResult;
+        pub const AccessorType = AccessorImpl;
+        pub const SplitKeyResult = AccessorType.SplitKeyResult;
         pub const KeyIn = KeyT;
         pub const KeyOut = KeyT;
         pub const ValueIn = ValueInType;
@@ -427,7 +427,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
 
         pub const Error = ErrorSet;
 
-        accessor: Accessor = undefined,
+        accessor_state: AccessorType = undefined,
 
         pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Self {
             const inode_base = Inode.PageViewTypeConst.calculateSlotCapacity(device.pageSize(), 0);
@@ -446,21 +446,25 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
                 },
             };
             return .{
-                .accessor = AccessorImpl.init(context),
+                .accessor_state = AccessorImpl.init(context),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor.deinit();
+            self.accessor_state.deinit();
             self.* = undefined;
         }
 
         pub fn effectiveSettings(self: *const Self) Settings {
-            return self.accessor.ctx.settings;
+            return self.accessor_state.ctx.settings;
         }
 
         pub fn getSettings(self: *const Self) *const Settings {
-            return &self.accessor.ctx.settings;
+            return &self.accessor_state.ctx.settings;
+        }
+
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
     };
 }

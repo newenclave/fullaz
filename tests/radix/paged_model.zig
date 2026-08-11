@@ -105,10 +105,10 @@ test "RadixTree paged: model create leaf" {
     try suite.initInPlace();
     defer suite.deinit();
 
-    var leaf = try suite.model.accessor.createLeaf();
-    defer suite.model.accessor.deinitLeaf(&leaf);
-    var leaf_load = try suite.model.accessor.loadLeaf(leaf.id());
-    defer suite.model.accessor.deinitLeaf(&leaf_load);
+    var leaf = try suite.model.accessor().createLeaf();
+    defer suite.model.accessor().deinitLeaf(&leaf);
+    var leaf_load = try suite.model.accessor().loadLeaf(leaf.id());
+    defer suite.model.accessor().deinitLeaf(&leaf_load);
 
     try leaf.set(0xc, "Hello!");
     printer.print("leaf get: {} {s}\n", .{ try leaf.isSet(0xc), try leaf.get(0xc) });
@@ -138,12 +138,12 @@ test "RadixTree paged: model create inode" {
     try suite.initInPlace();
     defer suite.deinit();
 
-    var inode = try suite.model.accessor.createInode();
+    var inode = try suite.model.accessor().createInode();
     printer.print("inode slots: {} {}\n", .{ try inode.size(), inode.calculateSlotCapacity(4096, 0) });
 
-    defer suite.model.accessor.deinitInode(&inode);
-    var inode_load = try suite.model.accessor.loadInode(inode.id());
-    defer suite.model.accessor.deinitInode(&inode_load);
+    defer suite.model.accessor().deinitInode(&inode);
+    var inode_load = try suite.model.accessor().loadInode(inode.id());
+    defer suite.model.accessor().deinitInode(&inode_load);
 
     try std.testing.expect(inode.id() == 0);
     try std.testing.expect(inode_load.id() == 0);
@@ -161,8 +161,8 @@ test "RadixTree paged: model split key" {
     });
 
     const key: u64 = 0x123456789abcdef0;
-    var split_key_result = try suite.model.accessor.splitKey(key);
-    defer suite.model.accessor.deinitSplitKey(&split_key_result);
+    var split_key_result = try suite.model.accessor().splitKey(key);
+    defer suite.model.accessor().deinitSplitKey(&split_key_result);
 
     printer.print("Split key result for {x} ({}):\n", .{ key, split_key_result.size() });
     for (0..split_key_result.size()) |i| {
