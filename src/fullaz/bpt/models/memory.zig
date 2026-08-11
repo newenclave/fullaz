@@ -37,12 +37,12 @@ pub fn TypeMap(comptime T: type) type {
     };
 }
 
-fn KeyBorrowTypeWrapper(comptime KeyType: type) type {
+fn KeyBorrowTypeWrapper(comptime KeyT: type) type {
     return struct {
         const Self = @This();
-        key: KeyType,
+        key: KeyT,
         sanitize_ptr: ?*u32 = null,
-        fn init(key: KeyType, sanitize_ptr: ?*u32) Self {
+        fn init(key: KeyT, sanitize_ptr: ?*u32) Self {
             return Self{
                 .key = key,
                 .sanitize_ptr = if (IS_DEBUG) sanitize_ptr else null,
@@ -59,17 +59,16 @@ fn MemoryInode(comptime KeyT: type, comptime maximum_elements: usize) type {
     return struct {
         const Self = @This();
 
-        const KeyType = KeyT;
         const ChildType = MemoryPidType;
         right_most_child_id: MemoryPidType = undefined,
 
         parent_id: ?MemoryPidType = null,
-        keys: SimpleVector(KeyType, maximum_elements),
+        keys: SimpleVector(KeyT, maximum_elements),
         children: SimpleVector(MemoryPidType, maximum_elements),
 
         pub fn init() Self {
             return Self{
-                .keys = SimpleVector(KeyType, maximum_elements).init(undefined),
+                .keys = SimpleVector(KeyT, maximum_elements).init(undefined),
                 .children = SimpleVector(ChildType, maximum_elements).init(undefined),
             };
         }
@@ -79,10 +78,9 @@ fn MemoryInode(comptime KeyT: type, comptime maximum_elements: usize) type {
 fn MemoryLeaf(comptime KeyT: type, comptime maximum_elements: usize) type {
     return struct {
         const Self = @This();
-        const KeyType = KeyT;
         const ValueType = [16]u8;
 
-        keys: SimpleVector(KeyType, maximum_elements),
+        keys: SimpleVector(KeyT, maximum_elements),
         values: SimpleVector(ValueType, maximum_elements),
         parent_id: ?MemoryPidType = null,
         prev: ?MemoryPidType = null,
@@ -90,7 +88,7 @@ fn MemoryLeaf(comptime KeyT: type, comptime maximum_elements: usize) type {
 
         pub fn init() Self {
             return Self{
-                .keys = SimpleVector(KeyType, maximum_elements).init(undefined),
+                .keys = SimpleVector(KeyT, maximum_elements).init(undefined),
                 .values = SimpleVector(ValueType, maximum_elements).init(undefined),
                 .parent_id = null,
                 .prev = null,
@@ -119,9 +117,8 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
 
         const MemoryLeafType = MemoryLeaf(KeyT, maximum_elements);
 
-        const KeyType = KeyT;
-        const KeyLikeType = KeyType;
-        const KeyOutType = *KeyType;
+        const KeyLikeType = KeyT;
+        const KeyOutType = *KeyT;
         const KeyBorrowType = KeyBorrowTypeWrapper(KeyT);
 
         pub const Error = ErrorSet;
@@ -204,10 +201,10 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             return cmp(void, k1, k2) == .eq;
         }
 
-        pub fn keyPosition(self: *const Self, key: KeyType) ErrorSet!usize {
+        pub fn keyPosition(self: *const Self, key: KeyT) ErrorSet!usize {
             if (self.leaf) |leaf| {
                 const slice = leaf.keys.data[0..self.leaf.?.keys.len];
-                const pos = try algos.lowerBound(KeyType, slice, key, cmp, @as(?u32, null));
+                const pos = try algos.lowerBound(KeyT, slice, key, cmp, @as(?u32, null));
                 return pos;
             } else {
                 return ErrorSet.InvalidId;
@@ -265,7 +262,7 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
             return false;
         }
 
-        pub fn insertValue(self: *Self, pos: usize, key: KeyType, value: ValueInType) ErrorSet!void {
+        pub fn insertValue(self: *Self, pos: usize, key: KeyT, value: ValueInType) ErrorSet!void {
             if (self.leaf) |leaf| {
                 try leaf.values.insert(pos, [_]u8{0} ** 16);
                 const len = @min(16, value.len);

@@ -136,8 +136,8 @@ pub fn View(
         pub const Error = ErrorSet;
 
         pub const SlotWrapper = SlotWrapperView(PageIdT, IndexT, Endian, read_only);
-        pub const SlotWrapperConst = SlotWrapperView(PageIdT, IndexT, Endian, true);
-        pub const SlotWrapperMut = SlotWrapperView(PageIdT, IndexT, Endian, false);
+        pub const ConstSlotWrapper = SlotWrapperView(PageIdT, IndexT, Endian, true);
+        pub const MutSlotWrapper = SlotWrapperView(PageIdT, IndexT, Endian, false);
 
         page_view: PageViewType,
 
@@ -198,16 +198,16 @@ pub fn View(
             return try SlotWrapper.init(slot);
         }
 
-        pub fn get(self: *const Self, pos: usize) Error!SlotWrapperConst {
+        pub fn get(self: *const Self, pos: usize) Error!ConstSlotWrapper {
             const sdir = try self.slotsDir();
             const slot = try sdir.get(pos);
-            return try SlotWrapperConst.init(slot);
+            return try ConstSlotWrapper.init(slot);
         }
 
-        pub fn getMut(self: *Self, pos: usize) Error!SlotWrapperMut {
+        pub fn getMut(self: *Self, pos: usize) Error!MutSlotWrapper {
             var sdir = try self.slotsDirMut();
             const slot = try sdir.getMut(pos);
-            return try SlotWrapperMut.init(slot);
+            return try MutSlotWrapper.init(slot);
         }
 
         pub fn canInsertSize(self: *const Self, pos: usize, value: usize) ErrorSet!AvailableStatus {
@@ -217,7 +217,7 @@ pub fn View(
 
         pub fn canInsert(self: *const Self, pos: usize, key: []const u8, value: []const u8, level: usize) ErrorSet!AvailableStatus {
             _ = pos;
-            const total_len = SlotWrapperConst.totalSlotSize(key.len, value.len, level);
+            const total_len = ConstSlotWrapper.totalSlotSize(key.len, value.len, level);
             return (try self.slotsDir()).canInsert(total_len);
         }
 
@@ -242,7 +242,7 @@ pub fn View(
             return try slot_dir.canUpdate(pos, total_size);
         }
 
-        pub fn createSlot(_: *const Self, buf: []u8, key_size: usize, value_size: usize, levels: usize) ErrorSet!SlotWrapperMut {
+        pub fn createSlot(_: *const Self, buf: []u8, key_size: usize, value_size: usize, levels: usize) ErrorSet!MutSlotWrapper {
             const targetTotal = SlotWrapper.totalSlotSize(key_size, value_size, levels);
             if (buf.len < targetTotal) {
                 return ErrorSet.BufferTooSmall;
@@ -251,7 +251,7 @@ pub fn View(
             hdr.key_len.set(@intCast(key_size));
             hdr.value_len.set(@intCast(value_size));
             hdr.level = @intCast(levels);
-            return try SlotWrapperMut.init(buf);
+            return try MutSlotWrapper.init(buf);
         }
 
         pub fn fullSlotSizeNeeded(key_size: usize, value_size: usize, levels: usize) usize {

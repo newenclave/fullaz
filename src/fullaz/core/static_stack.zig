@@ -2,20 +2,20 @@ const std = @import("std");
 const errors = @import("errors.zig");
 const StaticVector = @import("static_vector.zig").StaticVector;
 
-pub fn StaticStack(comptime T: type, comptime maximum_elements: usize, comptime DeinitCtx: type, comptime destructor: ?fn (DeinitCtx, *T) void) type {
+pub fn StaticStack(comptime T: type, comptime maximum_elements: usize, comptime DeinitCtxT: type, comptime destructor: ?fn (DeinitCtxT, *T) void) type {
     comptime {
         if (maximum_elements == 0) {
             @compileError("maximum_elements should have at least 1 element");
         }
     }
-    const Vector = StaticVector(T, maximum_elements, DeinitCtx, destructor);
+    const Vector = StaticVector(T, maximum_elements, DeinitCtxT, destructor);
     return struct {
         const Self = @This();
         vector: Vector,
 
         pub const Error = Vector.Error || errors.SetError;
 
-        pub fn init(ctx: DeinitCtx) Self {
+        pub fn init(ctx: DeinitCtxT) Self {
             return .{
                 .vector = Vector.init(ctx),
             };

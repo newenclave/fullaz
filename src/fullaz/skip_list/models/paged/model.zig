@@ -17,7 +17,7 @@ pub fn Paged(
     comptime FsmT: type,
     comptime AdditionalT: type,
     comptime cmp: anytype,
-    comptime Ctx: type,
+    comptime CtxT: type,
 ) type {
     const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
@@ -28,8 +28,8 @@ pub fn Paged(
 
     const NodeViewMut = SubheaderView(BlockIdType, u16, AdditionalT, .little, false);
     const NodeViewConst = SubheaderView(BlockIdType, u16, AdditionalT, .little, true);
-    const SlotWrapperConst = NodeViewConst.SlotWrapperConst;
-    const SlotWrapper = NodeViewMut.SlotWrapperConst;
+    const ConstSlotWrapper = NodeViewConst.ConstSlotWrapper;
+    const SlotWrapper = NodeViewMut.ConstSlotWrapper;
 
     const ContextImpl = struct {
         const Self = @This();
@@ -38,7 +38,7 @@ pub fn Paged(
         cache: *PageCacheT = undefined,
         storage: *StorageManagerT = undefined,
         fsm: *FsmT = undefined,
-        cmp_ctx: Ctx = undefined,
+        cmp_ctx: CtxT = undefined,
         allocator: std.mem.Allocator = undefined,
     };
 
@@ -147,7 +147,7 @@ pub fn Paged(
             return @as(usize, sw.header().level);
         }
 
-        fn getLevelRef(self: *const Self, level: usize) Error!*const SlotWrapperConst.LevelRef {
+        fn getLevelRef(self: *const Self, level: usize) Error!*const ConstSlotWrapper.LevelRef {
             const view = NodeViewConst.init(try self.ph.data());
             const sw = try view.get(self.pid.slot_id);
             const current_level = @as(usize, sw.header().level);
@@ -428,7 +428,7 @@ pub fn Paged(
             storage_mgr: *StorageManagerT,
             fsm: *FsmT,
             settings: Settings,
-            ctx: Ctx,
+            ctx: CtxT,
             rng: std.Random,
             allocator: std.mem.Allocator,
         ) Self {

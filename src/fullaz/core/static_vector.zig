@@ -1,7 +1,7 @@
 const std = @import("std");
 const errors = @import("errors.zig");
 
-pub fn StaticVector(comptime T: type, comptime maximum_elements: usize, comptime DeinitCtx: type, comptime destructor: ?fn (DeinitCtx, *T) void) type {
+pub fn StaticVector(comptime T: type, comptime maximum_elements: usize, comptime DeinitCtxT: type, comptime destructor: ?fn (DeinitCtxT, *T) void) type {
     comptime {
         if (maximum_elements == 0) {
             @compileError("maximum_elements should have at least 1 element");
@@ -12,11 +12,11 @@ pub fn StaticVector(comptime T: type, comptime maximum_elements: usize, comptime
         const Self = @This();
         data: [maximum_elements]T = undefined,
         len: usize = 0,
-        deinit_ctx: DeinitCtx = undefined,
+        deinit_ctx: DeinitCtxT = undefined,
 
         pub const Error = errors.StaticVectorError;
 
-        pub fn init(ctx: DeinitCtx) Self {
+        pub fn init(ctx: DeinitCtxT) Self {
             return .{
                 .data = undefined,
                 .len = 0,

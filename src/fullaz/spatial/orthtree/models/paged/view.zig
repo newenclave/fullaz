@@ -10,7 +10,7 @@ pub fn View(
     comptime IndexT: type,
     comptime CoordT: type,
     comptime dims: usize,
-    comptime TraitStorage: type,
+    comptime TraitStorageT: type,
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
@@ -19,11 +19,11 @@ pub fn View(
     const NodeSubheader = OrthtreePage.NodeSubheader;
     const Mbr = OrthtreePage.Mbr;
     const Key = geometry.BoundingBox(CoordT, dims);
-    const trait_size = @sizeOf(TraitStorage);
+    const trait_size = @sizeOf(TraitStorageT);
     const subheader_size = @sizeOf(NodeSubheader);
 
     comptime {
-        if (@alignOf(TraitStorage) != 1) {
+        if (@alignOf(TraitStorageT) != 1) {
             @compileError("Orthtree trait storage must have alignment 1");
         }
         if (trait_size == 0) {
@@ -69,7 +69,7 @@ pub fn View(
 
         pub const Error = errors.PageError || errors.IndexError || HeaderPageView.Error;
         pub const PageView = HeaderPageView;
-        pub const Trait = TraitStorage;
+        pub const Trait = TraitStorageT;
         pub const Box = Key;
         pub const EntryChain = struct {
             first: ?PageIdT,
@@ -262,7 +262,7 @@ pub fn View(
     return struct {
         pub const Node = NodeImpl;
         pub const Box = Node.Box;
-        pub const Trait = TraitStorage;
+        pub const Trait = TraitStorageT;
     };
 }
 
@@ -271,7 +271,7 @@ pub fn PackedView(
     comptime IndexT: type,
     comptime CoordT: type,
     comptime dims: usize,
-    comptime TraitStorage: type,
+    comptime TraitStorageT: type,
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
@@ -285,12 +285,12 @@ pub fn PackedView(
     const Key = geometry.BoundingBox(CoordT, dims);
     const FixedSlots = fixed_slots.Fixed(u64, IndexT, Endian, read_only);
     const ConstFixedSlots = fixed_slots.Fixed(u64, IndexT, Endian, true);
-    const trait_size = @sizeOf(TraitStorage);
+    const trait_size = @sizeOf(TraitStorageT);
     const slot_header_size = @sizeOf(NodeSlotSubheader);
     const slot_size = slot_header_size + trait_size;
 
     comptime {
-        if (@alignOf(TraitStorage) != 1) {
+        if (@alignOf(TraitStorageT) != 1) {
             @compileError("Orthtree trait storage must have alignment 1");
         }
         if (trait_size == 0) {
@@ -358,7 +358,7 @@ pub fn PackedView(
         const DataType = if (read_only) []const u8 else []u8;
 
         pub const Error = errors.PageError || errors.IndexError;
-        pub const Trait = TraitStorage;
+        pub const Trait = TraitStorageT;
         pub const Box = Key;
         pub const EntryChain = struct {
             first: ?PageIdT,
@@ -646,7 +646,7 @@ pub fn PackedView(
         pub const NodePage = NodePageImpl;
         pub const NodeSlot = NodeSlotImpl;
         pub const Box = Key;
-        pub const Trait = TraitStorage;
+        pub const Trait = TraitStorageT;
         pub const node_slot_size = slot_size;
     };
 }

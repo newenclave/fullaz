@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype, comptime Ctx: type) type {
+pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype, comptime CtxT: type) type {
     const Context = struct {
         allocator: std.mem.Allocator,
         max_level: usize,
@@ -183,7 +183,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         pub const Error = error{ OutOfMemory, OutOfBounds };
 
         ctx: Context,
-        cmp_ctx: Ctx = undefined,
+        cmp_ctx: CtxT = undefined,
         cont: NodeContainer = undefined,
         roots: PidContainer = undefined,
 

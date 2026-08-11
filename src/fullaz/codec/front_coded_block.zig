@@ -13,7 +13,7 @@ pub fn FrontCodedBlock(
     comptime endian: std.builtin.Endian,
     comptime check_limits: bool,
     comptime cmp: anytype,
-    comptime Ctx: type,
+    comptime CtxT: type,
 ) type {
     comptime {
         bounded_buffer.assertMemoryBlockWriter(BlockWriterT);
@@ -313,9 +313,9 @@ pub fn FrontCodedBlock(
         block_writer: BlockWriter,
         scratch: BufferType,
         scratch_len: usize = 0,
-        ctx: Ctx,
+        ctx: CtxT,
 
-        pub fn initWithContext(block_writer: BlockWriter, scratch: BufferType, ctx: Ctx) Error!Self {
+        pub fn initWithContext(block_writer: BlockWriter, scratch: BufferType, ctx: CtxT) Error!Self {
             if (@sizeOf(BlockHeader) > block_writer.remaining()) {
                 return Error.BufferTooSmall;
             }
@@ -389,7 +389,7 @@ pub fn FrontCodedBlock(
         }
 
         pub fn init(block_writer: BlockWriter, scratch: BufferType) Error!Self {
-            if (Ctx != void) {
+            if (CtxT != void) {
                 @compileError("BuilderImpl: a non-void context requires initWithContext");
             }
             return Self.initWithContext(block_writer, scratch, {});

@@ -17,7 +17,7 @@ pub fn PagedModel(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
     comptime cmp: anytype,
-    comptime Ctx: type,
+    comptime CtxT: type,
 ) type {
     comptime {
         interfaces.requiresStorageManager(StorageManagerT);
@@ -47,7 +47,7 @@ pub fn PagedModel(
     const Context = struct {
         cache: *PageCacheT = undefined,
         storage_mgr: *StorageManagerT = undefined,
-        cts: Ctx = undefined,
+        cts: CtxT = undefined,
         settings: Settings = undefined,
     };
 
@@ -619,7 +619,7 @@ pub fn PagedModel(
 
         accessor_state: AccessorType,
 
-        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings, ctx: Ctx) Self {
+        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings, ctx: CtxT) Self {
             const context = Context{
                 .cache = device,
                 .storage_mgr = storage_mgr,
