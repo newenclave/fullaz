@@ -3,7 +3,7 @@ const errors = @import("../../core/errors.zig");
 
 const KeySplitter = @import("../splitter.zig").Splitter;
 
-const Settings = struct {
+const SettingsImpl = struct {
     leaf_base: u32 = 128,
     inode_base: u32 = 512,
 };
@@ -16,11 +16,13 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
     const ErrorSet = errors.HandleError ||
         errors.PageError ||
         errors.IndexError ||
+        errors.SpaceError ||
         std.mem.Allocator.Error;
 
     const SplitKeyImpl = struct {
         const Self = @This();
-        const KeyDigit = SplitterType.Result;
+        pub const KeyDigitType = SplitterType.Result;
+        const KeyDigit = KeyDigitType;
         stack: std.ArrayList(KeyDigit),
         items: []KeyDigit = undefined,
 
@@ -126,7 +128,7 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
         const Container = LeafContainer;
         container: *Container,
         self_id: PidType,
-        const Error = ErrorSet;
+        pub const Error = ErrorSet;
 
         fn init(cont: *Container, pid: PidType) Error!Self {
             return Self{
@@ -227,7 +229,7 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
     const InodeImpl = struct {
         const Self = @This();
         const Container = InodeContainer;
-        const Error = ErrorSet;
+        pub const Error = ErrorSet;
 
         container: *Container,
         self_id: PidType,
@@ -333,15 +335,15 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
         const KeyDigit = Splitter.Result;
         const SplitKeyResult = SplitKeyImpl;
 
-        const Error = ErrorSet || Splitter.Error;
+        pub const Error = ErrorSet || Splitter.Error;
 
         alloc: std.mem.Allocator,
-        sett: Settings,
+        sett: SettingsImpl,
         cont: Container,
         splitter: Splitter,
         root: ?PidType = null,
 
-        fn init(alloc: std.mem.Allocator, sett: Settings) Error!Self {
+        fn init(alloc: std.mem.Allocator, sett: SettingsImpl) Error!Self {
             return Self{
                 .alloc = alloc,
                 .cont = try Container.initCapacity(alloc, 4),
@@ -460,9 +462,11 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
             return self.root;
         }
 
-        pub fn setRoot(self: *Self, pid: PidType) Error!void {
-            if (pid >= self.cont.items.len) {
-                return Error.InvalidId;
+        pub fn setRoot(self: *Self, pid: ?PidType) Error!void {
+            if (pid) |id| {
+                if (id >= self.cont.items.len) {
+                    return Error.InvalidId;
+                }
             }
             self.root = pid;
         }
@@ -489,18 +493,18 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
     return struct {
         const Self = @This();
 
-        pub const Pid = PidType;
-        pub const Level = LevelType;
+        pub const Settings = SettingsImpl;
+        pub const NodeIdType = PidType;
 
-        pub const KeyIn = KeyT;
-        pub const ValueIn = ValueT;
-        pub const KeyOut = KeyT;
-        pub const ValueOut = ValueT;
+        pub const KeyInType = KeyT;
+        pub const ValueInType = ValueT;
+        pub const KeyOutType = KeyT;
+        pub const ValueOutType = ValueT;
 
         pub const AccessorType = AccessorImpl;
-        pub const Inode = InodeImpl;
-        pub const Leaf = LeafImpl;
-        pub const SplitKeyResult = AccessorType.SplitKeyResult;
+        pub const InodeType = InodeImpl;
+        pub const LeafType = LeafImpl;
+        pub const SplitKeyType = AccessorType.SplitKeyResult;
 
         pub const Error = ErrorSet;
 

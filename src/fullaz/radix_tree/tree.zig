@@ -1,17 +1,20 @@
 const std = @import("std");
 const KeySplitter = @import("splitter.zig").Splitter;
 const errors = @import("../core/errors.zig");
+const model_interfaces = @import("models/interfaces.zig");
 
 pub fn Tree(comptime ModelT: type) type {
+    comptime model_interfaces.assertModel(ModelT);
+
     const Model = ModelT;
-    const Leaf = Model.Leaf;
+    const LeafType = Model.LeafType;
 
-    const KeyInType = Model.KeyIn;
-    const ValueInType = Model.ValueIn;
-    const ValueOutType = Model.ValueOut;
-    const Pid = Model.Pid;
+    const KeyInType = Model.KeyInType;
+    const ValueInType = Model.ValueInType;
+    const ValueOutType = Model.ValueOutType;
+    const NodeIdType = Model.NodeIdType;
 
-    const SplitKeyResult = Model.SplitKeyResult;
+    const SplitKeyType = Model.SplitKeyType;
 
     return struct {
         const Self = @This();
@@ -37,10 +40,11 @@ pub fn Tree(comptime ModelT: type) type {
             self.* = undefined;
         }
 
-        fn debugPrintSplitKey(key: KeyInType, skr: *const SplitKeyResult) void {
+        fn debugPrintSplitKey(key: KeyInType, skr: *const SplitKeyType) void {
             if (@import("builtin").mode == .Debug) {
                 std.debug.print("Key 0x{X:0>8} -> {} levels:\n", .{ key, skr.size() });
-                for (skr.items, 0..) |kd, i| {
+                for (0..skr.size()) |i| {
+                    const kd = skr.get(i);
                     const level_type = if (kd.level == 0) "LEAF" else "INODE";
                     std.debug.print("  [{}] {s} digit={:3} quot={:8}\n", .{
                         i,
@@ -176,7 +180,7 @@ pub fn Tree(comptime ModelT: type) type {
             }
         }
 
-        fn freeChild(self: *Self, inode_id: ?Pid, id: KeyInType) Error!void {
+        fn freeChild(self: *Self, inode_id: ?NodeIdType, id: KeyInType) Error!void {
             const acc = self.accessor();
             if (inode_id) |pid| {
                 var inode = try acc.loadInode(pid);
@@ -193,7 +197,7 @@ pub fn Tree(comptime ModelT: type) type {
             }
         }
 
-        fn findLeaf(self: *Self, skr: *const SplitKeyResult) Error!?Leaf {
+        fn findLeaf(self: *Self, skr: *const SplitKeyType) Error!?LeafType {
             const acc = self.accessor();
             const key_level = skr.size() - 1;
 
@@ -224,7 +228,7 @@ pub fn Tree(comptime ModelT: type) type {
             return null;
         }
 
-        fn createPath(self: *Self, skr: *const SplitKeyResult) Error!Leaf {
+        fn createPath(self: *Self, skr: *const SplitKeyType) Error!LeafType {
             const acc = self.accessor();
             if (try acc.getRootLevel()) |root_level| {
                 if (root_level < (skr.size() - 1)) {
