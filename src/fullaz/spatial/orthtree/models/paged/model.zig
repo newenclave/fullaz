@@ -27,16 +27,16 @@ pub fn Settings(comptime CoordT: type) type {
 }
 
 pub fn PagedModel(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime FsmT: type,
     comptime CoordT: type,
     comptime dims: usize,
     comptime Endian: std.builtin.Endian,
 ) type {
     return PagedModelImpl(
-        PageCacheType,
-        StorageManager,
+        PageCacheT,
+        StorageManagerT,
         FsmT,
         CoordT,
         dims,
@@ -46,8 +46,8 @@ pub fn PagedModel(
 }
 
 pub fn PagedModelImpl(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime FsmT: type,
     comptime CoordT: type,
     comptime dims: usize,
@@ -58,8 +58,8 @@ pub fn PagedModelImpl(
     const SettingsT = Settings(CoordT);
     const TraitPolicy = TraitT(CoordT, dims, Value);
     const TraitStorage = TraitPolicy.Storage;
-    const Pid = PageCacheType.Pid;
-    const PageHandle = PageCacheType.Handle;
+    const Pid = PageCacheT.Pid;
+    const PageHandle = PageCacheT.Handle;
     const BoxT = geometry.BoundingBox(CoordT, dims);
     const OrthtreePage = orthtree_page.Orthtree(
         Pid,
@@ -95,12 +95,12 @@ pub fn PagedModelImpl(
     const ReadNodeSlot = ReadPackedView.NodeSlot;
 
     comptime {
-        contracts.page_cache.requiresPageCache(PageCacheType);
-        orthtree_interfaces.requiresPagedStorageManager(StorageManager, NativeNodeId);
+        contracts.page_cache.requiresPageCache(PageCacheT);
+        orthtree_interfaces.requiresPagedStorageManager(StorageManagerT, NativeNodeId);
         requiresTypeDeclaration(FsmT, "Pid");
         requiresTypeDeclaration(FsmT, "Size");
         requiresErrorDeclaration(FsmT, "Error");
-        if (StorageManager.PageId != Pid) {
+        if (StorageManagerT.PageId != Pid) {
             @compileError("Orthtree storage manager PageId must match page cache Pid");
         }
         if (FsmT.Pid != Pid) {
@@ -138,8 +138,8 @@ pub fn PagedModelImpl(
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
         errors.IteratorError ||
-        PageCacheType.Error ||
-        StorageManager.Error ||
+        PageCacheT.Error ||
+        StorageManagerT.Error ||
         FsmT.Error ||
         MutableNodePage.Error ||
         TraitPolicy.Error ||
@@ -196,7 +196,7 @@ pub fn PagedModelImpl(
     const EntryChainHandle = struct {
         fn call(comptime NodeT: type) type {
             const Handle = slot_chain.HandleImpl(
-                PageCacheType,
+                PageCacheT,
                 NodeT,
                 void,
                 void,
@@ -436,16 +436,16 @@ pub fn PagedModelImpl(
 
         handle: PageHandle,
         self_id: NativeNodeId,
-        cache: *PageCacheType,
-        storage_manager: *StorageManager,
+        cache: *PageCacheT,
+        storage_manager: *StorageManagerT,
         fsm: *FsmT,
         settings: SettingsT,
 
         fn init(
             handle: PageHandle,
             self_id: NativeNodeId,
-            cache: *PageCacheType,
-            storage_manager: *StorageManager,
+            cache: *PageCacheT,
+            storage_manager: *StorageManagerT,
             fsm: *FsmT,
             settings: SettingsT,
         ) Self {
@@ -612,15 +612,15 @@ pub fn PagedModelImpl(
 
         pub const Error = ErrorSet;
 
-        cache: *PageCacheType,
-        storage_manager: *StorageManager,
+        cache: *PageCacheT,
+        storage_manager: *StorageManagerT,
         fsm: *FsmT,
         settings: SettingsT,
         trait_template: TraitStorage,
 
         fn init(
-            cache: *PageCacheType,
-            storage_manager: *StorageManager,
+            cache: *PageCacheT,
+            storage_manager: *StorageManagerT,
             fsm: *FsmT,
             settings: SettingsT,
             trait_template: TraitStorage,
@@ -724,15 +724,15 @@ pub fn PagedModelImpl(
 
         accessor: Accessor,
 
-        pub fn init(cache: *PageCacheType, storage_manager: *StorageManager, fsm: *FsmT, settings: SettingsT) Error!Self {
+        pub fn init(cache: *PageCacheT, storage_manager: *StorageManagerT, fsm: *FsmT, settings: SettingsT) Error!Self {
             var trait_template: Trait = undefined;
             TraitPolicy.format(&trait_template);
             return Self.initWithTrait(cache, storage_manager, fsm, settings, trait_template);
         }
 
         pub fn initWithTrait(
-            cache: *PageCacheType,
-            storage_manager: *StorageManager,
+            cache: *PageCacheT,
+            storage_manager: *StorageManagerT,
             fsm: *FsmT,
             settings: SettingsT,
             trait_template: Trait,

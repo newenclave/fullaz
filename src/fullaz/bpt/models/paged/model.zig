@@ -14,18 +14,18 @@ pub const Settings = struct {
 };
 
 pub fn PagedModel(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime cmp: anytype,
     comptime Ctx: type,
 ) type {
     comptime {
-        interfaces.requiresStorageManager(StorageManager);
-        interfaces.requiresPageCache(PageCacheType);
+        interfaces.requiresStorageManager(StorageManagerT);
+        interfaces.requiresPageCache(PageCacheT);
     }
 
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
     const BptPage = bpt_page.View(
@@ -45,15 +45,15 @@ pub fn PagedModel(
     const ValueType = []const u8;
 
     const Context = struct {
-        cache: *PageCacheType = undefined,
-        storage_mgr: *StorageManager = undefined,
+        cache: *PageCacheT = undefined,
+        storage_mgr: *StorageManagerT = undefined,
         cts: Ctx = undefined,
         settings: Settings = undefined,
     };
 
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
-        PageCacheType.Error ||
+        PageCacheT.Error ||
         errors.OrderError ||
         errors.BptError ||
         error{KeyTooLarge} ||
@@ -455,7 +455,7 @@ pub fn PagedModel(
         const Self = @This();
         pub const Error = ErrorSet;
 
-        pub const PageCache = PageCacheType;
+        pub const PageCache = PageCacheT;
         const RootType = BlockIdType;
 
         ctx: Context = undefined,
@@ -619,7 +619,7 @@ pub fn PagedModel(
 
         accessor: AccessorType,
 
-        pub fn init(device: *PageCacheType, storage_mgr: *StorageManager, settings: Settings, ctx: Ctx) Self {
+        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings, ctx: Ctx) Self {
             const context = Context{
                 .cache = device,
                 .storage_mgr = storage_mgr,

@@ -9,16 +9,16 @@ pub const Settings = struct {
     chunk_page_kind: u16 = 0x11,
 };
 
-pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type {
+pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type) type {
     comptime {
-        interfaces.page_cache.requiresPageCache(PageCacheType);
-        interfaces.storage_manager.requiresStorageManager(StorageManager);
+        interfaces.page_cache.requiresPageCache(PageCacheT);
+        interfaces.storage_manager.requiresStorageManager(StorageManagerT);
     }
 
     const PosType = u32;
     const Index = u16;
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
     //    const CommonPageView = page_header.View(BlockIdType, u16, .little, false);
@@ -26,12 +26,12 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
     const ViewTypes = view.View(BlockIdType, Index, PosType, .little, false);
     const ViewTypesConst = view.View(BlockIdType, Index, PosType, .little, true);
 
-    const CommonErrors = PageCacheType.Error ||
-        StorageManager.Error;
+    const CommonErrors = PageCacheT.Error ||
+        StorageManagerT.Error;
 
     const Context = struct {
-        cache: *PageCacheType,
-        mgr: *StorageManager,
+        cache: *PageCacheT,
+        mgr: *StorageManagerT,
         settings: Settings,
     };
 
@@ -100,7 +100,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
 
     const Cursor = struct {
         const Self = @This();
-        pub const Error = PageCacheType.Error ||
+        pub const Error = PageCacheT.Error ||
             CommonErrors ||
             errors.PageError;
 
@@ -351,7 +351,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         const Self = @This();
 
         pub const Pid = BlockIdType;
-        pub const Error = PageCacheType.Error ||
+        pub const Error = PageCacheT.Error ||
             CommonErrors ||
             errors.PageError;
 
@@ -365,7 +365,7 @@ pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type) type 
         ctx: Context,
 
         pub const View = view.View;
-        pub fn init(cache: *PageCacheType, mgr: *StorageManager, settings: Settings) Self {
+        pub fn init(cache: *PageCacheT, mgr: *StorageManagerT, settings: Settings) Self {
             return Self{
                 .ctx = Context{
                     .cache = cache,

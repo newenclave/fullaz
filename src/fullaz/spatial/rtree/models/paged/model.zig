@@ -10,8 +10,8 @@ pub const Settings = struct {
 };
 
 pub fn PagedModel(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime CoordT: type,
     comptime dims: usize,
     comptime max_entries_v: usize,
@@ -19,15 +19,15 @@ pub fn PagedModel(
     comptime Endian: std.builtin.Endian,
 ) type {
     comptime {
-        interfaces.requiresStorageManager(StorageManager);
-        interfaces.requiresPageCache(PageCacheType);
+        interfaces.requiresStorageManager(StorageManagerT);
+        interfaces.requiresPageCache(PageCacheT);
         if (max_entries_v < 4) {
             @compileError("max_entries must be at least 4");
         }
     }
 
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
     const RtreeView = rtree_view.View(BlockIdType, u16, CoordT, dims, Endian, false);
@@ -42,14 +42,14 @@ pub fn PagedModel(
     };
 
     const Context = struct {
-        cache: *PageCacheType,
-        storage_mgr: *StorageManager,
+        cache: *PageCacheT,
+        storage_mgr: *StorageManagerT,
         settings: Settings,
     };
 
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
-        PageCacheType.Error ||
+        PageCacheT.Error ||
         error{ ValueTooLarge, NodeFull };
 
     const idOrNull = struct {
@@ -314,7 +314,7 @@ pub fn PagedModel(
     const AccessorImpl = struct {
         const Self = @This();
         pub const Error = ErrorSet;
-        pub const PageCache = PageCacheType;
+        pub const PageCache = PageCacheT;
 
         ctx: Context,
 
@@ -417,7 +417,7 @@ pub fn PagedModel(
 
         accessor: AccessorImpl,
 
-        pub fn init(cache: *PageCacheType, storage_mgr: *StorageManager, settings: Settings) Self {
+        pub fn init(cache: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Self {
             return .{
                 .accessor = AccessorImpl.init(.{
                     .cache = cache,

@@ -12,15 +12,15 @@ pub const Settings = struct {
 };
 
 pub fn Paged(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime FsmT: type,
     comptime AdditionalT: type,
     comptime cmp: anytype,
     comptime Ctx: type,
 ) type {
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
     const KeyT = []const u8;
@@ -35,8 +35,8 @@ pub fn Paged(
         const Self = @This();
         settings: Settings,
         rng: std.Random = undefined,
-        cache: *PageCacheType = undefined,
-        storage: *StorageManager = undefined,
+        cache: *PageCacheT = undefined,
+        storage: *StorageManagerT = undefined,
         fsm: *FsmT = undefined,
         cmp_ctx: Ctx = undefined,
         allocator: std.mem.Allocator = undefined,
@@ -103,7 +103,7 @@ pub fn Paged(
     const NodeImpl = struct {
         const Self = @This();
 
-        pub const Error = PageCacheType.Error || errors.SlotsError;
+        pub const Error = PageCacheT.Error || errors.SlotsError;
         pub const KeyIn = KeyT;
         pub const ValueIn = ValueT;
         pub const KeyOut = KeyT;
@@ -225,8 +225,8 @@ pub fn Paged(
         pub const KeyIn = KeyT;
         pub const ValueIn = ValueT;
         pub const Pid = PidImpl;
-        pub const Error = PageCacheType.Error ||
-            StorageManager.Error ||
+        pub const Error = PageCacheT.Error ||
+            StorageManagerT.Error ||
             FsmT.Error ||
             errors.SlotsError;
         pub const Path = PathImpl;
@@ -424,8 +424,8 @@ pub fn Paged(
         accessor: AccessorImpl,
 
         pub fn init(
-            device: *PageCacheType,
-            storage_mgr: *StorageManager,
+            device: *PageCacheT,
+            storage_mgr: *StorageManagerT,
             fsm: *FsmT,
             settings: Settings,
             ctx: Ctx,
@@ -480,7 +480,7 @@ pub fn Paged(
         }
     };
 
-    //const BlockDevice = PageCacheType.UnderlyingDevice;
-    // const PageHandle = PageCacheType.Handle;
+    //const BlockDevice = PageCacheT.UnderlyingDevice;
+    // const PageHandle = PageCacheT.Handle;
     // const BlockIdType = BlockDevice.BlockId;
 }

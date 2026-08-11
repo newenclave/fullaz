@@ -14,22 +14,22 @@ pub fn requiresStore(comptime T: type) void {
     requiresFnSignature(T, "setRoot", fn (*T, ?T.PageId) Error!void);
 }
 
-pub fn FreeList(comptime PageCacheType: type, comptime StoreManager: type, comptime Endian: std.builtin.Endian) type {
-    comptime requiresStore(StoreManager);
+pub fn FreeList(comptime PageCacheT: type, comptime StoreManagerT: type, comptime Endian: std.builtin.Endian) type {
+    comptime requiresStore(StoreManagerT);
 
-    const PageId = StoreManager.PageId;
+    const PageId = StoreManagerT.PageId;
     const NIL: PageId = std.math.maxInt(PageId);
     const FreedView = freed.View(PageId, Endian, false);
     const FreedViewConst = freed.View(PageId, Endian, true);
 
     return struct {
         const Self = @This();
-        pub const Error = StoreManager.Error || PageCacheType.Error;
+        pub const Error = StoreManagerT.Error || PageCacheT.Error;
 
-        cache: *PageCacheType = undefined,
-        store: *StoreManager = undefined,
+        cache: *PageCacheT = undefined,
+        store: *StoreManagerT = undefined,
 
-        pub fn init(cache: *PageCacheType, store: *StoreManager) Self {
+        pub fn init(cache: *PageCacheT, store: *StoreManagerT) Self {
             return Self{
                 .store = store,
                 .cache = cache,

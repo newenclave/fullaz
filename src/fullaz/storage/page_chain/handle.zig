@@ -7,14 +7,14 @@ pub const Settings = struct {
 };
 
 pub fn Handle(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime SubheaderT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
     return HandleImpl(
-        PageCacheType,
-        StorageManager,
+        PageCacheT,
+        StorageManagerT,
         void,
         SubheaderT,
         false,
@@ -23,8 +23,8 @@ pub fn Handle(
 }
 
 pub fn HandleImpl(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime forward_only: bool,
@@ -32,16 +32,16 @@ pub fn HandleImpl(
 ) type {
     if (forward_only) {
         return HandleForwardImpl(
-            PageCacheType,
-            StorageManager,
+            PageCacheT,
+            StorageManagerT,
             AdditionalT,
             SubheaderT,
             Endian,
         );
     } else {
         return HandleBidirectionalImpl(
-            PageCacheType,
-            StorageManager,
+            PageCacheT,
+            StorageManagerT,
             AdditionalT,
             SubheaderT,
             Endian,
@@ -50,18 +50,18 @@ pub fn HandleImpl(
 }
 
 pub fn HandleForwardImpl(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
-    const PosType = StorageManager.Size;
+    const PosType = StorageManagerT.Size;
     const IndexT = u16;
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
-    const has_tail = @hasDecl(StorageManager, "getLast") and @hasDecl(StorageManager, "setLast");
+    const has_tail = @hasDecl(StorageManagerT, "getLast") and @hasDecl(StorageManagerT, "setLast");
 
     const EmptyStruct = extern struct {};
     const SubheaderType = if (SubheaderT == void) EmptyStruct else SubheaderT;
@@ -90,7 +90,7 @@ pub fn HandleForwardImpl(
 
     const ChunkHandle = struct {
         const Self = @This();
-        pub const Error = PageCacheType.Error;
+        pub const Error = PageCacheT.Error;
 
         ph: PageHandle = undefined,
 
@@ -182,10 +182,10 @@ pub fn HandleForwardImpl(
     const Loader = struct {
         const Error = errors.PageError ||
             ChunkHandle.Error ||
-            PageCacheType.Error ||
+            PageCacheT.Error ||
             ViewTypeConst.PageView.Error;
 
-        fn load(page_cache: *PageCacheType, page_kind: u16, pid: BlockIdType) Error!ChunkHandle {
+        fn load(page_cache: *PageCacheT, page_kind: u16, pid: BlockIdType) Error!ChunkHandle {
             var page_handle = try page_cache.fetch(pid);
             errdefer page_handle.deinit();
             const cv = ViewTypeConst.Chunk.init(try page_handle.data());
@@ -215,13 +215,13 @@ pub fn HandleForwardImpl(
             page_id: BlockIdType,
         };
 
-        page_cache: *PageCacheType,
+        page_cache: *PageCacheT,
         page_kind: u16,
         prev: ?ChunkHandle,
         page: ?ChunkHandle,
         cursor: Cursor,
 
-        fn init(page_cache: *PageCacheType, page_kind: u16, page_id: BlockIdType, cursor: Cursor) Error!Self {
+        fn init(page_cache: *PageCacheT, page_kind: u16, page_id: BlockIdType, cursor: Cursor) Error!Self {
             return .{
                 .page_cache = page_cache,
                 .page_kind = page_kind,
@@ -231,7 +231,7 @@ pub fn HandleForwardImpl(
             };
         }
 
-        fn initEmpty(page_cache: *PageCacheType, page_kind: u16) Self {
+        fn initEmpty(page_cache: *PageCacheT, page_kind: u16) Self {
             return .{
                 .page_cache = page_cache,
                 .page_kind = page_kind,
@@ -300,8 +300,8 @@ pub fn HandleForwardImpl(
         pub const Error = errors.PageError ||
             errors.IteratorError ||
             ChunkHandle.Error ||
-            StorageManager.Error ||
-            PageCacheType.Error ||
+            StorageManagerT.Error ||
+            PageCacheT.Error ||
             ViewTypeConst.PageView.Error;
 
         pub const PageId = BlockIdType;
@@ -309,13 +309,13 @@ pub fn HandleForwardImpl(
         pub const Subheader = SubheaderType;
         pub const Iterator = IteratorImpl;
 
-        page_cache: *PageCacheType,
-        mgr: *StorageManager,
+        page_cache: *PageCacheT,
+        mgr: *StorageManagerT,
         settings: Settings = .{},
 
         pub fn init(
-            page_cache: *PageCacheType,
-            storage_manager: *StorageManager,
+            page_cache: *PageCacheT,
+            storage_manager: *StorageManagerT,
             settings: Settings,
         ) Error!Self {
             return .{
@@ -329,17 +329,17 @@ pub fn HandleForwardImpl(
             _ = self;
         }
 
-        pub fn cache(self: *const Self) *const PageCacheType {
+        pub fn cache(self: *const Self) *const PageCacheT {
             return self.page_cache;
         }
-        pub fn cacheMut(self: *Self) *PageCacheType {
+        pub fn cacheMut(self: *Self) *PageCacheT {
             return self.page_cache;
         }
 
-        pub fn manager(self: *const Self) *const StorageManager {
+        pub fn manager(self: *const Self) *const StorageManagerT {
             return self.mgr;
         }
-        pub fn managerMut(self: *Self) *StorageManager {
+        pub fn managerMut(self: *Self) *StorageManagerT {
             return self.mgr;
         }
 
@@ -540,22 +540,22 @@ pub fn HandleForwardImpl(
 }
 
 pub fn HandleBidirectionalImpl(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
-    const PosType = StorageManager.Size;
+    const PosType = StorageManagerT.Size;
     const IndexT = u16;
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
     const EmptyStruct = extern struct {};
     const SubheaderType = if (SubheaderT == void) EmptyStruct else SubheaderT;
 
-    const has_tail = @hasDecl(StorageManager, "getLast") and @hasDecl(StorageManager, "setLast");
+    const has_tail = @hasDecl(StorageManagerT, "getLast") and @hasDecl(StorageManagerT, "setLast");
 
     _ = PosType;
 
@@ -581,7 +581,7 @@ pub fn HandleBidirectionalImpl(
 
     const ChunkHandle = struct {
         const Self = @This();
-        pub const Error = PageCacheType.Error;
+        pub const Error = PageCacheT.Error;
 
         ph: PageHandle = undefined,
 
@@ -683,10 +683,10 @@ pub fn HandleBidirectionalImpl(
     const Loader = struct {
         const Error = errors.PageError ||
             ChunkHandle.Error ||
-            PageCacheType.Error ||
+            PageCacheT.Error ||
             ViewTypeConst.PageView.Error;
 
-        fn load(page_cache: *PageCacheType, page_kind: u16, pid: BlockIdType) Error!ChunkHandle {
+        fn load(page_cache: *PageCacheT, page_kind: u16, pid: BlockIdType) Error!ChunkHandle {
             var page_handle = try page_cache.fetch(pid);
             errdefer page_handle.deinit();
             const cv = ViewTypeConst.Chunk.init(try page_handle.data());
@@ -716,12 +716,12 @@ pub fn HandleBidirectionalImpl(
             page_id: BlockIdType,
         };
 
-        page_cache: *PageCacheType,
+        page_cache: *PageCacheT,
         page_kind: u16,
         page: ?ChunkHandle,
         cursor: Cursor,
 
-        fn init(page_cache: *PageCacheType, page_kind: u16, page_id: BlockIdType, cursor: Cursor) Error!Self {
+        fn init(page_cache: *PageCacheT, page_kind: u16, page_id: BlockIdType, cursor: Cursor) Error!Self {
             return .{
                 .page_cache = page_cache,
                 .page_kind = page_kind,
@@ -730,7 +730,7 @@ pub fn HandleBidirectionalImpl(
             };
         }
 
-        fn initEmpty(page_cache: *PageCacheType, page_kind: u16) Self {
+        fn initEmpty(page_cache: *PageCacheT, page_kind: u16) Self {
             return .{
                 .page_cache = page_cache,
                 .page_kind = page_kind,
@@ -832,8 +832,8 @@ pub fn HandleBidirectionalImpl(
         pub const Error = errors.PageError ||
             errors.IteratorError ||
             ChunkHandle.Error ||
-            StorageManager.Error ||
-            PageCacheType.Error ||
+            StorageManagerT.Error ||
+            PageCacheT.Error ||
             ViewTypeConst.PageView.Error;
 
         pub const PageId = BlockIdType;
@@ -841,13 +841,13 @@ pub fn HandleBidirectionalImpl(
         pub const Subheader = SubheaderType;
         pub const Iterator = IteratorImpl;
 
-        page_cache: *PageCacheType,
-        mgr: *StorageManager,
+        page_cache: *PageCacheT,
+        mgr: *StorageManagerT,
         settings: Settings = .{},
 
         pub fn init(
-            page_cache: *PageCacheType,
-            storage_manager: *StorageManager,
+            page_cache: *PageCacheT,
+            storage_manager: *StorageManagerT,
             settings: Settings,
         ) Error!Self {
             return .{
@@ -861,17 +861,17 @@ pub fn HandleBidirectionalImpl(
             _ = self;
         }
 
-        pub fn cache(self: *const Self) *const PageCacheType {
+        pub fn cache(self: *const Self) *const PageCacheT {
             return self.page_cache;
         }
-        pub fn cacheMut(self: *Self) *PageCacheType {
+        pub fn cacheMut(self: *Self) *PageCacheT {
             return self.page_cache;
         }
 
-        pub fn manager(self: *const Self) *const StorageManager {
+        pub fn manager(self: *const Self) *const StorageManagerT {
             return self.mgr;
         }
-        pub fn managerMut(self: *Self) *StorageManager {
+        pub fn managerMut(self: *Self) *StorageManagerT {
             return self.mgr;
         }
 

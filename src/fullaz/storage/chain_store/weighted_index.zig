@@ -93,13 +93,13 @@ pub fn NoIndex(comptime PageIdT: type, comptime SizeT: type) type {
 }
 
 pub fn WeightedIndex(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
-    const BlockDevice = PageCacheType.UnderlyingDevice;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
     const BlockIdType = BlockDevice.BlockId;
-    const SizeT = StorageManager.Size;
+    const SizeT = StorageManagerT.Size;
 
     const EntrySizeT = SizeT;
     const Policy = IndexValuePolicy(BlockIdType, EntrySizeT, Endian);
@@ -107,10 +107,10 @@ pub fn WeightedIndex(
 
     const IdxMgr = struct {
         const Self = @This();
-        pub const Error = StorageManager.Error;
+        pub const Error = StorageManagerT.Error;
         pub const PageId = BlockIdType;
 
-        sm: *StorageManager,
+        sm: *StorageManagerT,
 
         pub fn getRoot(self: *const Self) ?PageId {
             return self.sm.getIndexRoot();
@@ -123,7 +123,7 @@ pub fn WeightedIndex(
         }
     };
 
-    const Model = wbpt.models.paged.PagedModel(PageCacheType, IdxMgr, SizeT, Policy);
+    const Model = wbpt.models.paged.PagedModel(PageCacheT, IdxMgr, SizeT, Policy);
     const ModelSettings = wbpt.models.paged.Settings;
     const Tree = wbpt.WeightedBpt(Model);
 
@@ -137,11 +137,11 @@ pub fn WeightedIndex(
         // Mirror Tree.Error (private): model errors ∪ the wbpt algorithm's own.
         pub const Error = Model.Error || errors.IteratorError || errors.BptError;
 
-        cache: *PageCacheType,
-        sm: *StorageManager,
+        cache: *PageCacheT,
+        sm: *StorageManagerT,
         settings: ModelSettings,
 
-        pub fn init(cache: *PageCacheType, mgr: *StorageManager, settings: anytype) Self {
+        pub fn init(cache: *PageCacheT, mgr: *StorageManagerT, settings: anytype) Self {
             var model_settings: ModelSettings = .{};
             if (@hasField(@TypeOf(settings), "index_leaf_page_kind")) {
                 model_settings.leaf_page_kind = settings.index_leaf_page_kind;

@@ -12,14 +12,14 @@ pub const Settings = struct {
     inode_page_kind: u16 = 1,
 };
 
-pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, comptime WeightT: type, comptime ValuePolicy: type) type {
+pub fn PagedModel(comptime PageCacheT: type, comptime StorageManagerT: type, comptime WeightT: type, comptime ValuePolicy: type) type {
     comptime {
-        contracts.storage_manager.requiresStorageManager(StorageManager);
-        contracts.page_cache.requiresPageCache(PageCacheType);
+        contracts.storage_manager.requiresStorageManager(StorageManagerT);
+        contracts.page_cache.requiresPageCache(PageCacheT);
     }
 
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
     const Weight = WeightT;
     const Index = u16;
@@ -36,8 +36,8 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
     };
 
     const Context = struct {
-        cache: *PageCacheType = undefined,
-        storage_mgr: *StorageManager = undefined,
+        cache: *PageCacheT = undefined,
+        storage_mgr: *StorageManagerT = undefined,
         settings: Settings = undefined,
     };
 
@@ -46,7 +46,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
         const Error = errors.HandleError ||
             errors.IndexError ||
-            PageCacheType.Error ||
+            PageCacheT.Error ||
             errors.PageError;
 
         ctx: *Context = undefined,
@@ -146,7 +146,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
-        PageCacheType.Error ||
+        PageCacheT.Error ||
         errors.OrderError ||
         errors.BptError;
 
@@ -661,7 +661,7 @@ pub fn PagedModel(comptime PageCacheType: type, comptime StorageManager: type, c
 
         accessor: AccessorType,
 
-        pub fn init(device: *PageCacheType, storage_mgr: *StorageManager, settings: Settings) Self {
+        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Self {
             const context = Context{
                 .cache = device,
                 .storage_mgr = storage_mgr,

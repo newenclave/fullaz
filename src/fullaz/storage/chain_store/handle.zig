@@ -13,64 +13,64 @@ pub const Settings = struct {
     index_inode_page_kind: u16 = 1,
 };
 
-pub fn Handle(comptime PageCacheType: type, comptime StorageManager: type, comptime Endian: std.builtin.Endian) type {
-    const PosType = StorageManager.Size;
-    const BlockDevice = PageCacheType.UnderlyingDevice;
+pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type, comptime Endian: std.builtin.Endian) type {
+    const PosType = StorageManagerT.Size;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
     const BlockIdType = BlockDevice.BlockId;
     const NoIndexImpl = weighted_index.NoIndex(BlockIdType, PosType);
 
-    return Indexed(PageCacheType, StorageManager, NoIndexImpl, Endian);
+    return Indexed(PageCacheT, StorageManagerT, NoIndexImpl, Endian);
 }
 
 pub fn HandleWeighted(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
     const IndexImpl = weighted_index.WeightedIndex(
-        PageCacheType,
-        StorageManager,
+        PageCacheT,
+        StorageManagerT,
         Endian,
     );
     return Indexed(
-        PageCacheType,
-        StorageManager,
+        PageCacheT,
+        StorageManagerT,
         IndexImpl,
         Endian,
     );
 }
 
 pub fn Indexed(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime IndexT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
     comptime {
-        interfaces.page_cache.requiresPageCache(PageCacheType);
-        requiresStorageManager(StorageManager);
+        interfaces.page_cache.requiresPageCache(PageCacheT);
+        requiresStorageManager(StorageManagerT);
         if (@hasDecl(IndexT, "requires_root")) {
-            requiresStorageManagerIndexRoot(StorageManager);
+            requiresStorageManagerIndexRoot(StorageManagerT);
         }
     }
 
-    const PosType = StorageManager.Size;
+    const PosType = StorageManagerT.Size;
     const Index = u16;
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
     const CommonPageViewConst = page_header.View(BlockIdType, Index, Endian, true);
     const ViewTypes = view.View(BlockIdType, Index, PosType, Endian, false);
     const ViewTypesConst = view.View(BlockIdType, Index, PosType, Endian, true);
 
-    const CommonErrors = PageCacheType.Error ||
-        StorageManager.Error ||
+    const CommonErrors = PageCacheT.Error ||
+        StorageManagerT.Error ||
         errors.HandleError;
 
     const Context = struct {
-        cache: *PageCacheType,
-        mgr: *StorageManager,
+        cache: *PageCacheT,
+        mgr: *StorageManagerT,
         settings: Settings,
     };
 
@@ -82,7 +82,7 @@ pub fn Indexed(
         const LinkTypeConst = ViewTypesConst.Link;
 
         const Error = errors.PageError ||
-            PageCacheType.Error;
+            PageCacheT.Error;
 
         handle: PageHandle,
         fn init(ph: PageHandle) Self {
@@ -120,7 +120,7 @@ pub fn Indexed(
 
     const Cursor = struct {
         const Self = @This();
-        pub const Error = PageCacheType.Error ||
+        pub const Error = PageCacheT.Error ||
             CommonErrors ||
             errors.PageError;
 
@@ -310,7 +310,7 @@ pub fn Indexed(
         const Self = @This();
 
         pub const Pid = BlockIdType;
-        pub const Error = PageCacheType.Error ||
+        pub const Error = PageCacheT.Error ||
             CommonErrors ||
             errors.PageError ||
             errors.IndexError ||
@@ -330,7 +330,7 @@ pub fn Indexed(
         index: IndexT,
 
         pub const View = view.View;
-        pub fn init(cache: *PageCacheType, mgr: *StorageManager, settings: Settings) Self {
+        pub fn init(cache: *PageCacheT, mgr: *StorageManagerT, settings: Settings) Self {
             const ctx = Context{
                 .cache = cache,
                 .mgr = mgr,
@@ -559,7 +559,7 @@ pub fn Indexed(
             return ph;
         }
 
-        pub fn totalSize(self: *const Self) Error!StorageManager.Size {
+        pub fn totalSize(self: *const Self) Error!StorageManagerT.Size {
             const total_size = try self.ctx.mgr.getTotalSize();
             return total_size;
         }
@@ -715,12 +715,12 @@ pub fn Indexed(
                     const ileft = @as(Index, @intCast(left));
                     var link = try cursor.getLinkMut();
                     link.setDataSize(current_size + ileft);
-                    try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManager.Size, ileft));
+                    try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManagerT.Size, ileft));
                     break;
                 } else {
                     var link = try cursor.getLinkMut();
                     link.setDataSize(max_size);
-                    try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManager.Size, @intCast(can_extend)));
+                    try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManagerT.Size, @intCast(can_extend)));
                     left -= @intCast(can_extend);
                     if (try cursor.hasNext()) {
                         try cursor.moveNext();
@@ -741,7 +741,7 @@ pub fn Indexed(
                 if (left < current_size) {
                     const total = try self.ctx.mgr.getTotalSize();
                     const new_total = total - left;
-                    try self.ctx.mgr.setTotalSize(@as(StorageManager.Size, @intCast(new_total)));
+                    try self.ctx.mgr.setTotalSize(@as(StorageManagerT.Size, @intCast(new_total)));
                     const new_current = current_size - @as(Index, @intCast(left));
                     try cursor.setCurrentDataSize(new_current);
                     if (self.g_pos.total_pos >= new_total) {
@@ -757,7 +757,7 @@ pub fn Indexed(
                     break;
                 }
                 left -= current_size;
-                try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() - @as(StorageManager.Size, @intCast(current_size)));
+                try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() - @as(StorageManagerT.Size, @intCast(current_size)));
 
                 if (!try cursor.hasPrev()) {
                     try self.ctx.mgr.setTotalSize(0);
@@ -793,7 +793,7 @@ pub fn Indexed(
             if (target_pos > current_size) {
                 pv.setSize(@intCast(target_pos));
                 const size_diff = target_pos - current_size;
-                try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManager.Size, @intCast(size_diff)));
+                try self.ctx.mgr.setTotalSize(try self.ctx.mgr.getTotalSize() + @as(StorageManagerT.Size, @intCast(size_diff)));
             }
             return target_len;
         }

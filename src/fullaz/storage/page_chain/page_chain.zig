@@ -29,21 +29,21 @@ pub fn BidirectionalView(
 }
 
 pub fn ForwardHandle(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime SubheaderT: type,
     comptime Endian: @import("std").builtin.Endian,
 ) type {
-    return ForwardHandleImpl(PageCacheType, StorageManager, void, SubheaderT, Endian);
+    return ForwardHandleImpl(PageCacheT, StorageManagerT, void, SubheaderT, Endian);
 }
 
 pub fn BidirectionalHandle(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime SubheaderT: type,
     comptime Endian: @import("std").builtin.Endian,
 ) type {
-    return BidirectionalHandleImpl(PageCacheType, StorageManager, void, SubheaderT, Endian);
+    return BidirectionalHandleImpl(PageCacheT, StorageManagerT, void, SubheaderT, Endian);
 }
 
 pub const Settings = struct {

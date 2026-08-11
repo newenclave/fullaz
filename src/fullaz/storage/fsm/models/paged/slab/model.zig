@@ -9,15 +9,15 @@ pub const Settings = struct {
 };
 
 pub fn Paged(
-    comptime PageCacheType: type,
+    comptime PageCacheT: type,
     comptime SlabStorageManagerT: type,
     comptime SizePolicyT: type,
     comptime LocationAccessorT: type,
 ) type {
     comptime assertLocationAccessor(LocationAccessorT);
 
-    const PidT = PageCacheType.UnderlyingDevice.BlockId;
-    const PageHandle = PageCacheType.Handle;
+    const PidT = PageCacheT.UnderlyingDevice.BlockId;
+    const PageHandle = PageCacheT.Handle;
     const SizeClassT = SizePolicyT.SizeClass;
 
     const View = view_mod.View(PidT, u16, SizeClassT, .little, false).SlabPageView;
@@ -50,7 +50,7 @@ pub fn Paged(
         const ClassChainManager = ClassChainManagerImpl;
 
         const PageChainHandle = page_chain.BidirectionalHandleImpl(
-            PageCacheType,
+            PageCacheT,
             ClassChainManager,
             void,
             View.SubheaderType,
@@ -64,12 +64,12 @@ pub fn Paged(
             View.Error ||
             errors.PageError;
 
-        cache: *PageCacheType,
+        cache: *PageCacheT,
         sm: *SlabStorageManagerT,
         policy: SizePolicyT,
         settings: Settings,
 
-        pub fn init(cache: *PageCacheType, sm: *SlabStorageManagerT, policy: SizePolicyT, settings: Settings) Self {
+        pub fn init(cache: *PageCacheT, sm: *SlabStorageManagerT, policy: SizePolicyT, settings: Settings) Self {
             return .{
                 .cache = cache,
                 .sm = sm,

@@ -14,27 +14,27 @@ pub const Settings = struct {
     leaf_base: u16 = 0,
 };
 
-pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, comptime Key: type, comptime ValueSize: usize) type {
+pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime Key: type, comptime ValueSize: usize) type {
     comptime {
-        contracts.storage_manager.requiresStorageManager(StorageManager);
-        contracts.page_cache.requiresPageCache(PageCacheType);
+        contracts.storage_manager.requiresStorageManager(StorageManagerT);
+        contracts.page_cache.requiresPageCache(PageCacheT);
     }
 
     const Context = struct {
-        cache: *PageCacheType = undefined,
-        storage_mgr: *StorageManager = undefined,
+        cache: *PageCacheT = undefined,
+        storage_mgr: *StorageManagerT = undefined,
         settings: Settings = undefined,
     };
 
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
-        PageCacheType.Error ||
+        PageCacheT.Error ||
         errors.BufferError ||
         errors.SpaceError ||
         errors.OrderError;
 
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
     const PageId = BlockIdType;
     const Index = u16;
@@ -429,7 +429,7 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
 
         accessor: Accessor = undefined,
 
-        pub fn init(device: *PageCacheType, storage_mgr: *StorageManager, settings: Settings) Self {
+        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Self {
             const inode_base = Inode.PageViewTypeConst.calculateSlotCapacity(device.pageSize(), 0);
             const leaf_base = Leaf.PageViewTypeConst.calculateSlotCapacity(device.pageSize(), 0);
 
