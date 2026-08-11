@@ -128,7 +128,7 @@ test "OrthTree paged model: structural nodes persist through accessor loads" {
     });
     defer model.deinit();
 
-    const accessor = model.getAccessor();
+    const accessor = model.accessor();
     var root = try accessor.createNode(Box.create(.{ 0, 0 }, .{ 10, 10 }));
     defer accessor.deinitNode(&root);
     const root_id = root.id();
@@ -294,7 +294,7 @@ test "OrthTree paged model: center-crossing entries span entry chunks" {
     }
     try std.testing.expectEqual(@as(usize, 12), try model.getEntriesCount());
 
-    const accessor = model.getAccessor();
+    const accessor = model.accessor();
     var root = try accessor.loadNode(storage_manager.root.?);
     defer accessor.deinitNode(&root);
     try std.testing.expect(!root.isLeaf());
@@ -362,9 +362,9 @@ test "OrthTree paged model: trait, entries, and root persist across cache reopen
         try std.testing.expectEqual(@as(usize, 2), try model.getEntriesCount());
 
         {
-            var root = try model.getAccessor().loadNode(storage_manager.root.?);
-            defer model.getAccessor().deinitNode(&root);
-            try std.testing.expectEqual(@as(u32, 2), root.getTrait().count.get());
+            var root = try model.accessor().loadNode(storage_manager.root.?);
+            defer model.accessor().deinitNode(&root);
+            try std.testing.expectEqual(@as(u32, 2), root.trait().count.get());
         }
 
         try tree.insert(Box.create(.{ 5, 5 }, .{ 6, 6 }), "third");
@@ -408,7 +408,7 @@ test "OrthTree paged model: paged FSM reopens and reuses partially filled node p
         defer fsm.deinit();
         var model = try Model.init(&cache, &storage_manager, &fsm, settings);
         defer model.deinit();
-        const accessor = model.getAccessor();
+        const accessor = model.accessor();
 
         {
             var root = try accessor.createNode(Box.create(.{ 0, 0 }, .{ 100, 100 }));
@@ -433,7 +433,7 @@ test "OrthTree paged model: paged FSM reopens and reuses partially filled node p
         {
             var root_page = try cache.fetch(storage_manager.root.?.page_id);
             defer root_page.deinit();
-            try std.testing.expect((try NodeLocationAccessor.read(try root_page.getData())) != null);
+            try std.testing.expect((try NodeLocationAccessor.read(try root_page.data())) != null);
         }
         try cache.flushAll();
     }
@@ -453,7 +453,7 @@ test "OrthTree paged model: paged FSM reopens and reuses partially filled node p
         try tree.query(Box.create(.{ 0, 0 }, .{ 100, 100 }), Counter.collect, &counter);
         try std.testing.expectEqual(@as(usize, 1), counter.count);
 
-        const accessor = model.getAccessor();
+        const accessor = model.accessor();
         try std.testing.expectError(error.OutOfBounds, accessor.loadNode(.{ .page_id = spilled_page_id, .slot_id = 1 }));
         {
             var reused = try accessor.createNode(Box.create(.{ 30, 30 }, .{ 40, 40 }));
@@ -493,11 +493,11 @@ test "OrthTree paged model: loader rejects a mismatched self pid without leaking
     const root_id = storage_manager.root.?;
     var page = try cache.fetch(root_id.page_id);
     defer page.deinit();
-    var header_view = HeaderView.init(try page.getDataMut());
+    var header_view = HeaderView.init(try page.dataMut());
     header_view.headerMut().self_pid.set(root_id.page_id + 1);
 
     const available_before = cache.availableFrames();
-    try std.testing.expectError(error.BadData, model.getAccessor().loadNode(root_id));
+    try std.testing.expectError(error.BadData, model.accessor().loadNode(root_id));
     try std.testing.expectEqual(available_before, cache.availableFrames());
 }
 
@@ -531,17 +531,17 @@ test "OrthTree paged model: loader rejects incompatible node page metadata witho
     const root_id = storage_manager.root.?;
     var page = try cache.fetch(root_id.page_id);
     defer page.deinit();
-    var node_page = PackedView.NodePage.init(try page.getDataMut());
+    var node_page = PackedView.NodePage.init(try page.dataMut());
     node_page.subheaderMut().layout_id.set(layout_id + 1);
 
     const available_before = cache.availableFrames();
-    try std.testing.expectError(error.BadData, model.getAccessor().loadNode(root_id));
+    try std.testing.expectError(error.BadData, model.accessor().loadNode(root_id));
     try std.testing.expectEqual(available_before, cache.availableFrames());
 
     node_page.subheaderMut().layout_id.set(layout_id);
     node_page.subheaderMut().fsm_location.page_id.set(1);
     node_page.subheaderMut().fsm_location.slot_id.setMax();
-    try std.testing.expectError(error.BadData, model.getAccessor().loadNode(root_id));
+    try std.testing.expectError(error.BadData, model.accessor().loadNode(root_id));
     try std.testing.expectEqual(available_before, cache.availableFrames());
 }
 
@@ -607,7 +607,7 @@ test "OrthTree paged model: three dimensional f32 nodes round-trip through pages
     var model = try C.Model.init(&cache, &storage_manager, &fsm, C.settings);
     defer model.deinit();
 
-    const accessor = model.getAccessor();
+    const accessor = model.accessor();
     const bounds = C.Box.create(.{ 1.5, -2.25, 3.125 }, .{ 9.5, 10.75, 11.0 });
     const node_id = blk: {
         var node = try accessor.createNode(bounds);
@@ -678,9 +678,9 @@ test "OrthTree paged model: three dimensional f32 insert, split, and reopen" {
         try std.testing.expect(probe.nodes > C.Tree.child_count);
         try std.testing.expect(probe.min_extent > 1.0);
 
-        var root = try model.getAccessor().loadNode(storage_manager.root.?);
-        defer model.getAccessor().deinitNode(&root);
-        try std.testing.expectEqual(count, root.getTrait().count.get());
+        var root = try model.accessor().loadNode(storage_manager.root.?);
+        defer model.accessor().deinitNode(&root);
+        try std.testing.expectEqual(count, root.trait().count.get());
 
         try cache.flushAll();
     }
@@ -705,9 +705,9 @@ test "OrthTree paged model: three dimensional f32 insert, split, and reopen" {
         try std.testing.expectEqual(@as(usize, count), counter.count);
         try std.testing.expectEqual(@as(usize, count), try model.getEntriesCount());
 
-        var root = try model.getAccessor().loadNode(storage_manager.root.?);
-        defer model.getAccessor().deinitNode(&root);
-        try std.testing.expectEqual(count, root.getTrait().count.get());
+        var root = try model.accessor().loadNode(storage_manager.root.?);
+        defer model.accessor().deinitNode(&root);
+        try std.testing.expectEqual(count, root.trait().count.get());
     }
 }
 
@@ -721,9 +721,9 @@ const GrowthFixture = struct {
     }
 
     fn rootTraitCount(model: *Model, root_id: StorageManager.NodeId) !u32 {
-        var root = try model.getAccessor().loadNode(root_id);
-        defer model.getAccessor().deinitNode(&root);
-        return root.getTrait().count.get();
+        var root = try model.accessor().loadNode(root_id);
+        defer model.accessor().deinitNode(&root);
+        return root.trait().count.get();
     }
 };
 

@@ -185,20 +185,20 @@ pub fn ViewForwardImpl(
         }
 
         pub fn getNext(self: *const Self) ?PageIdT {
-            const links = self.getLinks();
-            return LinkTrait.getNext(links);
+            const links_view = self.links();
+            return LinkTrait.getNext(links_view);
         }
 
         pub fn setNext(self: *Self, pid: ?PageIdT) void {
-            const links = self.getLinksMut();
-            LinkTrait.setNext(links, pid);
+            const links_view = self.linksMut();
+            LinkTrait.setNext(links_view, pid);
         }
 
-        fn getLinks(self: *const Self) *const LinkTrait.Storage {
+        fn links(self: *const Self) *const LinkTrait.Storage {
             return &self.page_view.header().additional.page_chain.links;
         }
 
-        fn getLinksMut(self: *Self) *LinkTrait.Storage {
+        fn linksMut(self: *Self) *LinkTrait.Storage {
             return &self.page_view.headerMut().additional.page_chain.links;
         }
     };
@@ -344,30 +344,30 @@ pub fn ViewBidirectionalImpl(
         }
 
         pub fn getPrev(self: *const Self) ?PageIdT {
-            const links = self.getLinks();
-            return LinkTrait.getPrev(links);
+            const links_view = self.links();
+            return LinkTrait.getPrev(links_view);
         }
 
         pub fn setPrev(self: *Self, pid: ?PageIdT) void {
-            const links = self.getLinksMut();
-            LinkTrait.setPrev(links, pid);
+            const links_view = self.linksMut();
+            LinkTrait.setPrev(links_view, pid);
         }
 
         pub fn getNext(self: *const Self) ?PageIdT {
-            const links = self.getLinks();
-            return LinkTrait.getNext(links);
+            const links_view = self.links();
+            return LinkTrait.getNext(links_view);
         }
 
         pub fn setNext(self: *Self, pid: ?PageIdT) void {
-            const links = self.getLinksMut();
-            LinkTrait.setNext(links, pid);
+            const links_view = self.linksMut();
+            LinkTrait.setNext(links_view, pid);
         }
 
-        fn getLinks(self: *const Self) *const LinkTrait.Storage {
+        fn links(self: *const Self) *const LinkTrait.Storage {
             return &self.page_view.header().additional.page_chain.links;
         }
 
-        fn getLinksMut(self: *Self) *LinkTrait.Storage {
+        fn linksMut(self: *Self) *LinkTrait.Storage {
             return &self.page_view.headerMut().additional.page_chain.links;
         }
     };

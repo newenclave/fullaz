@@ -112,7 +112,7 @@ test "Fs inspector recognizes v1 file-index page kinds" {
     {
         var handle = try cache.fetch(fsx.constants.superblock_pid);
         defer handle.deinit();
-        var sb = fsx.superblock.View(false).init(try handle.getDataMut());
+        var sb = fsx.superblock.View(false).init(try handle.dataMut());
         sb.headerMut().version.set(fsx.constants.legacy_version);
         try cache.flush(fsx.constants.superblock_pid);
     }

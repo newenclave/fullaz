@@ -21,7 +21,7 @@ pub fn ReclaimingCache(comptime InnerCache: type) type {
         pub fn init(inner: *InnerCache) Error!Self {
             var ph = try inner.fetch(constants.superblock_pid);
             defer ph.deinit();
-            const sb = superblock.View(true).init(try ph.getData());
+            const sb = superblock.View(true).init(try ph.data());
             return .{ .inner = inner, .freed_head = sb.getFreedHead() };
         }
 
@@ -33,7 +33,7 @@ pub fn ReclaimingCache(comptime InnerCache: type) type {
             self.freed_head = r;
             var ph = try self.inner.fetch(constants.superblock_pid);
             defer ph.deinit();
-            var sb = superblock.View(false).init(try ph.getDataMut());
+            var sb = superblock.View(false).init(try ph.dataMut());
             sb.setFreedHead(r);
             try self.inner.flush(constants.superblock_pid);
         }

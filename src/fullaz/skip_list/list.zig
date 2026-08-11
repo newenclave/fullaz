@@ -11,7 +11,7 @@ pub fn List(comptime ModelT: type) type {
         const Self = @This();
 
         const Model = ModelT;
-        const Accessor = ModelT.Accessor;
+        const AccessorType = ModelT.AccessorType;
 
         pub const KeyIn = Model.KeyIn;
         pub const KeyOut = Model.KeyOut;
@@ -45,7 +45,7 @@ pub fn List(comptime ModelT: type) type {
             }
 
             pub fn deinit(self: *Iterator) void {
-                var acc = self.list.getAccessor();
+                var acc = self.list.accessor();
                 switch (self.cursor) {
                     .before_first, .after_last => {},
                     .on => |*node| {
@@ -75,7 +75,7 @@ pub fn List(comptime ModelT: type) type {
                         .before_first => .before_first,
                         .after_last => .after_last,
                         .on => |*node| brk: {
-                            const acc = self.list.getAccessor();
+                            const acc = self.list.accessor();
                             const new_node = try acc.loadNode(node.id());
                             break :brk .{ .on = new_node };
                         },
@@ -84,7 +84,7 @@ pub fn List(comptime ModelT: type) type {
             }
 
             pub fn next(self: *Iterator) Error!bool {
-                var acc = self.list.getAccessor();
+                var acc = self.list.accessor();
                 switch (self.cursor) {
                     .before_first => {
                         if (try acc.getRoot(0)) |root_pid| {
@@ -130,7 +130,7 @@ pub fn List(comptime ModelT: type) type {
         pub fn deinit(_: *Self) void {}
 
         pub fn begin(self: *const Self) Error!Iterator {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
             if (try acc.getRoot(0)) |root_pid| {
                 const node = try acc.loadNode(root_pid);
                 return Iterator.init(self, .{ .on = node });
@@ -148,7 +148,7 @@ pub fn List(comptime ModelT: type) type {
             comptime keyDumper: ?fn (KeyOut) void,
             comptime valueDumper: ?fn (ValueOut) void,
         ) !void {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             const max_level = try self.model.getMaxLevel();
             for (0..max_level) |i| {
                 std.debug.print("=====\nlvl {d}: ", .{i});
@@ -178,7 +178,7 @@ pub fn List(comptime ModelT: type) type {
         }
 
         pub fn insert(self: *Self, key: KeyIn, value: ValueIn) Error!void {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             var new_node = try acc.createNode(key, value);
 
             defer acc.deinitNode(&new_node);
@@ -213,7 +213,7 @@ pub fn List(comptime ModelT: type) type {
         }
 
         pub fn remove(self: *Self, key: KeyIn) Error!void {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             var path = try self.createPath(key);
             defer acc.deinitPath(&path);
 
@@ -240,7 +240,7 @@ pub fn List(comptime ModelT: type) type {
         }
 
         pub fn removeItr(self: *Self, it: Iterator) Error!Iterator {
-            var acc = self.getAccessor();
+            var acc = self.accessor();
 
             var next = try it.clone();
             _ = next.next() catch {
@@ -265,7 +265,7 @@ pub fn List(comptime ModelT: type) type {
         }
 
         fn removeImpl(self: *Self, node: *Node) Error!void {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
 
             const level = try node.getLevel();
             for (0..level) |i| {
@@ -292,7 +292,7 @@ pub fn List(comptime ModelT: type) type {
         }
 
         pub fn find(self: *const Self, key: KeyIn) Error!Iterator {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             const default_iterator = Iterator.init(self, .after_last);
             const pid = try self.findElement(null, key, 0) orelse return default_iterator;
             var node = try acc.loadNode(pid);
@@ -308,14 +308,14 @@ pub fn List(comptime ModelT: type) type {
 
         pub fn contains(self: *Self, key: KeyIn) Error!bool {
             const pid = try self.findElement(null, key, 0) orelse return false;
-            var node = try self.getAccessor().loadNode(pid);
-            defer self.getAccessor().deinitNode(&node);
+            var node = try self.accessor().loadNode(pid);
+            defer self.accessor().deinitNode(&node);
             return self.model.keysCompare(key, try node.getKey()) == .eq;
         }
 
         fn createPath(self: *Self, key: KeyIn) Error!Path {
-            var path = try self.getAccessor().createPath();
-            errdefer self.getAccessor().deinitPath(&path);
+            var path = try self.accessor().createPath();
+            errdefer self.accessor().deinitPath(&path);
             const max_level = try self.model.getMaxLevel();
             var link: ?Pid = null;
             for (0..max_level) |i| {
@@ -327,7 +327,7 @@ pub fn List(comptime ModelT: type) type {
         }
 
         fn findElement(self: *const Self, from: ?Pid, key: KeyIn, level: usize) Error!?Pid {
-            const acc = self.getAccessor();
+            const acc = self.accessor();
             var prev: ?Pid = from;
             var curr: ?Pid = null;
             if (from) |pid| {
@@ -354,8 +354,8 @@ pub fn List(comptime ModelT: type) type {
             return prev;
         }
 
-        fn getAccessor(self: *const Self) *Accessor {
-            return self.model.getAccessor();
+        fn accessor(self: *const Self) *AccessorType {
+            return self.model.accessor();
         }
     };
 }

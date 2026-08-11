@@ -11,8 +11,8 @@ fn getFnInfo(comptime T: type) std.builtin.Type.Fn {
     };
 }
 
-pub fn CallbackResult(comptime Callback: type) type {
-    const fn_info = getFnInfo(Callback);
+pub fn CallbackResult(comptime CallbackT: type) type {
+    const fn_info = getFnInfo(CallbackT);
     const ret_ty = fn_info.return_type orelse
         @compileError("callback must have a return type");
 

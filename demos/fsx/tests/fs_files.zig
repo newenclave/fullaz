@@ -25,7 +25,7 @@ fn expectFileIndexLeafKind(format_version: u16, expected_kind: u16) !void {
     if (format_version != constants.version) {
         var ph = try cache.fetch(constants.superblock_pid);
         defer ph.deinit();
-        var sb = superblock.View(false).init(try ph.getDataMut());
+        var sb = superblock.View(false).init(try ph.dataMut());
         sb.headerMut().version.set(format_version);
         try cache.flush(constants.superblock_pid);
         f = try FsT.open(&cache, constants.default_block_size);
@@ -42,7 +42,7 @@ fn expectFileIndexLeafKind(format_version: u16, expected_kind: u16) !void {
     const index_root = roots.index.?;
     var ph = try cache.fetch(index_root);
     defer ph.deinit();
-    const page = fullaz.page.header.View(u32, u16, .little, true).init(try ph.getData());
+    const page = fullaz.page.header.View(u32, u16, .little, true).init(try ph.data());
     try std.testing.expectEqual(expected_kind, page.header().kind.get());
 
     var read_back: [10_000]u8 = undefined;

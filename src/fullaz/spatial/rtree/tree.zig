@@ -83,7 +83,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
 
         // ---- search: report values whose box overlaps the query window ---- //
         pub fn search(self: *Self, query: Key, ctx: anytype, cb: anytype) !void {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             const root = acc.getRoot() orelse {
                 return;
             };
@@ -92,7 +92,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
 
         // cb here is: fn(ctx: anytype, mbr: Key, value: ValueIn) anyerror!void //
         fn searchNode(self: *Self, id: Pid, query: Key, ctx: anytype, cb: anytype) !void {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             if (try acc.isLeafId(id)) {
                 var leaf = (try acc.loadLeaf(id)).?;
                 defer acc.deinitLeaf(leaf);
@@ -126,7 +126,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         }
 
         fn insertValue(self: *Self, mbr: Key, value: ValueIn, ctx: *InsertCtx) Error!void {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
 
             const root = acc.getRoot() orelse {
                 var leaf = try acc.createLeaf();
@@ -293,7 +293,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
 
         // Split in place: We dont need buffers for values anymore
         fn splitLeaf(self: *Self, leaf: *Leaf, new_mbr: Key, new_value: ValueIn) Error!Pid {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             const n = try leaf.size();
             const total = n + 1;
 
@@ -339,7 +339,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
 
         // Same in-place move for inodes
         fn splitInode(self: *Self, inode: *Inode, new_mbr: Key, new_child: Pid) Error!Pid {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             const n = try inode.size();
             const total = n + 1;
 
@@ -382,7 +382,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         }
 
         fn adjustTree(self: *Self, path: *Path, child_start: Pid, split_start: ?Pid, ctx: *InsertCtx) Error!void {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             var child_id = child_start;
             var split = split_start;
 
@@ -424,7 +424,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         }
 
         fn nodeMbrOf(self: *Self, id: Pid) Error!Key {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             if (try acc.isLeafId(id)) {
                 var l = (try acc.loadLeaf(id)).?;
                 defer acc.deinitLeaf(l);
@@ -436,7 +436,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         }
 
         fn levelOf(self: *Self, id: Pid) Error!usize {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             if (try acc.isLeafId(id)) {
                 return 0;
             }
@@ -446,7 +446,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         }
 
         pub fn height(self: *Self) Error!usize {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             const root = acc.getRoot() orelse {
                 return 0;
             };
@@ -461,7 +461,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         };
 
         pub fn remove(self: *Self, query: Key, ctx: anytype, matches: anytype) Error!bool {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             const root = acc.getRoot() orelse {
                 return false;
             };
@@ -482,7 +482,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         }
 
         fn findLeaf(self: *Self, id: Pid, query: Key, ctx: anytype, matches: anytype, path: *Path) Error!?Hit {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             if (try acc.isLeafId(id)) {
                 var leaf = (try acc.loadLeaf(id)).?;
                 defer acc.deinitLeaf(leaf);
@@ -517,7 +517,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         }
 
         fn condenseTree(self: *Self, path: *Path, leaf_id: Pid) Error!void {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
 
             // The one under-full leaf is detached but NOT destroyed
             // the  page stays valid and we reinsert its entries straight from it.
@@ -639,7 +639,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         }
 
         fn insertSubtree(self: *Self, mbr: Key, child_id: Pid, target_level: usize, ctx: *InsertCtx) Error!void {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
 
             const root = acc.getRoot() orelse {
                 try acc.setRoot(child_id);

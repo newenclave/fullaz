@@ -6,8 +6,8 @@ const errors = @import("../../../core/errors.zig");
 const wbpt_page = @import("../../../page/weighted_bpt.zig");
 const algorithm = @import("../../../core/algorithm.zig");
 
-pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
-    const WBptPage = wbpt_page.WeightedBpt(PageIdT, IndexT, Weight, Endian);
+pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime WeightT: type, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+    const WBptPage = wbpt_page.WeightedBpt(PageIdT, IndexT, WeightT, Endian);
 
     const HeaderPageView = header.View(PageIdT, IndexT, Endian, read_only);
     const SlotsDirType = slots.Variadic(IndexT, Endian, read_only);
@@ -21,13 +21,13 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
         errors.SlotsError;
 
     const WeightValue = struct {
-        weight: Weight,
+        weight: WeightT,
         value: []const u8,
     };
 
     const ChildWeightValue = struct {
         child: PageIdT,
-        weight: Weight,
+        weight: WeightT,
     };
 
     const LeafSubheaderType = WBptPage.LeafSubheader;
@@ -169,7 +169,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             return (try self.slotsDir()).canInsert3(a + header_size, b + header_size, c + header_size);
         }
 
-        pub fn insert(self: *Self, index: usize, weight: Weight, value: []const u8) ErrorSet!void {
+        pub fn insert(self: *Self, index: usize, weight: WeightT, value: []const u8) ErrorSet!void {
             const hdr_size = @sizeOf(SlotHeaderType);
             const total_size: usize = hdr_size + value.len;
             var slot_dir = try self.slotsDirMut();
@@ -197,7 +197,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             return try slot_dir.canUpdate(pos, total_size);
         }
 
-        pub fn update(self: *Self, pos: usize, weight: Weight, value: []const u8, tmp_buf: []u8) ErrorSet!void {
+        pub fn update(self: *Self, pos: usize, weight: WeightT, value: []const u8, tmp_buf: []u8) ErrorSet!void {
             const new_total_size = @sizeOf(SlotHeaderType) + value.len;
 
             if (tmp_buf.len < new_total_size) {
@@ -306,7 +306,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             }
         }
 
-        pub fn insert(self: *Self, index: usize, child_page_id: PageIdT, weight: Weight) ErrorSet!void {
+        pub fn insert(self: *Self, index: usize, child_page_id: PageIdT, weight: WeightT) ErrorSet!void {
             const slot_size = @sizeOf(SlotHeaderType);
             var slot_dir = try self.slotsDirMut();
 
@@ -342,7 +342,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             };
         }
 
-        pub fn updateWeight(self: *Self, pos: usize, new_weight: Weight) ErrorSet!void {
+        pub fn updateWeight(self: *Self, pos: usize, new_weight: WeightT) ErrorSet!void {
             var slot_dir = try self.slotsDirMut();
             const buffer = try slot_dir.getMut(pos);
             var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
@@ -361,7 +361,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Weight: type
             slot.child.set(new_child);
         }
 
-        pub fn canInsert(self: *const Self, _: usize, _: Weight) ErrorSet!AvailableStatus {
+        pub fn canInsert(self: *const Self, _: usize, _: WeightT) ErrorSet!AvailableStatus {
             const slot_size = @sizeOf(SlotHeaderType);
             const slot_dir = try self.slotsDir();
             return try slot_dir.canInsert(slot_size);

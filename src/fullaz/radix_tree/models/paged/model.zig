@@ -14,37 +14,37 @@ pub const Settings = struct {
     leaf_base: u16 = 0,
 };
 
-pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, comptime Key: type, comptime ValueSize: usize) type {
+pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime KeyT: type, comptime ValueSize: usize) type {
     comptime {
-        contracts.storage_manager.requiresStorageManager(StorageManager);
-        contracts.page_cache.requiresPageCache(PageCacheType);
+        contracts.storage_manager.requiresStorageManager(StorageManagerT);
+        contracts.page_cache.requiresPageCache(PageCacheT);
     }
 
     const Context = struct {
-        cache: *PageCacheType = undefined,
-        storage_mgr: *StorageManager = undefined,
+        cache: *PageCacheT = undefined,
+        storage_mgr: *StorageManagerT = undefined,
         settings: Settings = undefined,
     };
 
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
-        PageCacheType.Error ||
+        PageCacheT.Error ||
         errors.BufferError ||
         errors.SpaceError ||
         errors.OrderError;
 
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
     const PageId = BlockIdType;
     const Index = u16;
     const ValueInType = []const u8;
     const ValueOutType = ValueInType;
 
-    const ViewType = radix_page.View(PageId, Index, Key, ValueSize, .little, false);
-    const ConstViewType = radix_page.View(PageId, Index, Key, ValueSize, .little, true);
+    const ViewType = radix_page.View(PageId, Index, KeyT, ValueSize, .little, false);
+    const ConstViewType = radix_page.View(PageId, Index, KeyT, ValueSize, .little, true);
 
-    const SplitterType = KeySplitter(Key);
+    const SplitterType = KeySplitter(KeyT);
 
     const SplitKeyImpl = struct {
         const Self = @This();
@@ -115,12 +115,12 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
         }
 
         pub fn size(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.size());
         }
 
         pub fn capacity(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.capacity());
         }
 
@@ -128,53 +128,53 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
             return PageViewTypeConst.calculateSlotCapacity(page_size, metadata_len);
         }
 
-        pub fn set(self: *Self, key: Key, value: ValueInType) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+        pub fn set(self: *Self, key: KeyT, value: ValueInType) Error!void {
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.set(key, value);
         }
 
-        pub fn get(self: *const Self, key: Key) Error!ValueOutType {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+        pub fn get(self: *const Self, key: KeyT) Error!ValueOutType {
+            var view = PageViewTypeConst.init(try self.handle.data());
             return try view.get(key);
         }
 
-        pub fn isSet(self: *const Self, key: Key) Error!bool {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+        pub fn isSet(self: *const Self, key: KeyT) Error!bool {
+            var view = PageViewTypeConst.init(try self.handle.data());
             return try view.isSet(key);
         }
 
-        pub fn free(self: *Self, key: Key) ErrorSet!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+        pub fn free(self: *Self, key: KeyT) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.free(key);
         }
 
         pub fn setParent(self: *Self, parent_id: ?PageId) ErrorSet!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setParent(parent_id);
         }
 
         pub fn getParent(self: *const Self) ErrorSet!?PageId {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+            var view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParent();
         }
 
-        pub fn setParentQuotient(self: *Self, quotient: Key) ErrorSet!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+        pub fn setParentQuotient(self: *Self, quotient: KeyT) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setParentQuotient(quotient);
         }
 
-        pub fn getParentQuotient(self: *const Self) ErrorSet!Key {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+        pub fn getParentQuotient(self: *const Self) ErrorSet!KeyT {
+            var view = PageViewTypeConst.init(try self.handle.data());
             return view.subheader().parent_quotient.get();
         }
 
-        pub fn setParentId(self: *Self, idx: Key) ErrorSet!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+        pub fn setParentId(self: *Self, idx: KeyT) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setParentIdx(idx);
         }
 
-        pub fn getParentId(self: *const Self) ErrorSet!Key {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+        pub fn getParentId(self: *const Self) ErrorSet!KeyT {
+            var view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParentIdx();
         }
     };
@@ -208,12 +208,12 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
         }
 
         pub fn size(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.size());
         }
 
         pub fn capacity(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.capacity());
         }
 
@@ -221,63 +221,63 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
             return PageViewTypeConst.calculateSlotCapacity(page_size, metadata_len);
         }
 
-        pub fn set(self: *Self, key: Key, child_id: PageId) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+        pub fn set(self: *Self, key: KeyT, child_id: PageId) Error!void {
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.set(key, child_id);
         }
 
-        pub fn get(self: *const Self, key: Key) Error!PageId {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+        pub fn get(self: *const Self, key: KeyT) Error!PageId {
+            var view = PageViewTypeConst.init(try self.handle.data());
             return try view.get(key);
         }
 
-        pub fn isSet(self: *const Self, key: Key) Error!bool {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+        pub fn isSet(self: *const Self, key: KeyT) Error!bool {
+            var view = PageViewTypeConst.init(try self.handle.data());
             return try view.isSet(key);
         }
 
-        pub fn free(self: *Self, key: Key) ErrorSet!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+        pub fn free(self: *Self, key: KeyT) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.free(key);
         }
 
         pub fn setParent(self: *Self, parent_id: ?PageId) ErrorSet!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setParent(parent_id);
         }
 
         pub fn getParent(self: *const Self) ErrorSet!?PageId {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+            var view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParent();
         }
 
-        pub fn setParentQuotient(self: *Self, quotient: Key) ErrorSet!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+        pub fn setParentQuotient(self: *Self, quotient: KeyT) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setParentQuotient(quotient);
         }
 
-        pub fn getParentQuotient(self: *const Self) ErrorSet!Key {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+        pub fn getParentQuotient(self: *const Self) ErrorSet!KeyT {
+            var view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParentQuotient();
         }
 
-        pub fn setParentId(self: *Self, idx: Key) ErrorSet!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+        pub fn setParentId(self: *Self, idx: KeyT) ErrorSet!void {
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setParentIdx(idx);
         }
 
-        pub fn getParentId(self: *const Self) ErrorSet!Key {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+        pub fn getParentId(self: *const Self) ErrorSet!KeyT {
+            var view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParentIdx();
         }
 
         pub fn setLevel(self: *Self, level: usize) ErrorSet!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             try view.setLevel(level);
         }
 
         pub fn getLevel(self: *const Self) ErrorSet!usize {
-            var view = PageViewTypeConst.init(try self.handle.getData());
+            var view = PageViewTypeConst.init(try self.handle.data());
             return try view.getLevel();
         }
     };
@@ -319,7 +319,7 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
             if (root_id) |id| {
                 var ph = try self.ctx.cache.fetch(id);
                 defer ph.deinit();
-                var view = ConstViewType.InodeSubheaderView.init(try ph.getData());
+                var view = ConstViewType.InodeSubheaderView.init(try ph.data());
                 try view.check();
                 return try view.getLevel();
             }
@@ -330,7 +330,7 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            var page_view = LeafImpl.PageViewType.init(try ph.getDataMut());
+            var page_view = LeafImpl.PageViewType.init(try ph.dataMut());
             try page_view.formatPage(self.ctx.settings.leaf_page_kind, pid, 0);
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
         }
@@ -339,7 +339,7 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const pid = try ph.pid();
-            var view = LeafImpl.PageViewTypeConst.init(try ph.getData());
+            var view = LeafImpl.PageViewTypeConst.init(try ph.data());
             if (view.page_view.header().kind.get() != self.ctx.settings.leaf_page_kind) {
                 return Error.BadType;
             }
@@ -355,7 +355,7 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
         pub fn isLeaf(self: *const Self, id: BlockIdType) ErrorSet!bool {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
-            var view = LeafImpl.PageViewTypeConst.init(try ph.getData());
+            var view = LeafImpl.PageViewTypeConst.init(try ph.data());
             return view.page_view.header().kind.get() == self.ctx.settings.leaf_page_kind;
         }
 
@@ -363,7 +363,7 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            var page_view = InodeImpl.PageViewType.init(try ph.getDataMut());
+            var page_view = InodeImpl.PageViewType.init(try ph.dataMut());
             try page_view.formatPage(self.ctx.settings.inode_page_kind, pid, 0);
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
@@ -372,7 +372,7 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const pid = try ph.pid();
-            var view = InodeImpl.PageViewTypeConst.init(try ph.getData());
+            var view = InodeImpl.PageViewTypeConst.init(try ph.data());
             if (view.page_view.header().kind.get() != self.ctx.settings.inode_page_kind) {
                 return Error.BadType;
             }
@@ -385,12 +385,12 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
             inode.* = undefined;
         }
 
-        pub fn splitKey(self: *const Self, key: Key) Error!SplitKeyResult {
+        pub fn splitKey(self: *const Self, key: KeyT) Error!SplitKeyResult {
             const maximum_levels = self.splitter.maximum_levels;
             var tmp_page = try self.ctx.cache.getTemporaryPage();
             errdefer tmp_page.deinit();
 
-            var aligned_slice = try sliceAligned(try tmp_page.getDataMut(), maximum_levels);
+            var aligned_slice = try sliceAligned(try tmp_page.dataMut(), maximum_levels);
 
             const res = try self.splitter.split(key, aligned_slice);
             return SplitKeyResult.init(tmp_page, aligned_slice[0..res.len]);
@@ -417,19 +417,19 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
         const Self = @This();
         pub const Leaf = LeafImpl;
         pub const Inode = InodeImpl;
-        pub const Accessor = AccessorImpl;
-        pub const SplitKeyResult = Accessor.SplitKeyResult;
-        pub const KeyIn = Key;
-        pub const KeyOut = Key;
+        pub const AccessorType = AccessorImpl;
+        pub const SplitKeyResult = AccessorType.SplitKeyResult;
+        pub const KeyIn = KeyT;
+        pub const KeyOut = KeyT;
         pub const ValueIn = ValueInType;
         pub const ValueOut = ValueOutType;
         pub const Pid = PageId;
 
         pub const Error = ErrorSet;
 
-        accessor: Accessor = undefined,
+        accessor_state: AccessorType = undefined,
 
-        pub fn init(device: *PageCacheType, storage_mgr: *StorageManager, settings: Settings) Self {
+        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Self {
             const inode_base = Inode.PageViewTypeConst.calculateSlotCapacity(device.pageSize(), 0);
             const leaf_base = Leaf.PageViewTypeConst.calculateSlotCapacity(device.pageSize(), 0);
 
@@ -446,21 +446,25 @@ pub fn Model(comptime PageCacheType: type, comptime StorageManager: type, compti
                 },
             };
             return .{
-                .accessor = AccessorImpl.init(context),
+                .accessor_state = AccessorImpl.init(context),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor.deinit();
+            self.accessor_state.deinit();
             self.* = undefined;
         }
 
         pub fn effectiveSettings(self: *const Self) Settings {
-            return self.accessor.ctx.settings;
+            return self.accessor_state.ctx.settings;
         }
 
         pub fn getSettings(self: *const Self) *const Settings {
-            return &self.accessor.ctx.settings;
+            return &self.accessor_state.ctx.settings;
+        }
+
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
     };
 }

@@ -6,50 +6,50 @@ pub fn HeaderLocationAccessor(
     comptime PageIdT: type,
     comptime IndexT: type,
     comptime Endian: @import("std").builtin.Endian,
-    comptime Additional: type,
+    comptime AdditionalT: type,
     comptime field_name: []const u8,
 ) type {
-    const Trait = Additional.traitType(field_name);
-    const ReadView = header.ViewImpl(PageIdT, IndexT, Additional, Endian, true);
-    const WriteView = header.ViewImpl(PageIdT, IndexT, Additional, Endian, false);
+    const TraitT = AdditionalT.traitType(field_name);
+    const ReadView = header.ViewImpl(PageIdT, IndexT, AdditionalT, Endian, true);
+    const WriteView = header.ViewImpl(PageIdT, IndexT, AdditionalT, Endian, false);
 
     comptime {
-        if (!@hasDecl(Trait, "Location")) {
+        if (!@hasDecl(TraitT, "Location")) {
             @compileError("FSM location trait must declare Location");
         }
-        requiresFnSignature(Trait, "get", fn (*const Trait.Storage) ?Trait.Location);
-        requiresFnSignature(Trait, "set", fn (*Trait.Storage, Trait.Location) void);
-        requiresFnSignature(Trait, "clear", fn (*Trait.Storage) void);
-        requiresFnSignature(Trait, "validate", fn (*const Trait.Storage) bool);
+        requiresFnSignature(TraitT, "get", fn (*const TraitT.Storage) ?TraitT.Location);
+        requiresFnSignature(TraitT, "set", fn (*TraitT.Storage, TraitT.Location) void);
+        requiresFnSignature(TraitT, "clear", fn (*TraitT.Storage) void);
+        requiresFnSignature(TraitT, "validate", fn (*const TraitT.Storage) bool);
     }
 
     const Accessor = struct {
-        pub const Location = Trait.Location;
+        pub const Location = TraitT.Location;
         pub const Error = ReadView.Error;
 
         pub fn read(page: []const u8) Error!?Location {
             const view = ReadView.init(page);
             try view.validateTyped();
 
-            const storage = Additional.field(view.additional(), field_name);
-            if (!Trait.validate(storage)) {
+            const storage = AdditionalT.field(view.additional(), field_name);
+            if (!TraitT.validate(storage)) {
                 return Error.InconsistentLayout;
             }
-            return Trait.get(storage);
+            return TraitT.get(storage);
         }
 
         pub fn write(page: []u8, location: Location) Error!void {
             var view = WriteView.init(page);
             try view.validateTyped();
 
-            Trait.set(Additional.fieldMut(view.additionalMut(), field_name), location);
+            TraitT.set(AdditionalT.fieldMut(view.additionalMut(), field_name), location);
         }
 
         pub fn clear(page: []u8) Error!void {
             var view = WriteView.init(page);
             try view.validateTyped();
 
-            Trait.clear(Additional.fieldMut(view.additionalMut(), field_name));
+            TraitT.clear(AdditionalT.fieldMut(view.additionalMut(), field_name));
         }
     };
 

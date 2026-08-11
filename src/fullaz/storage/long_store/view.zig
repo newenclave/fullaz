@@ -92,11 +92,11 @@ pub fn View(
             return self.pageViewMut().dataMut();
         }
 
-        pub fn getLink(self: *const Self) LinkTypeConst {
+        pub fn link(self: *const Self) LinkTypeConst {
             return LinkTypeConst.init(&self.subheader().link);
         }
 
-        pub fn getLinkMut(self: *Self) LinkType {
+        pub fn linkMut(self: *Self) LinkType {
             if (read_only) {
                 @compileError("Cannot get mutable link from a read-only view");
             }
@@ -197,11 +197,11 @@ pub fn View(
             return self.pageViewMut().dataMut();
         }
 
-        pub fn getLink(self: *const Self) LinkTypeConst {
+        pub fn link(self: *const Self) LinkTypeConst {
             return LinkTypeConst.init(&self.subheader().link);
         }
 
-        pub fn getLinkMut(self: *Self) LinkType {
+        pub fn linkMut(self: *Self) LinkType {
             if (read_only) {
                 @compileError("Cannot get mutable link from a read-only view");
             }

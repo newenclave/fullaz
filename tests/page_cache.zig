@@ -41,7 +41,7 @@ test "PageCache: fetch loads page from device" {
     var handle = try cache.fetch(0);
     defer handle.deinit();
 
-    const data = try handle.getData();
+    const data = try handle.data();
     try testing.expectEqual(@as(u8, 0xAB), data[0]);
     try testing.expectEqual(@as(u8, 0xCD), data[1]);
 }
@@ -86,7 +86,7 @@ test "PageCache: create allocates new page" {
     try testing.expectEqual(initial_blocks + 1, device.blocksCount());
 
     // Data should be zeroed
-    const data = try handle.getData();
+    const data = try handle.data();
     for (data) |byte| {
         try testing.expectEqual(@as(u8, 0), byte);
     }
@@ -108,7 +108,7 @@ test "PageCache: markDirty and flush" {
     defer handle.deinit();
 
     // Modify data
-    (try handle.getDataMut())[0] = 0xFF;
+    (try handle.dataMut())[0] = 0xFF;
 
     // Flush
     try cache.flush(0);
@@ -204,7 +204,7 @@ test "PageCache: dirty page writeback on eviction" {
     // Fetch and modify page 0
     {
         var h0 = try cache.fetch(0);
-        (try h0.getDataMut())[0] = 0x42;
+        (try h0.dataMut())[0] = 0x42;
         h0.deinit();
     }
 
@@ -291,7 +291,7 @@ test "PageCache: layout lock is exclusive and pins the frame" {
 
     handle.deinit();
     try testing.expectEqual(@as(usize, 0), cache.availableFrames());
-    try testing.expectEqual(@as(usize, 256), (try lock.getData()).len);
+    try testing.expectEqual(@as(usize, 256), (try lock.data()).len);
 }
 
 test "PageCache: layout lock release allows another lock" {
@@ -331,12 +331,12 @@ test "PageCache: flushAll writes all dirty pages" {
     // Fetch and modify multiple pages
     {
         var h0 = try cache.fetch(0);
-        (try h0.getDataMut())[0] = 0x11;
+        (try h0.dataMut())[0] = 0x11;
         h0.deinit();
     }
     {
         var h1 = try cache.fetch(1);
-        (try h1.getDataMut())[0] = 0x22;
+        (try h1.dataMut())[0] = 0x22;
         h1.deinit();
     }
 
@@ -434,7 +434,7 @@ test "PageCache batch: commit publishes, nothing flushes before commit" {
     {
         var h = try cache.create();
         defer h.deinit();
-        (try h.getDataMut())[0] = 0xAA;
+        (try h.dataMut())[0] = 0xAA;
     }
     try cache.flushAll();
     try testing.expectEqual(@as(u8, 0xAA), device.storage.items[0]);
@@ -443,7 +443,7 @@ test "PageCache batch: commit publishes, nothing flushes before commit" {
     {
         var h = try cache.fetch(0);
         defer h.deinit();
-        (try h.getDataMut())[0] = 0xBB;
+        (try h.dataMut())[0] = 0xBB;
     }
     // Still the old byte on disk mid-batch.
     try testing.expectEqual(@as(u8, 0xAA), device.storage.items[0]);
@@ -465,7 +465,7 @@ test "PageCache batch: discard reverts content and file growth" {
     {
         var h = try cache.create();
         defer h.deinit();
-        (try h.getDataMut())[0] = 0xAA;
+        (try h.dataMut())[0] = 0xAA;
     }
     try cache.flushAll();
     const blocks_before = device.blocksCount();
@@ -474,15 +474,15 @@ test "PageCache batch: discard reverts content and file growth" {
     {
         var h = try cache.fetch(0);
         defer h.deinit();
-        (try h.getDataMut())[0] = 0xBB;
+        (try h.dataMut())[0] = 0xBB;
     }
     {
         var h1 = try cache.create();
         defer h1.deinit();
-        (try h1.getDataMut())[0] = 0xCC;
+        (try h1.dataMut())[0] = 0xCC;
         var h2 = try cache.create();
         defer h2.deinit();
-        (try h2.getDataMut())[0] = 0xDD;
+        (try h2.dataMut())[0] = 0xDD;
     }
     try testing.expectEqual(blocks_before + 2, device.blocksCount());
 
@@ -495,7 +495,7 @@ test "PageCache batch: discard reverts content and file growth" {
     // Re-fetch reads the original bytes from disk.
     var h = try cache.fetch(0);
     defer h.deinit();
-    try testing.expectEqual(@as(u8, 0xAA), (try h.getData())[0]);
+    try testing.expectEqual(@as(u8, 0xAA), (try h.data())[0]);
 }
 
 test "PageCache batch: dirty overflow returns BatchTooLarge" {

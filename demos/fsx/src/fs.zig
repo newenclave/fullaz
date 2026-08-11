@@ -45,7 +45,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
             if (pid != constants.superblock_pid) {
                 return Error.NotFreshDevice;
             }
-            var sb = superblock.View(false).init(try ph.getDataMut());
+            var sb = superblock.View(false).init(try ph.dataMut());
             sb.format(block_size);
             try cache.flush(constants.superblock_pid);
             return .{
@@ -58,7 +58,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
         pub fn open(cache: *PageCacheType, block_size: u32) !Self {
             var ph = try cache.fetch(constants.superblock_pid);
             defer ph.deinit();
-            const sb = superblock.View(true).init(try ph.getData());
+            const sb = superblock.View(true).init(try ph.data());
             try sb.validate(block_size);
             return .{
                 .cache = try Cache.init(cache),
@@ -78,7 +78,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
         pub fn getRootDirRoot(self: *Self) !?PageId {
             var ph = try self.cache.fetch(constants.superblock_pid);
             defer ph.deinit();
-            const sb = superblock.View(true).init(try ph.getData());
+            const sb = superblock.View(true).init(try ph.data());
             return sb.getRootDirRoot();
         }
 
@@ -108,7 +108,7 @@ pub fn Fs(comptime PageCacheType: type, comptime PathPolicy: type) type {
         pub fn setRootDirRoot(self: *Self, pid: ?PageId) !void {
             var ph = try self.cache.fetch(constants.superblock_pid);
             defer ph.deinit();
-            var sb = superblock.View(false).init(try ph.getDataMut());
+            var sb = superblock.View(false).init(try ph.dataMut());
             sb.setRootDirRoot(pid);
             try self.cache.flush(constants.superblock_pid);
         }

@@ -6,13 +6,13 @@ const errors = @import("../../core/errors.zig");
 pub const Settings = page_chain.Settings;
 
 pub fn Handle(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
     return HandleImpl(
-        PageCacheType,
-        StorageManager,
+        PageCacheT,
+        StorageManagerT,
         void,
         void,
         void,
@@ -21,18 +21,18 @@ pub fn Handle(
 }
 
 pub fn HandleImpl(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime FsmT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
     const FsmError = if (FsmT != void) FsmT.Error else error{};
-    const PosType = StorageManager.Size;
+    const PosType = StorageManagerT.Size;
     _ = PosType;
     const IndexT = u16;
-    const BlockDevice = PageCacheType.UnderlyingDevice;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
     const BlockIdType = BlockDevice.BlockId;
 
     const ViewType = view.ViewImpl(BlockIdType, IndexT, AdditionalT, Endian, false);
@@ -45,8 +45,8 @@ pub fn HandleImpl(
     const ChunkViewConst = ViewTypeConst.Chunk;
 
     const PageChainHandle = page_chain.HandleImpl(
-        PageCacheType,
-        StorageManager,
+        PageCacheT,
+        StorageManagerT,
         AdditionalT,
         SubheaderT,
         false,
@@ -76,7 +76,7 @@ pub fn HandleImpl(
 
     const ChunkHandle = struct {
         const Self = @This();
-        pub const Error = PageCacheType.Error || ViewTypeConst.Error;
+        pub const Error = PageCacheT.Error || ViewTypeConst.Error;
 
         pub const PageChainChunk = PageChainHandle.Chunk;
 
@@ -87,11 +87,11 @@ pub fn HandleImpl(
         }
 
         pub fn view(self: *const Self) Error!ChunkViewConst {
-            return ChunkViewConst.init(try self.ph.getPage());
+            return ChunkViewConst.init(try self.ph.page());
         }
 
         pub fn viewMut(self: *Self) Error!ChunkView {
-            return ChunkView.init(try self.ph.getPageMut());
+            return ChunkView.init(try self.ph.pageMut());
         }
 
         pub fn slotsDir(self: *const Self) Error!SlotsDirConst {
@@ -149,11 +149,11 @@ pub fn HandleImpl(
         slot_id: usize,
         page: ?PageChainHandle.Chunk,
         fsm: ?*FsmT,
-        manager: *StorageManager,
+        manager: *StorageManagerT,
 
         pub fn value(self: *const Self) Error![]const u8 {
             if (self.page) |*p| {
-                const sd = try SlotsDirConst.init(try p.getData());
+                const sd = try SlotsDirConst.init(try p.data());
                 return sd.get(self.slot_id);
             }
             return Error.InvalidIterator;
@@ -161,7 +161,7 @@ pub fn HandleImpl(
 
         pub fn clean(self: *Self) Error!bool {
             if (self.page) |*p| {
-                var sd = try SlotsDir.init(try p.getDataMut());
+                var sd = try SlotsDir.init(try p.dataMut());
                 if (self.slot_id >= sd.size()) {
                     self.deinitPage();
                     return false;
@@ -219,13 +219,13 @@ pub fn HandleImpl(
         page_itr: PageChainHandle.Iterator,
         cursor: Cursor,
         fsm: ?*FsmT,
-        manager: *StorageManager,
+        manager: *StorageManagerT,
 
         fn init(
             page_itr: PageChainHandle.Iterator,
             cursor: Cursor,
             fsm: ?*FsmT,
-            manager: *StorageManager,
+            manager: *StorageManagerT,
         ) Self {
             return .{
                 .page_itr = page_itr,
@@ -295,7 +295,7 @@ pub fn HandleImpl(
             var page = (try self.page_itr.cloneChunk()) orelse return Error.InvalidIterator;
             errdefer page.deinit();
 
-            var sd = try SlotsDir.init(try page.getDataMut());
+            var sd = try SlotsDir.init(try page.dataMut());
             try sd.setFlags(slot_id, @intCast(@intFromEnum(SlotsFlags.tombstone)));
             return .{
                 .page_id = try page.id(),
@@ -359,9 +359,9 @@ pub fn HandleImpl(
         pub const Iterator = IteratorImpl;
         pub const PendingRemoval = PendingRemovalImpl;
         pub const Error = PageChainHandle.Error ||
-            PageCacheType.Error ||
+            PageCacheT.Error ||
             ViewType.Error ||
-            StorageManager.Error ||
+            StorageManagerT.Error ||
             FsmError;
         pub const ValueIn = []const u8;
         pub const ValueOut = []const u8;
@@ -370,8 +370,8 @@ pub fn HandleImpl(
         last_chunk: ?ChunkHandle = null,
 
         pub fn init(
-            page_cache: *PageCacheType,
-            storage_manager: *StorageManager,
+            page_cache: *PageCacheT,
+            storage_manager: *StorageManagerT,
             settings: Settings,
         ) Error!Self {
             return .{
@@ -389,8 +389,8 @@ pub fn HandleImpl(
         }
 
         pub fn initWithFsm(
-            page_cache: *PageCacheType,
-            storage_manager: *StorageManager,
+            page_cache: *PageCacheT,
+            storage_manager: *StorageManagerT,
             fsm: *FsmT,
             settings: Settings,
         ) Error!Self {
@@ -423,7 +423,7 @@ pub fn HandleImpl(
                 return;
             };
             defer tmp.deinit();
-            sv.compactWithBuffer(try tmp.getDataMut()) catch {
+            sv.compactWithBuffer(try tmp.dataMut()) catch {
                 try sv.compactInPlace();
             };
         }

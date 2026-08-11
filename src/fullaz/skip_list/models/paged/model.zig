@@ -12,15 +12,15 @@ pub const Settings = struct {
 };
 
 pub fn Paged(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime FsmT: type,
     comptime AdditionalT: type,
     comptime cmp: anytype,
-    comptime Ctx: type,
+    comptime CtxT: type,
 ) type {
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
     const KeyT = []const u8;
@@ -28,17 +28,17 @@ pub fn Paged(
 
     const NodeViewMut = SubheaderView(BlockIdType, u16, AdditionalT, .little, false);
     const NodeViewConst = SubheaderView(BlockIdType, u16, AdditionalT, .little, true);
-    const SlotWrapperConst = NodeViewConst.SlotWrapperConst;
-    const SlotWrapper = NodeViewMut.SlotWrapperConst;
+    const ConstSlotWrapper = NodeViewConst.ConstSlotWrapper;
+    const SlotWrapper = NodeViewMut.ConstSlotWrapper;
 
     const ContextImpl = struct {
         const Self = @This();
         settings: Settings,
         rng: std.Random = undefined,
-        cache: *PageCacheType = undefined,
-        storage: *StorageManager = undefined,
+        cache: *PageCacheT = undefined,
+        storage: *StorageManagerT = undefined,
         fsm: *FsmT = undefined,
-        cmp_ctx: Ctx = undefined,
+        cmp_ctx: CtxT = undefined,
         allocator: std.mem.Allocator = undefined,
     };
 
@@ -103,7 +103,7 @@ pub fn Paged(
     const NodeImpl = struct {
         const Self = @This();
 
-        pub const Error = PageCacheType.Error || errors.SlotsError;
+        pub const Error = PageCacheT.Error || errors.SlotsError;
         pub const KeyIn = KeyT;
         pub const ValueIn = ValueT;
         pub const KeyOut = KeyT;
@@ -130,25 +130,25 @@ pub fn Paged(
         }
 
         pub fn getKey(self: *const Self) Error!KeyOut {
-            const view = NodeViewConst.init(try self.ph.getData());
+            const view = NodeViewConst.init(try self.ph.data());
             const sw = try view.get(self.pid.slot_id);
             return sw.key;
         }
 
         pub fn getValue(self: *const Self) Error!ValueOut {
-            const view = NodeViewConst.init(try self.ph.getData());
+            const view = NodeViewConst.init(try self.ph.data());
             const sw = try view.get(self.pid.slot_id);
             return sw.value;
         }
 
         pub fn getLevel(self: *const Self) Error!usize {
-            const view = NodeViewConst.init(try self.ph.getData());
+            const view = NodeViewConst.init(try self.ph.data());
             const sw = try view.get(self.pid.slot_id);
             return @as(usize, sw.header().level);
         }
 
-        fn getLevelRef(self: *const Self, level: usize) Error!*const SlotWrapperConst.LevelRef {
-            const view = NodeViewConst.init(try self.ph.getData());
+        fn getLevelRef(self: *const Self, level: usize) Error!*const ConstSlotWrapper.LevelRef {
+            const view = NodeViewConst.init(try self.ph.data());
             const sw = try view.get(self.pid.slot_id);
             const current_level = @as(usize, sw.header().level);
             if (level >= current_level) {
@@ -158,7 +158,7 @@ pub fn Paged(
         }
 
         fn getLevelRefMut(self: *Self, level: usize) Error!*SlotWrapper.LevelRef {
-            var view = NodeViewMut.init(try self.ph.getDataMut());
+            var view = NodeViewMut.init(try self.ph.dataMut());
             const sw = try view.getMut(self.pid.slot_id);
             const current_level = @as(usize, sw.header().level);
             if (level >= current_level) {
@@ -225,8 +225,8 @@ pub fn Paged(
         pub const KeyIn = KeyT;
         pub const ValueIn = ValueT;
         pub const Pid = PidImpl;
-        pub const Error = PageCacheType.Error ||
-            StorageManager.Error ||
+        pub const Error = PageCacheT.Error ||
+            StorageManagerT.Error ||
             FsmT.Error ||
             errors.SlotsError;
         pub const Path = PathImpl;
@@ -260,7 +260,7 @@ pub fn Paged(
         }
 
         pub fn checkCompactPage(self: *Self, ph: *PageHandle, key: KeyT, value: ValueT, level_field: usize) Error!bool {
-            var fview = NodeViewMut.init(try ph.getDataMut());
+            var fview = NodeViewMut.init(try ph.dataMut());
             const pos = try fview.entries();
             const available = try fview.canInsert(pos, key, value, level_field);
             if (available == .need_compact) {
@@ -269,7 +269,7 @@ pub fn Paged(
                     return true;
                 };
                 defer tmp_page.deinit();
-                try fview.compact(try tmp_page.getDataMut());
+                try fview.compact(try tmp_page.dataMut());
                 return true;
             }
             return available == .enough;
@@ -306,7 +306,7 @@ pub fn Paged(
             }
             errdefer ph.deinit();
 
-            var view = NodeViewMut.init(try ph.getDataMut());
+            var view = NodeViewMut.init(try ph.dataMut());
             const slot_id = try view.entries();
             const sbytes = try view.reserveGet(slot_id, slot_bytes);
 
@@ -334,7 +334,7 @@ pub fn Paged(
             var ph = try self.context.cache.fetch(pid.page_id);
             errdefer ph.deinit();
 
-            const view = NodeViewConst.init(try ph.getData());
+            const view = NodeViewConst.init(try ph.data());
             if (view.header().kind.get() != self.context.settings.node_page_kind) {
                 return Error.BadType;
             }
@@ -371,7 +371,7 @@ pub fn Paged(
         fn destroyImpl(self: *Self, pid: PidImpl) Error!void {
             var ph = try self.context.cache.fetch(pid.page_id);
             defer ph.deinit();
-            var view = NodeViewMut.init(try ph.getDataMut());
+            var view = NodeViewMut.init(try ph.dataMut());
             var sdir = try view.slotsDirMut();
             try sdir.free(pid.slot_id);
             const free: u16 = @intCast(try sdir.availableAfterCompact());
@@ -386,7 +386,7 @@ pub fn Paged(
             var ph = try self.context.cache.create();
             errdefer ph.deinit();
             const pid = try ph.pid();
-            var view = NodeViewMut.init(try ph.getDataMut());
+            var view = NodeViewMut.init(try ph.dataMut());
             try view.formatPage(self.context.settings.node_page_kind, pid, 0);
             return ph;
         }
@@ -410,7 +410,7 @@ pub fn Paged(
             errors.NotFoundError ||
             errors.SetError;
 
-        pub const Accessor = AccessorImpl;
+        pub const AccessorType = AccessorImpl;
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
 
@@ -421,19 +421,19 @@ pub fn Paged(
         pub const ValueOut = ValueIn;
         pub const Path = PathImpl;
 
-        accessor: AccessorImpl,
+        accessor_state: AccessorType,
 
         pub fn init(
-            device: *PageCacheType,
-            storage_mgr: *StorageManager,
+            device: *PageCacheT,
+            storage_mgr: *StorageManagerT,
             fsm: *FsmT,
             settings: Settings,
-            ctx: Ctx,
+            ctx: CtxT,
             rng: std.Random,
             allocator: std.mem.Allocator,
         ) Self {
             return Self{
-                .accessor = AccessorImpl.init(ContextImpl{
+                .accessor_state = AccessorImpl.init(ContextImpl{
                     .settings = settings,
                     .rng = rng,
                     .cache = device,
@@ -446,26 +446,26 @@ pub fn Paged(
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor = undefined; // Clear the accessor to release references to resources.
+            self.accessor_state = undefined; // Clear the accessor to release references to resources.
         }
 
         pub fn getMaxLevel(self: *const Self) Error!usize {
-            return self.accessor.context.settings.max_level;
+            return self.accessor_state.context.settings.max_level;
         }
 
-        pub fn getAccessor(self: *Self) *AccessorImpl {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn keysCompare(self: *const Self, k1: KeyIn, k2: KeyIn) std.math.Order {
-            const CmpReturnType = @TypeOf(cmp(self.accessor.context.cmp_ctx, k1, k2));
+            const CmpReturnType = @TypeOf(cmp(self.accessor_state.context.cmp_ctx, k1, k2));
             const is_error_union = @typeInfo(CmpReturnType) == .error_union;
 
             const order = blk: {
                 if (comptime is_error_union) {
-                    break :blk cmp(self.accessor.context.cmp_ctx, k1, k2) catch return .eq;
+                    break :blk cmp(self.accessor_state.context.cmp_ctx, k1, k2) catch return .eq;
                 } else {
-                    break :blk cmp(self.accessor.context.cmp_ctx, k1, k2);
+                    break :blk cmp(self.accessor_state.context.cmp_ctx, k1, k2);
                 }
             };
             return order;
@@ -480,7 +480,7 @@ pub fn Paged(
         }
     };
 
-    //const BlockDevice = PageCacheType.UnderlyingDevice;
-    // const PageHandle = PageCacheType.Handle;
+    //const BlockDevice = PageCacheT.UnderlyingDevice;
+    // const PageHandle = PageCacheT.Handle;
     // const BlockIdType = BlockDevice.BlockId;
 }

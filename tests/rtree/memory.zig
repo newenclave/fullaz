@@ -20,7 +20,7 @@ test "rtree memory model satisfies the contract" {
 test "rtree memory model: leaf create/insert/read/nodeMbr" {
     var m = try Model.init(testing.allocator);
     defer m.deinit();
-    const acc = m.getAccessor();
+    const acc = m.accessor();
 
     var leaf = try acc.createLeaf();
     defer acc.deinitLeaf(leaf);
@@ -47,7 +47,7 @@ test "rtree memory model: leaf create/insert/read/nodeMbr" {
 test "rtree memory model: leaf fills to capacity then reports full" {
     var m = try Model.init(testing.allocator);
     defer m.deinit();
-    const acc = m.getAccessor();
+    const acc = m.accessor();
     var leaf = try acc.createLeaf();
     defer acc.deinitLeaf(leaf);
 
@@ -64,7 +64,7 @@ test "rtree memory model: leaf fills to capacity then reports full" {
 test "rtree memory model: inode children, level, updateChildMbr, parent" {
     var m = try Model.init(testing.allocator);
     defer m.deinit();
-    const acc = m.getAccessor();
+    const acc = m.accessor();
 
     var child = try acc.createLeaf();
     defer acc.deinitLeaf(child);
@@ -90,7 +90,7 @@ test "rtree memory model: inode children, level, updateChildMbr, parent" {
 test "rtree memory model: load kind mismatch is null, isLeafId, destroy, root" {
     var m = try Model.init(testing.allocator);
     defer m.deinit();
-    const acc = m.getAccessor();
+    const acc = m.accessor();
 
     var leaf = try acc.createLeaf();
     const leaf_id = leaf.id();

@@ -27,16 +27,16 @@ pub fn Settings(comptime CoordT: type) type {
 }
 
 pub fn PagedModel(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime FsmT: type,
     comptime CoordT: type,
     comptime dims: usize,
     comptime Endian: std.builtin.Endian,
 ) type {
     return PagedModelImpl(
-        PageCacheType,
-        StorageManager,
+        PageCacheT,
+        StorageManagerT,
         FsmT,
         CoordT,
         dims,
@@ -46,8 +46,8 @@ pub fn PagedModel(
 }
 
 pub fn PagedModelImpl(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime FsmT: type,
     comptime CoordT: type,
     comptime dims: usize,
@@ -58,8 +58,8 @@ pub fn PagedModelImpl(
     const SettingsT = Settings(CoordT);
     const TraitPolicy = TraitT(CoordT, dims, Value);
     const TraitStorage = TraitPolicy.Storage;
-    const Pid = PageCacheType.Pid;
-    const PageHandle = PageCacheType.Handle;
+    const Pid = PageCacheT.Pid;
+    const PageHandle = PageCacheT.Handle;
     const BoxT = geometry.BoundingBox(CoordT, dims);
     const OrthtreePage = orthtree_page.Orthtree(
         Pid,
@@ -95,12 +95,12 @@ pub fn PagedModelImpl(
     const ReadNodeSlot = ReadPackedView.NodeSlot;
 
     comptime {
-        contracts.page_cache.requiresPageCache(PageCacheType);
-        orthtree_interfaces.requiresPagedStorageManager(StorageManager, NativeNodeId);
+        contracts.page_cache.requiresPageCache(PageCacheT);
+        orthtree_interfaces.requiresPagedStorageManager(StorageManagerT, NativeNodeId);
         requiresTypeDeclaration(FsmT, "Pid");
         requiresTypeDeclaration(FsmT, "Size");
         requiresErrorDeclaration(FsmT, "Error");
-        if (StorageManager.PageId != Pid) {
+        if (StorageManagerT.PageId != Pid) {
             @compileError("Orthtree storage manager PageId must match page cache Pid");
         }
         if (FsmT.Pid != Pid) {
@@ -138,8 +138,8 @@ pub fn PagedModelImpl(
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
         errors.IteratorError ||
-        PageCacheType.Error ||
-        StorageManager.Error ||
+        PageCacheT.Error ||
+        StorageManagerT.Error ||
         FsmT.Error ||
         MutableNodePage.Error ||
         TraitPolicy.Error ||
@@ -196,7 +196,7 @@ pub fn PagedModelImpl(
     const EntryChainHandle = struct {
         fn call(comptime NodeT: type) type {
             const Handle = slot_chain.HandleImpl(
-                PageCacheType,
+                PageCacheT,
                 NodeT,
                 void,
                 void,
@@ -367,7 +367,7 @@ pub fn PagedModelImpl(
                     }
                     var temporary = try self.node.cache.getTemporaryPage();
                     defer temporary.deinit();
-                    const data = try temporary.getDataMut();
+                    const data = try temporary.dataMut();
                     const entry_len = entry_slot_header_size + value.len;
                     if (entry_len > data.len) {
                         return error.ValueTooLarge;
@@ -436,16 +436,16 @@ pub fn PagedModelImpl(
 
         handle: PageHandle,
         self_id: NativeNodeId,
-        cache: *PageCacheType,
-        storage_manager: *StorageManager,
+        cache: *PageCacheT,
+        storage_manager: *StorageManagerT,
         fsm: *FsmT,
         settings: SettingsT,
 
         fn init(
             handle: PageHandle,
             self_id: NativeNodeId,
-            cache: *PageCacheType,
-            storage_manager: *StorageManager,
+            cache: *PageCacheT,
+            storage_manager: *StorageManagerT,
             fsm: *FsmT,
             settings: SettingsT,
         ) Self {
@@ -460,7 +460,7 @@ pub fn PagedModelImpl(
         }
 
         fn readView(self: *const Self) Error!ReadNodeSlot {
-            const page = ReadNodePage.init(try self.handle.getData());
+            const page = ReadNodePage.init(try self.handle.data());
             try page.validatePage(self.self_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
             const slot = try page.slot(self.self_id.slot_id);
             try slot.validate();
@@ -472,7 +472,7 @@ pub fn PagedModelImpl(
         }
 
         fn mutableView(self: *Self) Error!MutableNodeSlot {
-            var page = MutableNodePage.init(try self.handle.getDataMut());
+            var page = MutableNodePage.init(try self.handle.dataMut());
             try page.validatePage(self.self_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
             return try page.slotMut(self.self_id.slot_id);
         }
@@ -595,11 +595,11 @@ pub fn PagedModelImpl(
             return try EntriesMut.init(self);
         }
 
-        pub fn getTrait(self: *const Self) *const Trait {
+        pub fn trait(self: *const Self) *const Trait {
             return self.readViewUnchecked().trait();
         }
 
-        pub fn getTraitMut(self: *Self) Error!*Trait {
+        pub fn traitMut(self: *Self) Error!*Trait {
             var view = try self.mutableView();
             return view.traitMut();
         }
@@ -612,15 +612,15 @@ pub fn PagedModelImpl(
 
         pub const Error = ErrorSet;
 
-        cache: *PageCacheType,
-        storage_manager: *StorageManager,
+        cache: *PageCacheT,
+        storage_manager: *StorageManagerT,
         fsm: *FsmT,
         settings: SettingsT,
         trait_template: TraitStorage,
 
         fn init(
-            cache: *PageCacheType,
-            storage_manager: *StorageManager,
+            cache: *PageCacheT,
+            storage_manager: *StorageManagerT,
             fsm: *FsmT,
             settings: SettingsT,
             trait_template: TraitStorage,
@@ -656,7 +656,7 @@ pub fn PagedModelImpl(
                 try self.cache.create();
             errdefer handle.deinit();
             const page_id = try handle.pid();
-            var page = MutableNodePage.init(try handle.getDataMut());
+            var page = MutableNodePage.init(try handle.dataMut());
             const is_new = found_page == null;
             if (is_new) {
                 try page.formatPage(self.settings.node_page_kind, page_id, self.settings.node_layout_id);
@@ -685,7 +685,7 @@ pub fn PagedModelImpl(
         pub fn loadNode(self: *Self, node_id: NativeNodeId) Error!NodeImpl {
             var handle = try self.cache.fetch(node_id.page_id);
             errdefer handle.deinit();
-            const page = ReadNodePage.init(try handle.getData());
+            const page = ReadNodePage.init(try handle.data());
             try page.validatePage(node_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
             const slot = try page.slot(node_id.slot_id);
             try slot.validate();
@@ -713,7 +713,7 @@ pub fn PagedModelImpl(
         pub const Node = NodeImpl;
         pub const Entry = EntryImpl;
         pub const NodeId = NativeNodeId;
-        pub const Accessor = AccessorImpl;
+        pub const AccessorType = AccessorImpl;
         pub const Box = BoxT;
         pub const ValueIn = Value;
         pub const ValueOut = Value;
@@ -722,17 +722,17 @@ pub fn PagedModelImpl(
         pub const Error = ErrorSet;
         pub const Settings = SettingsT;
 
-        accessor: Accessor,
+        accessor_state: AccessorType,
 
-        pub fn init(cache: *PageCacheType, storage_manager: *StorageManager, fsm: *FsmT, settings: SettingsT) Error!Self {
+        pub fn init(cache: *PageCacheT, storage_manager: *StorageManagerT, fsm: *FsmT, settings: SettingsT) Error!Self {
             var trait_template: Trait = undefined;
             TraitPolicy.format(&trait_template);
             return Self.initWithTrait(cache, storage_manager, fsm, settings, trait_template);
         }
 
         pub fn initWithTrait(
-            cache: *PageCacheType,
-            storage_manager: *StorageManager,
+            cache: *PageCacheT,
+            storage_manager: *StorageManagerT,
             fsm: *FsmT,
             settings: SettingsT,
             trait_template: Trait,
@@ -757,30 +757,30 @@ pub fn PagedModelImpl(
                 return Error.BadData;
             }
             return .{
-                .accessor = Accessor.init(cache, storage_manager, fsm, settings, trait_template),
+                .accessor_state = AccessorType.init(cache, storage_manager, fsm, settings, trait_template),
             };
         }
 
         pub fn deinit(_: *Self) void {}
 
-        pub fn getAccessor(self: *Self) *Accessor {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn incrementEntriesCount(self: *Self) Error!void {
-            const count = try self.accessor.storage_manager.getEntriesCount();
+            const count = try self.accessor_state.storage_manager.getEntriesCount();
             const next = std.math.add(usize, count, 1) catch return Error.BadData;
-            try self.accessor.storage_manager.setEntriesCount(next);
+            try self.accessor_state.storage_manager.setEntriesCount(next);
         }
 
         pub fn decrementEntriesCount(self: *Self) Error!void {
-            const count = try self.accessor.storage_manager.getEntriesCount();
+            const count = try self.accessor_state.storage_manager.getEntriesCount();
             const next = std.math.sub(usize, count, 1) catch return Error.BadData;
-            try self.accessor.storage_manager.setEntriesCount(next);
+            try self.accessor_state.storage_manager.setEntriesCount(next);
         }
 
         pub fn getEntriesCount(self: *const Self) Error!usize {
-            return self.accessor.storage_manager.getEntriesCount();
+            return self.accessor_state.storage_manager.getEntriesCount();
         }
 
         pub fn valueOutAsIn(_: *const Self, value: ValueOut) ValueIn {
@@ -803,22 +803,22 @@ pub fn PagedModelImpl(
 
         pub fn onInsert(self: *Self, node: *Node, bounds: Box, value: ValueIn) Error!void {
             _ = self;
-            try TraitPolicy.onInsert(try node.getTraitMut(), bounds, value);
+            try TraitPolicy.onInsert(try node.traitMut(), bounds, value);
         }
 
         pub fn onGrow(self: *Self, node: *Node, new_root: *Node) Error!void {
             _ = self;
-            try TraitPolicy.onGrow(try new_root.getTraitMut(), node.getTrait());
+            try TraitPolicy.onGrow(try new_root.traitMut(), node.trait());
         }
 
         pub fn onAdopt(self: *Self, _: *Node, target: *Node, bounds: Box, value: ValueIn) Error!void {
             _ = self;
-            try TraitPolicy.onAdopt(try target.getTraitMut(), bounds, value);
+            try TraitPolicy.onAdopt(try target.traitMut(), bounds, value);
         }
 
         pub fn onRemove(self: *Self, node: *Node, bounds: Box, value: ValueIn) Error!void {
             _ = self;
-            try TraitPolicy.onRemove(try node.getTraitMut(), bounds, value);
+            try TraitPolicy.onRemove(try node.traitMut(), bounds, value);
         }
     };
 }

@@ -16,7 +16,7 @@ const RC = ReclaimingCache(PageCache);
 fn formatSuperblock(cache: *PageCache) !void {
     var ph = try cache.create();
     defer ph.deinit();
-    var sb = superblock.View(false).init(try ph.getDataMut());
+    var sb = superblock.View(false).init(try ph.dataMut());
     sb.format(4096);
     try cache.flush(constants.superblock_pid);
 }

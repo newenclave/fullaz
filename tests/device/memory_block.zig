@@ -224,7 +224,7 @@ test "DevMemBlock: PageCache preserves a non-zero device prefix" {
     var page = try cache.create();
     defer page.deinit();
     try std.testing.expectEqual(@as(u32, 0), try page.pid());
-    @memcpy((try page.getDataMut())[0..5], "hello");
+    @memcpy((try page.dataMut())[0..5], "hello");
     try cache.flushAll();
 
     try std.testing.expectEqualSlices(u8, &(.{0xD3} ** start_position), mem_block.storage.items[0..start_position]);

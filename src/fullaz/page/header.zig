@@ -43,20 +43,20 @@ pub fn HeaderImpl(
     comptime IndexT: type,
     comptime HeaderSizeT: type,
     comptime VersionT: type,
-    comptime Additional: type,
+    comptime AdditionalT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
-    const PageIdType = PackedInt(PageIdT, Endian);
-    const IndexType = PackedInt(IndexT, Endian);
+    const PackedPageId = PackedInt(PageIdT, Endian);
+    const PackedIndex = PackedInt(IndexT, Endian);
     const UInt16 = PackedInt(u16, Endian);
     const UInt32 = PackedInt(u32, Endian);
     const Version = PackedInt(VersionT, Endian);
     const HeaderSize = PackedInt(HeaderSizeT, Endian);
 
-    const has_additional_v = Additional != void;
+    const has_additional_v = AdditionalT != void;
 
     comptime {
-        if (has_additional_v and @alignOf(Additional) != 1) {
+        if (has_additional_v and @alignOf(AdditionalT) != 1) {
             @compileError("Page header Additional must have alignment 1");
         }
     }
@@ -67,12 +67,12 @@ pub fn HeaderImpl(
         kind: UInt16,
         version: Version,
         header_size: HeaderSize,
-        subheader_size: IndexType,
-        metadata_size: IndexType,
-        page_end: IndexType,
-        self_pid: PageIdType,
+        subheader_size: PackedIndex,
+        metadata_size: PackedIndex,
+        page_end: PackedIndex,
+        self_pid: PackedPageId,
         crc: UInt32,
-        additional: Additional = if (has_additional_v) undefined else {},
+        additional: AdditionalT = if (has_additional_v) undefined else {},
     };
 }
 

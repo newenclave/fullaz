@@ -74,7 +74,7 @@ pub fn VariadicImpl(
 
         pub const Entry = EntryHeader;
         pub const EntrySlice = []Entry;
-        pub const EntrySliceConst = []const Entry;
+        pub const ConstEntrySlice = []const Entry;
         pub const FlagsMask = FLAGS_MASK;
 
         pub const Error = errors.SlotsError;
@@ -113,11 +113,11 @@ pub fn VariadicImpl(
             if (read_only) {
                 @compileError("Cannot format header on const buffer");
             }
-            var header = self.headerMut();
-            header.entry_count.set(0);
-            header.free_begin.set(@intCast(@sizeOf(Header)));
-            header.free_end.set(@intCast(self.dataEnd()));
-            header.freed.set(0);
+            var header_ptr = self.headerMut();
+            header_ptr.entry_count.set(0);
+            header_ptr.free_begin.set(@intCast(@sizeOf(Header)));
+            header_ptr.free_end.set(@intCast(self.dataEnd()));
+            header_ptr.freed.set(0);
         }
 
         pub fn fullSlotSize(obj_len: usize) usize {
@@ -130,9 +130,9 @@ pub fn VariadicImpl(
         }
 
         pub fn availableSpace(self: *const Self) usize {
-            const header = self.headerConst();
-            const free_begin = header.free_begin.get();
-            const free_end = header.free_end.get();
+            const header_ptr = self.header();
+            const free_begin = header_ptr.free_begin.get();
+            const free_end = header_ptr.free_end.get();
             return @intCast(free_end - free_begin);
         }
 
@@ -142,7 +142,7 @@ pub fn VariadicImpl(
         }
 
         pub fn usedSpace(self: *const Self) Error!usize {
-            const slots = self.entriesConst();
+            const slots = self.entries();
             var used = slots.len * @sizeOf(Entry);
             for (slots) |*s| {
                 if (slotOffset(s.offset.get()) == SLOT_INVALID) {
@@ -194,7 +194,7 @@ pub fn VariadicImpl(
         }
 
         pub fn get(self: *const Self, entry: usize) Error![]const u8 {
-            const slots = self.entriesConst();
+            const slots = self.entries();
             if (entry >= slots.len) {
                 return Error.OutOfBounds;
             }
@@ -233,7 +233,7 @@ pub fn VariadicImpl(
         }
 
         pub fn findFreeEntry(self: *const Self) ?usize {
-            const slots = self.entriesConst();
+            const slots = self.entries();
             for (slots, 0..) |s, i| {
                 if (slotOffset(s.offset.get()) == SLOT_INVALID) {
                     return i;
@@ -326,7 +326,7 @@ pub fn VariadicImpl(
 
         pub fn canUpdate(self: *const Self, entry: usize, len: usize) Error!AvailableStatus {
             const fix_len: usize = @as(usize, self.fixLength(@as(T, @intCast(len))));
-            const slots = self.entriesConst();
+            const slots = self.entries();
             if (entry >= slots.len) {
                 return Error.OutOfBounds;
             }
@@ -389,7 +389,7 @@ pub fn VariadicImpl(
         }
 
         pub fn canMergeWithAdditional(self: *const Self, other: *const Self, add_size: usize) !AvailableStatus {
-            const other_slots = other.entriesConst();
+            const other_slots = other.entries();
             const fixed_add_size = if (add_size == 0) 0 else @as(usize, self.fixLength(@as(T, @intCast(add_size))));
             const full_add_size = (fixed_add_size + @as(usize, if (fixed_add_size == 0) 0 else @sizeOf(Entry)));
             var needed: usize = full_add_size;
@@ -418,12 +418,12 @@ pub fn VariadicImpl(
             }
 
             const len = data.len;
-            const buf = self.reserveGetAt(self.entriesConst().len, len) catch |err| {
+            const buf = self.reserveGetAt(self.entries().len, len) catch |err| {
                 return err;
             };
             const buf_fixed = buf[0..len];
             @memcpy(buf_fixed, data);
-            return self.entriesConst().len - 1;
+            return self.entries().len - 1;
         }
 
         pub fn insertAt(self: *Self, pos: usize, data: []const u8) Error!void {
@@ -493,7 +493,7 @@ pub fn VariadicImpl(
 
             const base_end: T = @intCast(self.dataEnd());
 
-            const old_data_beg: T = self.headerConst().free_end.get();
+            const old_data_beg: T = self.header().free_end.get();
 
             var cursor: T = base_end;
             var free_end: T = base_end;
@@ -554,7 +554,7 @@ pub fn VariadicImpl(
             );
         }
 
-        pub fn headerConst(self: *const Self) *const Header {
+        pub fn header(self: *const Self) *const Header {
             return @ptrCast(&self.body[0]);
         }
 
@@ -566,7 +566,7 @@ pub fn VariadicImpl(
         pub fn resizeGet(self: *Self, pos: usize, len: usize) Error![]u8 {
             if (read_only) @compileError("Cannot insert into const buffer");
 
-            if (pos > self.entriesConst().len) {
+            if (pos > self.entries().len) {
                 return Error.OutOfBounds;
             }
 
@@ -605,7 +605,7 @@ pub fn VariadicImpl(
         }
 
         pub fn reserveGet(self: *Self, len: usize) Error![]u8 {
-            const slots = self.entriesConst();
+            const slots = self.entries();
             return self.reserveGetExpand(slots.len, len, true);
         }
 
@@ -614,7 +614,7 @@ pub fn VariadicImpl(
                 @compileError("Cannot insert into const buffer");
             }
 
-            if (pos > self.entriesConst().len) {
+            if (pos > self.entries().len) {
                 return Error.OutOfBounds;
             }
 
@@ -669,18 +669,18 @@ pub fn VariadicImpl(
             var slots = self.entriesMut();
             slots[pos].length.set(@as(T, @intCast(len)));
             const flags = if (need_slot) 0 else slotFlags(slots[pos].offset.get());
-            slots[pos].offset.set(encodeSlotOffset(self.headerConst().free_end.get(), flags));
+            slots[pos].offset.set(encodeSlotOffset(self.header().free_end.get(), flags));
 
             return buf;
         }
 
         pub fn size(self: *const Self) usize {
-            const header = self.headerConst();
-            return @as(usize, @intCast(header.entry_count.get()));
+            const header_ptr = self.header();
+            return @as(usize, @intCast(header_ptr.entry_count.get()));
         }
 
         pub fn getFlags(self: *const Self, entry: usize) Error!T {
-            const slots = self.entriesConst();
+            const slots = self.entries();
             if (entry >= slots.len) {
                 return Error.OutOfBounds;
             }
@@ -700,19 +700,19 @@ pub fn VariadicImpl(
             );
         }
 
-        pub fn entriesConst(self: *const Self) EntrySliceConst {
-            const header = self.headerConst();
+        pub fn entries(self: *const Self) ConstEntrySlice {
+            const header_ptr = self.header();
             const first_entry_ptr: [*]const Entry = @ptrCast(&self.body[@sizeOf(Header)]);
-            return first_entry_ptr[0..header.entry_count.get()];
+            return first_entry_ptr[0..header_ptr.entry_count.get()];
         }
 
         pub fn entriesMut(self: *Self) EntrySlice {
             if (read_only) {
                 @compileError("Cannot get mutable entries from const buffer");
             }
-            const header = self.headerConst();
+            const header_ptr = self.header();
             const first_entry_ptr: [*]Entry = @ptrCast(&self.body[@sizeOf(Header)]);
-            return first_entry_ptr[0..header.entry_count.get()];
+            return first_entry_ptr[0..header_ptr.entry_count.get()];
         }
 
         fn expand(self: *Self, pos: usize) void {
@@ -724,7 +724,7 @@ pub fn VariadicImpl(
         }
 
         fn shrink(self: *Self, pos: usize) Error!void {
-            if (pos > self.headerConst().entry_count.get()) {
+            if (pos > self.header().entry_count.get()) {
                 return Error.OutOfBounds;
             }
             var slots = self.entriesMut();
@@ -736,36 +736,36 @@ pub fn VariadicImpl(
         // returns buffer body[free_end - len..free_end]
         // it doesn't decrease free_end
         pub fn allocateSpace(self: *Self, len: usize) []u8 {
-            const header = self.headerConst();
-            const old_end: usize = @intCast(header.free_end.get());
+            const header_ptr = self.header();
+            const old_end: usize = @intCast(header_ptr.free_end.get());
             const new_end: usize = old_end - len;
             return self.body[new_end..][0..len];
         }
 
         fn decreaseFreeEnd(self: *Self, len: usize) void {
-            const header = self.headerMut();
+            const header_ptr = self.headerMut();
             const shift: T = @intCast(len);
-            const old_end = header.free_end.get();
-            header.free_end.set(old_end - shift);
+            const old_end = header_ptr.free_end.get();
+            header_ptr.free_end.set(old_end - shift);
         }
 
         // adds an entry at the end of the entries.
         // it doesn't increase entry_count and free_beg
         fn allocateEntry(self: *Self) *Entry {
-            const header = self.headerMut();
-            const entry_count = header.entry_count.get();
+            const header_ptr = self.headerMut();
+            const entry_count = header_ptr.entry_count.get();
             const first_entry_ptr: [*]Entry = @ptrCast(&self.body[@sizeOf(Header)]);
             const new_entry_ptr = &first_entry_ptr[@intCast(entry_count)];
             return new_entry_ptr;
         }
 
         fn increaseEntryCount(self: *Self) void {
-            const header = self.headerMut();
-            const entry_count = header.entry_count.get();
-            const new_free_begin: usize = @sizeOf(Entry) + @as(usize, @intCast(header.free_begin.get()));
-            header.entry_count.set(entry_count + 1);
-            header.free_begin.set(@as(T, @intCast(new_free_begin)));
-            const old_free_end = header.free_end.get();
+            const header_ptr = self.headerMut();
+            const entry_count = header_ptr.entry_count.get();
+            const new_free_begin: usize = @sizeOf(Entry) + @as(usize, @intCast(header_ptr.free_begin.get()));
+            header_ptr.entry_count.set(entry_count + 1);
+            header_ptr.free_begin.set(@as(T, @intCast(new_free_begin)));
+            const old_free_end = header_ptr.free_end.get();
             if (old_free_end < new_free_begin) {
                 @breakpoint();
             }
@@ -822,7 +822,7 @@ pub fn VariadicImpl(
 
         fn findFreeSlot(self: *const Self, needed: T) ?FreeSlotInfo {
             const fixed_len = self.fixLength(needed);
-            var current_offset = self.headerConst().freed.get();
+            var current_offset = self.header().freed.get();
             while (current_offset != SLOT_INVALID) {
                 const current_ptr: *const FreedEntry = @ptrCast(&self.body[@intCast(current_offset)]);
                 const current_len = current_ptr.length.get();

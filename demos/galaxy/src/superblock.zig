@@ -125,7 +125,7 @@ pub fn View(comptime read_only: bool) type {
             self.headerMut().cell_size.set(v);
         }
 
-        pub fn getView(self: *const Self) [2]f64 {
+        pub fn view(self: *const Self) [2]f64 {
             const h = self.header();
             return .{ h.view_w.get(), h.view_h.get() };
         }

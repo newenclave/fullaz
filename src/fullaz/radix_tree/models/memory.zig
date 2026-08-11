@@ -8,10 +8,10 @@ const Settings = struct {
     inode_base: u32 = 512,
 };
 
-pub fn Model(comptime Key: type, comptime Value: type) type {
+pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
     const PidType = usize;
     const LevelType = usize;
-    const SplitterType = KeySplitter(Key);
+    const SplitterType = KeySplitter(KeyT);
 
     const ErrorSet = errors.HandleError ||
         errors.PageError ||
@@ -58,12 +58,12 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
 
     const LeafContainer = struct {
         const Self = @This();
-        const MemoryContainer = std.ArrayList(?Value);
+        const MemoryContainer = std.ArrayList(?ValueT);
 
         cont: MemoryContainer,
         parent_id: ?PidType = null,
-        parent_quotient: Key = undefined,
-        parent_idx: Key = undefined,
+        parent_quotient: KeyT = undefined,
+        parent_idx: KeyT = undefined,
         elements_count: usize = 0,
 
         fn init(allocator: std.mem.Allocator, base: usize) ErrorSet!Self {
@@ -89,8 +89,8 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
 
         cont: MemoryContainer,
         parent_id: ?PidType = null,
-        parent_quotient: Key = undefined,
-        parent_idx: Key = undefined,
+        parent_quotient: KeyT = undefined,
+        parent_idx: KeyT = undefined,
         level: LevelType = 0,
         elements_count: usize = 0,
 
@@ -155,23 +155,23 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             return self.container.parent_id;
         }
 
-        pub fn setParentQuotient(self: *Self, parent_quotient: Key) Error!void {
+        pub fn setParentQuotient(self: *Self, parent_quotient: KeyT) Error!void {
             self.container.parent_quotient = parent_quotient;
         }
 
-        pub fn getParentQuotient(self: *const Self) Error!Key {
+        pub fn getParentQuotient(self: *const Self) Error!KeyT {
             return self.container.parent_quotient;
         }
 
-        pub fn setParentId(self: *Self, parent_idx: Key) Error!void {
+        pub fn setParentId(self: *Self, parent_idx: KeyT) Error!void {
             self.container.parent_idx = parent_idx;
         }
 
-        pub fn getParentId(self: *const Self) Error!Key {
+        pub fn getParentId(self: *const Self) Error!KeyT {
             return self.container.parent_idx;
         }
 
-        pub fn set(self: *Self, key: Key, value: Value) Error!void {
+        pub fn set(self: *Self, key: KeyT, value: ValueT) Error!void {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -182,7 +182,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             self.container.cont.items[idx] = value;
         }
 
-        pub fn free(self: *Self, key: Key) Error!void {
+        pub fn free(self: *Self, key: KeyT) Error!void {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -193,7 +193,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             }
         }
 
-        pub fn getPtr(self: *const Self, key: Key) Error!*const Value {
+        pub fn getPtr(self: *const Self, key: KeyT) Error!*const ValueT {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -204,7 +204,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             return Error.InvalidId;
         }
 
-        pub fn get(self: *const Self, key: Key) Error!Value {
+        pub fn get(self: *const Self, key: KeyT) Error!ValueT {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -215,7 +215,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             return Error.InvalidId;
         }
 
-        pub fn isSet(self: *const Self, key: Key) Error!bool {
+        pub fn isSet(self: *const Self, key: KeyT) Error!bool {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -251,7 +251,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             return self.container.cont.items.len;
         }
 
-        pub fn set(self: *Self, key: Key, child_id: PidType) Error!void {
+        pub fn set(self: *Self, key: KeyT, child_id: PidType) Error!void {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -262,7 +262,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             self.container.cont.items[idx] = child_id;
         }
 
-        pub fn get(self: *const Self, key: Key) Error!PidType {
+        pub fn get(self: *const Self, key: KeyT) Error!PidType {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -273,7 +273,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             return Error.InvalidId;
         }
 
-        pub fn free(self: *Self, key: Key) Error!void {
+        pub fn free(self: *Self, key: KeyT) Error!void {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -292,19 +292,19 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             return self.container.parent_id;
         }
 
-        pub fn setParentQuotient(self: *Self, parent_quotient: Key) Error!void {
+        pub fn setParentQuotient(self: *Self, parent_quotient: KeyT) Error!void {
             self.container.parent_quotient = parent_quotient;
         }
 
-        pub fn getParentQuotient(self: *const Self) Error!Key {
+        pub fn getParentQuotient(self: *const Self) Error!KeyT {
             return self.container.parent_quotient;
         }
 
-        pub fn setParentId(self: *Self, parent_idx: Key) Error!void {
+        pub fn setParentId(self: *Self, parent_idx: KeyT) Error!void {
             self.container.parent_idx = parent_idx;
         }
 
-        pub fn getParentId(self: *const Self) Error!Key {
+        pub fn getParentId(self: *const Self) Error!KeyT {
             return self.container.parent_idx;
         }
 
@@ -316,7 +316,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             self.container.level = level;
         }
 
-        pub fn isSet(self: *const Self, key: Key) Error!bool {
+        pub fn isSet(self: *const Self, key: KeyT) Error!bool {
             const idx = @as(usize, @intCast(key));
             if (idx >= self.container.cont.items.len) {
                 return Error.OutOfBounds;
@@ -418,7 +418,7 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
             //inode.deinit(self.alloc);
         }
 
-        pub fn splitKey(self: *const Self, key: Key) Error!SplitKeyResult {
+        pub fn splitKey(self: *const Self, key: KeyT) Error!SplitKeyResult {
             const maximum_levels = self.splitter.maximum_levels;
             var stack = try std.ArrayList(KeyDigit).initCapacity(self.alloc, maximum_levels);
             errdefer stack.deinit(self.alloc);
@@ -492,36 +492,36 @@ pub fn Model(comptime Key: type, comptime Value: type) type {
         pub const Pid = PidType;
         pub const Level = LevelType;
 
-        pub const KeyIn = Key;
-        pub const ValueIn = Value;
-        pub const KeyOut = Key;
-        pub const ValueOut = Value;
+        pub const KeyIn = KeyT;
+        pub const ValueIn = ValueT;
+        pub const KeyOut = KeyT;
+        pub const ValueOut = ValueT;
 
-        pub const Accessor = AccessorImpl;
+        pub const AccessorType = AccessorImpl;
         pub const Inode = InodeImpl;
         pub const Leaf = LeafImpl;
-        pub const SplitKeyResult = Accessor.SplitKeyResult;
+        pub const SplitKeyResult = AccessorType.SplitKeyResult;
 
         pub const Error = ErrorSet;
 
-        accessor: Accessor,
+        accessor_state: AccessorType,
 
         pub fn init(alloc: std.mem.Allocator, sett: Settings) !Self {
             return Self{
-                .accessor = try Accessor.init(alloc, sett),
+                .accessor_state = try AccessorType.init(alloc, sett),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor.deinit();
+            self.accessor_state.deinit();
         }
 
-        pub fn getAccessor(self: *Self) *Accessor {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn getSettings(self: *const Self) *const Settings {
-            return &self.accessor.sett;
+            return &self.accessor_state.sett;
         }
     };
 }

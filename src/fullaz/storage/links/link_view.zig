@@ -2,12 +2,12 @@ const errors = @import("../../core/errors.zig");
 
 // TODO: This is a very temporary implementation. Link must not contain the data size.
 pub fn LinkView(
-    comptime PageId: type,
-    comptime Index: type,
-    comptime LinkHeader: type,
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime LinkHeaderT: type,
     comptime read_only: bool,
 ) type {
-    const FldPtr = if (read_only) *const LinkHeader else *LinkHeader;
+    const FldPtr = if (read_only) *const LinkHeaderT else *LinkHeaderT;
     return struct {
         const Self = @This();
         pub const Error = error{} || errors.SpaceError;
@@ -20,12 +20,12 @@ pub fn LinkView(
             };
         }
 
-        pub fn getFwd(self: *const Self) ?PageId {
+        pub fn getFwd(self: *const Self) ?PageIdT {
             const val = self.link.fwd.get();
             return if (self.link.fwd.isMaxVal(val)) null else val;
         }
 
-        pub fn setFwd(self: *Self, next: ?PageId) void {
+        pub fn setFwd(self: *Self, next: ?PageIdT) void {
             if (read_only) {
                 @compileError("Cannot set next on a read-only view");
             }
@@ -36,12 +36,12 @@ pub fn LinkView(
             }
         }
 
-        pub fn getBack(self: *const Self) ?PageId {
+        pub fn getBack(self: *const Self) ?PageIdT {
             const val = self.link.back.get();
             return if (self.link.back.isMaxVal(val)) null else val;
         }
 
-        pub fn setBack(self: *Self, last: ?PageId) void {
+        pub fn setBack(self: *Self, last: ?PageIdT) void {
             if (read_only) {
                 @compileError("Cannot set last on a read-only view");
             }
@@ -52,18 +52,18 @@ pub fn LinkView(
             }
         }
 
-        pub fn getDataSize(self: *const Self) Index {
+        pub fn getDataSize(self: *const Self) IndexT {
             return self.link.payload.size.get();
         }
 
-        pub fn setDataSize(self: *Self, size: Index) void {
+        pub fn setDataSize(self: *Self, size: IndexT) void {
             if (read_only) {
                 @compileError("Cannot set data size on a read-only view");
             }
             self.link.payload.size.set(size);
         }
 
-        pub fn incrementDataSize(self: *Self, increment: Index) void {
+        pub fn incrementDataSize(self: *Self, increment: IndexT) void {
             if (read_only) {
                 @compileError("Cannot increment data size on a read-only view");
             }
@@ -71,7 +71,7 @@ pub fn LinkView(
             self.link.payload.size.set(current + increment);
         }
 
-        pub fn decrementDataSize(self: *Self, decrement: Index) void {
+        pub fn decrementDataSize(self: *Self, decrement: IndexT) void {
             if (read_only) {
                 @compileError("Cannot decrement data size on a read-only view");
             }

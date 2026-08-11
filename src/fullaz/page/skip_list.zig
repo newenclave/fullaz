@@ -4,10 +4,11 @@ const header = @import("header.zig");
 const PageSlotRef = @import("page_slot_ref.zig").PageSlotRef;
 
 pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.builtin.Endian) type {
-    const PageIdPackedType = PackedInt(PageIdT, Endian);
-    const IndexPackedType = PackedInt(IndexT, Endian);
-
-    const SkipListNodeIdType = PageSlotRef(PageIdT, IndexT, Endian);
+    const layout = struct {
+        const PackedIndex = PackedInt(IndexT, Endian);
+        const PackedPageId = PackedInt(PageIdT, Endian);
+        const SkipListNodeIdType = PageSlotRef(PageIdT, IndexT, Endian);
+    };
 
     const SkipListNodeSubheaderType = extern struct {
         const Self = @This();
@@ -20,8 +21,8 @@ pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: 
 
     const LevelRefType = extern struct {
         const Self = @This();
-        next: SkipListNodeIdType,
-        prev: SkipListNodeIdType,
+        next: layout.SkipListNodeIdType,
+        prev: layout.SkipListNodeIdType,
         pub fn format(self: *Self) void {
             self.next.format();
             self.prev.format();
@@ -34,8 +35,8 @@ pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: 
         level: u8,
         reserved: [3]u8,
 
-        key_len: IndexPackedType,
-        value_len: IndexPackedType, // todo: do we need this value?
+        key_len: layout.PackedIndex,
+        value_len: layout.PackedIndex, // todo: do we need this value?
 
         pub fn formatHeader(self: *Self) void {
             self.reserved = [3]u8{0} ** 3;
@@ -43,8 +44,8 @@ pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: 
     };
 
     return struct {
-        pub const PageIdType = PageIdPackedType;
-        pub const IndexType = IndexPackedType;
+        pub const PackedPageId = layout.PackedPageId;
+        pub const PackedIndex = layout.PackedIndex;
         pub const SkipListSubheader = SkipListNodeSubheaderType;
         pub const SkipListNode = SkipListNodeType;
         pub const LevelRef = LevelRefType;

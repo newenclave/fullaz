@@ -8,23 +8,23 @@ const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 pub const requiresStorageManager = contracts.storage_manager.requiresStorageManager;
 pub const requiresPageCache = contracts.page_cache.requiresPageCache;
 
-pub fn assertMemoryBlockWriter(comptime Writer: type) void {
-    requiresErrorDeclaration(Writer, "Error");
-    const Error = Writer.Error;
+pub fn assertMemoryBlockWriter(comptime WriterT: type) void {
+    requiresErrorDeclaration(WriterT, "Error");
+    const Error = WriterT.Error;
 
-    requiresFnSignature(Writer, "extend", fn (*Writer, usize) Error!void);
-    requiresFnSignature(Writer, "used", fn (*const Writer) []const u8);
-    requiresFnSignature(Writer, "remaining", fn (*const Writer) usize);
-    requiresFnSignature(Writer, "at", fn (*const Writer, usize, usize) []const u8);
-    requiresFnSignature(Writer, "atMut", fn (*const Writer, usize, usize) []u8);
+    requiresFnSignature(WriterT, "extend", fn (*WriterT, usize) Error!void);
+    requiresFnSignature(WriterT, "used", fn (*const WriterT) []const u8);
+    requiresFnSignature(WriterT, "remaining", fn (*const WriterT) usize);
+    requiresFnSignature(WriterT, "at", fn (*const WriterT, usize, usize) []const u8);
+    requiresFnSignature(WriterT, "atMut", fn (*const WriterT, usize, usize) []u8);
 }
 
-pub fn assertMemoryBlockView(comptime View: type) void {
-    requiresErrorDeclaration(View, "Error");
-    const Error = View.Error;
+pub fn assertMemoryBlockView(comptime ViewT: type) void {
+    requiresErrorDeclaration(ViewT, "Error");
+    const Error = ViewT.Error;
 
-    requiresFnSignature(View, "at", fn (*const View, usize, usize) Error![]const u8);
-    requiresFnSignature(View, "len", fn (*const View) Error!usize);
+    requiresFnSignature(ViewT, "at", fn (*const ViewT, usize, usize) Error![]const u8);
+    requiresFnSignature(ViewT, "len", fn (*const ViewT) Error!usize);
 }
 
 pub fn MemoryBlockWriter(comptime T: type) type {

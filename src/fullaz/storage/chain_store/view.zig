@@ -35,9 +35,9 @@ pub fn View(
         pub const Error = error{} || CommonErrorSet;
         page_view: SubheaderView = undefined,
 
-        pub fn init(data: DataType) Self {
+        pub fn init(bytes: DataType) Self {
             return .{
-                .page_view = SubheaderView.init(data),
+                .page_view = SubheaderView.init(bytes),
             };
         }
 
@@ -65,21 +65,21 @@ pub fn View(
         }
 
         // returns the PAGE data; Doesn't include header, subheader, or metadata
-        pub fn getData(self: *const Self) []const u8 {
+        pub fn data(self: *const Self) []const u8 {
             return self.page_view.page().data();
         }
 
         // returns the PAGE mutable data; Doesn't include header, subheader, or metadata
-        pub fn getDataMut(self: *Self) []u8 {
+        pub fn dataMut(self: *Self) []u8 {
             var page = self.page_view.pageMut();
             return page.dataMut();
         }
 
-        pub fn getLink(self: *const Self) LinkTypeConst {
+        pub fn link(self: *const Self) LinkTypeConst {
             return LinkTypeConst.init(&self.subheader().link);
         }
 
-        pub fn getLinkMut(self: *Self) LinkType {
+        pub fn linkMut(self: *Self) LinkType {
             if (read_only) {
                 @compileError("Cannot get mutable link from a read-only view");
             }
@@ -133,14 +133,14 @@ pub fn View(
             sh.link.payload.size.set(size);
         }
 
-        pub fn getChunkData(self: *const Self) []const u8 {
-            const full_data = self.getData();
+        pub fn chunkData(self: *const Self) []const u8 {
+            const full_data = self.data();
             const data_size = self.getSize();
             return full_data[0..data_size];
         }
 
-        pub fn getChunkDataMut(self: *Self) []u8 {
-            const full_data = self.getDataMut();
+        pub fn chunkDataMut(self: *Self) []u8 {
+            const full_data = self.dataMut();
             const data_size = self.getSize();
             return full_data[0..data_size];
         }

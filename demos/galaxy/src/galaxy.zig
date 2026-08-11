@@ -98,7 +98,7 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
             if (try ph.pid() != constants.superblock_pid) {
                 return error.NotFreshDevice;
             }
-            var sb = superblock.View(false).init(try ph.getDataMut());
+            var sb = superblock.View(false).init(try ph.dataMut());
             sb.format(block_size);
             sb.setSeed(seed);
             sb.setPlayer(spawn_x, spawn_y);
@@ -127,10 +127,10 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
             const root = blk: {
                 var ph = try cache.fetch(constants.superblock_pid);
                 defer ph.deinit();
-                const sb = superblock.View(true).init(try ph.getData());
+                const sb = superblock.View(true).init(try ph.data());
                 try sb.validate(block_size);
                 const p = sb.getPlayer();
-                const v = sb.getView();
+                const v = sb.view();
                 break :blk .{
                     .root = sb.getRoot(),
                     .seed = sb.getSeed(),
@@ -241,7 +241,7 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
         }
 
         pub fn walkNodes(self: *Self, ctx: anytype, cb: anytype) !void {
-            const acc = self.model.getAccessor();
+            const acc = self.model.accessor();
             const root = acc.getRoot() orelse return;
             try walkNode(acc, root, ctx, cb);
         }
@@ -328,7 +328,7 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
         pub fn save(self: *Self) !void {
             var ph = try self.cache.fetch(constants.superblock_pid);
             defer ph.deinit();
-            var sb = superblock.View(false).init(try ph.getDataMut());
+            var sb = superblock.View(false).init(try ph.dataMut());
             sb.setPlayer(self.px, self.py);
             sb.setStarCounter(self.star_counter);
             try self.cache.flush(constants.superblock_pid);

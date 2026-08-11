@@ -73,12 +73,12 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                 return self.handle.pid();
             }
 
-            pub fn getData(self: *const LockSelf) Error![]const u8 {
-                return self.handle.getData();
+            pub fn data(self: *const LockSelf) Error![]const u8 {
+                return self.handle.data();
             }
 
-            pub fn getDataMut(self: *LockSelf) Error![]u8 {
-                return self.handle.getDataMut();
+            pub fn dataMut(self: *LockSelf) Error![]u8 {
+                return self.handle.dataMut();
             }
         };
 
@@ -117,14 +117,14 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             return self.frame.?.pid;
         }
 
-        pub fn getData(self: *const Self) Error![]const u8 {
+        pub fn data(self: *const Self) Error![]const u8 {
             if (self.frame == null) {
                 return Error.InvalidHandle;
             }
             return self.frame.?.data;
         }
 
-        pub fn getDataMut(self: *Self) Error![]u8 {
+        pub fn dataMut(self: *Self) Error![]u8 {
             if (self.frame == null) {
                 return Error.InvalidHandle;
             }

@@ -98,13 +98,13 @@ pub fn Manager(comptime PageCacheType: type) type {
             sb: superblock.View(false),
         };
 
-        // getDataMut already marks the frame dirty, so there is no flush here:
+        // dataMut already marks the frame dirty, so there is no flush here:
         // setEntriesCount fires on every single insert and flushing would mean
         // one device write per point. Cloud.save owns the flush.
         fn superblockMut(self: *Self) Error!MutableSuperblock {
             var handle = try self.cache.fetch(constants.superblock_pid);
             errdefer handle.deinit();
-            const bytes = try handle.getDataMut();
+            const bytes = try handle.dataMut();
             return .{ .handle = handle, .sb = superblock.View(false).init(bytes) };
         }
     };

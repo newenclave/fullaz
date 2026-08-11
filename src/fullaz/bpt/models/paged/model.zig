@@ -14,18 +14,18 @@ pub const Settings = struct {
 };
 
 pub fn PagedModel(
-    comptime PageCacheType: type,
-    comptime StorageManager: type,
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
     comptime cmp: anytype,
-    comptime Ctx: type,
+    comptime CtxT: type,
 ) type {
     comptime {
-        interfaces.requiresStorageManager(StorageManager);
-        interfaces.requiresPageCache(PageCacheType);
+        interfaces.requiresStorageManager(StorageManagerT);
+        interfaces.requiresPageCache(PageCacheT);
     }
 
-    const BlockDevice = PageCacheType.UnderlyingDevice;
-    const PageHandle = PageCacheType.Handle;
+    const BlockDevice = PageCacheT.UnderlyingDevice;
+    const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
 
     const BptPage = bpt_page.View(
@@ -45,15 +45,15 @@ pub fn PagedModel(
     const ValueType = []const u8;
 
     const Context = struct {
-        cache: *PageCacheType = undefined,
-        storage_mgr: *StorageManager = undefined,
-        cts: Ctx = undefined,
+        cache: *PageCacheT = undefined,
+        storage_mgr: *StorageManagerT = undefined,
+        cts: CtxT = undefined,
         settings: Settings = undefined,
     };
 
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
-        PageCacheType.Error ||
+        PageCacheT.Error ||
         errors.OrderError ||
         errors.BptError ||
         error{KeyTooLarge} ||
@@ -90,12 +90,12 @@ pub fn PagedModel(
         }
 
         pub fn size(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.entries();
         }
 
         pub fn capacity(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             const maximum_slot_size = self.ctx.settings.maximum_key_size + self.ctx.settings.maximum_value_size;
             return try view.capacityFor(maximum_slot_size);
         }
@@ -119,22 +119,22 @@ pub fn PagedModel(
         }
 
         pub fn keyPosition(self: *const Self, key: KeyType) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.lowerBoundWith(key, cmp, self.ctx);
         }
 
         pub fn getKey(self: *const Self, pos: usize) Error!KeyType {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.get(pos)).key;
         }
 
         pub fn getValue(self: *const Self, pos: usize) Error!ValueType {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.get(pos)).value;
         }
 
         pub fn getNext(self: *const Self) ?BlockIdType {
-            const data = self.handle.getData() catch return null;
+            const data = self.handle.data() catch return null;
             const view = PageViewTypeConst.init(data);
             const current = view.subheader().next.get();
             if (current != std.math.maxInt(BlockIdType)) {
@@ -144,7 +144,7 @@ pub fn PagedModel(
         }
 
         pub fn getPrev(self: *const Self) ?BlockIdType {
-            const data = self.handle.getData() catch return null;
+            const data = self.handle.data() catch return null;
             const view = PageViewTypeConst.init(data);
             const current = view.subheader().prev.get();
             if (current != std.math.maxInt(BlockIdType)) {
@@ -154,7 +154,7 @@ pub fn PagedModel(
         }
 
         pub fn setNext(self: *Self, next_id: ?BlockIdType) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             if (next_id) |nid| {
                 view.subheaderMut().next.set(nid);
             } else {
@@ -163,7 +163,7 @@ pub fn PagedModel(
         }
 
         pub fn setPrev(self: *Self, prev_id: ?BlockIdType) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             if (prev_id) |pid| {
                 view.subheaderMut().prev.set(pid);
             } else {
@@ -172,7 +172,7 @@ pub fn PagedModel(
         }
 
         pub fn setParent(self: *Self, parent_id: ?BlockIdType) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             if (parent_id) |pid| {
                 view.subheaderMut().parent.set(pid);
             } else {
@@ -181,7 +181,7 @@ pub fn PagedModel(
         }
 
         pub fn getParent(self: *const Self) ?BlockIdType {
-            const data = self.handle.getData() catch return null;
+            const data = self.handle.data() catch return null;
             const view = PageViewTypeConst.init(data);
             const parent = view.subheader().parent.get();
             if (parent != std.math.maxInt(BlockIdType)) {
@@ -209,14 +209,14 @@ pub fn PagedModel(
 
         pub fn canInsertValue(self: *const Self, pos: usize, key: KeyType, value: ValueType) Error!bool {
             try self.checkKeyValue(key, value);
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.canInsert(pos, key, value) != .not_enough;
         }
 
         pub fn insertValue(self: *Self, pos: usize, key: KeyType, value: ValueType) Error!void {
             try self.checkKeyValue(key, value);
 
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             const res = try view.canInsert(pos, key, value);
             if (res == .not_enough) {
                 return Error.NodeFull;
@@ -224,26 +224,26 @@ pub fn PagedModel(
                 var tmp_page = try self.ctx.cache.getTemporaryPage();
                 defer tmp_page.deinit();
 
-                var view_mut = PageViewType.init(try self.handle.getDataMut());
+                var view_mut = PageViewType.init(try self.handle.dataMut());
                 var slots_dir = try view_mut.slotsDirMut();
-                slots_dir.compactWithBuffer(try tmp_page.getDataMut()) catch {
+                slots_dir.compactWithBuffer(try tmp_page.dataMut()) catch {
                     try slots_dir.compactInPlace();
                 };
             }
-            var view_mut = PageViewType.init(try self.handle.getDataMut());
+            var view_mut = PageViewType.init(try self.handle.dataMut());
             try view_mut.insert(pos, key, value);
         }
 
         pub fn canUpdateValue(self: *const Self, pos: usize, value: ValueType) Error!bool {
             try self.checkKeyValue(null, value);
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.canUpdateValue(pos, value) != .not_enough;
         }
 
         pub const UpdateStatus = BptPageConst.SlotsAvailableStatus;
 
         pub fn canUpdateValueStatus(self: *const Self, pos: usize, value: ValueType) Error!UpdateStatus {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return view.canUpdateValue(pos, value);
         }
 
@@ -251,12 +251,12 @@ pub fn PagedModel(
             try self.checkKeyValue(null, value);
             var tmp_page = try self.ctx.cache.getTemporaryPage();
             defer tmp_page.deinit();
-            var view = PageViewType.init(try self.handle.getDataMut());
-            return view.updateValue(pos, value, try tmp_page.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
+            return view.updateValue(pos, value, try tmp_page.dataMut());
         }
 
         pub fn erase(self: *Self, pos: usize) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             var slots_dir = try view.slotsDirMut();
             return slots_dir.remove(pos);
         }
@@ -294,12 +294,12 @@ pub fn PagedModel(
         }
 
         pub fn size(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.slotsDir()).size();
         }
 
         pub fn capacity(self: *const Self) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.capacityFor(self.ctx.settings.maximum_key_size);
         }
 
@@ -322,12 +322,12 @@ pub fn PagedModel(
         }
 
         pub fn getKey(self: *const Self, pos: usize) Error!KeyType {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.get(pos)).key;
         }
 
         pub fn getChild(self: *const Self, pos: usize) Error!BlockIdType {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             const current_size = (try view.slotsDir()).size();
             if (pos < current_size) {
                 return (try view.get(pos)).child;
@@ -343,12 +343,12 @@ pub fn PagedModel(
         }
 
         pub fn keyPosition(self: *const Self, key: KeyType) Error!usize {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.upperBoundWith(key, cmp, self.ctx);
         }
 
         pub fn canUpdateKey(self: *const Self, pos: usize, new_key: KeyType) Error!bool {
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.canUpdate(pos, new_key) != .not_enough;
         }
 
@@ -358,7 +358,7 @@ pub fn PagedModel(
                 return Error.KeyTooLarge;
             }
 
-            const view = PageViewTypeConst.init(try self.handle.getData());
+            const view = PageViewTypeConst.init(try self.handle.data());
             return try view.canInsert(pos, key, cid) != .not_enough;
         }
 
@@ -370,23 +370,23 @@ pub fn PagedModel(
             var tmp_page = try self.ctx.cache.getTemporaryPage();
             defer tmp_page.deinit();
 
-            var view = PageViewTypeConst.init(try self.handle.getData());
+            var view = PageViewTypeConst.init(try self.handle.data());
             const current_available = try view.canInsert(pos, key, child_id);
             if (current_available == .not_enough) {
                 return Error.NodeFull;
             } else if (current_available == .need_compact) {
-                var view_mut = PageViewType.init(try self.handle.getDataMut());
+                var view_mut = PageViewType.init(try self.handle.dataMut());
                 var slots_dir = try view_mut.slotsDirMut();
-                slots_dir.compactWithBuffer(try tmp_page.getDataMut()) catch {
+                slots_dir.compactWithBuffer(try tmp_page.dataMut()) catch {
                     try slots_dir.compactInPlace();
                 };
             }
-            var view_mut = PageViewType.init(try self.handle.getDataMut());
+            var view_mut = PageViewType.init(try self.handle.dataMut());
             try view_mut.insert(pos, key, child_id);
         }
 
         pub fn updateChild(self: *Self, pos: usize, child_id: BlockIdType) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             const current_size = (try view.slotsDir()).size();
             if (pos < current_size) {
                 try view.updateChild(pos, child_id);
@@ -402,25 +402,25 @@ pub fn PagedModel(
                 return Error.KeyTooLarge;
             }
 
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             var tmp_buf = try self.ctx.cache.getTemporaryPage();
             defer tmp_buf.deinit();
 
-            return view.updateKey(pos, key, try tmp_buf.getDataMut());
+            return view.updateKey(pos, key, try tmp_buf.dataMut());
         }
 
         pub fn setParent(self: *Self, parent_id: ?BlockIdType) Error!void {
             if (parent_id) |pid| {
-                var view = PageViewType.init(try self.handle.getDataMut());
+                var view = PageViewType.init(try self.handle.dataMut());
                 view.subheaderMut().parent.set(pid);
             } else {
-                var view = PageViewType.init(try self.handle.getDataMut());
+                var view = PageViewType.init(try self.handle.dataMut());
                 view.subheaderMut().parent.setMax();
             }
         }
 
         pub fn getParent(self: *const Self) ?BlockIdType {
-            const data = self.handle.getData() catch return null;
+            const data = self.handle.data() catch return null;
             const view = PageViewTypeConst.init(data);
             const parent = view.subheader().parent.get();
             if (parent != std.math.maxInt(BlockIdType)) {
@@ -430,7 +430,7 @@ pub fn PagedModel(
         }
 
         pub fn erase(self: *Self, pos: usize) Error!void {
-            var view = PageViewType.init(try self.handle.getDataMut());
+            var view = PageViewType.init(try self.handle.dataMut());
             var slots_dir = try view.slotsDirMut();
             return slots_dir.remove(pos);
         }
@@ -455,7 +455,7 @@ pub fn PagedModel(
         const Self = @This();
         pub const Error = ErrorSet;
 
-        pub const PageCache = PageCacheType;
+        pub const PageCache = PageCacheT;
         const RootType = BlockIdType;
 
         ctx: Context = undefined,
@@ -486,7 +486,7 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            var page_view = LeafImpl.PageViewType.init(try ph.getDataMut());
+            var page_view = LeafImpl.PageViewType.init(try ph.dataMut());
             try page_view.formatPage(self.ctx.settings.leaf_page_kind, pid, 0);
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
         }
@@ -495,7 +495,7 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            var page_view = InodeImpl.PageViewType.init(try ph.getDataMut());
+            var page_view = InodeImpl.PageViewType.init(try ph.dataMut());
             try page_view.formatPage(self.ctx.settings.inode_page_kind, pid, 0);
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
@@ -504,7 +504,7 @@ pub fn PagedModel(
             if (id_opt) |id| {
                 var ph = try self.ctx.cache.fetch(id);
                 errdefer ph.deinit();
-                const view = LeafImpl.PageViewTypeConst.init(try ph.getData());
+                const view = LeafImpl.PageViewTypeConst.init(try ph.data());
                 if (view.page_view.header().kind.get() != self.ctx.settings.leaf_page_kind) {
                     ph.deinit();
                     return null;
@@ -517,7 +517,7 @@ pub fn PagedModel(
         pub fn loadInode(self: *Self, id_opt: ?BlockIdType) ErrorSet!?InodeImpl {
             if (id_opt) |id| {
                 var ph = try self.ctx.cache.fetch(id);
-                const view = InodeImpl.PageViewTypeConst.init(try ph.getData());
+                const view = InodeImpl.PageViewTypeConst.init(try ph.data());
                 if (view.page_view.header().kind.get() != self.ctx.settings.inode_page_kind) {
                     ph.deinit();
                     return null;
@@ -530,7 +530,7 @@ pub fn PagedModel(
         pub fn isLeafId(self: *Self, id: BlockIdType) ErrorSet!bool {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
-            const view = LeafImpl.PageViewTypeConst.init(try ph.getData());
+            const view = LeafImpl.PageViewTypeConst.init(try ph.data());
             return (view.page_view.header().kind.get() == self.ctx.settings.leaf_page_kind);
         }
 
@@ -549,12 +549,12 @@ pub fn PagedModel(
         }
 
         pub fn borrowKeyfromInode(self: *Self, inode: *const InodeImpl, pos: usize) ErrorSet!KeyBorrowImpl {
-            const view = InodeImpl.PageViewTypeConst.init(try inode.handle.getData());
+            const view = InodeImpl.PageViewTypeConst.init(try inode.handle.data());
             const entry = try view.get(pos);
             const key = entry.key;
             var ph = try self.ctx.cache.getTemporaryPage();
 
-            var tmp_buf = try ph.getDataMut();
+            var tmp_buf = try ph.dataMut();
             const key_buf = tmp_buf[0..key.len];
             @memcpy(key_buf, key);
 
@@ -562,12 +562,12 @@ pub fn PagedModel(
         }
 
         pub fn borrowKeyfromLeaf(self: *Self, leaf: *const LeafImpl, pos: usize) ErrorSet!KeyBorrowImpl {
-            const view = LeafImpl.PageViewTypeConst.init(try leaf.handle.getData());
+            const view = LeafImpl.PageViewTypeConst.init(try leaf.handle.data());
             const entry = try view.get(pos);
             const key = entry.key;
 
             var ph = try self.ctx.cache.getTemporaryPage();
-            var tmp_buf = try ph.getDataMut();
+            var tmp_buf = try ph.dataMut();
             const key_buf = tmp_buf[0..key.len];
 
             @memcpy(key_buf, key);
@@ -580,16 +580,16 @@ pub fn PagedModel(
         }
 
         pub fn canMergeLeafs(_: *Self, left: *const LeafImpl, right: *const LeafImpl) ErrorSet!bool {
-            const view_a = LeafImpl.PageViewTypeConst.init(try left.handle.getData());
-            const view_b = LeafImpl.PageViewTypeConst.init(try right.handle.getData());
+            const view_a = LeafImpl.PageViewTypeConst.init(try left.handle.data());
+            const view_b = LeafImpl.PageViewTypeConst.init(try right.handle.data());
             const slots_dir_a = try view_a.slotsDir();
             const slots_dir_b = try view_b.slotsDir();
             return try slots_dir_a.canMergeWith(&slots_dir_b) != .not_enough;
         }
 
         pub fn canMergeInodes(self: *Self, left: *const InodeImpl, right: *const InodeImpl) ErrorSet!bool {
-            const view_a = InodeImpl.PageViewTypeConst.init(try left.handle.getData());
-            const view_b = InodeImpl.PageViewTypeConst.init(try right.handle.getData());
+            const view_a = InodeImpl.PageViewTypeConst.init(try left.handle.data());
+            const view_b = InodeImpl.PageViewTypeConst.init(try right.handle.data());
             const slots_dir_a = try view_a.slotsDir();
             const slots_dir_b = try view_b.slotsDir();
             const additional_key_len = view_a.totalSlotSize(self.ctx.settings.maximum_key_size);
@@ -617,9 +617,9 @@ pub fn PagedModel(
 
         pub const NodeIdType = BlockIdType;
 
-        accessor: AccessorType,
+        accessor_state: AccessorType,
 
-        pub fn init(device: *PageCacheType, storage_mgr: *StorageManager, settings: Settings, ctx: Ctx) Self {
+        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings, ctx: CtxT) Self {
             const context = Context{
                 .cache = device,
                 .storage_mgr = storage_mgr,
@@ -627,7 +627,7 @@ pub fn PagedModel(
                 .settings = settings,
             };
             return .{
-                .accessor = AccessorImpl.init(context),
+                .accessor_state = AccessorImpl.init(context),
             };
         }
 
@@ -635,8 +635,8 @@ pub fn PagedModel(
             // nothing to yet
         }
 
-        pub fn getAccessor(self: *Self) *AccessorType {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn keyBorrowAsLike(_: *const Self, key: *const KeyBorrowType) KeyLikeType {

@@ -240,7 +240,7 @@ test "PageChain: handle" {
     printer.print("Subheader = {any}\n", .{sh});
     printer.print("Header Len = {}\n", .{(try c.header()).header_size.get()});
     printer.print("SubHeader Len = {}\n", .{(try c.header()).subheader_size.get()});
-    printer.print("Data len = {}\n", .{(try c.getData()).len});
+    printer.print("Data len = {}\n", .{(try c.data()).len});
 }
 
 test "PageChain: loadChunk rejects a plain page with the same kind" {
@@ -261,7 +261,7 @@ test "PageChain: loadChunk rejects a plain page with the same kind" {
     var page = try cache.create();
     defer page.deinit();
     const pid = try page.pid();
-    var plain = PlainView.init(try page.getDataMut());
+    var plain = PlainView.init(try page.dataMut());
     plain.formatPage(0x51, pid, 0, 0);
 
     try std.testing.expectError(error.InvalidHeaderSize, hdl.loadChunk(pid));

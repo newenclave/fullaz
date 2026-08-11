@@ -15,12 +15,12 @@ test "gravity: mass trait calculates center of mass" {
     var simulation = try gravity.Simulation.init(std.testing.allocator, &bodies);
     defer simulation.deinit();
 
-    const root_id = simulation.model.getAccessor().getRoot().?;
-    var root = try simulation.model.getAccessor().loadNode(root_id);
-    defer simulation.model.getAccessor().deinitNode(&root);
-    try std.testing.expectEqual(@as(usize, 3), root.getTrait().data.body_count);
-    try std.testing.expectEqual(@as(f64, 40), root.getTrait().data.total_mass);
-    try expectPointApprox(.{ 7.5, 5 }, gravity.centerOfMass(root.getTrait().data), 1e-12);
+    const root_id = simulation.model.accessor().getRoot().?;
+    var root = try simulation.model.accessor().loadNode(root_id);
+    defer simulation.model.accessor().deinitNode(&root);
+    try std.testing.expectEqual(@as(usize, 3), root.trait().data.body_count);
+    try std.testing.expectEqual(@as(f64, 40), root.trait().data.total_mass);
+    try expectPointApprox(.{ 7.5, 5 }, gravity.centerOfMass(root.trait().data), 1e-12);
 }
 
 test "gravity: direct acceleration excludes the target body" {

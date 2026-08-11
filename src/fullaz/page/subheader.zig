@@ -5,7 +5,7 @@ const PageViewType = @import("header.zig").ViewImpl;
 pub fn View(
     comptime PageIdT: type,
     comptime IndexT: type,
-    comptime Subheader: type,
+    comptime SubheaderT: type,
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
@@ -13,7 +13,7 @@ pub fn View(
         PageIdT,
         IndexT,
         void,
-        Subheader,
+        SubheaderT,
         Endian,
         read_only,
     );
@@ -23,7 +23,7 @@ pub fn ViewImpl(
     comptime PageIdT: type,
     comptime IndexT: type,
     comptime AdditionalT: type,
-    comptime Subheader: type,
+    comptime SubheaderT: type,
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
@@ -62,7 +62,7 @@ pub fn ViewImpl(
             self.page_view.formatPage(
                 kind,
                 page_id,
-                @as(IndexT, @intCast(@sizeOf(Subheader))),
+                @as(IndexT, @intCast(@sizeOf(SubheaderT))),
                 metadata_len,
             );
         }
@@ -78,12 +78,12 @@ pub fn ViewImpl(
             return self.page_view.headerMut();
         }
 
-        pub fn subheader(self: *const Self) *const Subheader {
+        pub fn subheader(self: *const Self) *const SubheaderT {
             const subhdr = self.page_view.subheader();
             return @ptrCast(@alignCast(&subhdr[0]));
         }
 
-        pub fn subheaderMut(self: *Self) *Subheader {
+        pub fn subheaderMut(self: *Self) *SubheaderT {
             if (read_only) {
                 @compileError("Cannot get mutable subheader from a read-only page");
             }

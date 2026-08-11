@@ -20,7 +20,7 @@ test "RadixTree memory: create model" {
         .inode_base = 256,
     });
     defer model.deinit();
-    const acc = model.getAccessor();
+    const acc = model.accessor();
     var leaf = try acc.createLeaf();
     defer acc.deinitLeaf(&leaf);
     var inode = try acc.createInode();

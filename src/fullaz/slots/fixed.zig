@@ -6,23 +6,23 @@ const bit_set = @import("../core/bitset.zig");
 const PackedInt = core.packed_int.PackedInt;
 
 pub fn Fixed(
-    comptime BitSetDataType: type,
+    comptime BitSetDataT: type,
     comptime SizeT: type,
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
-    return FixedImpl(BitSetDataType, SizeT, Endian, read_only);
+    return FixedImpl(BitSetDataT, SizeT, Endian, read_only);
 }
 
 pub fn FixedImpl(
-    comptime BitSetDataType: type,
+    comptime BitSetDataT: type,
     comptime SizeT: type,
     comptime Endian: std.builtin.Endian,
     comptime read_only: bool,
 ) type {
     const BufferType = if (read_only) []const u8 else []u8;
 
-    const BitSet = bit_set.BitSet(BitSetDataType, Endian);
+    const BitSet = bit_set.BitSet(BitSetDataT, Endian);
     const SizeType = PackedInt(SizeT, Endian);
 
     const Magic = PackedInt(u16, Endian);
@@ -69,7 +69,7 @@ pub fn FixedImpl(
 
         pub fn maxObjectsByWords(full_len: usize, slot_size: usize) bit_set.CapacityResult {
             const body_len = full_len - @sizeOf(Header);
-            return bit_set.maxObjectsByWords(BitSetDataType, body_len, slot_size);
+            return bit_set.maxObjectsByWords(BitSetDataT, body_len, slot_size);
         }
 
         pub fn isFull(self: *const Self) Error!bool {
@@ -174,7 +174,7 @@ pub fn FixedImpl(
         fn getSlotsBody(self: *const Self) []const u8 {
             const hdr = self.header();
             const bitmask_words: usize = @intCast(hdr.bitmask_words.get());
-            const vs_body_len = bitmask_words * @sizeOf(BitSetDataType);
+            const vs_body_len = bitmask_words * @sizeOf(BitSetDataT);
             return self.body[vs_body_len..];
         }
 
@@ -213,7 +213,7 @@ pub fn FixedImpl(
         fn getSlotsBodyMut(self: *Self) []u8 {
             const hdr = self.header();
             const bitmask_words: usize = @intCast(hdr.bitmask_words.get());
-            const vs_body_len = bitmask_words * @sizeOf(BitSetDataType);
+            const vs_body_len = bitmask_words * @sizeOf(BitSetDataT);
             return self.body[vs_body_len..];
         }
 
@@ -221,7 +221,7 @@ pub fn FixedImpl(
             const hdr = self.header();
             const bitmask_words: usize = @intCast(hdr.bitmask_words.get());
             const bitmask_size: usize = @intCast(hdr.capacity.get());
-            const bs_body = self.body[0..(bitmask_words * @sizeOf(BitSetDataType))];
+            const bs_body = self.body[0..(bitmask_words * @sizeOf(BitSetDataT))];
             return try BitSet.initConst(bs_body, bitmask_size);
         }
 
@@ -229,7 +229,7 @@ pub fn FixedImpl(
             const hdr = self.headerMut();
             const bitmask_words: usize = @intCast(hdr.bitmask_words.get());
             const bitmask_size: usize = @intCast(hdr.capacity.get());
-            const bs_body = self.body[0..(bitmask_words * @sizeOf(BitSetDataType))];
+            const bs_body = self.body[0..(bitmask_words * @sizeOf(BitSetDataT))];
             return try BitSet.initMutable(bs_body, bitmask_size);
         }
     };

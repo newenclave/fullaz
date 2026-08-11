@@ -96,7 +96,7 @@ pub fn Orthtree(
     }
 
     const child_count = 1 << dims;
-    const PageIdType = PackedInt(PageIdT, Endian);
+    const PackedPageId = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const EntryCountType = PackedInt(u32, Endian);
     const CoordType = PackedNumber(CoordT, Endian);
@@ -116,15 +116,15 @@ pub fn Orthtree(
     const NodeSubheaderType = extern struct {
         const Self = @This();
 
-        parent: PageIdType,
-        entries_first: PageIdType,
-        entries_last: PageIdType,
+        parent: PackedPageId,
+        entries_first: PackedPageId,
+        entries_last: PackedPageId,
         entries_count: EntryCountType,
         level: u8,
         flags: u8,
         reserved: [2]u8,
         bounds: MbrType,
-        children: [child_count]PageIdType,
+        children: [child_count]PackedPageId,
 
         pub fn formatHeader(self: *Self) void {
             self.parent.setMax();
@@ -168,8 +168,8 @@ pub fn Orthtree(
         const Self = @This();
 
         parent: NodeRefType,
-        entries_first: PageIdType,
-        entries_last: PageIdType,
+        entries_first: PackedPageId,
+        entries_last: PackedPageId,
         entries_count: EntryCountType,
         level: u8,
         flags: u8,
@@ -201,7 +201,7 @@ pub fn Orthtree(
     };
 
     return struct {
-        pub const PageId = PageIdType;
+        pub const PageId = PackedPageId;
         pub const Index = IndexType;
         pub const NodeRef = NodeRefType;
         pub const NodeId = NativeNodeId;

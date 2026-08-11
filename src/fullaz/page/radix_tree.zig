@@ -5,7 +5,7 @@ const SubheaderView = @import("subheader.zig").View;
 const PackedInt = core.packed_int.PackedInt;
 
 pub fn RadixTree(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, comptime Endian: std.builtin.Endian) type {
-    const PageIdType = PackedInt(PageIdT, Endian);
+    const PackedPageId = PackedInt(PageIdT, Endian);
     const KeyType = PackedInt(KeyT, Endian);
     const LevelType = PackedInt(u8, Endian);
     const ParentIdxType = PackedInt(u16, Endian);
@@ -13,7 +13,7 @@ pub fn RadixTree(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: t
 
     const LeafSubheaderType = extern struct {
         const Self = @This();
-        parent: PageIdType,
+        parent: PackedPageId,
         parent_quotient: KeyType,
         parent_idx: ParentIdxType,
         pub fn formatHeader(self: *Self) void {
@@ -25,7 +25,7 @@ pub fn RadixTree(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: t
 
     const InodeSubheaderType = extern struct {
         const Self = @This();
-        parent: PageIdType,
+        parent: PackedPageId,
         parent_quotient: KeyType,
         parent_idx: ParentIdxType,
         level: LevelType,
@@ -39,7 +39,7 @@ pub fn RadixTree(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: t
 
     const InodeSlotType = extern struct {
         const Self = @This();
-        child: PageIdType,
+        child: PackedPageId,
         pub fn formatSlot(self: *Self) void {
             self.child.setMax();
         }

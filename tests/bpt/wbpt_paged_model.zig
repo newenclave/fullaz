@@ -79,15 +79,15 @@ test "WBpt paged: Create with Paged model" {
     defer tree.deinit();
 
     {
-        var leaf = try model.accessor.createLeaf();
-        defer model.getAccessor().deinitLeaf(&leaf);
+        var leaf = try model.accessor().createLeaf();
+        defer model.accessor().deinitLeaf(&leaf);
 
         try leaf.setParent(123);
         try leaf.setPrev(456);
         try leaf.setNext(789);
 
-        var leaf_load = try model.accessor.loadLeaf(leaf.id());
-        defer model.getAccessor().deinitLeaf(&leaf_load);
+        var leaf_load = try model.accessor().loadLeaf(leaf.id());
+        defer model.accessor().deinitLeaf(&leaf_load);
 
         try std.testing.expect(try leaf.getParent() == 123);
         try std.testing.expect(try leaf.getPrev() == 456);
@@ -100,10 +100,10 @@ test "WBpt paged: Create with Paged model" {
         try std.testing.expect(leaf.id() == leaf_load.id());
     }
     {
-        var inode = try model.accessor.createInode();
-        defer model.getAccessor().deinitInode(&inode);
-        var inode_load = try model.accessor.loadInode(inode.id());
-        defer model.getAccessor().deinitInode(&inode_load);
+        var inode = try model.accessor().createInode();
+        defer model.accessor().deinitInode(&inode);
+        var inode_load = try model.accessor().loadInode(inode.id());
+        defer model.accessor().deinitInode(&inode_load);
 
         try std.testing.expect(inode.id() == inode_load.id());
     }
@@ -126,8 +126,8 @@ test "WBpt paged: Insert, get" {
     var tree = Tree.init(&model, .neighbor_share);
     defer tree.deinit();
 
-    var leaf = try model.accessor.createLeaf();
-    defer model.getAccessor().deinitLeaf(&leaf);
+    var leaf = try model.accessor().createLeaf();
+    defer model.accessor().deinitLeaf(&leaf);
 
     try leaf.insertAt(0, "Test!");
     try leaf.insertWeight(3, "111111111111");

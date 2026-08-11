@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype, comptime Ctx: type) type {
+pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype, comptime CtxT: type) type {
     const Context = struct {
         allocator: std.mem.Allocator,
         max_level: usize,
@@ -183,7 +183,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         pub const Error = error{ OutOfMemory, OutOfBounds };
 
         ctx: Context,
-        cmp_ctx: Ctx = undefined,
+        cmp_ctx: CtxT = undefined,
         cont: NodeContainer = undefined,
         roots: PidContainer = undefined,
 
@@ -295,7 +295,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         const Self = @This();
 
         pub const Error = error{ OutOfMemory, OutOfBounds };
-        pub const Accessor = AccessorImpl;
+        pub const AccessorType = AccessorImpl;
 
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
@@ -306,35 +306,35 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         pub const ValueOut = *const ValueIn;
         pub const Path = PathImpl;
 
-        accessor: Accessor,
+        accessor_state: AccessorType,
 
         pub fn init(allocator: std.mem.Allocator, max_level: usize, rng: std.Random) Error!Self {
             return .{
-                .accessor = try Accessor.init(allocator, max_level, rng),
+                .accessor_state = try AccessorType.init(allocator, max_level, rng),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor.deinit();
+            self.accessor_state.deinit();
         }
 
         pub fn getMaxLevel(self: *const Self) Error!usize {
-            return self.accessor.ctx.max_level;
+            return self.accessor_state.ctx.max_level;
         }
 
-        pub fn getAccessor(self: *Self) *Accessor {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn keysCompare(self: *const Self, k1: KeyIn, k2: KeyIn) std.math.Order {
-            const CmpReturnType = @TypeOf(cmp(self.accessor.cmp_ctx, k1, k2));
+            const CmpReturnType = @TypeOf(cmp(self.accessor_state.cmp_ctx, k1, k2));
             const is_error_union = @typeInfo(CmpReturnType) == .error_union;
 
             const order = blk: {
                 if (comptime is_error_union) {
-                    break :blk cmp(self.accessor.cmp_ctx, k1, k2) catch return .eq;
+                    break :blk cmp(self.accessor_state.cmp_ctx, k1, k2) catch return .eq;
                 } else {
-                    break :blk cmp(self.accessor.cmp_ctx, k1, k2);
+                    break :blk cmp(self.accessor_state.cmp_ctx, k1, k2);
                 }
             };
             return order;

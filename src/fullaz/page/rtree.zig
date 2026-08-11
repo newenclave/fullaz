@@ -10,7 +10,7 @@ pub fn Rtree(
     comptime dims: usize,
     comptime Endian: std.builtin.Endian,
 ) type {
-    const PageIdType = PackedInt(PageIdT, Endian);
+    const PackedPageId = PackedInt(PageIdT, Endian);
     const IndexType = PackedInt(IndexT, Endian);
     const CoordType = PackedNumber(CoordT, Endian);
 
@@ -22,7 +22,7 @@ pub fn Rtree(
 
     const LeafSubheaderType = extern struct {
         const Self = @This();
-        parent: PageIdType,
+        parent: PackedPageId,
         pub fn formatHeader(self: *Self) void {
             self.parent.setMax();
         }
@@ -35,7 +35,7 @@ pub fn Rtree(
 
     const InodeSubheaderType = extern struct {
         const Self = @This();
-        parent: PageIdType,
+        parent: PackedPageId,
         level: IndexType,
         pub fn formatHeader(self: *Self) void {
             self.parent.setMax();
@@ -44,7 +44,7 @@ pub fn Rtree(
     };
 
     const InodeSlotHeaderType = extern struct {
-        child: PageIdType,
+        child: PackedPageId,
         mbr: MbrType,
     };
 

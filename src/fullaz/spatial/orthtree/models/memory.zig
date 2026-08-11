@@ -391,11 +391,11 @@ pub fn MemoryImpl(
             return self.node.level;
         }
 
-        pub fn getTrait(self: *const Self) *const TraitType {
+        pub fn trait(self: *const Self) *const TraitType {
             return &self.node.trait;
         }
 
-        pub fn getTraitMut(self: *Self) ErrorSet!*TraitType {
+        pub fn traitMut(self: *Self) ErrorSet!*TraitType {
             return &self.node.trait;
         }
 
@@ -541,7 +541,7 @@ pub fn MemoryImpl(
         pub const Entry = EntryImpl;
         pub const NodeId = IdType;
         const Self = @This();
-        pub const Accessor = AccessorImpl;
+        pub const AccessorType = AccessorImpl;
 
         pub const Box = BoundingBoxT;
         pub const ValueIn = ValueT;
@@ -551,7 +551,7 @@ pub fn MemoryImpl(
         pub const Trait = TraitType;
         pub const Settings = SettingsT;
 
-        accessor: Accessor,
+        accessor_state: AccessorType,
 
         pub fn init(allocator: std.mem.Allocator, max_leaf_entries: usize) ErrorSet!Self {
             return initWithSettings(allocator, Trait.init(), .{
@@ -571,28 +571,28 @@ pub fn MemoryImpl(
             settings: SettingsT,
         ) ErrorSet!Self {
             return Self{
-                .accessor = try Accessor.init(allocator, trait, settings),
+                .accessor_state = try AccessorType.init(allocator, trait, settings),
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.accessor.deinit();
+            self.accessor_state.deinit();
         }
 
-        pub fn getAccessor(self: *Self) *Accessor {
-            return &self.accessor;
+        pub fn accessor(self: *Self) *AccessorType {
+            return &self.accessor_state;
         }
 
         pub fn incrementEntriesCount(self: *Self) ErrorSet!void {
-            self.accessor.ctx.entries_count += 1;
+            self.accessor_state.ctx.entries_count += 1;
         }
 
         pub fn decrementEntriesCount(self: *Self) ErrorSet!void {
-            self.accessor.ctx.entries_count -= 1;
+            self.accessor_state.ctx.entries_count -= 1;
         }
 
         pub fn getEntriesCount(self: *const Self) ErrorSet!usize {
-            return self.accessor.ctx.entries_count;
+            return self.accessor_state.ctx.entries_count;
         }
 
         pub fn valueOutAsIn(self: *const Self, value: ValueOut) ValueIn {
