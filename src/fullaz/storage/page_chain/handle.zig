@@ -252,7 +252,7 @@ pub fn HandleForwardImpl(
             };
         }
 
-        pub fn chunk(self: *const Self) Error!?ChunkHandle {
+        pub fn cloneChunk(self: *const Self) Error!?ChunkHandle {
             const page = self.page orelse return null;
             return @as(?ChunkHandle, try page.clone());
         }
@@ -366,7 +366,12 @@ pub fn HandleForwardImpl(
             const next = try current.getNext();
 
             var replacement = if (next) |next_id|
-                try IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, next_id, .{ .on = 0 })
+                try IteratorImpl.init(
+                    self.page_cache,
+                    self.settings.chunk_page_kind,
+                    next_id,
+                    .{ .on = 0 },
+                )
             else
                 IteratorImpl.initEmpty(self.page_cache, self.settings.chunk_page_kind);
             errdefer replacement.deinit();
@@ -555,7 +560,8 @@ pub fn HandleBidirectionalImpl(
     const EmptyStruct = extern struct {};
     const SubheaderType = if (SubheaderT == void) EmptyStruct else SubheaderT;
 
-    const has_tail = @hasDecl(StorageManagerT, "getLast") and @hasDecl(StorageManagerT, "setLast");
+    const has_tail = @hasDecl(StorageManagerT, "getLast") and
+        @hasDecl(StorageManagerT, "setLast");
 
     _ = PosType;
 

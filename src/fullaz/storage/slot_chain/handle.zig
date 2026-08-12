@@ -320,6 +320,27 @@ fn HandleDirectionalImpl(
         }
     };
 
+    const TombstoneMarker = struct {
+        fn forIterator(comptime IteratorT: type) type {
+            return struct {
+                const Error = IteratorT.Error;
+                fn markTombstone(self: *IteratorT) Error!void {
+                    const slot_id = switch (self.cursor) {
+                        .on => |index| index,
+                        else => return Error.InvalidIterator,
+                    };
+                    var page = (try self.page_itr.cloneChunk()) orelse return Error.InvalidIterator;
+                    defer page.deinit();
+                    var slots_dir = try SlotsDir.init(try page.dataMut());
+                    const flags = try slots_dir.getFlags(slot_id);
+                    if ((flags & @intFromEnum(SlotsFlags.tombstone)) == 0) {
+                        try slots_dir.setFlags(slot_id, @intCast(@intFromEnum(SlotsFlags.tombstone)));
+                    }
+                }
+            };
+        }
+    };
+
     const BidirectionalIteratorImpl = struct {
         const Self = @This();
         pub const Error = ChunkHandle.Error || PageChainHandle.Error;
@@ -432,6 +453,10 @@ fn HandleDirectionalImpl(
                 .fsm = self.fsm,
                 .manager = self.manager,
             };
+        }
+
+        pub fn markTombstone(self: *Self) Error!void {
+            return TombstoneMarker.forIterator(Self).markTombstone(self);
         }
 
         fn findNext(self: *Self, start: usize) Error!bool {
@@ -559,7 +584,7 @@ fn HandleDirectionalImpl(
                 .on => |index| index,
                 else => return Error.InvalidIterator,
             };
-            var page = (try self.page_itr.chunk()) orelse return Error.InvalidIterator;
+            var page = (try self.page_itr.cloneChunk()) orelse return Error.InvalidIterator;
             errdefer page.deinit();
 
             var sd = try SlotsDir.init(try page.dataMut());
@@ -573,6 +598,10 @@ fn HandleDirectionalImpl(
                 .fsm = self.fsm,
                 .manager = self.manager,
             };
+        }
+
+        pub fn markTombstone(self: *Self) Error!void {
+            return TombstoneMarker.forIterator(Self).markTombstone(self);
         }
 
         fn findNext(self: *Self, start: usize) Error!bool {
@@ -668,6 +697,60 @@ fn HandleDirectionalImpl(
             sv.compactWithBuffer(try tmp.dataMut()) catch {
                 try sv.compactInPlace();
             };
+        }
+
+        fn finishPageRemoval(
+            self: *Self,
+            page_id: PageId,
+            removed_slots: usize,
+            remaining_slots: usize,
+            free_space: usize,
+        ) Error!void {
+            if (removed_slots == 0) {
+                return;
+            }
+
+            const total = try self.ctx.page_chain.manager().getTotalSize();
+            if (removed_slots > @as(usize, @intCast(total))) {
+                return Error.BadData;
+            }
+            try self.ctx.page_chain.managerMut().setTotalSize(total - @as(@TypeOf(total), @intCast(removed_slots)));
+
+            if (comptime FsmT != void) {
+                if (self.ctx.fsm) |fsm| {
+                    if (remaining_slots == 0) {
+                        try fsm.remove(page_id);
+                    } else {
+                        try fsm.update(page_id, @intCast(free_space));
+                    }
+                }
+            }
+
+            if (remaining_slots == 0) {
+                if (self.last_chunk) |*last_chunk| {
+                    if (try last_chunk.id() == page_id) {
+                        last_chunk.deinit();
+                        self.last_chunk = null;
+                    }
+                }
+                try self.removePage(page_id);
+            }
+        }
+
+        fn removePage(self: *Self, page_id: PageId) Error!void {
+            var chain_iterator = try self.ctx.page_chain.iterator();
+            while (true) {
+                const page = (try chain_iterator.get()) orelse {
+                    chain_iterator.deinit();
+                    return Error.InvalidId;
+                };
+                if (page.page_id == page_id) {
+                    var replacement = try self.ctx.page_chain.remove(chain_iterator);
+                    replacement.deinit();
+                    return;
+                }
+                try chain_iterator.next();
+            }
         }
 
         pub fn insertUnordered(self: *Self, val: ValueIn) Error!void {
@@ -804,6 +887,99 @@ fn HandleDirectionalImpl(
                 self.ctx.fsm,
                 self.ctx.page_chain.managerMut(),
             );
+        }
+
+        /// Marks live slots selected by `predicate` without changing page size or FSM state.
+        /// `value` is borrowed for the duration of the predicate call.
+        pub fn markTombstonesIf(self: *Self, context: anytype, comptime predicate: anytype) Error!usize {
+            var chain_iterator = (try self.iterator()) orelse return 0;
+            defer chain_iterator.deinit();
+
+            var marked: usize = 0;
+            while (try chain_iterator.next()) |result| {
+                if (try predicate(context, result.page_id, result.pos, result.value)) {
+                    try chain_iterator.markTombstone();
+                    marked += 1;
+                }
+            }
+            return marked;
+        }
+
+        /// Physically removes all tombstoned slots and returns their count.
+        pub fn removeTombstones(self: *Self) Error!usize {
+            var chain_iterator = try self.ctx.page_chain.iterator();
+            defer chain_iterator.deinit();
+
+            var removed_total: usize = 0;
+            while (try chain_iterator.get()) |page_result| {
+                var page = try self.loadPage(page_result.page_id);
+                const removed_slots = try page.removeTombstones();
+                const remaining_slots = try page.size();
+                const free_space = (try page.slotsDir()).availableSpace();
+                page.deinit();
+
+                try self.finishPageRemoval(
+                    page_result.page_id,
+                    removed_slots,
+                    remaining_slots,
+                    free_space,
+                );
+                removed_total += removed_slots;
+                try chain_iterator.next();
+            }
+            return removed_total;
+        }
+
+        /// Physically removes live slots selected by `predicate` and returns their count.
+        /// `value` is borrowed for the duration of the predicate call.
+        pub fn removeIf(self: *Self, context: anytype, comptime predicate: anytype) Error!usize {
+            const PredicateContext = struct {
+                const CallbackContext = @TypeOf(context);
+
+                context: CallbackContext,
+                page_id: PageId,
+                callback_error: ?Error = null,
+
+                fn call(callback_state: *@This(), slot_index: usize, flags: IndexT, value: []const u8) bool {
+                    if ((flags & @intFromEnum(SlotsFlags.tombstone)) != 0) {
+                        return false;
+                    }
+                    return predicate(callback_state.context, callback_state.page_id, slot_index, value) catch |err| {
+                        callback_state.callback_error = err;
+                        return false;
+                    };
+                }
+            };
+
+            var chain_iterator = try self.ctx.page_chain.iterator();
+            defer chain_iterator.deinit();
+
+            var removed_total: usize = 0;
+            while (try chain_iterator.get()) |page_result| {
+                var page = try self.loadPage(page_result.page_id);
+                var slots_dir = try page.slotsDirMut();
+                var predicate_context = PredicateContext{
+                    .context = context,
+                    .page_id = page_result.page_id,
+                };
+                const removed_slots = try slots_dir.removeIf(PredicateContext.call, &predicate_context);
+                const remaining_slots = try page.size();
+                const free_space = (try page.slotsDir()).availableSpace();
+                page.deinit();
+
+                try self.finishPageRemoval(
+                    page_result.page_id,
+                    removed_slots,
+                    remaining_slots,
+                    free_space,
+                );
+                removed_total += removed_slots;
+                if (predicate_context.callback_error) |err| {
+                    return err;
+                }
+                try chain_iterator.next();
+            }
+            return removed_total;
         }
 
         /// Rebinds a pending removal to this handle's chain state and manager.

@@ -570,6 +570,120 @@ test "SlotChain: pending removal destroys an empty page" {
     try std.testing.expect((try hdl.iterator()) == null);
 }
 
+test "SlotChain: markTombstonesIf skips marked slots until cleanup" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+
+    var manager = NoneStorageManager{};
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var handle = try Handle.init(&cache, &manager, .{});
+    defer handle.deinit();
+    _ = try handle.append("first");
+    _ = try handle.append("second");
+    _ = try handle.append("third");
+
+    const Match = struct {
+        fn call(_: void, _: u32, _: usize, value: []const u8) error{}!bool {
+            return std.mem.eql(u8, value, "second");
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), try handle.markTombstonesIf({}, Match.call));
+    try std.testing.expectEqual(@as(usize, 0), try handle.markTombstonesIf({}, Match.call));
+    try std.testing.expectEqual(@as(usize, 3), try handle.size());
+
+    var iterator = (try handle.iterator()).?;
+    defer iterator.deinit();
+    try std.testing.expectEqualStrings("first", (try iterator.next()).?.value);
+    try std.testing.expectEqualStrings("third", (try iterator.next()).?.value);
+    try std.testing.expect((try iterator.next()) == null);
+
+    try std.testing.expectEqual(@as(usize, 1), try handle.removeTombstones());
+    try std.testing.expectEqual(@as(usize, 2), try handle.size());
+}
+
+test "SlotChain bidirectional iterator: markTombstone marks the current slot" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.BidirectionalHandle(Cache, NoneStorageManager, .little);
+
+    var manager = NoneStorageManager{};
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var handle = try Handle.init(&cache, &manager, .{});
+    defer handle.deinit();
+    _ = try handle.append("only");
+
+    var iterator = (try handle.iterator()).?;
+    defer iterator.deinit();
+    _ = (try iterator.next()).?;
+    try iterator.markTombstone();
+    try std.testing.expect((try iterator.next()) == null);
+}
+
+test "SlotChain forward iterator: markTombstone marks the current slot" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.ForwardHandle(Cache, RootOnlyStorageManager, .little);
+
+    var manager = RootOnlyStorageManager{};
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var handle = try Handle.init(&cache, &manager, .{});
+    defer handle.deinit();
+    _ = try handle.append("only");
+
+    var iterator = (try handle.iterator()).?;
+    defer iterator.deinit();
+    _ = (try iterator.next()).?;
+    try iterator.markTombstone();
+    try std.testing.expect((try iterator.next()) == null);
+}
+
+test "SlotChain: removeIf removes matching slots across pages" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, TrackingStorageManager, .little);
+
+    var manager = TrackingStorageManager{};
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var handle = try Handle.init(&cache, &manager, .{});
+    defer handle.deinit();
+
+    var first: [3000]u8 = undefined;
+    @memset(&first, 'a');
+    var second: [3000]u8 = undefined;
+    @memset(&second, 'b');
+    _ = try handle.append(&first);
+    const first_page_id = manager.first_block_id.?;
+    _ = try handle.append(&second);
+
+    const Match = struct {
+        fn call(expected_page_id: u32, page_id: u32, slot_index: usize, value: []const u8) error{}!bool {
+            _ = slot_index;
+            return page_id == expected_page_id and value[0] == 'a';
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), try handle.removeIf(first_page_id, Match.call));
+    try std.testing.expectEqual(@as(?u32, first_page_id), manager.destroyed_page_id);
+    try std.testing.expectEqual(@as(usize, 1), try handle.size());
+
+    var iterator = (try handle.iterator()).?;
+    defer iterator.deinit();
+    try std.testing.expectEqual(@as(u8, 'b'), (try iterator.next()).?.value[0]);
+    try std.testing.expect((try iterator.next()) == null);
+}
+
 test "SlotChain: pending removal updates FSM and total size" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
