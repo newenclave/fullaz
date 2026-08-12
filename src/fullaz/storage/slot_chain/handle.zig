@@ -16,6 +16,7 @@ pub fn Handle(
         void,
         void,
         void,
+        false,
         Endian,
     );
 }
@@ -26,6 +27,74 @@ pub fn HandleImpl(
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime FsmT: type,
+    comptime forward_only: bool,
+    comptime Endian: std.builtin.Endian,
+) type {
+    if (forward_only) {
+        return HandleForwardImpl(
+            PageCacheT,
+            StorageManagerT,
+            AdditionalT,
+            SubheaderT,
+            FsmT,
+            Endian,
+        );
+    }
+    return HandleBidirectionalImpl(
+        PageCacheT,
+        StorageManagerT,
+        AdditionalT,
+        SubheaderT,
+        FsmT,
+        Endian,
+    );
+}
+
+pub fn HandleBidirectionalImpl(
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
+    comptime AdditionalT: type,
+    comptime SubheaderT: type,
+    comptime FsmT: type,
+    comptime Endian: std.builtin.Endian,
+) type {
+    return HandleDirectionalImpl(
+        PageCacheT,
+        StorageManagerT,
+        AdditionalT,
+        SubheaderT,
+        FsmT,
+        false,
+        Endian,
+    );
+}
+
+pub fn HandleForwardImpl(
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
+    comptime AdditionalT: type,
+    comptime SubheaderT: type,
+    comptime FsmT: type,
+    comptime Endian: std.builtin.Endian,
+) type {
+    return HandleDirectionalImpl(
+        PageCacheT,
+        StorageManagerT,
+        AdditionalT,
+        SubheaderT,
+        FsmT,
+        true,
+        Endian,
+    );
+}
+
+fn HandleDirectionalImpl(
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
+    comptime AdditionalT: type,
+    comptime SubheaderT: type,
+    comptime FsmT: type,
+    comptime forward_only: bool,
     comptime Endian: std.builtin.Endian,
 ) type {
     const FsmError = if (FsmT != void) FsmT.Error else error{};
@@ -34,9 +103,27 @@ pub fn HandleImpl(
     const IndexT = u16;
     const BlockDevice = PageCacheT.UnderlyingDevice;
     const BlockIdType = BlockDevice.BlockId;
+    const has_tail = @hasDecl(StorageManagerT, "getLast") and @hasDecl(
+        StorageManagerT,
+        "setLast",
+    );
 
-    const ViewType = view.ViewImpl(BlockIdType, IndexT, AdditionalT, Endian, false);
-    const ViewTypeConst = view.ViewImpl(BlockIdType, IndexT, AdditionalT, Endian, true);
+    const ViewType = view.ViewImpl(
+        BlockIdType,
+        IndexT,
+        AdditionalT,
+        forward_only,
+        Endian,
+        false,
+    );
+    const ViewTypeConst = view.ViewImpl(
+        BlockIdType,
+        IndexT,
+        AdditionalT,
+        forward_only,
+        Endian,
+        true,
+    );
 
     const SlotsDir = ViewType.SlotsDir;
     const SlotsDirConst = ViewTypeConst.SlotsDir;
@@ -49,7 +136,7 @@ pub fn HandleImpl(
         StorageManagerT,
         AdditionalT,
         SubheaderT,
-        false,
+        forward_only,
         Endian,
     );
 
@@ -148,6 +235,8 @@ pub fn HandleImpl(
         page_id: BlockIdType,
         slot_id: usize,
         page: ?PageChainHandle.Chunk,
+        page_chain: *PageChainHandle,
+        last_chunk: *?ChunkHandle,
         fsm: ?*FsmT,
         manager: *StorageManagerT,
 
@@ -174,14 +263,22 @@ pub fn HandleImpl(
 
                 try sd.remove(self.slot_id);
                 errdefer self.deinitPage();
+                const page_empty = sd.size() == 0;
                 if (comptime FsmT != void) {
                     if (self.fsm) |fsm| {
-                        try fsm.update(self.page_id, @intCast(sd.availableSpace()));
+                        if (page_empty) {
+                            try fsm.remove(self.page_id);
+                        } else {
+                            try fsm.update(self.page_id, @intCast(sd.availableSpace()));
+                        }
                     }
                 }
                 const total = try self.manager.getTotalSize();
                 try self.manager.setTotalSize(total - 1);
                 self.deinitPage();
+                if (page_empty) {
+                    try self.removeEmptyPage();
+                }
                 return true;
             }
             return false;
@@ -198,9 +295,32 @@ pub fn HandleImpl(
                 self.page = null;
             }
         }
+
+        fn removeEmptyPage(self: *Self) Error!void {
+            if (self.last_chunk.*) |*last_chunk| {
+                if (try last_chunk.id() == self.page_id) {
+                    last_chunk.deinit();
+                    self.last_chunk.* = null;
+                }
+            }
+
+            var itr = try self.page_chain.iterator();
+            while (true) {
+                const page = (try itr.get()) orelse {
+                    itr.deinit();
+                    return Error.InvalidId;
+                };
+                if (page.page_id == self.page_id) {
+                    var replacement = try self.page_chain.remove(itr);
+                    replacement.deinit();
+                    return;
+                }
+                try itr.next();
+            }
+        }
     };
 
-    const IteratorImpl = struct {
+    const BidirectionalIteratorImpl = struct {
         const Self = @This();
         pub const Error = ChunkHandle.Error || PageChainHandle.Error;
 
@@ -218,18 +338,24 @@ pub fn HandleImpl(
 
         page_itr: PageChainHandle.Iterator,
         cursor: Cursor,
+        page_chain: *PageChainHandle,
+        last_chunk: *?ChunkHandle,
         fsm: ?*FsmT,
         manager: *StorageManagerT,
 
         fn init(
             page_itr: PageChainHandle.Iterator,
             cursor: Cursor,
+            chain_handle: *PageChainHandle,
+            last_chunk: *?ChunkHandle,
             fsm: ?*FsmT,
             manager: *StorageManagerT,
         ) Self {
             return .{
                 .page_itr = page_itr,
                 .cursor = cursor,
+                .page_chain = chain_handle,
+                .last_chunk = last_chunk,
                 .fsm = fsm,
                 .manager = manager,
             };
@@ -301,6 +427,8 @@ pub fn HandleImpl(
                 .page_id = try page.id(),
                 .slot_id = slot_id,
                 .page = page,
+                .page_chain = self.page_chain,
+                .last_chunk = self.last_chunk,
                 .fsm = self.fsm,
                 .manager = self.manager,
             };
@@ -351,12 +479,126 @@ pub fn HandleImpl(
         }
     };
 
+    const ForwardIteratorImpl = struct {
+        const Self = @This();
+        pub const Error = ChunkHandle.Error || PageChainHandle.Error;
+
+        const Cursor = union(enum) {
+            before_first,
+            on: usize,
+            after_last,
+        };
+
+        pub const Result = struct {
+            value: []const u8,
+            page_id: BlockIdType,
+            pos: usize,
+        };
+
+        page_itr: PageChainHandle.Iterator,
+        cursor: Cursor,
+        page_chain: *PageChainHandle,
+        last_chunk: *?ChunkHandle,
+        fsm: ?*FsmT,
+        manager: *StorageManagerT,
+
+        fn init(
+            page_itr: PageChainHandle.Iterator,
+            cursor: Cursor,
+            chain_handle: *PageChainHandle,
+            last_chunk: *?ChunkHandle,
+            fsm: ?*FsmT,
+            manager: *StorageManagerT,
+        ) Self {
+            return .{
+                .page_itr = page_itr,
+                .cursor = cursor,
+                .page_chain = chain_handle,
+                .last_chunk = last_chunk,
+                .fsm = fsm,
+                .manager = manager,
+            };
+        }
+
+        pub fn get(self: *const Self) Error!?Result {
+            const pos = switch (self.cursor) {
+                .on => |index| index,
+                else => return null,
+            };
+            const page = (try self.page_itr.get()) orelse return null;
+            const sd = try SlotsDirConst.init(page.value);
+            if (pos >= sd.size()) {
+                return null;
+            }
+            return .{
+                .value = try sd.get(pos),
+                .page_id = page.page_id,
+                .pos = pos,
+            };
+        }
+
+        pub fn next(self: *Self) Error!?Result {
+            const start = switch (self.cursor) {
+                .before_first => 0,
+                .on => |pos| pos + 1,
+                .after_last => return null,
+            };
+            if (!try self.findNext(start)) {
+                self.cursor = .after_last;
+                return null;
+            }
+            return self.get();
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.page_itr.deinit();
+        }
+
+        pub fn markForRemoval(self: *Self) Error!PendingRemovalImpl {
+            const slot_id = switch (self.cursor) {
+                .on => |index| index,
+                else => return Error.InvalidIterator,
+            };
+            var page = (try self.page_itr.chunk()) orelse return Error.InvalidIterator;
+            errdefer page.deinit();
+
+            var sd = try SlotsDir.init(try page.dataMut());
+            try sd.setFlags(slot_id, @intCast(@intFromEnum(SlotsFlags.tombstone)));
+            return .{
+                .page_id = try page.id(),
+                .slot_id = slot_id,
+                .page = page,
+                .page_chain = self.page_chain,
+                .last_chunk = self.last_chunk,
+                .fsm = self.fsm,
+                .manager = self.manager,
+            };
+        }
+
+        fn findNext(self: *Self, start: usize) Error!bool {
+            var index = start;
+            while (true) {
+                const page = (try self.page_itr.get()) orelse return false;
+                const sd = try SlotsDirConst.init(page.value);
+                while (index < sd.size()) : (index += 1) {
+                    const flags = try sd.getFlags(index);
+                    if ((flags & @intFromEnum(SlotsFlags.tombstone)) == 0) {
+                        self.cursor = .{ .on = index };
+                        return true;
+                    }
+                }
+                try self.page_itr.next();
+                index = 0;
+            }
+        }
+    };
+
     return struct {
         const Self = @This();
         pub const PageId = BlockIdType;
         pub const Index = IndexT;
         pub const View = ViewType;
-        pub const Iterator = IteratorImpl;
+        pub const Iterator = if (forward_only) ForwardIteratorImpl else BidirectionalIteratorImpl;
         pub const PendingRemoval = PendingRemovalImpl;
         pub const Error = PageChainHandle.Error ||
             PageCacheT.Error ||
@@ -508,8 +750,25 @@ pub fn HandleImpl(
             if (self.last_chunk != null) {
                 return;
             }
-            const last_id = try self.ctx.page_chain.manager().getLast() orelse return;
-            self.last_chunk = try self.loadPage(last_id);
+            if (comptime has_tail) {
+                const last_id = (try self.ctx.page_chain.manager().getLast()) orelse return;
+                self.last_chunk = try self.loadPage(last_id);
+                return;
+            }
+
+            var page_itr = try self.ctx.page_chain.iterator();
+            defer page_itr.deinit();
+
+            while (true) {
+                const page = (try page_itr.get()) orelse return;
+                const chunk = try self.loadPage(page.page_id);
+                if (self.last_chunk) |*last_chunk| {
+                    last_chunk.deinit();
+                }
+                self.last_chunk = chunk;
+
+                try page_itr.next();
+            }
         }
 
         pub fn size(self: *const Self) Error!usize {
@@ -521,18 +780,27 @@ pub fn HandleImpl(
             return Iterator.init(
                 try self.ctx.page_chain.iterator(),
                 .before_first,
+                &self.ctx.page_chain,
+                &self.last_chunk,
                 self.ctx.fsm,
                 self.ctx.page_chain.managerMut(),
             );
         }
 
         pub fn iteratorFromEnd(self: *Self) Error!?Iterator {
-            if (try self.ctx.page_chain.manager().getLast() == null) return null;
+            if (comptime forward_only) {
+                @compileError("Forward-only slot chains do not support reverse iteration");
+            }
+            if (try self.ctx.page_chain.manager().getFirst() == null) {
+                return null;
+            }
             var page_itr = try self.ctx.page_chain.iteratorFromEnd();
             try page_itr.next();
             return Iterator.init(
                 page_itr,
                 .after_last,
+                &self.ctx.page_chain,
+                &self.last_chunk,
                 self.ctx.fsm,
                 self.ctx.page_chain.managerMut(),
             );
