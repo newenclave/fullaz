@@ -34,11 +34,12 @@ const usage =
     "usage: cloud <image> [--format] [--seed N] [--points N] [--clusters N]\n" ++
     "             [--detail PERCENT] [--distance CUBES]\n";
 
-const keys_hint = "h/l yaw  j/k pitch  +/- zoom  [/] detail  i add points  w write  q quit";
+const keys_hint = "h/l yaw  j/k pitch  +/- zoom  [/] detail  i add  d remove 500  w write  q quit";
 
 // Rows reserved for the heads-up display above the viewport.
 const hud_rows: usize = 4;
 const insert_batch: u32 = 10_000;
+const remove_batch: u32 = 500;
 
 // Frame size used when stdout is not a terminal, chosen to fit a README block.
 const headless_columns: usize = 78;
@@ -300,6 +301,8 @@ fn writeHud(
     const points = try c.pointCount();
     const bytes = c.imageBytes();
     const per_point = if (points == 0) 0 else bytes / points;
+    const free_pages = c.freePageCount();
+    const reused_pages = c.reusedPageCount();
 
     try out.print("fullaz . cloud | points {d} | splats {d} | aggregates {d} | drawn {d}\x1b[K\r\n", .{
         points,
@@ -314,10 +317,12 @@ fn writeHud(
         detail_fraction * 100.0,
         c.camera.distance,
     });
-    try out.print("image {d} KiB in {d} pages ({d} B/point) | seed {d}{s}{s}\x1b[K\r\n", .{
+    try out.print("image {d} KiB in {d} pages ({d} B/point) | free {d} | reused {d} | seed {d}{s}{s}\x1b[K\r\n", .{
         bytes / 1024,
         bytes / constants.block_size,
         per_point,
+        free_pages,
+        reused_pages,
         c.spec.seed,
         if (status.len == 0) "" else " | ",
         status,
@@ -375,12 +380,14 @@ fn run(init: std.process.Init, out: *Io.Writer, options: Options) !void {
 
         const points = try c.pointCount();
         const bytes = c.imageBytes();
-        try out.print("\n{s}: {d} points, {d} KiB in {d} pages ({d} B/point), seed {d}\n", .{
+        try out.print("\n{s}: {d} points, {d} KiB in {d} pages ({d} B/point), {d} free, {d} reused, seed {d}\n", .{
             options.image,
             points,
             bytes / 1024,
             bytes / constants.block_size,
             if (points == 0) 0 else bytes / points,
+            c.freePageCount(),
+            c.reusedPageCount(),
             c.spec.seed,
         });
         try out.print("{d} splats: {d} aggregates + {d} points, {d} nodes seen\n", .{
@@ -471,6 +478,11 @@ fn run(init: std.process.Init, out: *Io.Writer, options: Options) !void {
                 'i', 'I' => {
                     _ = try c.insertPoints(insert_batch);
                     status = "points added";
+                    dirty = true;
+                },
+                'd', 'D' => {
+                    const removed = try c.removePoints(remove_batch);
+                    status = if (removed == 0) "no points to remove" else "points removed";
                     dirty = true;
                 },
                 'w', 'W' => {

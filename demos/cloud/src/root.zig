@@ -9,6 +9,7 @@ pub const ascii = @import("ascii.zig");
 pub const superblock = @import("superblock.zig");
 pub const storage = @import("storage.zig");
 pub const scene = @import("scene.zig");
+pub const reclaiming_cache = @import("reclaiming_cache.zig");
 const cloud_mod = @import("cloud.zig");
 
 pub const Cloud = cloud_mod.Cloud;

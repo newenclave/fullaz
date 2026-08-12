@@ -806,6 +806,13 @@ fn HandleDirectionalImpl(
             );
         }
 
+        /// Rebinds a pending removal to this handle's chain state and manager.
+        pub fn rebindPendingRemoval(self: *Self, pending: *PendingRemoval) void {
+            pending.page_chain = &self.ctx.page_chain;
+            pending.last_chunk = &self.last_chunk;
+            pending.manager = self.ctx.page_chain.managerMut();
+        }
+
         pub fn insertPageToFsm(self: *Self, page_id: PageId, free_size: usize) Error!void {
             if (comptime FsmT == void) {
                 return;

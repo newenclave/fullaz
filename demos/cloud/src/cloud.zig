@@ -7,6 +7,7 @@ const scene = @import("scene.zig");
 const storage_mod = @import("storage.zig");
 const superblock = @import("superblock.zig");
 const trait = @import("trait.zig");
+const reclaiming_cache_mod = @import("reclaiming_cache.zig");
 
 const orthtree = fullaz.spatial.orthtree;
 
@@ -20,21 +21,22 @@ pub fn defaultCamera() superblock.Camera {
 }
 
 pub fn Cloud(comptime PageCacheType: type) type {
-    const ManagerT = storage_mod.Manager(PageCacheType);
+    const ReclaimingCacheT = reclaiming_cache_mod.ReclaimingCache(PageCacheType);
+    const ManagerT = storage_mod.Manager(ReclaimingCacheT);
     const LocationAccessor = orthtree.models.paged.NodePageLocationAccessor(
         constants.PageId,
         u16,
         constants.endian,
     );
     const FsmModelT = fullaz.storage.fsm.models.paged.slab.Model(
-        PageCacheType,
+        ReclaimingCacheT,
         ManagerT,
         storage_mod.NodeSizePolicy,
         LocationAccessor,
     );
     const FsmT = fullaz.storage.fsm.Fsm(FsmModelT);
     const ModelT = orthtree.models.PagedImpl(
-        PageCacheType,
+        ReclaimingCacheT,
         ManagerT,
         FsmT,
         constants.Coord,
@@ -48,6 +50,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
         const Self = @This();
 
         pub const Manager = ManagerT;
+        pub const ReclaimingCache = ReclaimingCacheT;
         pub const FsmModel = FsmModelT;
         pub const Fsm = FsmT;
         pub const Model = ModelT;
@@ -62,6 +65,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
 
         gpa: std.mem.Allocator,
         cache: *PageCacheType,
+        reclaiming_cache: *ReclaimingCache,
         // Model points at Manager and Fsm, Fsm points at FsmModel, and both
         // format and open return Self by value. Any of them stored inline would
         // dangle the moment that copy happens.
@@ -77,6 +81,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
         detail_fraction: f64,
 
         const Wired = struct {
+            reclaiming_cache: *ReclaimingCache,
             manager: *Manager,
             fsm_model: *FsmModel,
             fsm: *Fsm,
@@ -84,13 +89,21 @@ pub fn Cloud(comptime PageCacheType: type) type {
         };
 
         fn wire(gpa: std.mem.Allocator, cache: *PageCacheType, state: Manager.State) !Wired {
+            const reclaiming = try gpa.create(ReclaimingCache);
+            errdefer gpa.destroy(reclaiming);
+            reclaiming.* = ReclaimingCache.init(cache, .{
+                .free_page_root = state.free_page_root,
+                .free_page_count = state.free_page_count,
+                .reused_page_count = state.reused_page_count,
+            });
+
             const manager = try gpa.create(Manager);
             errdefer gpa.destroy(manager);
-            manager.* = Manager.init(cache, state);
+            manager.* = Manager.init(reclaiming, state);
 
             const fsm_model = try gpa.create(FsmModel);
             errdefer gpa.destroy(fsm_model);
-            fsm_model.* = FsmModel.init(cache, manager, .{}, .{ .page_kind = fsm_page_kind });
+            fsm_model.* = FsmModel.init(reclaiming, manager, .{}, .{ .page_kind = fsm_page_kind });
 
             const fsm = try gpa.create(Fsm);
             errdefer gpa.destroy(fsm);
@@ -98,9 +111,9 @@ pub fn Cloud(comptime PageCacheType: type) type {
 
             const model = try gpa.create(Model);
             errdefer gpa.destroy(model);
-            model.* = try Model.init(cache, manager, fsm, constants.tree_settings);
+            model.* = try Model.init(reclaiming, manager, fsm, constants.tree_settings);
 
-            return .{ .manager = manager, .fsm_model = fsm_model, .fsm = fsm, .model = model };
+            return .{ .reclaiming_cache = reclaiming, .manager = manager, .fsm_model = fsm_model, .fsm = fsm, .model = model };
         }
 
         pub fn format(
@@ -125,6 +138,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
             var self = Self{
                 .gpa = gpa,
                 .cache = cache,
+                .reclaiming_cache = wired.reclaiming_cache,
                 .manager = wired.manager,
                 .fsm_model = wired.fsm_model,
                 .fsm = wired.fsm,
@@ -164,6 +178,9 @@ pub fn Cloud(comptime PageCacheType: type) type {
                         .root = view.getRoot(),
                         .entries_count = try view.getEntriesCount(),
                         .fsm_class_root = view.getFsmClassRoot(),
+                        .free_page_root = view.getFreePageRoot(),
+                        .free_page_count = view.getFreePageCount(),
+                        .reused_page_count = view.getReusedPageCount(),
                     },
                     .spec = scene.Spec{
                         .seed = view.getSeed(),
@@ -181,6 +198,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
             return Self{
                 .gpa = gpa,
                 .cache = cache,
+                .reclaiming_cache = wired.reclaiming_cache,
                 .manager = wired.manager,
                 .fsm_model = wired.fsm_model,
                 .fsm = wired.fsm,
@@ -203,6 +221,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
             self.fsm_model.deinit();
             self.gpa.destroy(self.fsm_model);
             self.gpa.destroy(self.manager);
+            self.gpa.destroy(self.reclaiming_cache);
         }
 
         pub fn save(self: *Self) !void {
@@ -233,6 +252,24 @@ pub fn Cloud(comptime PageCacheType: type) type {
             return added;
         }
 
+        pub fn removePoints(self: *Self, count: u32) !u32 {
+            const removed_count = @min(count, self.next_point_id);
+            var removed: u32 = 0;
+            while (removed < removed_count) : (removed += 1) {
+                const point_id = self.next_point_id - removed - 1;
+                const matchesPointId = struct {
+                    fn call(expected_id: u32, _: Box, value: []const u8) error{}!bool {
+                        return point.PointRecord.fromBytes(value).id.get() == expected_id;
+                    }
+                }.call;
+                if (!try self.tree.remove(constants.rootBox(), matchesPointId, point_id)) {
+                    return error.PointNotFound;
+                }
+            }
+            self.next_point_id -= removed_count;
+            return removed_count;
+        }
+
         pub fn pointCount(self: *Self) !usize {
             return self.model.getEntriesCount();
         }
@@ -243,6 +280,18 @@ pub fn Cloud(comptime PageCacheType: type) type {
 
         pub fn imageBytes(self: *const Self) usize {
             return self.cache.device.blocksCount() * self.cache.pageSize();
+        }
+
+        pub fn freePageCount(self: *const Self) usize {
+            return self.reclaiming_cache.state.free_page_count;
+        }
+
+        pub fn freePageRoot(self: *const Self) ?constants.PageId {
+            return self.reclaiming_cache.state.free_page_root;
+        }
+
+        pub fn reusedPageCount(self: *const Self) usize {
+            return self.reclaiming_cache.state.reused_page_count;
         }
     };
 }

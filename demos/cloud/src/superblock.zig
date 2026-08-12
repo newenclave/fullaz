@@ -35,6 +35,9 @@ pub const Header = extern struct {
     // Persist the wider one so a browser-exported image opens natively.
     entries_count: U64,
     fsm_class_root: Pid,
+    free_page_root: Pid,
+    free_page_count: U64,
+    reused_page_count: U64,
 
     world_seed: U64,
     next_point_id: U32,
@@ -92,6 +95,9 @@ pub fn View(comptime read_only: bool) type {
             h.root_slot.set(0);
             h.entries_count.set(0);
             h.fsm_class_root.set(pid_none);
+            h.free_page_root.set(pid_none);
+            h.free_page_count.set(0);
+            h.reused_page_count.set(0);
             h.world_seed.set(seed);
             h.next_point_id.set(0);
             h.cluster_count.set(cluster_count);
@@ -145,6 +151,30 @@ pub fn View(comptime read_only: bool) type {
 
         pub fn setFsmClassRoot(self: *Self, pid: ?PageId) void {
             self.headerMut().fsm_class_root.set(wrapPid(pid));
+        }
+
+        pub fn getFreePageRoot(self: *const Self) ?PageId {
+            return unwrapPid(self.header().free_page_root.get());
+        }
+
+        pub fn setFreePageRoot(self: *Self, pid: ?PageId) void {
+            self.headerMut().free_page_root.set(wrapPid(pid));
+        }
+
+        pub fn getFreePageCount(self: *const Self) usize {
+            return @intCast(self.header().free_page_count.get());
+        }
+
+        pub fn setFreePageCount(self: *Self, count: usize) void {
+            self.headerMut().free_page_count.set(@intCast(count));
+        }
+
+        pub fn getReusedPageCount(self: *const Self) usize {
+            return @intCast(self.header().reused_page_count.get());
+        }
+
+        pub fn setReusedPageCount(self: *Self, count: usize) void {
+            self.headerMut().reused_page_count.set(@intCast(count));
         }
 
         pub fn getSeed(self: *const Self) u64 {

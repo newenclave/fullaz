@@ -36,6 +36,9 @@ pub fn Manager(comptime PageCacheType: type) type {
             root: ?NodeId = null,
             entries_count: usize = 0,
             fsm_class_root: ?PageId = null,
+            free_page_root: ?PageId = null,
+            free_page_count: usize = 0,
+            reused_page_count: usize = 0,
         };
 
         cache: *PageCacheType,
@@ -89,9 +92,9 @@ pub fn Manager(comptime PageCacheType: type) type {
             view.sb.setFsmClassRoot(root);
         }
 
-        // The demo is insert-only, so nothing ever asks for a page back. A page
-        // released here would simply stay allocated inside the image.
-        pub fn destroyPage(_: *Self, _: PageId) Error!void {}
+        pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
+            try self.cache.free(page_id);
+        }
 
         const MutableSuperblock = struct {
             handle: PageCacheType.Handle,

@@ -7,7 +7,7 @@ pub const PageId = u32;
 pub const pid_none: PageId = std.math.maxInt(PageId);
 
 pub const magic: u32 = 0x31444C43; // "CLD1"
-pub const version: u16 = 1;
+pub const version: u16 = 2;
 
 pub const block_size: u32 = 1024;
 // Traversal pins one node page plus one entry chunk per level, so the budget is

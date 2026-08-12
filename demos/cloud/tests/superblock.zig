@@ -29,6 +29,9 @@ test "cloud: a formatted superblock validates and starts empty" {
     try testing.expectEqual(@as(?superblock.NodeId, null), view.getRoot());
     try testing.expectEqual(@as(usize, 0), try view.getEntriesCount());
     try testing.expectEqual(@as(?constants.PageId, null), view.getFsmClassRoot());
+    try testing.expectEqual(@as(?constants.PageId, null), view.getFreePageRoot());
+    try testing.expectEqual(@as(usize, 0), view.getFreePageCount());
+    try testing.expectEqual(@as(usize, 0), view.getReusedPageCount());
     try testing.expectEqual(@as(u64, 0xABCDEF), view.getSeed());
     try testing.expectEqual(@as(u32, 0), view.getNextPointId());
     try testing.expectEqual(@as(u16, 12), view.getClusterCount());
@@ -57,11 +60,17 @@ test "cloud: superblock round-trips the counters and the fsm root" {
     view.setEntriesCount(200_000);
     view.setNextPointId(200_000);
     view.setFsmClassRoot(41);
+    view.setFreePageRoot(42);
+    view.setFreePageCount(17);
+    view.setReusedPageCount(9);
 
     const ro = Ro.init(&page);
     try testing.expectEqual(@as(usize, 200_000), try ro.getEntriesCount());
     try testing.expectEqual(@as(u32, 200_000), ro.getNextPointId());
     try testing.expectEqual(@as(?constants.PageId, 41), ro.getFsmClassRoot());
+    try testing.expectEqual(@as(?constants.PageId, 42), ro.getFreePageRoot());
+    try testing.expectEqual(@as(usize, 17), ro.getFreePageCount());
+    try testing.expectEqual(@as(usize, 9), ro.getReusedPageCount());
 
     view.setFsmClassRoot(null);
     try testing.expectEqual(@as(?constants.PageId, null), Ro.init(&page).getFsmClassRoot());
@@ -101,6 +110,14 @@ test "cloud: superblock validation rejects a bad version" {
     var view = freshPage(&page);
 
     view.headerMut().version.set(constants.version + 1);
+    try testing.expectError(superblock.Error.BadVersion, Ro.init(&page).validate(common.block_size));
+}
+
+test "cloud: superblock validation rejects the v1 image format" {
+    var page: [common.block_size]u8 = undefined;
+    var view = freshPage(&page);
+    view.headerMut().version.set(1);
+
     try testing.expectError(superblock.Error.BadVersion, Ro.init(&page).validate(common.block_size));
 }
 

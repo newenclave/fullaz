@@ -71,6 +71,44 @@ test "cloud: building the index releases every frame it pins" {
     try testing.expectEqual(available_before, cache.availableFrames());
 }
 
+test "cloud: removing generated points restores their insertion sequence" {
+    var device = try Device.init(testing.allocator, common.block_size);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, testing.allocator, common.frames);
+    defer cache.deinit();
+
+    var c = try C.format(testing.allocator, &cache, common.block_size, spec, 100);
+    defer c.deinit();
+    _ = try c.insertPoints(50);
+    try testing.expectEqual(@as(usize, 150), try c.pointCount());
+    try testing.expectEqual(@as(u32, 150), c.next_point_id);
+
+    try testing.expectEqual(@as(u32, 50), try c.removePoints(50));
+    try testing.expectEqual(@as(usize, 100), try c.pointCount());
+    try testing.expectEqual(@as(u32, 100), c.next_point_id);
+
+    _ = try c.insertPoints(50);
+    try testing.expectEqual(@as(usize, 150), try c.pointCount());
+    try testing.expectEqual(@as(u32, 150), c.next_point_id);
+}
+
+test "cloud: removes a 5000-point batch" {
+    const initial_points: u32 = 10_000;
+    const remove_count: u32 = 5_000;
+
+    var device = try Device.init(testing.allocator, common.block_size);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, testing.allocator, common.frames);
+    defer cache.deinit();
+
+    var c = try C.format(testing.allocator, &cache, common.block_size, spec, initial_points);
+    defer c.deinit();
+
+    try testing.expectEqual(remove_count, try c.removePoints(remove_count));
+    try testing.expectEqual(@as(usize, initial_points - remove_count), try c.pointCount());
+    try testing.expectEqual(initial_points - remove_count, c.next_point_id);
+}
+
 test "cloud: an image stays under eighty bytes per point" {
     const points: u32 = 50000;
 
@@ -113,8 +151,8 @@ test "cloud: an image stays under eighty bytes per point" {
 
     // A point costs about 34 bytes on the page (24 of MBR, 8 of payload, a slot
     // directory entry). The rest is chunk pages that leaves only partly fill,
-    // plus chains orphaned by splits: destroyPage is a no-op here and the model
-    // always takes fresh pages from the cache, so nothing recycles them.
+    // plus pages kept in the persistent free list until a later allocation
+    // reuses them.
     // block_size and max_leaf_entries are tuned together against this number:
     // at 2048 it is 89 and at 4096 it is 125.
     const per_point = c.imageBytes() / points;

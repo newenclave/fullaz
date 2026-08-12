@@ -213,6 +213,8 @@ pub fn PagedModelImpl(
             const ChainHandle = EntryChainHandle(NodeT);
 
             return struct {
+                owner: NodeT,
+                chain: ChainHandle,
                 pending: ChainHandle.PendingRemoval,
                 value: Value,
             };
@@ -402,13 +404,26 @@ pub fn PagedModelImpl(
                 }
 
                 pub fn removeCurrent(self: *Self, entry_cursor: *Cursor) ErrorSet!ValueBorrowT {
-                    _ = self;
                     if (entry_cursor.iterator) |*iterator| {
+                        var owner = try self.node.clone();
+                        errdefer owner.deinit();
+                        var chain = try ChainHandle.init(
+                            owner.cache,
+                            &owner,
+                            .{
+                                .chunk_page_kind = owner.settings.entry_page_kind,
+                            },
+                        );
+                        errdefer chain.deinit();
+
                         var pending = try iterator.markForRemoval();
                         errdefer pending.deinit();
                         const entry = try decodeEntry(try pending.value());
+                        chain.rebindPendingRemoval(&pending);
                         entry_cursor.current = null;
                         return .{
+                            .owner = owner,
+                            .chain = chain,
                             .pending = pending,
                             .value = entry.value(),
                         };
@@ -480,6 +495,17 @@ pub fn PagedModelImpl(
 
         pub fn deinit(self: *Self) void {
             self.handle.deinit();
+        }
+
+        fn clone(self: *const Self) Error!Self {
+            return Self.init(
+                try self.handle.clone(),
+                self.self_id,
+                self.cache,
+                self.storage_manager,
+                self.fsm,
+                self.settings,
+            );
         }
 
         pub fn id(self: *const Self) Id {
@@ -793,6 +819,15 @@ pub fn PagedModelImpl(
         }
 
         pub fn finalizeBorrowValue(_: *Self, value: *ValueBorrow) Error!void {
+            value.chain.deinit();
+            value.chain = try EntryChainHandle(NodeImpl).init(
+                value.owner.cache,
+                &value.owner,
+                .{
+                    .chunk_page_kind = value.owner.settings.entry_page_kind,
+                },
+            );
+            value.chain.rebindPendingRemoval(&value.pending);
             if (!try value.pending.clean()) {
                 return Error.BadData;
             }
@@ -800,6 +835,8 @@ pub fn PagedModelImpl(
 
         pub fn deinitBorrowValue(_: *Self, value: *ValueBorrow) void {
             value.pending.deinit();
+            value.chain.deinit();
+            value.owner.deinit();
         }
 
         pub fn onInsert(self: *Self, node: *Node, bounds: Box, value: ValueIn) Error!void {

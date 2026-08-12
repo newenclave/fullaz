@@ -47,6 +47,7 @@
     <span><i style="background:#ffb86c"></i>tree nodes</span>
     <span><i style="background:#7dd3fc"></i>point chunks</span>
     <span><i style="background:#86efac"></i>free-space map</span>
+    <span><i style="background:#a3e635"></i>reusable free page</span>
     <span><i style="background:#4b5563"></i>wasted (split leftovers)</span>
   </div>
 </div>
@@ -54,6 +55,7 @@
 <div id="controls">
   <button id="reset">new cloud</button>
   <button id="add">add 10k points</button>
+  <button id="remove">remove 5k points</button>
   <label class="field"><span>points</span><input id="points" type="number" min="1000" max="500000" step="1000" value="60000"></label>
   <label class="field"><span>detail</span><input id="detail" type="range" min="0.5" max="20" step="0.5" value="5"><output id="detail-value">5%</output></label>
   <button id="download">download image</button>
@@ -69,17 +71,18 @@ const canvas = document.getElementById("sky"), ctx = canvas.getContext("2d");
 const mapCanvas = document.getElementById("map"), mapCtx = mapCanvas.getContext("2d");
 const el = {
   hud: document.getElementById("hud"), reset: document.getElementById("reset"),
-  add: document.getElementById("add"), points: document.getElementById("points"),
+  add: document.getElementById("add"), remove: document.getElementById("remove"), points: document.getElementById("points"),
   detail: document.getElementById("detail"), detailValue: document.getElementById("detail-value"),
   download: document.getElementById("download"), upload: document.getElementById("upload"),
   storage: document.getElementById("storage"), mapStats: document.getElementById("map-stats"),
   toggleMap: document.getElementById("toggle-map"), invertMouse: document.getElementById("invert-mouse"),
 };
 
-const ROLE_COLOURS = ["#f87171", "#d946ef", "#ffb86c", "#7dd3fc", "#86efac", "#4b5563"];
-const ROLE_NAMES = ["unknown", "superblock", "nodes", "chunks", "fsm", "wasted"];
+const ROLE_COLOURS = ["#f87171", "#d946ef", "#ffb86c", "#7dd3fc", "#86efac", "#a3e635", "#4b5563"];
+const ROLE_NAMES = ["unknown", "superblock", "nodes", "chunks", "fsm", "free", "wasted"];
 
 let ex = null, dpr = 1, dirty = true, failure = "", seed = 0;
+let removing = false;
 // Chunk waste only changes when the point set does, not when the camera does:
 // finding it walks every entry in the tree, so it stays off the per-frame path.
 let storageDirty = true;
@@ -186,6 +189,8 @@ function drawHud(splats) {
     `${label("detail")}${(ex.detailFraction() * 100).toFixed(1)}% of height\n` +
     `${label("distance")}${(ex.cameraDistance() / ex.worldSide()).toFixed(2)} cubes\n` +
     `${label("image")}${(bytes / 1024).toFixed(0)} KiB in ${pages.toLocaleString()} pages\n` +
+    `${label("free pages")}${ex.freePages().toLocaleString()}\n` +
+    `${label("reused pages")}${ex.reusedPages().toLocaleString()}\n` +
     `${label("per point")}${points ? (bytes / points).toFixed(0) : 0} bytes\n` +
     `${label("seed")}${seed}` +
     (failure ? `\n<span style="color:#f87171">${failure}</span>` : "");
@@ -313,6 +318,26 @@ function newCloud() {
 
 el.reset.onclick = newCloud;
 el.add.onclick = () => { ex.insertPoints(10000); dirty = true; storageDirty = true; persist(); };
+el.remove.onclick = () => {
+  if (removing) return;
+  removing = true;
+  el.remove.disabled = true;
+  let remaining = 5000;
+  const removeBatch = () => {
+    const removed = ex.removePoints(Math.min(64, remaining));
+    remaining -= removed;
+    dirty = true;
+    storageDirty = true;
+    if (removed !== 0 && remaining !== 0) {
+      requestAnimationFrame(removeBatch);
+      return;
+    }
+    removing = false;
+    el.remove.disabled = false;
+    persist();
+  };
+  requestAnimationFrame(removeBatch);
+};
 el.invertMouse.checked = localStorage.getItem("cloud-invert-mouse") === "1";
 el.invertMouse.onchange = () => {
   localStorage.setItem("cloud-invert-mouse", el.invertMouse.checked ? "1" : "0");

@@ -6,6 +6,7 @@ test {
     _ = @import("ascii.zig");
     _ = @import("superblock.zig");
     _ = @import("storage.zig");
+    _ = @import("reclaiming_cache.zig");
     _ = @import("scene.zig");
     _ = @import("persistence.zig");
 }

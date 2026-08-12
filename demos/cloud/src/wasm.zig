@@ -3,6 +3,7 @@ const fullaz = @import("fullaz");
 const cloud = @import("cloud");
 
 const constants = cloud.constants;
+const FreedView = fullaz.page.freed.View(constants.PageId, constants.endian, true);
 
 // Freestanding wasm has no default panic handler (the std one needs the OS).
 // Trap on panic -- the JS side sees the instance abort.
@@ -41,11 +42,12 @@ pub const role_superblock: u8 = 1;
 pub const role_nodes: u8 = 2;
 pub const role_entries: u8 = 3;
 pub const role_fsm: u8 = 4;
+pub const role_free: u8 = 5;
 // A chunk page kept alive by a node's entries_first/entries_last, but with
 // every slot tombstoned. There is no destroyChunk for entry chains, so once a
 // split moves a node's entries to its children, that chain's pages are
 // permanently linked and permanently empty -- reachable, just pure waste.
-pub const role_entries_dead: u8 = 5;
+pub const role_entries_dead: u8 = 6;
 
 // Once a chunk page is found to hold zero live entries it stays that way
 // forever: nothing ever un-tombstones a slot or relinks a chain (see
@@ -201,6 +203,11 @@ export fn insertPoints(count: u32) u32 {
     return world.insertPoints(@min(count, 500_000)) catch |err| fail(err);
 }
 
+export fn removePoints(count: u32) u32 {
+    if (!ready) return 0;
+    return world.removePoints(@min(count, 500_000)) catch |err| fail(err);
+}
+
 export fn renderFrame(width: u32, height: u32) u32 {
     if (!ready) return 0;
 
@@ -313,6 +320,24 @@ export fn snapshotPages(include_waste: u32) u32 {
         }
     }
 
+    var free_page_id = world.freePageRoot();
+    var free_pages_seen: usize = 0;
+    while (free_page_id) |page_id| {
+        if (free_pages_seen >= world.freePageCount()) {
+            return fail(error.BadData);
+        }
+        const page_index: usize = @intCast(page_id);
+        if (page_index >= total) {
+            return fail(error.InvalidId);
+        }
+        page_roles[page_index] = role_free;
+        const start = page_index * block_size;
+        const freed = FreedView.init(device.storage.items[start..][0..block_size]);
+        const next = freed.header().next.get();
+        free_page_id = if (next == constants.pid_none) null else next;
+        free_pages_seen += 1;
+    }
+
     mapped_pages = total;
     last_error = "";
     return @intCast(total);
@@ -337,6 +362,14 @@ export fn pointCount() u32 {
 
 export fn pagesTotal() u32 {
     return if (ready) @intCast(device.blocksCount()) else 0;
+}
+
+export fn freePages() u32 {
+    return if (ready) @intCast(world.freePageCount()) else 0;
+}
+
+export fn reusedPages() u32 {
+    return if (ready) @intCast(world.reusedPageCount()) else 0;
 }
 
 export fn pageBytes() u32 {
