@@ -233,15 +233,31 @@ const BrailleSink = struct {
     }
 };
 
-const BrailleStyleContext = struct {
+const BrailleRenderer = struct {
     attributes: []const BrailleAttribute,
     width: usize,
 
-    fn style(self: *const BrailleStyleContext, column: usize, row: usize, cell: u8) zigline.braille.Style {
-        if (cell == zigline.braille.empty()) {
-            return .{};
+    pub const Error = std.Io.Writer.Error;
+
+    pub fn beginRender(_: *BrailleRenderer, _: *Io.Writer) Error!void {}
+
+    pub fn beforeCell(
+        self: *BrailleRenderer,
+        out: *Io.Writer,
+        column: usize,
+        row: usize,
+        glyph: []const u8,
+    ) Error!void {
+        if (std.mem.eql(u8, glyph, "\xE2\xA0\x80")) {
+            try out.writeAll("\x1b[39m");
+            return;
         }
-        return .{ .foreground = self.attributes[row * self.width + column].colour };
+        const colour = self.attributes[row * self.width + column].colour;
+        try out.print("\x1b[38;2;{d};{d};{d}m", .{ colour[0], colour[1], colour[2] });
+    }
+
+    pub fn endRender(_: *BrailleRenderer, out: *Io.Writer) Error!void {
+        try out.writeAll("\x1b[39m");
     }
 };
 
@@ -408,11 +424,11 @@ fn run(init: std.process.Init, out: *Io.Writer, options: Options) !void {
             try writeHud(out, &c, stats, c.detail_fraction, status);
             try out.flush();
             const scene = &viewport.scene.?;
-            const context = BrailleStyleContext{
+            var renderer = BrailleRenderer{
                 .attributes = viewport.attributes,
                 .width = scene.width_in_cells,
             };
-            try scene.renderStyledAt(out, 0, hud_rows, &context, BrailleStyleContext.style);
+            try scene.renderWithAt(out, 0, hud_rows, &renderer, BrailleRenderer);
             try out.flush();
             status = "";
         }
