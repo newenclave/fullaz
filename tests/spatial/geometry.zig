@@ -5,6 +5,7 @@ const BoundingBox = fullaz.spatial.BoundingBox;
 const testing = std.testing;
 
 const BB = BoundingBox(i64, 2);
+const FB = BoundingBox(f64, 2);
 
 fn box(x0: i64, y0: i64, x1: i64, y1: i64) BB {
     return BB.initWith(.{ x0, y0 }, .{ x1, y1 });
@@ -14,6 +15,12 @@ test "BoundingBox: init is empty/zeroed and valid" {
     const b = BB.init();
     try testing.expect(b.valid());
     try testing.expectEqual(@as(i64, 0), b.measure());
+}
+
+test "BoundingBox: init is empty/zeroed f64 and valid" {
+    const b = FB.init();
+    try testing.expect(b.valid());
+    try testing.expectEqual(@as(f64, 0), b.measure());
 }
 
 test "BoundingBox: measure and perimeter" {
@@ -72,8 +79,6 @@ test "BoundingBox: overlapMeasure = area of the intersection (0 if disjoint)" {
 test "BoundingBox: center" {
     try testing.expectEqual(BB.Point{ 1, 2 }, box(0, 0, 2, 4).center());
 }
-
-const FB = BoundingBox(f64, 2);
 
 fn fbox(x0: f64, y0: f64, x1: f64, y1: f64) FB {
     return FB.initWith(.{ x0, y0 }, .{ x1, y1 });
