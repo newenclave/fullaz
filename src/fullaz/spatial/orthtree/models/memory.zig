@@ -144,6 +144,13 @@ pub fn MemoryImpl(
                 return entry.data;
             }
 
+            pub fn markCurrentTombstone(self: *CursorSelf) ErrorSet!void {
+                const index = self.current_index orelse return ErrorSet.OutOfBounds;
+                _ = self.storage.list.orderedRemove(index);
+                self.next_index = index;
+                self.current_index = null;
+            }
+
             pub fn moveCurrentTo(self: *CursorSelf, target: *Self) ErrorSet!EntryImpl {
                 const index = self.current_index orelse return ErrorSet.OutOfBounds;
                 const entry = self.storage.list.items[index];
@@ -239,6 +246,11 @@ pub fn MemoryImpl(
         pub fn removeCurrent(self: *Self, entry_cursor: *Cursor) ErrorSet!ValueT {
             _ = self;
             return entry_cursor.removeCurrent();
+        }
+
+        pub fn markCurrentTombstone(self: *Self, entry_cursor: *Cursor) ErrorSet!void {
+            _ = self;
+            try entry_cursor.markCurrentTombstone();
         }
     };
 

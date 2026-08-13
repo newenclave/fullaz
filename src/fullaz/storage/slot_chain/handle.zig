@@ -930,6 +930,18 @@ fn HandleDirectionalImpl(
             return removed_total;
         }
 
+        /// Physically removes tombstoned slots from one page and returns their count.
+        pub fn removePageTombstones(self: *Self, page_id: PageId) Error!usize {
+            var page = try self.loadPage(page_id);
+            const removed_slots = try page.removeTombstones();
+            const remaining_slots = try page.size();
+            const free_space = (try page.slotsDir()).availableSpace();
+            page.deinit();
+
+            try self.finishPageRemoval(page_id, removed_slots, remaining_slots, free_space);
+            return removed_slots;
+        }
+
         /// Physically removes live slots selected by `predicate` and returns their count.
         /// `value` is borrowed for the duration of the predicate call.
         pub fn removeIf(self: *Self, context: anytype, comptime predicate: anytype) Error!usize {

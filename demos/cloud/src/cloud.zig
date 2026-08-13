@@ -254,17 +254,19 @@ pub fn Cloud(comptime PageCacheType: type) type {
 
         pub fn removePoints(self: *Self, count: u32) !u32 {
             const removed_count = @min(count, self.next_point_id);
-            var removed: u32 = 0;
-            while (removed < removed_count) : (removed += 1) {
-                const point_id = self.next_point_id - removed - 1;
-                const matchesPointId = struct {
-                    fn call(expected_id: u32, _: Box, value: []const u8) error{}!bool {
-                        return point.PointRecord.fromBytes(value).id.get() == expected_id;
-                    }
-                }.call;
-                if (!try self.tree.remove(constants.rootBox(), matchesPointId, point_id)) {
-                    return error.PointNotFound;
+            const first_point_id = self.next_point_id - removed_count;
+            const MatchesPointId = struct {
+                fn call(first_id: u32, _: Box, value: []const u8) error{}!bool {
+                    return point.PointRecord.fromBytes(value).id.get() >= first_id;
                 }
+            };
+            const removed = try self.tree.removeIf(
+                constants.rootBox(),
+                MatchesPointId.call,
+                first_point_id,
+            );
+            if (removed != removed_count) {
+                return error.PointNotFound;
             }
             self.next_point_id -= removed_count;
             return removed_count;

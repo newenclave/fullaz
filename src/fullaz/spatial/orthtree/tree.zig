@@ -113,6 +113,18 @@ pub fn TreeImpl(comptime ModelT: type) type {
             return false;
         }
 
+        /// Removes every entry selected by `predicate` within `qbox`.
+        /// Partial progress is retained if predicate, trait, count, or cleanup fails.
+        pub fn removeIf(self: *Self, qbox: Box, comptime predicate: anytype, ctx: anytype) Error!usize {
+            const acc = self.accessor();
+            if (acc.getRoot()) |root_id| {
+                var root_node = try acc.loadNode(root_id);
+                defer acc.deinitNode(&root_node);
+                return try self.removeIfFromNode(&root_node, null, qbox, predicate, ctx);
+            }
+            return 0;
+        }
+
         pub fn visitNodes(self: *Self, comptime callback: anytype, ctx: anytype) Error!void {
             const acc = self.accessor();
             if (acc.getRoot()) |root_id| {
@@ -414,6 +426,73 @@ pub fn TreeImpl(comptime ModelT: type) type {
             bbox: Box,
             value: ValueBorrow,
         };
+
+        const NodePath = struct {
+            node: *Node,
+            parent: ?*const @This(),
+
+            fn onRemove(self: *const @This(), tree: *Self, box: Box, value: Value) Error!void {
+                var current: ?*const @This() = self;
+                while (current) |path| {
+                    try tree.onRemove(path.node, box, value);
+                    current = path.parent;
+                }
+            }
+        };
+
+        fn removeIfFromNode(
+            self: *Self,
+            node: *Node,
+            parent_path: ?*const NodePath,
+            qbox: Box,
+            comptime predicate: anytype,
+            ctx: anytype,
+        ) Error!usize {
+            if (!node.bounds().overlaps(&qbox)) {
+                return 0;
+            }
+
+            const path = NodePath{ .node = node, .parent = parent_path };
+            var entries = try node.entriesMut();
+            defer entries.deinit();
+            var cursor = try entries.cursor();
+            defer cursor.deinit();
+
+            var removed_total: usize = 0;
+            while (try cursor.next()) |entry| {
+                const entry_box = entry.box();
+                if (!entry_box.overlaps(&qbox)) {
+                    continue;
+                }
+                const entry_value = self.model.valueOutAsIn(entry.value());
+                if (!try predicate(ctx, entry_box, entry_value)) {
+                    continue;
+                }
+
+                try entries.markCurrentTombstone(&cursor);
+                try path.onRemove(self, entry_box, entry_value);
+                try self.model.decrementEntriesCount();
+                removed_total += 1;
+            }
+
+            if (node.isLeaf()) {
+                return removed_total;
+            }
+            inline for (0..child_count) |i| {
+                if (node.getChild(i)) |child_id| {
+                    var child_node = try self.accessor().loadNode(child_id);
+                    defer self.accessor().deinitNode(&child_node);
+                    removed_total += try self.removeIfFromNode(
+                        &child_node,
+                        &path,
+                        qbox,
+                        predicate,
+                        ctx,
+                    );
+                }
+            }
+            return removed_total;
+        }
 
         fn removeFromNode(
             self: *Self,

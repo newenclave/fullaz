@@ -107,6 +107,7 @@ test "cloud: removes a 5000-point batch" {
     try testing.expectEqual(remove_count, try c.removePoints(remove_count));
     try testing.expectEqual(@as(usize, initial_points - remove_count), try c.pointCount());
     try testing.expectEqual(initial_points - remove_count, c.next_point_id);
+    try testing.expectEqual(initial_points - remove_count, try rootTraitCount(&c));
 }
 
 test "cloud: an image stays under eighty bytes per point" {

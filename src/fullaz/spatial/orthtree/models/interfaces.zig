@@ -75,6 +75,11 @@ fn assertEntriesMut(comptime M: type, comptime EntriesMut: type) void {
         "removeCurrent",
         fn (*EntriesMut, *EntriesMut.Cursor) M.Error!M.ValueBorrow,
     );
+    requiresFnSignature(
+        EntriesMut,
+        "markCurrentTombstone",
+        fn (*EntriesMut, *EntriesMut.Cursor) M.Error!void,
+    );
     requiresFnSignature(EntriesMut, "deinit", fn (*EntriesMut) void);
 }
 

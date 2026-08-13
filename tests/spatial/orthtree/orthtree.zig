@@ -623,6 +623,50 @@ fn expectRemoveHookError(comptime Coord: type) !void {
     try std.testing.expectEqual(@as(usize, 0), root.size());
 }
 
+fn expectRemoveIf(comptime Coord: type) !void {
+    const Model = orthtree.models.MemoryImpl(Coord, 2, u32, MassTrait);
+    const TreeType = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+    const Match = struct {
+        fn call(_: void, _: Box, value: u32) !bool {
+            return value != 11;
+        }
+    };
+    const Collector = struct {
+        count: usize = 0,
+        sum: u32 = 0,
+
+        fn collect(self: *@This(), _: Box, value: u32) !void {
+            self.count += 1;
+            self.sum += value;
+        }
+    };
+
+    var model = try Model.init(std.testing.allocator, 1);
+    defer model.deinit();
+    var tree = TreeType.init(&model);
+    const acc = model.accessor();
+    const bounds = Box.create(.{ 0, 0 }, .{ 10, 10 });
+    try tree.insert(bounds, 5);
+    try tree.insert(Box.create(.{ 1, 1 }, .{ 2, 2 }), 7);
+    try tree.insert(Box.create(.{ 6, 6 }, .{ 7, 7 }), 11);
+
+    try std.testing.expectEqual(@as(usize, 2), try tree.removeIf(bounds, Match.call, {}));
+    try std.testing.expectEqual(@as(usize, 1), try model.getEntriesCount());
+
+    var root = try acc.loadNode(acc.getRoot().?);
+    defer acc.deinitNode(&root);
+    try std.testing.expectEqual(@as(u32, 11), root.trait().mass);
+
+    var collector = Collector{};
+    try tree.query(bounds, Collector.collect, &collector);
+    try std.testing.expectEqual(@as(usize, 1), collector.count);
+    try std.testing.expectEqual(@as(u32, 11), collector.sum);
+
+    try std.testing.expectEqual(@as(usize, 0), try tree.removeIf(bounds, Match.call, {}));
+    try std.testing.expectEqual(@as(usize, 1), try model.getEntriesCount());
+}
+
 test "OrthTree: create" {
     _ = fulla.spatial.orthtree;
 }
@@ -750,6 +794,14 @@ test "OrthTree: remove for u32 coordinates" {
 
 test "OrthTree: remove for f32 coordinates" {
     try expectRemove(f32);
+}
+
+test "OrthTree: removeIf for u32 coordinates" {
+    try expectRemoveIf(u32);
+}
+
+test "OrthTree: removeIf for f32 coordinates" {
+    try expectRemoveIf(f32);
 }
 
 test "OrthTree: remove hook error for u32 coordinates" {

@@ -251,6 +251,60 @@ test "OrthTree paged model: inserts, queries, and removes byte values" {
     try std.testing.expect(!collector.seen_second);
 }
 
+test "OrthTree paged model: removeIf updates traits and compacts entries" {
+    const Model = fullaz.spatial.orthtree.models.PagedImpl(Cache, StorageManager, Fsm, i32, 2, CountTrait, .little);
+    const Tree = TreeImpl(Model);
+    const Box = Model.Box;
+    const Match = struct {
+        fn call(_: void, _: Box, value: []const u8) !bool {
+            return !std.mem.eql(u8, value, "keep");
+        }
+    };
+    const Counter = struct {
+        count: usize = 0,
+
+        fn collect(self: *@This(), _: Box, _: []const u8) !void {
+            self.count += 1;
+        }
+    };
+
+    var device = try Device.init(std.testing.allocator, 128);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 32);
+    defer cache.deinit();
+    var storage_manager = StorageManager{};
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+    var model = try Model.init(&cache, &storage_manager, &fsm, .{
+        .max_leaf_entries = 16,
+        .max_value_size = 16,
+        .node_layout_id = 0x1001,
+        .node_page_kind = 0x71,
+        .entry_page_kind = 0x72,
+    });
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    const bounds = Box.create(.{ 0, 0 }, .{ 100, 100 });
+    try tree.initRootBounds(bounds);
+    try tree.insert(Box.create(.{ 1, 1 }, .{ 2, 2 }), "remove-a");
+    try tree.insert(Box.create(.{ 3, 3 }, .{ 4, 4 }), "keep");
+    try tree.insert(Box.create(.{ 5, 5 }, .{ 6, 6 }), "remove-b");
+
+    try std.testing.expectEqual(@as(usize, 2), try tree.removeIf(bounds, Match.call, {}));
+    try std.testing.expectEqual(@as(usize, 1), try model.getEntriesCount());
+
+    var root = try model.accessor().loadNode(storage_manager.root.?);
+    defer model.accessor().deinitNode(&root);
+    try std.testing.expectEqual(@as(u32, 1), root.trait().count.get());
+
+    var counter = Counter{};
+    try tree.query(bounds, Counter.collect, &counter);
+    try std.testing.expectEqual(@as(usize, 1), counter.count);
+    try std.testing.expectEqual(@as(usize, 0), try tree.removeIf(bounds, Match.call, {}));
+}
+
 test "OrthTree paged model: center-crossing entries span entry chunks" {
     const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, Fsm, i32, 2, .little);
     const Tree = TreeImpl(Model);

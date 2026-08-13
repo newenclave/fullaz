@@ -299,16 +299,7 @@ pub fn PagedModelImpl(
 
                     fn cleanDirtyPage(self: *CursorSelf) ErrorSet!void {
                         const page_id = self.dirty_page orelse return;
-                        var page = try self.entries.chain.loadPage(page_id);
-                        defer page.deinit();
-                        const removed = try page.removeTombstones();
-                        if (removed > 0) {
-                            const total = try self.entries.node.getTotalSize();
-                            if (removed > @as(usize, @intCast(total))) {
-                                return error.BadData;
-                            }
-                            try self.entries.node.setTotalSize(total - @as(u32, @intCast(removed)));
-                        }
+                        _ = try self.entries.chain.removePageTombstones(page_id);
                         self.dirty_page = null;
                     }
 
@@ -330,6 +321,27 @@ pub fn PagedModelImpl(
                             return null;
                         }
                         return null;
+                    }
+
+                    pub fn markCurrentTombstone(self: *CursorSelf) ErrorSet!void {
+                        if (self.current == null) {
+                            return ErrorSet.OutOfBounds;
+                        }
+                        if (self.iterator) |*iterator| {
+                            const result = (try iterator.get()) orelse return ErrorSet.OutOfBounds;
+                            const page_id = result.page_id;
+                            if (self.dirty_page) |dirty_page| {
+                                if (dirty_page != page_id) {
+                                    return ErrorSet.BadData;
+                                }
+                            } else {
+                                self.dirty_page = page_id;
+                            }
+                            try iterator.markTombstone();
+                            self.current = null;
+                            return;
+                        }
+                        return ErrorSet.OutOfBounds;
                     }
 
                     pub fn deinit(self: *CursorSelf) void {
@@ -385,14 +397,14 @@ pub fn PagedModelImpl(
 
                 pub fn moveCurrentTo(self: *Self, entry_cursor: *Cursor, target: *Self) ErrorSet!EntryImpl {
                     _ = self;
-                    const entry = entry_cursor.current orelse return error.OutOfBounds;
+                    const entry = entry_cursor.current orelse return ErrorSet.OutOfBounds;
                     try target.appendEntry(entry.box(), entry.value());
                     if (entry_cursor.iterator) |*iterator| {
                         var pending = try iterator.markForRemoval();
                         defer pending.deinit();
                         if (entry_cursor.dirty_page) |page_id| {
                             if (page_id != pending.page_id) {
-                                return error.BadData;
+                                return ErrorSet.BadData;
                             }
                         } else {
                             entry_cursor.dirty_page = pending.page_id;
@@ -400,7 +412,7 @@ pub fn PagedModelImpl(
                         entry_cursor.current = null;
                         return entry;
                     }
-                    return error.OutOfBounds;
+                    return ErrorSet.OutOfBounds;
                 }
 
                 pub fn removeCurrent(self: *Self, entry_cursor: *Cursor) ErrorSet!ValueBorrowT {
@@ -428,7 +440,12 @@ pub fn PagedModelImpl(
                             .value = entry.value(),
                         };
                     }
-                    return error.OutOfBounds;
+                    return ErrorSet.OutOfBounds;
+                }
+
+                pub fn markCurrentTombstone(self: *Self, entry_cursor: *Cursor) ErrorSet!void {
+                    _ = self;
+                    try entry_cursor.markCurrentTombstone();
                 }
 
                 pub fn deinit(self: *Self) void {
