@@ -43,12 +43,12 @@
   <div id="map-stats"></div>
   <canvas id="map"></canvas>
   <div id="legend">
-    <span><i style="background:#d946ef"></i>superblock</span>
-    <span><i style="background:#ffb86c"></i>tree nodes</span>
-    <span><i style="background:#7dd3fc"></i>point chunks</span>
-    <span><i style="background:#86efac"></i>free-space map</span>
-    <span><i style="background:#a3e635"></i>reusable free page</span>
-    <span><i style="background:#4b5563"></i>wasted (split leftovers)</span>
+    <span><i style="background:#9b7bbd"></i>superblock</span>
+    <span><i style="background:#ad7d57"></i>tree nodes</span>
+    <span><i style="background:#2f5963"></i>point chunks</span>
+    <span><i style="background:#4e7c68"></i>free-space map</span>
+    <span><i style="background:#6f863f"></i>reusable free page</span>
+    <span><i style="background:#765b6a"></i>wasted (split leftovers)</span>
   </div>
 </div>
 
@@ -78,7 +78,7 @@ const el = {
   toggleMap: document.getElementById("toggle-map"), invertMouse: document.getElementById("invert-mouse"),
 };
 
-const ROLE_COLOURS = ["#f87171", "#d946ef", "#ffb86c", "#7dd3fc", "#86efac", "#a3e635", "#4b5563"];
+const ROLE_COLOURS = ["#b36a6a", "#9b7bbd", "#ad7d57", "#2f5963", "#4e7c68", "#6f863f", "#765b6a"];
 const ROLE_NAMES = ["unknown", "superblock", "nodes", "chunks", "fsm", "free", "wasted"];
 
 let ex = null, dpr = 1, dirty = true, failure = "", seed = 0;
