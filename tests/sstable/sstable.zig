@@ -95,6 +95,11 @@ test "SSTable footer formats and validates its regions" {
     try std.testing.expectEqual(info.entry_count, restored.entry_count);
     try std.testing.expectEqual(info.index_root_page_id, restored.index_root_page_id);
     try std.testing.expectEqual(info.settings, restored.settings);
+
+    var bad_info = info;
+    bad_info.min_lsn = 2;
+    bad_info.max_lsn = 1;
+    try std.testing.expectError(error.BadSettings, view.format(bad_info));
 }
 
 test "SSTable footer rejects a corrupt checksum" {
@@ -308,6 +313,8 @@ test "SSTable reader preserves entry metadata with both index backends" {
         try std.testing.expectEqual(.tombstone, cat.metadata.flags);
         try std.testing.expectEqual(@as(u16, 8), cat.metadata.lsn);
         try std.testing.expectEqualSlices(u8, "5", (try reader.find("eel", &scratch)).?.value);
+        try std.testing.expectEqual(@as(u16, 0), reader.footer.min_lsn);
+        try std.testing.expectEqual(@as(u16, 8), reader.footer.max_lsn);
         try std.testing.expect((try reader.find("aardvark", &scratch)) == null);
         try std.testing.expect((try reader.find("cow", &scratch)) == null);
         try std.testing.expect((try reader.find("zebra", &scratch)) == null);

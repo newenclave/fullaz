@@ -44,7 +44,10 @@ pub fn main(init: std.process.Init) !void {
 
     const layout = dictionary.layout().?;
     try out.print("fullaz / SSTable format explorer\n\n", .{});
-    try out.print("entries: {d}\n", .{layout.entry_count});
+    try out.print(
+        "entries: {d} ({d} tombstones), LSN range: {d}..{d}\n",
+        .{ layout.entry_count, layout.tombstone_count, layout.min_lsn, layout.max_lsn },
+    );
     for (demo_entries) |entry| {
         try out.print("  {s:<8} {s}\n", .{ entry.key, entry.value });
     }

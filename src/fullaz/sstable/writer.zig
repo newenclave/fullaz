@@ -145,6 +145,8 @@ pub fn Writer(
         data_length: Format.Offset = 0,
         data_page_count: Format.DataIndex = 0,
         entry_count: usize = 0,
+        min_lsn: Format.Lsn = 0,
+        max_lsn: Format.Lsn = 0,
         block_entry_count: usize = 0,
         finished: bool = false,
         pub fn init(
@@ -247,6 +249,13 @@ pub fn Writer(
                 try self.sealBlock();
             }
             try self.block_builder.addWithMetadata(key, value, &metadata_bytes);
+            if (self.entry_count == 0) {
+                self.min_lsn = metadata.lsn;
+                self.max_lsn = metadata.lsn;
+            } else {
+                self.min_lsn = @min(self.min_lsn, metadata.lsn);
+                self.max_lsn = @max(self.max_lsn, metadata.lsn);
+            }
             self.block_entry_count += 1;
             self.last_key.clearRetainingCapacity();
             try self.last_key.appendSlice(self.allocator, key);
@@ -282,6 +291,8 @@ pub fn Writer(
             try footer.format(.{
                 .comparator_id = self.options.comparator_id,
                 .entry_count = @intCast(self.entry_count),
+                .min_lsn = self.min_lsn,
+                .max_lsn = self.max_lsn,
                 .data_offset = self.data_offset,
                 .data_length = self.data_length,
                 .data_page_count = self.data_page_count,

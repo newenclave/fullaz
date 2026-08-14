@@ -118,6 +118,8 @@ pub const Dictionary = struct {
     pub const Layout = struct {
         entry_count: usize,
         tombstone_count: usize,
+        min_lsn: usize,
+        max_lsn: usize,
         data_offset: usize,
         data_bytes: usize,
         data_page_count: usize,
@@ -274,6 +276,8 @@ pub const Dictionary = struct {
         return .{
             .entry_count = @intCast(info.entry_count),
             .tombstone_count = tombstone_count,
+            .min_lsn = @intCast(info.min_lsn),
+            .max_lsn = @intCast(info.max_lsn),
             .data_offset = @intCast(info.data_offset),
             .data_bytes = @intCast(info.data_length),
             .data_page_count = @intCast(info.data_page_count),
