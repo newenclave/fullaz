@@ -88,9 +88,12 @@ pub fn main(init: std.process.Init) !void {
             .data_page = &data_page,
             .key = &scratch_key,
         };
-        const value = try dictionary.lookup(key, &scratch);
-        if (value) |found| {
-            try out.print("lookup {s}: {s}\n", .{ key, found });
+        const entry = try dictionary.lookup(key, &scratch);
+        if (entry) |found| {
+            try out.print(
+                "lookup {s}: {s} ({s}, LSN {d})\n",
+                .{ key, found.value, @tagName(found.metadata.flags), found.metadata.lsn },
+            );
         } else {
             try out.print("lookup {s}: not found\n", .{key});
         }

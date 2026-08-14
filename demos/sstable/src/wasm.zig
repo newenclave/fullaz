@@ -1,4 +1,5 @@
 const std = @import("std");
+const fullaz = @import("fullaz");
 const sstable = @import("sstable");
 
 const Dictionary = sstable.dictionary.Dictionary;
@@ -18,6 +19,8 @@ var dictionary = Dictionary.init(allocator);
 var staging: ?Dictionary = null;
 var last_error: []const u8 = "";
 var lookup_result: []const u8 = &.{};
+var lookup_flags: u8 = @intFromEnum(fullaz.sstable.EntryFlags.value);
+var lookup_lsn: u64 = 0;
 var data_page: [sstable.dictionary.settings.data_page_bytes]u8 = undefined;
 var key: [sstable.dictionary.max_key_bytes]u8 = undefined;
 var layout_snapshot: Dictionary.Layout = undefined;
@@ -89,6 +92,8 @@ export fn finishBuild() u32 {
     dictionary = next.*;
     staging = null;
     lookup_result = &.{};
+    lookup_flags = @intFromEnum(fullaz.sstable.EntryFlags.value);
+    lookup_lsn = 0;
     last_error = "";
     return 1;
 }
@@ -103,6 +108,8 @@ export fn reset() void {
     dictionary.deinit();
     dictionary = Dictionary.init(allocator);
     lookup_result = &.{};
+    lookup_flags = @intFromEnum(fullaz.sstable.EntryFlags.value);
+    lookup_lsn = 0;
     last_error = "";
 }
 
@@ -142,7 +149,9 @@ export fn loadLargeSample() u32 {
         }
         input_entry.* = .{
             .key = key_bytes,
-            .value = value_bytes,
+            .value = if (index % 17 == 0) "" else value_bytes,
+            .flags = if (index % 17 == 0) .tombstone else .value,
+            .lsn = @intCast(index + 1),
         };
     }
 
@@ -154,6 +163,8 @@ export fn loadLargeSample() u32 {
     dictionary.deinit();
     dictionary = next;
     lookup_result = &.{};
+    lookup_flags = @intFromEnum(fullaz.sstable.EntryFlags.value);
+    lookup_lsn = 0;
     last_error = "";
     return 1;
 }
@@ -163,12 +174,15 @@ export fn lookup(key_ptr: usize, key_len: usize) u32 {
         .data_page = &data_page,
         .key = &key,
     };
-    lookup_result = dictionary.lookup(input(key_ptr, key_len), &scratch) catch |err| {
+    const entry = dictionary.lookup(input(key_ptr, key_len), &scratch) catch |err| {
         return fail(err);
     } orelse {
         last_error = "NotFound";
         return 0;
     };
+    lookup_result = entry.value;
+    lookup_flags = @intFromEnum(entry.metadata.flags);
+    lookup_lsn = entry.metadata.lsn;
     last_error = "";
     return 1;
 }
@@ -205,6 +219,14 @@ export fn lookupResultPtr() usize {
 
 export fn lookupResultLen() usize {
     return lookup_result.len;
+}
+
+export fn lookupFlags() u8 {
+    return lookup_flags;
+}
+
+export fn lookupLsn() u64 {
+    return lookup_lsn;
 }
 
 export fn lastErrorPtr() usize {

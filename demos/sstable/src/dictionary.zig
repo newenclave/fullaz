@@ -11,6 +11,7 @@ const Log = fullaz.device.MemoryLog(u64);
 const Writer = fullaz.sstable.Writer(Format, Log, compareBytes, void);
 const Reader = fullaz.sstable.Reader(Format, Log, compareBytes, void);
 const Footer = fullaz.sstable.Footer(Format);
+const EntryMetadata = fullaz.sstable.EntryMetadata(Format);
 
 pub const ReadScratch = Reader.ReadScratchType;
 
@@ -26,18 +27,25 @@ pub const settings: fullaz.sstable.Settings = .{
 const Entry = struct {
     key: []u8,
     value: []u8,
+    metadata: EntryMetadata,
 
-    fn init(allocator: std.mem.Allocator, key: []const u8, value: []const u8) !Entry {
+    fn init(
+        allocator: std.mem.Allocator,
+        key: []const u8,
+        value: []const u8,
+        metadata: EntryMetadata,
+    ) !Entry {
         const owned_key = try allocator.dupe(u8, key);
         errdefer allocator.free(owned_key);
         return .{
             .key = owned_key,
             .value = try allocator.dupe(u8, value),
+            .metadata = metadata,
         };
     }
 
     fn clone(self: Entry, allocator: std.mem.Allocator) !Entry {
-        return init(allocator, self.key, self.value);
+        return init(allocator, self.key, self.value, self.metadata);
     }
 
     fn deinit(self: Entry, allocator: std.mem.Allocator) void {
@@ -71,7 +79,7 @@ const Table = struct {
         defer writer.deinit();
 
         for (entries) |entry| {
-            try writer.add(entry.key, entry.value);
+            try writer.addWithMetadata(entry.key, entry.value, entry.metadata);
         }
         try writer.finish();
 
@@ -101,11 +109,15 @@ pub const Dictionary = struct {
     pub const InputEntry = struct {
         key: []const u8,
         value: []const u8,
+        flags: fullaz.sstable.EntryFlags = .value,
+        lsn: Format.Lsn = 0,
     };
+    pub const Lookup = Reader.Entry;
 
     /// File regions emitted by the SSTable writer.
     pub const Layout = struct {
         entry_count: usize,
+        tombstone_count: usize,
         data_offset: usize,
         data_bytes: usize,
         data_page_count: usize,
@@ -158,11 +170,18 @@ pub const Dictionary = struct {
             const replacement = try self.allocator.dupe(u8, value);
             self.allocator.free(entries.items[location.index].value);
             entries.items[location.index].value = replacement;
+            entries.items[location.index].metadata = .{
+                .flags = .value,
+                .lsn = 0,
+            };
         } else {
             if (entries.items.len == max_entries) {
                 return Error.TooManyEntries;
             }
-            const entry = try Entry.init(self.allocator, key, value);
+            const entry = try Entry.init(self.allocator, key, value, .{
+                .flags = .value,
+                .lsn = 0,
+            });
             entries.insert(self.allocator, location.index, entry) catch |err| {
                 entry.deinit(self.allocator);
                 return err;
@@ -192,7 +211,10 @@ pub const Dictionary = struct {
                     },
                 }
             }
-            const owned = try Entry.init(self.allocator, entry.key, entry.value);
+            const owned = try Entry.init(self.allocator, entry.key, entry.value, .{
+                .flags = entry.flags,
+                .lsn = entry.lsn,
+            });
             entries.append(self.allocator, owned) catch |err| {
                 owned.deinit(self.allocator);
                 return err;
@@ -219,8 +241,8 @@ pub const Dictionary = struct {
         return true;
     }
 
-    /// The returned value borrows `scratch` and is invalidated by the next lookup.
-    pub fn lookup(self: *Self, key: []const u8, scratch: *ReadScratch) Error!?[]const u8 {
+    /// The returned entry borrows `scratch` and is invalidated by the next lookup.
+    pub fn lookup(self: *Self, key: []const u8, scratch: *ReadScratch) Error!?Lookup {
         if (!std.unicode.utf8ValidateSlice(key)) {
             return Error.InvalidUtf8;
         }
@@ -241,10 +263,17 @@ pub const Dictionary = struct {
         const footer_bytes = info.settings.index_page_bytes;
         const trailer_bytes = @sizeOf(Footer.Trailer);
         const file_bytes = table.log.buf.items.len;
+        var tombstone_count: usize = 0;
+        for (self.entries.items) |entry| {
+            if (entry.metadata.flags == .tombstone) {
+                tombstone_count += 1;
+            }
+        }
         std.debug.assert(file_bytes >= footer_bytes + trailer_bytes);
 
         return .{
             .entry_count = @intCast(info.entry_count),
+            .tombstone_count = tombstone_count,
             .data_offset = @intCast(info.data_offset),
             .data_bytes = @intCast(info.data_length),
             .data_page_count = @intCast(info.data_page_count),
@@ -344,8 +373,8 @@ test "dictionary rebuilds sorted entries" {
     var data_page: [settings.data_page_bytes]u8 = undefined;
     var key: [max_key_bytes]u8 = undefined;
     var scratch = ReadScratch{ .data_page = &data_page, .key = &key };
-    try std.testing.expectEqualSlices(u8, "small", (try dictionary.lookup("ant", &scratch)).?);
-    try std.testing.expectEqualSlices(u8, "striped", (try dictionary.lookup("zebra", &scratch)).?);
+    try std.testing.expectEqualSlices(u8, "small", (try dictionary.lookup("ant", &scratch)).?.value);
+    try std.testing.expectEqualSlices(u8, "striped", (try dictionary.lookup("zebra", &scratch)).?.value);
     try std.testing.expect(try dictionary.remove("ant"));
     try std.testing.expect((try dictionary.lookup("ant", &scratch)) == null);
 }
@@ -394,7 +423,7 @@ test "dictionary replaces an ordered entry set atomically" {
     var data_page: [settings.data_page_bytes]u8 = undefined;
     var key: [max_key_bytes]u8 = undefined;
     var scratch = ReadScratch{ .data_page = &data_page, .key = &key };
-    try std.testing.expectEqualSlices(u8, "playful", (try dictionary.lookup("otter", &scratch)).?);
+    try std.testing.expectEqualSlices(u8, "playful", (try dictionary.lookup("otter", &scratch)).?.value);
     try std.testing.expect((try dictionary.lookup("zebra", &scratch)) == null);
 }
 
@@ -425,7 +454,12 @@ test "dictionary builds a near-megabyte lexicon table" {
             @memcpy(value[filled .. filled + fill_len], value_fill[0..fill_len]);
             filled += fill_len;
         }
-        entry.* = .{ .key = key, .value = value };
+        entry.* = .{
+            .key = key,
+            .value = if (index % 17 == 0) "" else value,
+            .flags = if (index % 17 == 0) .tombstone else .value,
+            .lsn = @intCast(index + 1),
+        };
     }
 
     var dictionary = Dictionary.init(std.testing.allocator);
@@ -433,9 +467,17 @@ test "dictionary builds a near-megabyte lexicon table" {
     try dictionary.replaceAll(input);
 
     const layout = dictionary.layout().?;
+    try std.testing.expectEqual(@as(usize, 206), layout.tombstone_count);
     try std.testing.expect(layout.file_bytes > 800 * 1024);
     try std.testing.expect(layout.file_bytes <= 1024 * 1024);
     try std.testing.expect(layout.data_page_count > 100);
     try std.testing.expect(layout.index_page_count > 1);
     try std.testing.expectEqual(layout.data_page_count, layout.index_entry_count);
+
+    var data_page: [settings.data_page_bytes]u8 = undefined;
+    var key: [max_key_bytes]u8 = undefined;
+    var scratch = ReadScratch{ .data_page = &data_page, .key = &key };
+    const tombstone = (try dictionary.lookup("lexeme-0000", &scratch)).?;
+    try std.testing.expectEqual(.tombstone, tombstone.metadata.flags);
+    try std.testing.expectEqual(@as(u64, 1), tombstone.metadata.lsn);
 }
