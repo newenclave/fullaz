@@ -1,6 +1,7 @@
 const std = @import("std");
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
 const Variadic = @import("../slots/variadic.zig").Variadic;
+const errors = @import("errors.zig");
 
 pub fn DataPage(comptime Format: type) type {
     const PackedDataIndex = PackedInt(Format.DataIndex, Format.Endian);
@@ -22,15 +23,7 @@ pub fn DataPage(comptime Format: type) type {
         const Self = @This();
 
         pub const Header = HeaderImpl;
-        pub const Error = MutableSlots.Error || error{
-            BadMagic,
-            BadVersion,
-            BadHeaderSize,
-            BadPageSize,
-            BadBlockCount,
-            BadBlockRecord,
-            Unordered,
-        };
+        pub const Error = MutableSlots.Error || errors.DataPage;
 
         pub fn pageSizeFromHeader(header_bytes: []const u8) Error!usize {
             if (header_bytes.len != @sizeOf(Header)) {

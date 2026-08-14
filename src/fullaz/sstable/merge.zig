@@ -1,5 +1,6 @@
 const std = @import("std");
 const sstable = @import("sstable.zig");
+const errors = @import("errors.zig");
 
 pub fn Merger(
     comptime Format: type,
@@ -26,16 +27,7 @@ pub fn Merger(
             drop_winning_tombstones: bool = false,
         };
 
-        pub const Error = ReaderT.Error || WriterT.Error || error{
-            NoInputs,
-            InvalidEstimate,
-            ComparatorMismatch,
-            OutputKeyTooSmall,
-            OutputValueTooSmall,
-            CountOverflow,
-            UnorderedKey,
-            EmptyOutput,
-        };
+        pub const Error = ReaderT.Error || WriterT.Error || errors.Merger;
 
         const Cursor = struct {
             reader: *ReaderT,

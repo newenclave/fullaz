@@ -7,6 +7,7 @@ const storage = @import("../storage/storage.zig");
 const sstable = @import("sstable.zig");
 const Footer = @import("footer.zig").Footer;
 const DataPage = @import("data_page.zig").DataPage;
+const errors = @import("errors.zig");
 const IndexBackend = sstable.IndexBackend;
 const OpenOptions = sstable.OpenOptions;
 const Settings = sstable.Settings;
@@ -46,7 +47,7 @@ pub fn Reader(
     const Location = extern struct { offset: PackedOffset, length: PackedOffset };
     const IndexStorage = struct {
         pub const PageId = Format.PageId;
-        pub const Error = error{};
+        pub const Error = errors.IndexStorage;
         root: ?PageId,
         pub fn getRoot(self: *const @This()) ?PageId {
             return self.root;
@@ -58,7 +59,7 @@ pub fn Reader(
     };
     const LogBlock = struct {
         pub const BlockId = Format.PageId;
-        pub const Error = LogT.Error || error{ BadData, InvalidId, ReadOnly };
+        pub const Error = LogT.Error || errors.IndexLogBlock;
         log: *LogT,
         start: Format.Offset,
         block_size: usize,
@@ -240,13 +241,7 @@ pub fn Reader(
             MemoryIndexDevice.Error ||
             IndexCache.Error ||
             IndexModel.Error ||
-            error{
-                ComparatorMismatch,
-                BadFileSize,
-                BadIndex,
-                BadData,
-                BadScratch,
-            };
+            errors.Reader;
 
         allocator: std.mem.Allocator,
         log: *LogT,

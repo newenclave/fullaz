@@ -2,6 +2,7 @@ const std = @import("std");
 const PackedFloat = @import("../core/packed_int.zig").PackedFloat;
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
 const sstable = @import("sstable.zig");
+const errors = @import("errors.zig");
 
 pub fn Footer(comptime Format: type) type {
     const PackedOffset = PackedInt(Format.Offset, Format.Endian);
@@ -59,17 +60,7 @@ pub fn Footer(comptime Format: type) type {
 
         pub const Header = HeaderImpl;
         pub const Trailer = TrailerImpl;
-        pub const Error = error{
-            BufferTooSmall,
-            BadMagic,
-            BadVersion,
-            BadHeaderSize,
-            BadFooterSize,
-            BadChecksum,
-            BadSettings,
-            BadRegion,
-            BadTrailer,
-        };
+        pub const Error = errors.Footer;
 
         pub fn formatTrailer(bytes: []u8, footer_size: usize) Error!void {
             if (bytes.len != @sizeOf(Trailer)) {

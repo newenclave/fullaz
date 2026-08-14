@@ -7,6 +7,7 @@ const storage = @import("../storage/storage.zig");
 const sstable = @import("sstable.zig");
 const Footer = @import("footer.zig").Footer;
 const DataPage = @import("data_page.zig").DataPage;
+const errors = @import("errors.zig");
 
 const BuildOptions = sstable.BuildOptions;
 const Settings = sstable.Settings;
@@ -52,7 +53,7 @@ pub fn Writer(
     const IndexCache = storage.page_cache.PageCache(IndexDevice);
     const IndexStorage = struct {
         pub const PageId = Format.PageId;
-        pub const Error = error{};
+        pub const Error = errors.IndexStorage;
         root: ?PageId = null,
         pub fn getRoot(self: *const @This()) ?PageId {
             return self.root;
@@ -114,17 +115,7 @@ pub fn Writer(
             IndexDevice.Error ||
             IndexCache.Error ||
             IndexModel.Error ||
-            error{
-                EmptyTable,
-                Finished,
-                EntryCountMismatch,
-                DuplicateKey,
-                UnorderedKey,
-                KeyTooLarge,
-                ValueTooLarge,
-                DataPageTooSmall,
-                CountOverflow,
-            };
+            errors.Writer;
 
         allocator: std.mem.Allocator,
         log: *LogT,

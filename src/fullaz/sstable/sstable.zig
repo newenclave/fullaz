@@ -2,6 +2,7 @@ const std = @import("std");
 const packed_int = @import("../core/packed_int.zig");
 
 pub const interfaces = @import("interfaces.zig");
+pub const errors = @import("errors.zig");
 
 pub const Footer = @import("footer.zig").Footer;
 pub const DataPage = @import("data_page.zig").DataPage;
@@ -77,7 +78,7 @@ pub fn EntryMetadata(comptime Format: type) type {
         const Self = @This();
 
         pub const byte_len = 1 + @sizeOf(PackedLsn);
-        pub const Error = error{InvalidMetadata};
+        pub const Error = errors.EntryMetadata;
 
         flags: EntryFlags,
         lsn: Format.Lsn,
