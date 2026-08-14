@@ -18,7 +18,8 @@ pub fn Reader(
 ) type {
     const PackedOffset = core.packed_int.PackedInt(Format.Offset, Format.Endian);
     const BlockView = codec.bounded_buffer.MemoryBlockView(u8);
-    const CodedBlock = codec.front_coded_block.FrontCodedBlock(
+    const EntryMetadata = sstable.EntryMetadata(Format);
+    const CodedBlock = codec.front_coded_block.FrontCodedBlockWithMetadata(
         Format.DataIndex,
         Format.DataIndex,
         Format.DataIndex,
@@ -28,6 +29,7 @@ pub fn Reader(
         true,
         cmp,
         CtxT,
+        EntryMetadata.byte_len,
     );
     const FooterType = Footer(Format);
     const DataPageConst = DataPage(Format).View(true);
@@ -206,6 +208,10 @@ pub fn Reader(
     };
     return struct {
         const Self = @This();
+        pub const Entry = struct {
+            value: []const u8,
+            metadata: EntryMetadata,
+        };
         pub const ReadScratchType = struct {
             data_page: []u8,
             key: []u8,
@@ -215,6 +221,7 @@ pub fn Reader(
             FooterType.Error ||
             DataPage(Format).Error ||
             CodedBlock.Reader.FindError ||
+            EntryMetadata.Error ||
             BloomBits.Error ||
             MemoryIndexDevice.Error ||
             IndexCache.Error ||
@@ -328,7 +335,7 @@ pub fn Reader(
             self: *Self,
             key: []const u8,
             scratch: *ReadScratchType,
-        ) Error!?[]const u8 {
+        ) Error!?Entry {
             if (scratch.data_page.len != self.footer.settings.data_page_bytes or
                 scratch.key.len < self.footer.settings.max_key_bytes)
             {
@@ -395,7 +402,10 @@ pub fn Reader(
                 cmp,
                 self.ctx,
             ) orelse return null;
-            return try found.value();
+            return .{
+                .value = try found.value(),
+                .metadata = try EntryMetadata.fromBytes(try found.metadata()),
+            };
         }
     };
 }

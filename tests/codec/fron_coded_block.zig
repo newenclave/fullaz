@@ -56,6 +56,32 @@ const FrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
     void,
 );
 
+const MetadataFrontCodedBlock = codec.front_coded_block.FrontCodedBlockWithMetadata(
+    u8,
+    u16,
+    u32,
+    BlockWriter,
+    BlockReader,
+    .little,
+    true,
+    StrCmp.cmp,
+    void,
+    2,
+);
+
+const ZeroMetadataFrontCodedBlock = codec.front_coded_block.FrontCodedBlockWithMetadata(
+    u8,
+    u16,
+    u32,
+    BlockWriter,
+    BlockReader,
+    .little,
+    true,
+    StrCmp.cmp,
+    void,
+    0,
+);
+
 const SmallIndexFrontCodedBlock = codec.front_coded_block.FrontCodedBlock(
     u8,
     u8,
@@ -403,6 +429,107 @@ test "Codec: FrontCodedBlock iterator rebuilds keys with caller scratch" {
     }
 
     try std.testing.expectEqual(sample_entries.len, index);
+}
+
+test "Codec: FrontCodedBlock preserves per-entry metadata" {
+    var buf = [_]u8{0} ** 256;
+    var builder_scratch: [32]u8 = undefined;
+    var builder = try MetadataFrontCodedBlock.Builder.init(
+        BlockWriter.init(buf[0..]),
+        builder_scratch[0..],
+    );
+    defer builder.deinit();
+
+    try builder.addWithMetadata("ant", "1", &[_]u8{ 0xa5, 0x01 });
+    try builder.add("bee", "2");
+
+    var reader = try builder.reader();
+    defer reader.deinit();
+
+    var read_scratch: [32]u8 = undefined;
+    var itr = try reader.iterator(read_scratch[0..]);
+    defer itr.deinit();
+
+    try std.testing.expectEqualSlices(u8, "ant", itr.scratchKey());
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xa5, 0x01 }, try itr.metadata());
+    try itr.next();
+    try std.testing.expectEqualSlices(u8, "bee", itr.scratchKey());
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0 }, try itr.metadata());
+
+    var found_scratch: [32]u8 = undefined;
+    var found = (try reader.find("ant", found_scratch[0..], StrSliceCmp.cmp, {})).?;
+    defer found.deinit();
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xa5, 0x01 }, try found.metadata());
+}
+
+test "Codec: FrontCodedBlock validates metadata length" {
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+    var builder = try MetadataFrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try std.testing.expect(!builder.canAddWithMetadata("ant", "1", "x"));
+    try std.testing.expectError(error.InvalidMetadata, builder.addWithMetadata("ant", "1", "x"));
+}
+
+test "Codec: FrontCodedBlock accounts for metadata capacity" {
+    const block_size = @sizeOf(MetadataFrontCodedBlock.Header) +
+        @sizeOf(MetadataFrontCodedBlock.EntryHeader) +
+        "ant".len +
+        "1".len +
+        2;
+    var buf: [block_size]u8 = undefined;
+    var scratch: [32]u8 = undefined;
+    var builder = try MetadataFrontCodedBlock.Builder.init(BlockWriter.init(&buf), scratch[0..]);
+    defer builder.deinit();
+
+    try std.testing.expect(builder.canAddWithMetadata("ant", "1", &[_]u8{ 0, 0 }));
+    try builder.addWithMetadata("ant", "1", &[_]u8{ 0, 0 });
+    try std.testing.expectEqual(block_size, builder.usedBytes().len);
+}
+
+test "Codec: FrontCodedBlock rejects truncated metadata" {
+    var buf = [_]u8{0} ** 128;
+    var scratch: [32]u8 = undefined;
+    var builder = try MetadataFrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
+    defer builder.deinit();
+
+    try builder.addWithMetadata("ant", "1", &[_]u8{ 0, 0 });
+    const header: *MetadataFrontCodedBlock.Header = @ptrCast(buf[0..].ptr);
+    header.used_bytes.set(@intCast(builder.usedBytes().len - 1));
+
+    try std.testing.expectError(
+        error.BufferTooSmall,
+        MetadataFrontCodedBlock.Reader.init(BlockReader.init(builder.usedBytes())),
+    );
+}
+
+test "Codec: FrontCodedBlock metadata length zero preserves the wire format" {
+    var default_buf = [_]u8{0} ** 256;
+    var metadata_buf = [_]u8{0} ** 256;
+    var default_scratch: [32]u8 = undefined;
+    var metadata_scratch: [32]u8 = undefined;
+    var default_builder = try FrontCodedBlock.Builder.init(
+        BlockWriter.init(default_buf[0..]),
+        default_scratch[0..],
+    );
+    defer default_builder.deinit();
+    var metadata_builder = try ZeroMetadataFrontCodedBlock.Builder.init(
+        BlockWriter.init(metadata_buf[0..]),
+        metadata_scratch[0..],
+    );
+    defer metadata_builder.deinit();
+
+    for (sample_entries) |entry| {
+        try default_builder.add(entry.key, entry.value);
+        try metadata_builder.add(entry.key, entry.value);
+    }
+
+    try std.testing.expectEqualSlices(
+        u8,
+        default_builder.usedBytes(),
+        metadata_builder.usedBytes(),
+    );
 }
 
 test "Codec: FrontCodedBlock find returns matching entries" {

@@ -12,7 +12,8 @@ pub fn Footer(comptime Format: type) type {
     const PackedF64 = PackedFloat(f64, Format.Endian);
 
     const magic: u32 = 0x5353_5446;
-    const version: u16 = 1;
+    const version: u16 = 2;
+    const entry_metadata_bytes = 1 + @sizeOf(Format.Lsn);
 
     const HeaderImpl = extern struct {
         magic: PackedU32,
@@ -38,6 +39,7 @@ pub fn Footer(comptime Format: type) type {
         data_page_bytes: PackedDataIndex,
         max_key_bytes: PackedDataIndex,
         max_value_bytes: PackedDataIndex,
+        entry_metadata_bytes: PackedU16,
         bloom_false_positive_rate: PackedF64,
     };
 
@@ -113,6 +115,7 @@ pub fn Footer(comptime Format: type) type {
             index_page_size: Format.DataIndex,
             index_page_count: Format.PageId,
             index_root_page_id: Format.PageId,
+            entry_metadata_bytes: usize = entry_metadata_bytes,
             settings: sstable.Settings,
         };
 
@@ -176,6 +179,7 @@ pub fn Footer(comptime Format: type) type {
                     hdr.data_page_bytes.set(@intCast(footer_info.settings.data_page_bytes));
                     hdr.max_key_bytes.set(@intCast(footer_info.settings.max_key_bytes));
                     hdr.max_value_bytes.set(@intCast(footer_info.settings.max_value_bytes));
+                    hdr.entry_metadata_bytes.set(@intCast(footer_info.entry_metadata_bytes));
                     hdr.bloom_false_positive_rate.set(footer_info.settings.bloom_false_positive_rate);
                     hdr.checksum.set(checksum(self.bytes));
                 }
@@ -220,6 +224,7 @@ pub fn Footer(comptime Format: type) type {
                         .index_page_size = hdr.index_page_size.get(),
                         .index_page_count = hdr.index_page_count.get(),
                         .index_root_page_id = hdr.index_root_page_id.get(),
+                        .entry_metadata_bytes = hdr.entry_metadata_bytes.get(),
                         .settings = .{
                             .max_entries_per_coded_block = try toUsize(
                                 hdr.max_entries_per_coded_block.get(),
@@ -254,6 +259,9 @@ pub fn Footer(comptime Format: type) type {
                 return Error.BadFooterSize;
             }
             if (info.settings.index_page_bytes != footer_size) {
+                return Error.BadSettings;
+            }
+            if (info.entry_metadata_bytes != entry_metadata_bytes) {
                 return Error.BadSettings;
             }
             if (info.settings.max_entries_per_coded_block == 0 or

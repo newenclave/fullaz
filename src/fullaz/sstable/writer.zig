@@ -25,7 +25,8 @@ pub fn Writer(
     };
     const BlockWriter = codec.bounded_buffer.MemoryBlockWriter(u8);
     const BlockView = codec.bounded_buffer.MemoryBlockView(u8);
-    const CodedBlock = codec.front_coded_block.FrontCodedBlock(
+    const EntryMetadata = sstable.EntryMetadata(Format);
+    const CodedBlock = codec.front_coded_block.FrontCodedBlockWithMetadata(
         Format.DataIndex,
         Format.DataIndex,
         Format.DataIndex,
@@ -35,6 +36,7 @@ pub fn Writer(
         true,
         ByteCmp.compare,
         void,
+        EntryMetadata.byte_len,
     );
     const MutableDataPage = DataPage(Format).View(false);
     const FooterType = Footer(Format);
@@ -190,6 +192,17 @@ pub fn Writer(
             };
         }
         pub fn add(self: *Self, key: []const u8, value: []const u8) Error!void {
+            return self.addWithMetadata(key, value, .{
+                .flags = .value,
+                .lsn = 0,
+            });
+        }
+        pub fn addWithMetadata(
+            self: *Self,
+            key: []const u8,
+            value: []const u8,
+            metadata: EntryMetadata,
+        ) Error!void {
             if (self.finished) {
                 return Error.Finished;
             }
@@ -213,7 +226,8 @@ pub fn Writer(
                     },
                 }
             }
-            if (!self.block_builder.canAdd(key, value) or
+            const metadata_bytes = metadata.toBytes();
+            if (!self.block_builder.canAddWithMetadata(key, value, &metadata_bytes) or
                 self.block_entry_count >= self.options.settings.max_entries_per_coded_block)
             {
                 if (self.block_entry_count == 0) {
@@ -221,13 +235,19 @@ pub fn Writer(
                 }
                 try self.sealBlock();
             }
-            try self.block_builder.add(key, value);
+            try self.block_builder.addWithMetadata(key, value, &metadata_bytes);
             self.block_entry_count += 1;
             self.last_key.clearRetainingCapacity();
             try self.last_key.appendSlice(self.allocator, key);
             var bloom = try BloomBits.initMutable(self.bloom_bytes, self.bloom_bit_count);
             core.bloom.add(&bloom, key, self.bloom_hash_count);
             self.entry_count += 1;
+        }
+        pub fn addTombstone(self: *Self, key: []const u8, lsn: Format.Lsn) Error!void {
+            return self.addWithMetadata(key, "", .{
+                .flags = .tombstone,
+                .lsn = lsn,
+            });
         }
         pub fn finish(self: *Self) Error!void {
             if (self.finished) {
@@ -262,6 +282,7 @@ pub fn Writer(
                 .index_page_size = @intCast(self.options.settings.index_page_bytes),
                 .index_page_count = index.page_count,
                 .index_root_page_id = index.root_page_id,
+                .entry_metadata_bytes = EntryMetadata.byte_len,
                 .settings = self.options.settings,
             });
             try self.log.append(footer_bytes);
