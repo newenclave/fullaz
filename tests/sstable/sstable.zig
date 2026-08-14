@@ -31,3 +31,69 @@ test "SSTable reader and writer contracts accept minimal interfaces" {
     comptime sstable.interfaces.assertWriter(Writer);
     comptime sstable.interfaces.assertReader(Reader);
 }
+
+test "SSTable footer formats and validates its regions" {
+    const Format = sstable.SstableFormat(u64, u32, u32, .little);
+    const Footer = sstable.Footer(Format);
+    var bytes: [4096]u8 = undefined;
+    var view = try Footer.View(false).init(&bytes);
+    const info = Footer.Info{
+        .comparator_id = 17,
+        .entry_count = 128,
+        .data_offset = 0,
+        .data_length = 8192,
+        .data_page_count = 2,
+        .bloom_offset = 8192,
+        .bloom_length = 64,
+        .bloom_bit_count = 512,
+        .bloom_hash_count = 3,
+        .index_offset = 8256,
+        .index_page_size = bytes.len,
+        .index_page_count = 2,
+        .index_root_page_id = 1,
+        .settings = .{
+            .index_page_bytes = bytes.len,
+        },
+    };
+    const footer_offset = info.index_offset + @as(u64, bytes.len) * info.index_page_count;
+
+    try view.format(info);
+    const actual = try Footer.View(true).init(&bytes);
+    const restored = try actual.validate(footer_offset);
+
+    try std.testing.expectEqual(info.comparator_id, restored.comparator_id);
+    try std.testing.expectEqual(info.entry_count, restored.entry_count);
+    try std.testing.expectEqual(info.index_root_page_id, restored.index_root_page_id);
+    try std.testing.expectEqual(info.settings, restored.settings);
+}
+
+test "SSTable footer rejects a corrupt checksum" {
+    const Format = sstable.SstableFormat(u64, u32, u32, .little);
+    const Footer = sstable.Footer(Format);
+    var bytes: [1024]u8 = undefined;
+    var view = try Footer.View(false).init(&bytes);
+    const info = Footer.Info{
+        .comparator_id = 17,
+        .entry_count = 1,
+        .data_offset = 0,
+        .data_length = 1,
+        .data_page_count = 1,
+        .bloom_offset = 1,
+        .bloom_length = 1,
+        .bloom_bit_count = 8,
+        .bloom_hash_count = 1,
+        .index_offset = 2,
+        .index_page_size = bytes.len,
+        .index_page_count = 1,
+        .index_root_page_id = 0,
+        .settings = .{
+            .index_page_bytes = bytes.len,
+        },
+    };
+    const footer_offset = info.index_offset + bytes.len;
+
+    try view.format(info);
+    bytes[bytes.len - 1] ^= 1;
+    const actual = try Footer.View(true).init(&bytes);
+    try std.testing.expectError(error.BadChecksum, actual.validate(footer_offset));
+}
