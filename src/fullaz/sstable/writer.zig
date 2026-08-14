@@ -17,6 +17,13 @@ pub fn Writer(
     comptime cmp: anytype,
     comptime CtxT: type,
 ) type {
+    comptime {
+        device.interfaces.assertLogDevice(LogT);
+        if (LogT.Offset != Format.Offset) {
+            @compileError("SSTable Writer LogT.Offset must equal Format.Offset");
+        }
+    }
+
     const PackedOffset = core.packed_int.PackedInt(Format.Offset, Format.Endian);
     const ByteCmp = struct {
         fn compare(_: void, a: u8, b: u8) core.algorithm.Order {
@@ -126,6 +133,7 @@ pub fn Writer(
         last_key: std.ArrayList(u8),
         data_page_last_key: std.ArrayList(u8),
         data_page_bytes: []u8,
+        compact_page_bytes: []u8,
         data_page: MutableDataPage,
         index_state: *IndexState,
         bloom_bytes: []u8,
@@ -159,6 +167,8 @@ pub fn Writer(
             errdefer allocator.free(block_scratch);
             const data_page_bytes = try allocator.alloc(u8, options.settings.data_page_bytes);
             errdefer allocator.free(data_page_bytes);
+            const compact_page_bytes = try allocator.alloc(u8, options.settings.data_page_bytes);
+            errdefer allocator.free(compact_page_bytes);
             const bloom_bytes = try allocator.alloc(u8, bloom_bytes_len);
             errdefer allocator.free(bloom_bytes);
             @memset(bloom_bytes, 0);
@@ -181,6 +191,7 @@ pub fn Writer(
                 .last_key = .empty,
                 .data_page_last_key = .empty,
                 .data_page_bytes = data_page_bytes,
+                .compact_page_bytes = compact_page_bytes,
                 .data_page = data_page,
                 .index_state = index_state,
                 .bloom_bytes = bloom_bytes,
@@ -279,6 +290,7 @@ pub fn Writer(
             self.allocator.free(self.block_bytes);
             self.allocator.free(self.block_scratch);
             self.allocator.free(self.data_page_bytes);
+            self.allocator.free(self.compact_page_bytes);
             self.allocator.free(self.bloom_bytes);
         }
         fn sealBlock(self: *Self) Error!void {
@@ -308,10 +320,13 @@ pub fn Writer(
                 return;
             }
             const offset = self.log.size();
-            try self.log.append(self.data_page_bytes);
+            const encoded_bytes = try self.data_page.encodedBytes();
+            const compact_page = self.compact_page_bytes[0..encoded_bytes];
+            try self.data_page.copyTo(compact_page);
+            try self.log.append(compact_page);
             const packed_location = Location{
                 .offset = PackedOffset.init(offset),
-                .length = PackedOffset.init(@intCast(self.data_page_bytes.len)),
+                .length = PackedOffset.init(@intCast(compact_page.len)),
             };
             if (!try self.index_state.tree.insert(
                 self.data_page_last_key.items,
@@ -322,7 +337,7 @@ pub fn Writer(
             self.data_length = std.math.add(
                 Format.Offset,
                 self.data_length,
-                @intCast(self.data_page_bytes.len),
+                @intCast(compact_page.len),
             ) catch return Error.CountOverflow;
             self.data_page_count = std.math.add(
                 Format.DataIndex,

@@ -108,6 +108,27 @@ pub fn DataPage(comptime Format: type) type {
                     return self.header().block_count.get();
                 }
 
+                /// Returns the compact serialized size of this page.
+                pub fn encodedBytes(self: *const ViewSelf) Error!usize {
+                    const slot_dir = try self.slots();
+                    return @sizeOf(Header) + try slot_dir.usedBytes();
+                }
+
+                /// Rewrites this page into an exactly sized output buffer.
+                pub fn copyTo(self: *const ViewSelf, output: []u8) Error!void {
+                    if (output.len != try self.encodedBytes()) {
+                        return Error.BadPageSize;
+                    }
+                    var compact = try Self.View(false).init(output);
+                    try compact.format();
+                    for (0..self.blockCount()) |block_index| {
+                        try compact.append(
+                            try self.fenceKey(block_index),
+                            try self.codedBlock(block_index),
+                        );
+                    }
+                }
+
                 pub fn canAppend(
                     self: *const ViewSelf,
                     fence_key: []const u8,

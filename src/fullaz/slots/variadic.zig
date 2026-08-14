@@ -158,6 +158,11 @@ pub fn VariadicImpl(
             return used;
         }
 
+        /// Returns the smallest body size that can contain the live slots.
+        pub fn usedBytes(self: *const Self) Error!usize {
+            return @sizeOf(Header) + try self.usedSpace();
+        }
+
         pub fn availableAfterCompact(self: *const Self) Error!usize {
             return self.capacitySpace() - try self.usedSpace();
         }
