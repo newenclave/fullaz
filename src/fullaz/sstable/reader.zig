@@ -10,12 +10,20 @@ const DataPage = @import("data_page.zig").DataPage;
 const IndexBackend = sstable.IndexBackend;
 const OpenOptions = sstable.OpenOptions;
 const Settings = sstable.Settings;
+
 pub fn Reader(
     comptime Format: type,
     comptime LogT: type,
     comptime cmp: anytype,
     comptime CtxT: type,
 ) type {
+    comptime {
+        device.interfaces.assertLogDevice(LogT);
+        if (LogT.Offset != Format.Offset) {
+            @compileError("SSTable Reader LogT.Offset must equal Format.Offset");
+        }
+    }
+
     const PackedOffset = core.packed_int.PackedInt(Format.Offset, Format.Endian);
     const BlockView = codec.bounded_buffer.MemoryBlockView(u8);
     const EntryMetadata = sstable.EntryMetadata(Format);
@@ -232,12 +240,14 @@ pub fn Reader(
                 BadIndex,
                 BadScratch,
             };
+
         allocator: std.mem.Allocator,
         log: *LogT,
         ctx: CtxT,
         footer: FooterType.Info,
         bloom_bytes: []u8,
         index_state: *IndexState,
+
         pub fn init(
             allocator: std.mem.Allocator,
             log: *LogT,
@@ -366,7 +376,7 @@ pub fn Reader(
                 usize,
                 location.length.get(),
             ) orelse return Error.BadIndex;
-            if (length != scratch.data_page.len) {
+            if (length > scratch.data_page.len) {
                 return Error.BadIndex;
             }
             const data_end = std.math.add(
@@ -386,8 +396,9 @@ pub fn Reader(
             if (offset < self.footer.data_offset or page_end > data_end) {
                 return Error.BadIndex;
             }
-            try self.log.readAt(offset, scratch.data_page);
-            const page = try DataPageConst.init(scratch.data_page);
+            const data_page = scratch.data_page[0..length];
+            try self.log.readAt(offset, data_page);
+            const page = try DataPageConst.init(data_page);
             try page.validate();
             const block_index = try page.lowerBound(key, cmp, self.ctx);
             if (block_index == page.blockCount()) {

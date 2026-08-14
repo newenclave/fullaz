@@ -240,6 +240,7 @@ test "SSTable writer appends a validated footer to FileLog" {
     try std.testing.expectEqual(@as(u32, 42), info.comparator_id);
     try std.testing.expectEqual(@as(u64, 3), info.entry_count);
     try std.testing.expectEqual(@as(u32, 1), info.data_page_count);
+    try std.testing.expect(info.data_length < info.settings.data_page_bytes);
     try std.testing.expect(info.index_page_count > 0);
     try std.testing.expect(info.index_root_page_id < info.index_page_count);
     comptime sstable.interfaces.assertWriter(Writer);

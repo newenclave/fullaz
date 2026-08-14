@@ -135,6 +135,22 @@ pub fn build(b: *std.Build) void {
     };
 
     addDemo(b, demo_ctx, .{
+        .name = "sstable",
+        .lib_source = "demos/sstable/src/root.zig",
+        .exe_source = "demos/sstable/src/main.zig",
+        .run_step = "run-sstable",
+        .run_desc = "Run the SSTable format explorer",
+        .tests_source = "demos/sstable/tests/tests.zig",
+        .test_step = "test-sstable",
+        .test_desc = "Run SSTable demo tests",
+        .wasm_source = "demos/sstable/src/wasm.zig",
+        .wasm_step = "wasm-sstable",
+        .wasm_desc = "Build the SSTable WASM demo into zig-out/web-sstable",
+        .web_dir = "web-sstable",
+        .web_index = "demos/sstable/web/index.html",
+    });
+
+    addDemo(b, demo_ctx, .{
         .name = "fsx",
         .lib_source = "demos/fsx/src/root.zig",
         .lib_needs_zigline = true,

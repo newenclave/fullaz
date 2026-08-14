@@ -3,7 +3,7 @@ const device = @import("../../device/device.zig");
 
 const PackedInt = @import("../../core/packed_int.zig").PackedInt;
 
-pub const MemoryLog = device.MemoryLog;
+pub const MemoryLog = device.MemoryLog(usize);
 pub const FileLog = device.FileLog;
 
 pub const ErrorSet = error{BadPageSize};
