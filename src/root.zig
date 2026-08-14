@@ -17,3 +17,5 @@ pub const skip_list = @import("fullaz/skip_list/skip_list.zig");
 pub const spatial = @import("fullaz/spatial/spatial.zig");
 
 pub const codec = @import("fullaz/codec/codec.zig");
+
+pub const sstable = @import("fullaz/sstable/sstable.zig");

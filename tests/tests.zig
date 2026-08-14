@@ -50,6 +50,7 @@ test {
     _ = @import("device/file_block.zig");
 
     _ = @import("codec/fron_coded_block.zig");
+    _ = @import("sstable/sstable.zig");
 
     _ = @import("spatial/geometry.zig");
     _ = @import("spatial/orthtree/orthtree.zig");
