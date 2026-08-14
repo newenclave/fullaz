@@ -126,3 +126,91 @@ test "SSTable data page selects a coded block by fence key" {
     const reopened = try DataPage.View(true).init(&bytes);
     try reopened.validate();
 }
+
+test "SSTable writer appends a validated footer to FileLog" {
+    const Format = sstable.SstableFormat(u64, u32, u32, .little);
+    const FileLog = @import("fullaz").device.FileLog(u64);
+    const Writer = sstable.Writer(Format, FileLog, compareBytes, void);
+    const Footer = sstable.Footer(Format);
+    const path = "test-sstable-writer.log";
+
+    std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+
+    var log = try FileLog.create(std.testing.io, path);
+    defer log.deinit();
+    var writer = try Writer.init(std.testing.allocator, &log, .{
+        .entry_count = 3,
+        .comparator_id = 42,
+        .settings = .{
+            .max_entries_per_coded_block = 2,
+            .max_coded_block_bytes = 128,
+            .data_page_bytes = 512,
+            .index_page_bytes = 512,
+            .max_key_bytes = 32,
+            .max_value_bytes = 32,
+        },
+    }, {});
+    defer writer.deinit();
+
+    try writer.add("ant", "1");
+    try std.testing.expectError(error.DuplicateKey, writer.add("ant", "again"));
+    try std.testing.expectError(error.UnorderedKey, writer.add("aardvark", "0"));
+    try writer.add("bee", "2");
+    try writer.add("cat", "3");
+    try writer.finish();
+
+    var footer_bytes: [512]u8 = undefined;
+    const footer_offset = log.size() - @sizeOf(Footer.Trailer) - footer_bytes.len;
+    try log.readAt(footer_offset, &footer_bytes);
+    const footer = try Footer.View(true).init(&footer_bytes);
+    const info = try footer.validate(footer_offset);
+
+    try std.testing.expectEqual(@as(u32, 42), info.comparator_id);
+    try std.testing.expectEqual(@as(u64, 3), info.entry_count);
+    try std.testing.expectEqual(@as(u32, 1), info.data_page_count);
+    try std.testing.expect(info.index_page_count > 0);
+    try std.testing.expect(info.index_root_page_id < info.index_page_count);
+    comptime sstable.interfaces.assertWriter(Writer);
+}
+
+test "SSTable reader finds writer output with both index backends" {
+    const Format = sstable.SstableFormat(u64, u32, u32, .little);
+    const FileLog = @import("fullaz").device.FileLog(u64);
+    const Writer = sstable.Writer(Format, FileLog, compareBytes, void);
+    const Reader = sstable.Reader(Format, FileLog, compareBytes, void);
+    const path = "test-sstable-reader.log";
+
+    std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    var log = try FileLog.create(std.testing.io, path);
+    defer log.deinit();
+    var writer = try Writer.init(std.testing.allocator, &log, .{
+        .entry_count = 5, .comparator_id = 7,
+        .settings = .{ .max_entries_per_coded_block = 2, .max_coded_block_bytes = 128, .data_page_bytes = 512,
+            .index_page_bytes = 512, .max_key_bytes = 32, .max_value_bytes = 32 },
+    }, {});
+    defer writer.deinit();
+    try writer.add("ant", "1");
+    try writer.add("bee", "2");
+    try writer.add("cat", "3");
+    try writer.add("dog", "4");
+    try writer.add("eel", "5");
+    try writer.finish();
+
+    inline for ([_]sstable.IndexBackend{ .memory, .file }) |backend| {
+        var reader = try Reader.init(std.testing.allocator, &log, .{ .comparator_id = 7, .index_backend = backend }, {});
+        defer reader.deinit();
+        var data_page: [512]u8 = undefined;
+        var key: [32]u8 = undefined;
+        var scratch = Reader.ReadScratchType{ .data_page = &data_page, .key = &key };
+        try std.testing.expectEqualSlices(u8, "1", (try reader.find("ant", &scratch)).?);
+        try std.testing.expectEqualSlices(u8, "5", (try reader.find("eel", &scratch)).?);
+        try std.testing.expect((try reader.find("aardvark", &scratch)) == null);
+        try std.testing.expect((try reader.find("cow", &scratch)) == null);
+        try std.testing.expect((try reader.find("zebra", &scratch)) == null);
+        // A key that was never added and is rejected by this table's Bloom filter.
+        try std.testing.expect((try reader.find("definitely-not-present", &scratch)) == null);
+    }
+    comptime sstable.interfaces.assertReader(Reader);
+}

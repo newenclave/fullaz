@@ -495,6 +495,10 @@ pub fn FrontCodedBlock(
             return ReaderImpl.init(BlockViewT.init(self.block_writer.used()));
         }
 
+        pub fn usedBytes(self: *const Self) []const u8 {
+            return self.block_writer.used();
+        }
+
         pub fn deinit(self: *Self) void {
             if (@hasDecl(BlockWriter, "deinit")) {
                 self.block_writer.deinit();

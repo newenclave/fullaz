@@ -120,7 +120,7 @@ pub fn PagedModel(
 
         pub fn keyPosition(self: *const Self, key: KeyType) Error!usize {
             const view = PageViewTypeConst.init(try self.handle.data());
-            return try view.lowerBoundWith(key, cmp, self.ctx);
+            return try view.lowerBoundWith(key, cmp, self.ctx.cts);
         }
 
         pub fn getKey(self: *const Self, pos: usize) Error!KeyType {
@@ -344,7 +344,7 @@ pub fn PagedModel(
 
         pub fn keyPosition(self: *const Self, key: KeyType) Error!usize {
             const view = PageViewTypeConst.init(try self.handle.data());
-            return try view.upperBoundWith(key, cmp, self.ctx);
+            return try view.upperBoundWith(key, cmp, self.ctx.cts);
         }
 
         pub fn canUpdateKey(self: *const Self, pos: usize, new_key: KeyType) Error!bool {

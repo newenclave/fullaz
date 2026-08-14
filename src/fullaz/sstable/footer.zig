@@ -41,10 +41,19 @@ pub fn Footer(comptime Format: type) type {
         bloom_false_positive_rate: PackedF64,
     };
 
+    const TrailerImpl = extern struct {
+        magic: PackedU32,
+        version: PackedU16,
+        trailer_size: PackedU16,
+        footer_size: PackedDataIndex,
+        checksum: PackedU32,
+    };
+
     return struct {
         const Self = @This();
 
         pub const Header = HeaderImpl;
+        pub const Trailer = TrailerImpl;
         pub const Error = error{
             BufferTooSmall,
             BadMagic,
@@ -54,7 +63,36 @@ pub fn Footer(comptime Format: type) type {
             BadChecksum,
             BadSettings,
             BadRegion,
+            BadTrailer,
         };
+
+        pub fn formatTrailer(bytes: []u8, footer_size: usize) Error!void {
+            if (bytes.len != @sizeOf(Trailer)) {
+                return Error.BadTrailer;
+            }
+            const packed_footer_size = std.math.cast(Format.DataIndex, footer_size) orelse return Error.BadTrailer;
+            @memset(bytes, 0);
+            const trailer: *Trailer = @ptrCast(bytes.ptr);
+            trailer.magic.set(magic);
+            trailer.version.set(version);
+            trailer.trailer_size.set(@intCast(bytes.len));
+            trailer.footer_size.set(packed_footer_size);
+            trailer.checksum.set(0);
+            trailer.checksum.set(trailerChecksum(bytes));
+        }
+
+        pub fn validateTrailer(bytes: []const u8) Error!usize {
+            if (bytes.len != @sizeOf(Trailer)) {
+                return Error.BadTrailer;
+            }
+            const trailer: *const Trailer = @ptrCast(bytes.ptr);
+            if (trailer.magic.get() != magic or trailer.version.get() != version or
+                trailer.trailer_size.get() != bytes.len or trailer.checksum.get() != trailerChecksum(bytes))
+            {
+                return Error.BadTrailer;
+            }
+            return std.math.cast(usize, trailer.footer_size.get()) orelse Error.BadTrailer;
+        }
 
         pub const Info = struct {
             comparator_id: u32,
@@ -247,6 +285,14 @@ pub fn Footer(comptime Format: type) type {
 
         fn toUsize(value: anytype) Error!usize {
             return std.math.cast(usize, value) orelse Error.BadSettings;
+        }
+
+        fn trailerChecksum(bytes: []const u8) u32 {
+            const checksum_offset = @offsetOf(Trailer, "checksum");
+            var crc = std.hash.Crc32.init();
+            crc.update(bytes[0..checksum_offset]);
+            crc.update(bytes[checksum_offset + @sizeOf(PackedU32) ..]);
+            return crc.final();
         }
     };
 }
