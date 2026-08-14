@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const interfaces = @import("interfaces.zig");
 pub const Footer = @import("footer.zig").Footer;
+pub const DataPage = @import("data_page.zig").DataPage;
 
 pub const IndexBackend = enum {
     file,

@@ -97,3 +97,32 @@ test "SSTable footer rejects a corrupt checksum" {
     const actual = try Footer.View(true).init(&bytes);
     try std.testing.expectError(error.BadChecksum, actual.validate(footer_offset));
 }
+
+fn compareBytes(_: void, a: []const u8, b: []const u8) @import("fullaz").core.algorithm.Order {
+    return switch (std.mem.order(u8, a, b)) {
+        .lt => .lt,
+        .eq => .eq,
+        .gt => .gt,
+    };
+}
+
+test "SSTable data page selects a coded block by fence key" {
+    const Format = sstable.SstableFormat(u64, u32, u32, .little);
+    const DataPage = sstable.DataPage(Format);
+    var bytes: [512]u8 = undefined;
+    var page = try DataPage.View(false).init(&bytes);
+    try page.format();
+    try page.append("cat", "block-a");
+    try page.append("dog", "block-b");
+    try page.append("fox", "block-c");
+
+    try std.testing.expectEqual(@as(usize, 3), page.blockCount());
+    try std.testing.expectEqualSlices(u8, "dog", try page.fenceKey(1));
+    try std.testing.expectEqualSlices(u8, "block-c", try page.codedBlock(2));
+    try std.testing.expectEqual(@as(usize, 0), try page.lowerBound("ant", compareBytes, {}));
+    try std.testing.expectEqual(@as(usize, 1), try page.lowerBound("cow", compareBytes, {}));
+    try std.testing.expectEqual(@as(usize, 3), try page.lowerBound("zebra", compareBytes, {}));
+
+    const reopened = try DataPage.View(true).init(&bytes);
+    try reopened.validate();
+}
