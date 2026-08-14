@@ -19,7 +19,11 @@ pub fn assertWriter(comptime WriterT: type) void {
     requiresErrorDeclaration(WriterT, "Error");
     const Error = WriterT.Error;
 
-    requiresFnSignature(WriterT, "add", fn (*WriterT, []const u8, []const u8) Error!void);
+    requiresFnSignature(
+        WriterT,
+        "add",
+        fn (*WriterT, []const u8, []const u8) Error!void,
+    );
     requiresFnSignature(WriterT, "finish", fn (*WriterT) Error!void);
     requiresFnSignature(WriterT, "deinit", fn (*WriterT) void);
 }
@@ -41,7 +45,11 @@ pub fn assertReader(comptime ReaderT: type) void {
     requiresTypeDeclaration(ReaderT, "ReadScratchType");
     const Error = ReaderT.Error;
 
-    requiresFnSignature(ReaderT, "find", fn (*ReaderT, []const u8, *ReaderT.ReadScratchType) Error!?[]const u8);
+    requiresFnSignature(
+        ReaderT,
+        "find",
+        fn (*ReaderT, []const u8, *ReaderT.ReadScratchType) Error!?[]const u8,
+    );
     requiresFnSignature(ReaderT, "deinit", fn (*ReaderT) void);
 }
 

@@ -70,7 +70,10 @@ pub fn Footer(comptime Format: type) type {
             if (bytes.len != @sizeOf(Trailer)) {
                 return Error.BadTrailer;
             }
-            const packed_footer_size = std.math.cast(Format.DataIndex, footer_size) orelse return Error.BadTrailer;
+            const packed_footer_size = std.math.cast(
+                Format.DataIndex,
+                footer_size,
+            ) orelse return Error.BadTrailer;
             @memset(bytes, 0);
             const trailer: *Trailer = @ptrCast(bytes.ptr);
             trailer.magic.set(magic);
@@ -86,8 +89,10 @@ pub fn Footer(comptime Format: type) type {
                 return Error.BadTrailer;
             }
             const trailer: *const Trailer = @ptrCast(bytes.ptr);
-            if (trailer.magic.get() != magic or trailer.version.get() != version or
-                trailer.trailer_size.get() != bytes.len or trailer.checksum.get() != trailerChecksum(bytes))
+            if (trailer.magic.get() != magic or
+                trailer.version.get() != version or
+                trailer.trailer_size.get() != bytes.len or
+                trailer.checksum.get() != trailerChecksum(bytes))
             {
                 return Error.BadTrailer;
             }
@@ -162,8 +167,12 @@ pub fn Footer(comptime Format: type) type {
                     hdr.index_page_size.set(footer_info.index_page_size);
                     hdr.index_page_count.set(footer_info.index_page_count);
                     hdr.index_root_page_id.set(footer_info.index_root_page_id);
-                    hdr.max_entries_per_coded_block.set(@intCast(footer_info.settings.max_entries_per_coded_block));
-                    hdr.max_coded_block_bytes.set(@intCast(footer_info.settings.max_coded_block_bytes));
+                    hdr.max_entries_per_coded_block.set(
+                        @intCast(footer_info.settings.max_entries_per_coded_block),
+                    );
+                    hdr.max_coded_block_bytes.set(
+                        @intCast(footer_info.settings.max_coded_block_bytes),
+                    );
                     hdr.data_page_bytes.set(@intCast(footer_info.settings.data_page_bytes));
                     hdr.max_key_bytes.set(@intCast(footer_info.settings.max_key_bytes));
                     hdr.max_value_bytes.set(@intCast(footer_info.settings.max_value_bytes));
@@ -212,8 +221,12 @@ pub fn Footer(comptime Format: type) type {
                         .index_page_count = hdr.index_page_count.get(),
                         .index_root_page_id = hdr.index_root_page_id.get(),
                         .settings = .{
-                            .max_entries_per_coded_block = try toUsize(hdr.max_entries_per_coded_block.get()),
-                            .max_coded_block_bytes = try toUsize(hdr.max_coded_block_bytes.get()),
+                            .max_entries_per_coded_block = try toUsize(
+                                hdr.max_entries_per_coded_block.get(),
+                            ),
+                            .max_coded_block_bytes = try toUsize(
+                                hdr.max_coded_block_bytes.get(),
+                            ),
                             .data_page_bytes = try toUsize(hdr.data_page_bytes.get()),
                             .index_page_bytes = try toUsize(hdr.index_page_size.get()),
                             .max_key_bytes = try toUsize(hdr.max_key_bytes.get()),
@@ -248,11 +261,14 @@ pub fn Footer(comptime Format: type) type {
                 info.settings.data_page_bytes == 0 or
                 info.settings.max_key_bytes == 0 or
                 info.settings.max_value_bytes == 0 or
-                !(info.settings.bloom_false_positive_rate > 0 and info.settings.bloom_false_positive_rate < 1))
+                !(info.settings.bloom_false_positive_rate > 0 and
+                    info.settings.bloom_false_positive_rate < 1))
             {
                 return Error.BadSettings;
             }
-            if (info.index_page_count == 0 or info.index_root_page_id >= info.index_page_count) {
+            if (info.index_page_count == 0 or
+                info.index_root_page_id >= info.index_page_count)
+            {
                 return Error.BadRegion;
             }
         }
@@ -266,7 +282,10 @@ pub fn Footer(comptime Format: type) type {
             if (bloom_end > info.index_offset) {
                 return Error.BadRegion;
             }
-            const index_page_size = std.math.cast(Format.Offset, info.index_page_size) orelse return Error.BadRegion;
+            const index_page_size = std.math.cast(
+                Format.Offset,
+                info.index_page_size,
+            ) orelse return Error.BadRegion;
             const index_length = std.math.mul(Format.Offset, index_page_size, info.index_page_count) catch {
                 return Error.BadRegion;
             };

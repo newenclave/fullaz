@@ -139,18 +139,23 @@ test "SSTable writer appends a validated footer to FileLog" {
 
     var log = try FileLog.create(std.testing.io, path);
     defer log.deinit();
-    var writer = try Writer.init(std.testing.allocator, &log, .{
-        .entry_count = 3,
-        .comparator_id = 42,
-        .settings = .{
-            .max_entries_per_coded_block = 2,
-            .max_coded_block_bytes = 128,
-            .data_page_bytes = 512,
-            .index_page_bytes = 512,
-            .max_key_bytes = 32,
-            .max_value_bytes = 32,
+    var writer = try Writer.init(
+        std.testing.allocator,
+        &log,
+        .{
+            .entry_count = 3,
+            .comparator_id = 42,
+            .settings = .{
+                .max_entries_per_coded_block = 2,
+                .max_coded_block_bytes = 128,
+                .data_page_bytes = 512,
+                .index_page_bytes = 512,
+                .max_key_bytes = 32,
+                .max_value_bytes = 32,
+            },
         },
-    }, {});
+        {},
+    );
     defer writer.deinit();
 
     try writer.add("ant", "1");
@@ -185,11 +190,23 @@ test "SSTable reader finds writer output with both index backends" {
     defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
     var log = try FileLog.create(std.testing.io, path);
     defer log.deinit();
-    var writer = try Writer.init(std.testing.allocator, &log, .{
-        .entry_count = 5, .comparator_id = 7,
-        .settings = .{ .max_entries_per_coded_block = 2, .max_coded_block_bytes = 128, .data_page_bytes = 512,
-            .index_page_bytes = 512, .max_key_bytes = 32, .max_value_bytes = 32 },
-    }, {});
+    var writer = try Writer.init(
+        std.testing.allocator,
+        &log,
+        .{
+            .entry_count = 5,
+            .comparator_id = 7,
+            .settings = .{
+                .max_entries_per_coded_block = 2,
+                .max_coded_block_bytes = 128,
+                .data_page_bytes = 512,
+                .index_page_bytes = 512,
+                .max_key_bytes = 32,
+                .max_value_bytes = 32,
+            },
+        },
+        {},
+    );
     defer writer.deinit();
     try writer.add("ant", "1");
     try writer.add("bee", "2");
@@ -199,11 +216,22 @@ test "SSTable reader finds writer output with both index backends" {
     try writer.finish();
 
     inline for ([_]sstable.IndexBackend{ .memory, .file }) |backend| {
-        var reader = try Reader.init(std.testing.allocator, &log, .{ .comparator_id = 7, .index_backend = backend }, {});
+        var reader = try Reader.init(
+            std.testing.allocator,
+            &log,
+            .{
+                .comparator_id = 7,
+                .index_backend = backend,
+            },
+            {},
+        );
         defer reader.deinit();
         var data_page: [512]u8 = undefined;
         var key: [32]u8 = undefined;
-        var scratch = Reader.ReadScratchType{ .data_page = &data_page, .key = &key };
+        var scratch = Reader.ReadScratchType{
+            .data_page = &data_page,
+            .key = &key,
+        };
         try std.testing.expectEqualSlices(u8, "1", (try reader.find("ant", &scratch)).?);
         try std.testing.expectEqualSlices(u8, "5", (try reader.find("eel", &scratch)).?);
         try std.testing.expect((try reader.find("aardvark", &scratch)) == null);

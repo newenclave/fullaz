@@ -63,7 +63,10 @@ pub fn DataPage(comptime Format: type) type {
                     if (read_only) {
                         @compileError("cannot format a read-only SSTable data page view");
                     }
-                    const page_size = std.math.cast(Format.DataIndex, self.bytes.len) orelse return Error.BadPageSize;
+                    const page_size = std.math.cast(
+                        Format.DataIndex,
+                        self.bytes.len,
+                    ) orelse return Error.BadPageSize;
 
                     @memset(self.bytes, 0);
                     const hdr = self.headerMut();
@@ -105,7 +108,11 @@ pub fn DataPage(comptime Format: type) type {
                     return self.header().block_count.get();
                 }
 
-                pub fn canAppend(self: *const ViewSelf, fence_key: []const u8, coded_block: []const u8) bool {
+                pub fn canAppend(
+                    self: *const ViewSelf,
+                    fence_key: []const u8,
+                    coded_block: []const u8,
+                ) bool {
                     const record_len = recordLen(fence_key, coded_block) catch {
                         return false;
                     };
@@ -115,7 +122,11 @@ pub fn DataPage(comptime Format: type) type {
                     return Slots.fullSlotSize(record_len) <= slot_dir.availableSpace();
                 }
 
-                pub fn append(self: *ViewSelf, fence_key: []const u8, coded_block: []const u8) Error!void {
+                pub fn append(
+                    self: *ViewSelf,
+                    fence_key: []const u8,
+                    coded_block: []const u8,
+                ) Error!void {
                     if (read_only) {
                         @compileError("cannot append to a read-only SSTable data page view");
                     }
@@ -147,15 +158,26 @@ pub fn DataPage(comptime Format: type) type {
                     return record_bytes[@sizeOf(PackedDataIndex) + fence_len ..];
                 }
 
-                pub fn lowerBound(self: *const ViewSelf, key: []const u8, comptime cmp: anytype, ctx: anytype) Error!usize {
+                pub fn lowerBound(
+                    self: *const ViewSelf,
+                    key: []const u8,
+                    comptime cmp: anytype,
+                    ctx: anytype,
+                ) Error!usize {
                     var lo: usize = 0;
                     var hi = self.blockCount();
                     while (lo < hi) {
                         const mid = lo + (hi - lo) / 2;
                         switch (cmp(ctx, try self.fenceKey(mid), key)) {
-                            .lt => lo = mid + 1,
-                            .eq, .gt => hi = mid,
-                            .unordered => return Error.Unordered,
+                            .lt => {
+                                lo = mid + 1;
+                            },
+                            .eq, .gt => {
+                                hi = mid;
+                            },
+                            .unordered => {
+                                return Error.Unordered;
+                            },
                         }
                     }
                     return lo;
@@ -174,8 +196,16 @@ pub fn DataPage(comptime Format: type) type {
 
         fn recordLen(fence_key: []const u8, coded_block: []const u8) Error!usize {
             const base = @sizeOf(PackedDataIndex);
-            const fence_end = std.math.add(usize, base, fence_key.len) catch return Error.BadBlockRecord;
-            const total = std.math.add(usize, fence_end, coded_block.len) catch return Error.BadBlockRecord;
+            const fence_end = std.math.add(
+                usize,
+                base,
+                fence_key.len,
+            ) catch return Error.BadBlockRecord;
+            const total = std.math.add(
+                usize,
+                fence_end,
+                coded_block.len,
+            ) catch return Error.BadBlockRecord;
             if (std.math.cast(Format.DataIndex, total) == null) {
                 return Error.BadBlockRecord;
             }
@@ -186,8 +216,13 @@ pub fn DataPage(comptime Format: type) type {
             if (record.len < @sizeOf(PackedDataIndex)) {
                 return Error.BadBlockRecord;
             }
-            const packed_fence_len = PackedDataIndex.fromSlice(record) catch return Error.BadBlockRecord;
-            const fence_len = std.math.cast(usize, packed_fence_len.get()) orelse return Error.BadBlockRecord;
+            const packed_fence_len = PackedDataIndex.fromSlice(
+                record,
+            ) catch return Error.BadBlockRecord;
+            const fence_len = std.math.cast(
+                usize,
+                packed_fence_len.get(),
+            ) orelse return Error.BadBlockRecord;
             if (fence_len > record.len - @sizeOf(PackedDataIndex)) {
                 return Error.BadBlockRecord;
             }
