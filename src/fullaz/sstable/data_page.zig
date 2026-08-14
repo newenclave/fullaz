@@ -32,6 +32,23 @@ pub fn DataPage(comptime Format: type) type {
             Unordered,
         };
 
+        pub fn pageSizeFromHeader(header_bytes: []const u8) Error!usize {
+            if (header_bytes.len != @sizeOf(Header)) {
+                return Error.BadHeaderSize;
+            }
+            const hdr: *const Header = @ptrCast(header_bytes.ptr);
+            if (hdr.magic.get() != magic) {
+                return Error.BadMagic;
+            }
+            if (hdr.version.get() != version) {
+                return Error.BadVersion;
+            }
+            if (hdr.header_size.get() != @sizeOf(Header)) {
+                return Error.BadHeaderSize;
+            }
+            return hdr.page_size.get();
+        }
+
         pub fn View(comptime read_only: bool) type {
             const Slots = Variadic(Format.DataIndex, Format.Endian, read_only);
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const packed_int = @import("../core/packed_int.zig");
 
 pub const interfaces = @import("interfaces.zig");
 
@@ -27,6 +28,7 @@ pub const Settings = struct {
 
 pub const BuildOptions = struct {
     entry_count: usize,
+    enforce_entry_count: bool = true,
     comparator_id: u32,
     settings: Settings = .{},
 };
@@ -69,7 +71,7 @@ pub fn SstableFormatWithLsn(
 }
 
 pub fn EntryMetadata(comptime Format: type) type {
-    const PackedLsn = @import("../core/packed_int.zig").PackedInt(Format.Lsn, Format.Endian);
+    const PackedLsn = packed_int.PackedInt(Format.Lsn, Format.Endian);
 
     return struct {
         const Self = @This();
@@ -110,3 +112,4 @@ pub fn EntryMetadata(comptime Format: type) type {
 
 pub const Writer = @import("writer.zig").Writer;
 pub const Reader = @import("reader.zig").Reader;
+pub const Merger = @import("merge.zig").Merger;

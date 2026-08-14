@@ -177,6 +177,282 @@ fn compareBytes(_: void, a: []const u8, b: []const u8) @import("fullaz").core.al
     };
 }
 
+const MergeFormat = sstable.SstableFormatWithLsn(u64, u32, u32, u16, .little);
+const MergeLog = @import("fullaz").device.MemoryLog(u64);
+const MergeWriter = sstable.Writer(MergeFormat, MergeLog, compareBytes, void);
+const MergeReader = sstable.Reader(MergeFormat, MergeLog, compareBytes, void);
+const MergeMerger = sstable.Merger(MergeFormat, MergeLog, compareBytes, void);
+const merge_source_settings: sstable.Settings = .{
+    .max_entries_per_coded_block = 2,
+    .max_coded_block_bytes = 128,
+    .data_page_bytes = 512,
+    .index_page_bytes = 512,
+    .max_key_bytes = 32,
+    .max_value_bytes = 32,
+};
+const merge_output_settings: sstable.Settings = .{
+    .max_entries_per_coded_block = 3,
+    .max_coded_block_bytes = 128,
+    .data_page_bytes = 256,
+    .index_page_bytes = 1024,
+    .max_key_bytes = 64,
+    .max_value_bytes = 64,
+};
+
+const MergeInput = struct {
+    key: []const u8,
+    value: []const u8,
+    flags: sstable.EntryFlags,
+    lsn: u16,
+};
+
+fn createMergeReader(
+    allocator: std.mem.Allocator,
+    log: *MergeLog,
+    entries: []const MergeInput,
+) !MergeReader {
+    var writer = try MergeWriter.init(
+        allocator,
+        log,
+        .{
+            .entry_count = entries.len,
+            .comparator_id = 42,
+            .settings = merge_source_settings,
+        },
+        {},
+    );
+    defer writer.deinit();
+    for (entries) |entry| {
+        try writer.addWithMetadata(entry.key, entry.value, .{
+            .flags = entry.flags,
+            .lsn = entry.lsn,
+        });
+    }
+    try writer.finish();
+    return MergeReader.init(
+        allocator,
+        log,
+        .{
+            .comparator_id = 42,
+            .index_backend = .memory,
+        },
+        {},
+    );
+}
+
+fn expectMergeEntry(
+    reader: *MergeReader,
+    scratch: *MergeReader.ReadScratchType,
+    key: []const u8,
+    value: []const u8,
+    flags: sstable.EntryFlags,
+    lsn: u16,
+) !void {
+    const entry = (try reader.find(key, scratch)).?;
+    try std.testing.expectEqualSlices(u8, value, entry.value);
+    try std.testing.expectEqual(flags, entry.metadata.flags);
+    try std.testing.expectEqual(lsn, entry.metadata.lsn);
+}
+
+test "SSTable merger selects versions across all sizing strategies" {
+    const newest_entries = [_]MergeInput{
+        .{ .key = "ant", .value = "newer", .flags = .value, .lsn = 5 },
+        .{ .key = "cat", .value = "", .flags = .tombstone, .lsn = 11 },
+        .{ .key = "dog", .value = "newest-tie", .flags = .value, .lsn = 9 },
+        .{ .key = "fox", .value = "f", .flags = .value, .lsn = 2 },
+    };
+    const middle_entries = [_]MergeInput{
+        .{ .key = "ant", .value = "highest-lsn", .flags = .value, .lsn = 7 },
+        .{ .key = "bat", .value = "b", .flags = .value, .lsn = 4 },
+        .{ .key = "cat", .value = "old-live", .flags = .value, .lsn = 10 },
+        .{ .key = "dog", .value = "older-tie", .flags = .value, .lsn = 9 },
+    };
+    const oldest_entries = [_]MergeInput{
+        .{ .key = "cat", .value = "oldest", .flags = .value, .lsn = 1 },
+        .{ .key = "eel", .value = "e", .flags = .value, .lsn = 3 },
+    };
+
+    var newest_log = try MergeLog.init(std.testing.allocator);
+    defer newest_log.deinit();
+    var middle_log = try MergeLog.init(std.testing.allocator);
+    defer middle_log.deinit();
+    var oldest_log = try MergeLog.init(std.testing.allocator);
+    defer oldest_log.deinit();
+    var newest = try createMergeReader(std.testing.allocator, &newest_log, &newest_entries);
+    defer newest.deinit();
+    var middle = try createMergeReader(std.testing.allocator, &middle_log, &middle_entries);
+    defer middle.deinit();
+    var oldest = try createMergeReader(std.testing.allocator, &oldest_log, &oldest_entries);
+    defer oldest.deinit();
+    const inputs = [_]*MergeReader{ &newest, &middle, &oldest };
+    const strategies = [_]MergeMerger.EntryCountStrategy{
+        .upper_bound,
+        .exact_two_pass,
+        .{ .estimate = 1 },
+    };
+
+    for (strategies) |strategy| {
+        var output_log = try MergeLog.init(std.testing.allocator);
+        defer output_log.deinit();
+        try MergeMerger.run(
+            std.testing.allocator,
+            &inputs,
+            &output_log,
+            .{
+                .comparator_id = 42,
+                .settings = merge_output_settings,
+                .entry_count_strategy = strategy,
+            },
+            {},
+        );
+        var output = try MergeReader.init(
+            std.testing.allocator,
+            &output_log,
+            .{
+                .comparator_id = 42,
+                .index_backend = .memory,
+            },
+            {},
+        );
+        defer output.deinit();
+        var data_page: [merge_output_settings.data_page_bytes]u8 = undefined;
+        var key: [merge_output_settings.max_key_bytes]u8 = undefined;
+        var scratch = MergeReader.ReadScratchType{
+            .data_page = &data_page,
+            .key = &key,
+        };
+
+        try expectMergeEntry(&output, &scratch, "ant", "highest-lsn", .value, 7);
+        try expectMergeEntry(&output, &scratch, "bat", "b", .value, 4);
+        try expectMergeEntry(&output, &scratch, "cat", "", .tombstone, 11);
+        try expectMergeEntry(&output, &scratch, "dog", "newest-tie", .value, 9);
+        try expectMergeEntry(&output, &scratch, "eel", "e", .value, 3);
+        try expectMergeEntry(&output, &scratch, "fox", "f", .value, 2);
+        try std.testing.expectEqual(@as(u64, 6), output.footer.entry_count);
+        try std.testing.expectEqual(@as(u16, 2), output.footer.min_lsn);
+        try std.testing.expectEqual(@as(u16, 11), output.footer.max_lsn);
+        try std.testing.expectEqual(
+            merge_output_settings.index_page_bytes,
+            output.footer.settings.index_page_bytes,
+        );
+    }
+}
+
+test "SSTable merger can drop winning tombstones" {
+    const newest_entries = [_]MergeInput{
+        .{ .key = "ant", .value = "", .flags = .tombstone, .lsn = 2 },
+        .{ .key = "cat", .value = "c", .flags = .value, .lsn = 3 },
+    };
+    const oldest_entries = [_]MergeInput{
+        .{ .key = "ant", .value = "old", .flags = .value, .lsn = 1 },
+        .{ .key = "bee", .value = "b", .flags = .value, .lsn = 1 },
+    };
+
+    var newest_log = try MergeLog.init(std.testing.allocator);
+    defer newest_log.deinit();
+    var oldest_log = try MergeLog.init(std.testing.allocator);
+    defer oldest_log.deinit();
+    var newest = try createMergeReader(std.testing.allocator, &newest_log, &newest_entries);
+    defer newest.deinit();
+    var oldest = try createMergeReader(std.testing.allocator, &oldest_log, &oldest_entries);
+    defer oldest.deinit();
+    const inputs = [_]*MergeReader{ &newest, &oldest };
+    var output_log = try MergeLog.init(std.testing.allocator);
+    defer output_log.deinit();
+    try MergeMerger.run(
+        std.testing.allocator,
+        &inputs,
+        &output_log,
+        .{
+            .comparator_id = 42,
+            .settings = merge_output_settings,
+            .entry_count_strategy = .exact_two_pass,
+            .drop_winning_tombstones = true,
+        },
+        {},
+    );
+    var output = try MergeReader.init(
+        std.testing.allocator,
+        &output_log,
+        .{
+            .comparator_id = 42,
+            .index_backend = .memory,
+        },
+        {},
+    );
+    defer output.deinit();
+    var data_page: [merge_output_settings.data_page_bytes]u8 = undefined;
+    var key: [merge_output_settings.max_key_bytes]u8 = undefined;
+    var scratch = MergeReader.ReadScratchType{
+        .data_page = &data_page,
+        .key = &key,
+    };
+
+    try std.testing.expect((try output.find("ant", &scratch)) == null);
+    try expectMergeEntry(&output, &scratch, "bee", "b", .value, 1);
+    try expectMergeEntry(&output, &scratch, "cat", "c", .value, 3);
+    try std.testing.expectEqual(@as(u64, 2), output.footer.entry_count);
+}
+
+test "SSTable merger leaves no output when cleanup drops every entry" {
+    const entries = [_]MergeInput{
+        .{ .key = "ant", .value = "", .flags = .tombstone, .lsn = 1 },
+    };
+    var input_log = try MergeLog.init(std.testing.allocator);
+    defer input_log.deinit();
+    var input = try createMergeReader(std.testing.allocator, &input_log, &entries);
+    defer input.deinit();
+    const inputs = [_]*MergeReader{&input};
+    var output_log = try MergeLog.init(std.testing.allocator);
+    defer output_log.deinit();
+
+    try std.testing.expectError(
+        error.EmptyOutput,
+        MergeMerger.run(
+            std.testing.allocator,
+            &inputs,
+            &output_log,
+            .{
+                .comparator_id = 42,
+                .settings = merge_output_settings,
+                .drop_winning_tombstones = true,
+            },
+            {},
+        ),
+    );
+    try std.testing.expectEqual(@as(u64, 0), output_log.size());
+}
+
+test "SSTable merger rejects insufficient output limits before writing" {
+    const entries = [_]MergeInput{
+        .{ .key = "ant", .value = "value", .flags = .value, .lsn = 1 },
+    };
+    var input_log = try MergeLog.init(std.testing.allocator);
+    defer input_log.deinit();
+    var input = try createMergeReader(std.testing.allocator, &input_log, &entries);
+    defer input.deinit();
+    const inputs = [_]*MergeReader{&input};
+    var output_log = try MergeLog.init(std.testing.allocator);
+    defer output_log.deinit();
+    var output_settings = merge_output_settings;
+    output_settings.max_value_bytes = merge_source_settings.max_value_bytes - 1;
+
+    try std.testing.expectError(
+        error.OutputValueTooSmall,
+        MergeMerger.run(
+            std.testing.allocator,
+            &inputs,
+            &output_log,
+            .{
+                .comparator_id = 42,
+                .settings = output_settings,
+            },
+            {},
+        ),
+    );
+    try std.testing.expectEqual(@as(u64, 0), output_log.size());
+}
+
 test "SSTable data page selects a coded block by fence key" {
     const Format = sstable.SstableFormat(u64, u32, u32, .little);
     const DataPage = sstable.DataPage(Format);
@@ -251,6 +527,64 @@ test "SSTable writer appends a validated footer to FileLog" {
     comptime sstable.interfaces.assertWriter(Writer);
 }
 
+test "SSTable writer permits an estimated entry count" {
+    const Format = sstable.SstableFormat(u64, u32, u32, .little);
+    const MemoryLog = @import("fullaz").device.MemoryLog(u64);
+    const Writer = sstable.Writer(Format, MemoryLog, compareBytes, void);
+    const Footer = sstable.Footer(Format);
+
+    var log = try MemoryLog.init(std.testing.allocator);
+    defer log.deinit();
+    var writer = try Writer.init(
+        std.testing.allocator,
+        &log,
+        .{
+            .entry_count = 1,
+            .enforce_entry_count = false,
+            .comparator_id = 42,
+            .settings = .{
+                .max_entries_per_coded_block = 2,
+                .max_coded_block_bytes = 128,
+                .data_page_bytes = 512,
+                .index_page_bytes = 512,
+                .max_key_bytes = 32,
+                .max_value_bytes = 32,
+            },
+        },
+        {},
+    );
+    defer writer.deinit();
+    try writer.add("ant", "1");
+    try writer.add("bee", "2");
+    try writer.finish();
+
+    var footer_bytes: [512]u8 = undefined;
+    const footer_offset = log.size() - @sizeOf(Footer.Trailer) - footer_bytes.len;
+    try log.readAt(footer_offset, &footer_bytes);
+    const footer = try Footer.View(true).init(&footer_bytes);
+    const info = try footer.validate(footer_offset);
+    try std.testing.expectEqual(@as(u64, 2), info.entry_count);
+}
+
+test "SSTable merger rejects empty inputs" {
+    const Format = sstable.SstableFormat(u64, u32, u32, .little);
+    const MemoryLog = @import("fullaz").device.MemoryLog(u64);
+    const Merger = sstable.Merger(Format, MemoryLog, compareBytes, void);
+
+    var output_log = try MemoryLog.init(std.testing.allocator);
+    defer output_log.deinit();
+    try std.testing.expectError(
+        error.NoInputs,
+        Merger.run(
+            std.testing.allocator,
+            &.{},
+            &output_log,
+            .{ .comparator_id = 42 },
+            {},
+        ),
+    );
+}
+
 test "SSTable reader preserves entry metadata with both index backends" {
     const Format = sstable.SstableFormatWithLsn(u64, u32, u32, u16, .little);
     const FileLog = @import("fullaz").device.FileLog(u64);
@@ -320,6 +654,28 @@ test "SSTable reader preserves entry metadata with both index backends" {
         try std.testing.expect((try reader.find("zebra", &scratch)) == null);
         // A key that was never added and is rejected by this table's Bloom filter.
         try std.testing.expect((try reader.find("definitely-not-present", &scratch)) == null);
+
+        var iterator = try reader.iterator(&scratch);
+        const expected = [_]struct {
+            key: []const u8,
+            value: []const u8,
+            flags: sstable.EntryFlags,
+            lsn: u16,
+        }{
+            .{ .key = "ant", .value = "1", .flags = .value, .lsn = 7 },
+            .{ .key = "bee", .value = "2", .flags = .value, .lsn = 0 },
+            .{ .key = "cat", .value = "", .flags = .tombstone, .lsn = 8 },
+            .{ .key = "dog", .value = "4", .flags = .value, .lsn = 0 },
+            .{ .key = "eel", .value = "5", .flags = .value, .lsn = 0 },
+        };
+        for (expected) |expected_entry| {
+            const scanned = (try iterator.next()).?;
+            try std.testing.expectEqualSlices(u8, expected_entry.key, scanned.key);
+            try std.testing.expectEqualSlices(u8, expected_entry.value, scanned.value);
+            try std.testing.expectEqual(expected_entry.flags, scanned.metadata.flags);
+            try std.testing.expectEqual(expected_entry.lsn, scanned.metadata.lsn);
+        }
+        try std.testing.expect((try iterator.next()) == null);
     }
     comptime sstable.interfaces.assertReader(Reader);
 }

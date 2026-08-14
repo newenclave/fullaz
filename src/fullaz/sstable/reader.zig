@@ -40,6 +40,7 @@ pub fn Reader(
         EntryMetadata.byte_len,
     );
     const FooterType = Footer(Format);
+    const DataPageType = DataPage(Format);
     const DataPageConst = DataPage(Format).View(true);
     const BloomBits = core.bitset.BitSet(u64, Format.Endian);
     const Location = extern struct { offset: PackedOffset, length: PackedOffset };
@@ -220,6 +221,11 @@ pub fn Reader(
             value: []const u8,
             metadata: EntryMetadata,
         };
+        pub const ScanEntry = struct {
+            key: []const u8,
+            value: []const u8,
+            metadata: EntryMetadata,
+        };
         pub const ReadScratchType = struct {
             data_page: []u8,
             key: []u8,
@@ -238,6 +244,7 @@ pub fn Reader(
                 ComparatorMismatch,
                 BadFileSize,
                 BadIndex,
+                BadData,
                 BadScratch,
             };
 
@@ -247,6 +254,101 @@ pub fn Reader(
         footer: FooterType.Info,
         bloom_bytes: []u8,
         index_state: *IndexState,
+
+        pub const Iterator = struct {
+            const IteratorSelf = @This();
+
+            reader: *Self,
+            scratch: *ReadScratchType,
+            next_page_offset: Format.Offset,
+            data_end: Format.Offset,
+            page_count: usize = 0,
+            page: ?DataPageConst = null,
+            block_index: usize = 0,
+            coded_reader: ?CodedBlock.Reader = null,
+            coded_iterator: ?CodedBlock.Reader.Iterator = null,
+            advance_current: bool = false,
+
+            pub fn next(self: *IteratorSelf) Error!?ScanEntry {
+                while (true) {
+                    if (self.coded_iterator) |*coded_iterator| {
+                        if (self.advance_current) {
+                            try coded_iterator.next();
+                            self.advance_current = false;
+                        }
+                        if (!coded_iterator.done()) {
+                            self.advance_current = true;
+                            return .{
+                                .key = coded_iterator.scratchKey(),
+                                .value = try coded_iterator.value(),
+                                .metadata = try EntryMetadata.fromBytes(
+                                    try coded_iterator.metadata(),
+                                ),
+                            };
+                        }
+                        coded_iterator.deinit();
+                        self.coded_iterator = null;
+                        if (self.coded_reader) |*coded_reader| {
+                            coded_reader.deinit();
+                            self.coded_reader = null;
+                        }
+                        self.block_index += 1;
+                    }
+                    if (self.page) |*page| {
+                        if (self.block_index < page.blockCount()) {
+                            self.coded_reader = try CodedBlock.Reader.init(
+                                BlockView.init(try page.codedBlock(self.block_index)),
+                            );
+                            self.coded_iterator = try self.coded_reader.?.iterator(
+                                self.scratch.key,
+                            );
+                            continue;
+                        }
+                        self.page = null;
+                    }
+                    if (self.next_page_offset == self.data_end) {
+                        if (self.page_count != self.reader.footer.data_page_count) {
+                            return Error.BadData;
+                        }
+                        return null;
+                    }
+                    if (self.next_page_offset > self.data_end) {
+                        return Error.BadData;
+                    }
+                    try self.readPage();
+                }
+            }
+
+            fn readPage(self: *IteratorSelf) Error!void {
+                var header_bytes: [@sizeOf(DataPageType.Header)]u8 = undefined;
+                try self.reader.log.readAt(self.next_page_offset, &header_bytes);
+                const page_size = try DataPageType.pageSizeFromHeader(&header_bytes);
+                if (page_size > self.scratch.data_page.len) {
+                    return Error.BadData;
+                }
+                const page_size_offset = std.math.cast(Format.Offset, page_size) orelse {
+                    return Error.BadData;
+                };
+                const page_end = std.math.add(
+                    Format.Offset,
+                    self.next_page_offset,
+                    page_size_offset,
+                ) catch return Error.BadData;
+                if (page_end > self.data_end) {
+                    return Error.BadData;
+                }
+                try self.reader.log.readAt(
+                    self.next_page_offset,
+                    self.scratch.data_page[0..page_size],
+                );
+                const page = try DataPageConst.init(self.scratch.data_page[0..page_size]);
+                try page.validate();
+                self.page = page;
+                self.block_index = 0;
+                self.next_page_offset = page_end;
+                self.page_count += 1;
+            }
+        };
 
         pub fn init(
             allocator: std.mem.Allocator,
@@ -341,16 +443,26 @@ pub fn Reader(
             self.index_state.deinit(self.allocator);
             self.allocator.free(self.bloom_bytes);
         }
+        pub fn iterator(self: *Self, scratch: *ReadScratchType) Error!Iterator {
+            try self.validateScratch(scratch);
+            const data_end = std.math.add(
+                Format.Offset,
+                self.footer.data_offset,
+                self.footer.data_length,
+            ) catch return Error.BadData;
+            return .{
+                .reader = self,
+                .scratch = scratch,
+                .next_page_offset = self.footer.data_offset,
+                .data_end = data_end,
+            };
+        }
         pub fn find(
             self: *Self,
             key: []const u8,
             scratch: *ReadScratchType,
         ) Error!?Entry {
-            if (scratch.data_page.len != self.footer.settings.data_page_bytes or
-                scratch.key.len < self.footer.settings.max_key_bytes)
-            {
-                return Error.BadScratch;
-            }
+            try self.validateScratch(scratch);
             const bloom = try BloomBits.initConst(
                 self.bloom_bytes,
                 @intCast(self.footer.bloom_bit_count),
@@ -362,10 +474,10 @@ pub fn Reader(
             )) {
                 return null;
             }
-            var iterator = (try self.index_state.tree.lowerBound(key)) orelse return null;
-            defer iterator.deinit();
-            const entry = (try iterator.get()) orelse
-                (try iterator.next()) orelse
+            var index_iterator = (try self.index_state.tree.lowerBound(key)) orelse return null;
+            defer index_iterator.deinit();
+            const entry = (try index_iterator.get()) orelse
+                (try index_iterator.next()) orelse
                 return null;
             if (entry.value.len != @sizeOf(Location)) {
                 return Error.BadIndex;
@@ -417,6 +529,13 @@ pub fn Reader(
                 .value = try found.value(),
                 .metadata = try EntryMetadata.fromBytes(try found.metadata()),
             };
+        }
+        fn validateScratch(self: *const Self, scratch: *ReadScratchType) Error!void {
+            if (scratch.data_page.len != self.footer.settings.data_page_bytes or
+                scratch.key.len < self.footer.settings.max_key_bytes)
+            {
+                return Error.BadScratch;
+            }
         }
     };
 }

@@ -125,6 +125,7 @@ pub fn Writer(
                 DataPageTooSmall,
                 CountOverflow,
             };
+
         allocator: std.mem.Allocator,
         log: *LogT,
         options: BuildOptions,
@@ -149,6 +150,7 @@ pub fn Writer(
         max_lsn: Format.Lsn = 0,
         block_entry_count: usize = 0,
         finished: bool = false,
+
         pub fn init(
             allocator: std.mem.Allocator,
             log: *LogT,
@@ -165,21 +167,29 @@ pub fn Writer(
                 bloom_params.bitset_words,
                 @sizeOf(u64),
             ) catch return Error.CountOverflow;
+
             const block_bytes = try allocator.alloc(u8, options.settings.max_coded_block_bytes);
             errdefer allocator.free(block_bytes);
+
             const block_scratch = try allocator.alloc(u8, options.settings.max_key_bytes);
             errdefer allocator.free(block_scratch);
+
             const data_page_bytes = try allocator.alloc(u8, options.settings.data_page_bytes);
             errdefer allocator.free(data_page_bytes);
+
             const compact_page_bytes = try allocator.alloc(u8, options.settings.data_page_bytes);
             errdefer allocator.free(compact_page_bytes);
+
             const bloom_bytes = try allocator.alloc(u8, bloom_bytes_len);
             errdefer allocator.free(bloom_bytes);
             @memset(bloom_bytes, 0);
+
             const index_state = try IndexState.init(allocator, options.settings, ctx);
             errdefer index_state.deinit(allocator);
+
             var data_page = try MutableDataPage.init(data_page_bytes);
             try data_page.format();
+
             const block_builder = try CodedBlock.Builder.init(
                 BlockWriter.init(block_bytes),
                 block_scratch,
@@ -225,7 +235,7 @@ pub fn Writer(
             if (value.len > self.options.settings.max_value_bytes) {
                 return Error.ValueTooLarge;
             }
-            if (self.entry_count >= self.options.entry_count) {
+            if (self.options.enforce_entry_count and self.entry_count >= self.options.entry_count) {
                 return Error.EntryCountMismatch;
             }
             if (self.last_key.items.len != 0) {
@@ -276,7 +286,7 @@ pub fn Writer(
             if (self.entry_count == 0) {
                 return Error.EmptyTable;
             }
-            if (self.entry_count != self.options.entry_count) {
+            if (self.options.enforce_entry_count and self.entry_count != self.options.entry_count) {
                 return Error.EntryCountMismatch;
             }
             try self.sealBlock();
