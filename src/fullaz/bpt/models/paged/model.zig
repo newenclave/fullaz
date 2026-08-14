@@ -105,14 +105,14 @@ pub fn PagedModel(
         }
 
         pub fn keysEqual(self: *const Self, k1: KeyType, k2: KeyType) bool {
-            const CmpReturnType = @TypeOf(cmp(self.ctx, k1, k2));
+            const CmpReturnType = @TypeOf(cmp(self.ctx.cts, k1, k2));
             const is_error_union = @typeInfo(CmpReturnType) == .error_union;
 
             const order = blk: {
                 if (comptime is_error_union) {
-                    break :blk cmp(self.ctx, k1, k2) catch return false;
+                    break :blk cmp(self.ctx.cts, k1, k2) catch return false;
                 } else {
-                    break :blk cmp(self.ctx, k1, k2);
+                    break :blk cmp(self.ctx.cts, k1, k2);
                 }
             };
             return order == .eq;
@@ -308,14 +308,14 @@ pub fn PagedModel(
         }
 
         pub fn keysEqual(self: *const Self, k1: KeyType, k2: KeyType) bool {
-            const CmpReturnType = @TypeOf(cmp(self.ctx, k1, k2));
+            const CmpReturnType = @TypeOf(cmp(self.ctx.cts, k1, k2));
             const is_error_union = @typeInfo(CmpReturnType) == .error_union;
 
             const order = blk: {
                 if (comptime is_error_union) {
-                    break :blk cmp(self.ctx, k1, k2) catch return false;
+                    break :blk cmp(self.ctx.cts, k1, k2) catch return false;
                 } else {
-                    break :blk cmp(self.ctx, k1, k2);
+                    break :blk cmp(self.ctx.cts, k1, k2);
                 }
             };
             return order == .eq;
