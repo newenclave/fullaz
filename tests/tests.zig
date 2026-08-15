@@ -29,6 +29,7 @@ test {
     _ = @import("skip_list/paged.zig");
 
     _ = @import("slots/variadic.zig");
+    _ = @import("slots/trailing.zig");
     _ = @import("slots/fixed.zig");
 
     _ = @import("slot_chain/slot_chain.zig");
