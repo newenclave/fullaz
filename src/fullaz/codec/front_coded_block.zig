@@ -15,6 +15,32 @@ pub fn FrontCodedBlock(
     comptime cmp: anytype,
     comptime CtxT: type,
 ) type {
+    return FrontCodedBlockWithMetadata(
+        CountT,
+        IndexT,
+        BlockSizeT,
+        BlockWriterT,
+        BlockViewT,
+        endian,
+        check_limits,
+        cmp,
+        CtxT,
+        0,
+    );
+}
+
+pub fn FrontCodedBlockWithMetadata(
+    comptime CountT: type, // entry_count field
+    comptime IndexT: type, // index type for EntryHeader fields: shared_len, suffix_len, value_len and max_key_len from the header
+    comptime BlockSizeT: type, // used_bytes value from BlockHeader.
+    comptime BlockWriterT: type,
+    comptime BlockViewT: type,
+    comptime endian: std.builtin.Endian,
+    comptime check_limits: bool,
+    comptime cmp: anytype,
+    comptime CtxT: type,
+    comptime metadata_len: usize,
+) type {
     comptime {
         bounded_buffer.assertMemoryBlockWriter(BlockWriterT);
         bounded_buffer.assertMemoryBlockView(BlockViewT);
@@ -73,8 +99,12 @@ pub fn FrontCodedBlock(
             if (value_len > std.math.maxInt(usize) - key_end) {
                 return Error.BufferTooSmall;
             }
+            const value_end = key_end + value_len;
+            if (metadata_len > std.math.maxInt(usize) - value_end) {
+                return Error.BufferTooSmall;
+            }
 
-            return key_end + value_len;
+            return value_end + metadata_len;
         }
 
         pub fn shared(self: *const Self) IndexT {
@@ -93,6 +123,13 @@ pub fn FrontCodedBlock(
             const value_pos = @sizeOf(BlockEntryHeader) + key_len;
             const value_len = hdr.value_len.get();
             return self.entry[value_pos .. value_pos + value_len];
+        }
+
+        pub fn metadata(self: *const Self) []const u8 {
+            const hdr = self.entryHeader();
+            const value_pos = @sizeOf(BlockEntryHeader) + hdr.suffix_len.get();
+            const metadata_pos = value_pos + hdr.value_len.get();
+            return self.entry[metadata_pos .. metadata_pos + metadata_len];
         }
 
         fn entryHeader(self: *const Self) *const BlockEntryHeader {
@@ -181,6 +218,11 @@ pub fn FrontCodedBlock(
         pub fn value(self: *const Self) Error!ValueType {
             const entry = try self.current();
             return entry.value();
+        }
+
+        pub fn metadata(self: *const Self) Error![]const u8 {
+            const entry = try self.current();
+            return entry.metadata();
         }
 
         fn current(self: *const Self) Error!EntryImpl {
@@ -308,7 +350,7 @@ pub fn FrontCodedBlock(
     const BuilderImpl = struct {
         const Self = @This();
         pub const BlockWriter = BlockWriterT;
-        pub const Error = errors.SpaceError || BlockWriter.Error;
+        pub const Error = errors.SpaceError || BlockWriter.Error || error{InvalidMetadata};
 
         block_writer: BlockWriter,
         scratch: BufferType,
@@ -339,11 +381,16 @@ pub fn FrontCodedBlock(
             return res;
         }
 
-        fn appendEntry(self: *Self, shared: usize, suffix: KeyType, value: ValueType) Error!void {
-            // std.debug.print(
-            //     "appendEntry: shared = {}, suffix.len = {s}, value.len = {}\n",
-            //     .{ shared, suffix, value.len },
-            // );
+        fn appendEntryWithMetadata(
+            self: *Self,
+            shared: usize,
+            suffix: KeyType,
+            value: ValueType,
+            metadata: []const u8,
+        ) Error!void {
+            if (metadata.len != metadata_len) {
+                return Error.InvalidMetadata;
+            }
 
             if (check_limits) {
                 if (shared > std.math.maxInt(IndexT)) {
@@ -384,8 +431,11 @@ pub fn FrontCodedBlock(
             const key_block = new_block[@sizeOf(BlockEntryHeader)..value_offset];
 
             const value_block = new_block[value_offset .. value_offset + value.len];
+            const metadata_offset = value_offset + value.len;
+            const metadata_block = new_block[metadata_offset .. metadata_offset + metadata_len];
             @memcpy(key_block, suffix);
             @memcpy(value_block, value);
+            @memcpy(metadata_block, metadata);
         }
 
         pub fn init(block_writer: BlockWriter, scratch: BufferType) Error!Self {
@@ -448,7 +498,30 @@ pub fn FrontCodedBlock(
             return self.block_writer.remaining() >= expected_len;
         }
 
+        pub fn canAddWithMetadata(
+            self: *const Self,
+            key: KeyType,
+            value: ValueType,
+            metadata: []const u8,
+        ) bool {
+            return metadata.len == metadata_len and self.canAdd(key, value);
+        }
+
         pub fn add(self: *Self, key: KeyType, value: ValueType) Error!void {
+            var metadata: [metadata_len]u8 = undefined;
+            @memset(metadata[0..], 0);
+            return self.addWithMetadata(key, value, &metadata);
+        }
+
+        pub fn addWithMetadata(
+            self: *Self,
+            key: KeyType,
+            value: ValueType,
+            metadata: []const u8,
+        ) Error!void {
+            if (metadata.len != metadata_len) {
+                return Error.InvalidMetadata;
+            }
             const max_key_len = @max(self.header().max_key_len.get(), key.len);
 
             if (self.scratch.len < max_key_len) {
@@ -477,7 +550,7 @@ pub fn FrontCodedBlock(
                 self.ctx,
             ) catch unreachable;
 
-            try appendEntry(self, shared, key[shared..], value);
+            try self.appendEntryWithMetadata(shared, key[shared..], value, metadata);
 
             const hdr = self.headerMut();
             const current_entries = hdr.entry_count.get();
@@ -518,7 +591,7 @@ pub fn FrontCodedBlock(
         }
 
         fn expectedBlockLen(suffix: KeyType, value: ValueType) usize {
-            return @sizeOf(BlockEntryHeader) + suffix.len + value.len;
+            return @sizeOf(BlockEntryHeader) + suffix.len + value.len + metadata_len;
         }
     };
 

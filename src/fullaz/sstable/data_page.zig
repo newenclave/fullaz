@@ -1,6 +1,7 @@
 const std = @import("std");
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
 const Variadic = @import("../slots/variadic.zig").Variadic;
+const errors = @import("errors.zig");
 
 pub fn DataPage(comptime Format: type) type {
     const PackedDataIndex = PackedInt(Format.DataIndex, Format.Endian);
@@ -22,15 +23,24 @@ pub fn DataPage(comptime Format: type) type {
         const Self = @This();
 
         pub const Header = HeaderImpl;
-        pub const Error = MutableSlots.Error || error{
-            BadMagic,
-            BadVersion,
-            BadHeaderSize,
-            BadPageSize,
-            BadBlockCount,
-            BadBlockRecord,
-            Unordered,
-        };
+        pub const Error = MutableSlots.Error || errors.DataPage;
+
+        pub fn pageSizeFromHeader(header_bytes: []const u8) Error!usize {
+            if (header_bytes.len != @sizeOf(Header)) {
+                return Error.BadHeaderSize;
+            }
+            const hdr: *const Header = @ptrCast(header_bytes.ptr);
+            if (hdr.magic.get() != magic) {
+                return Error.BadMagic;
+            }
+            if (hdr.version.get() != version) {
+                return Error.BadVersion;
+            }
+            if (hdr.header_size.get() != @sizeOf(Header)) {
+                return Error.BadHeaderSize;
+            }
+            return hdr.page_size.get();
+        }
 
         pub fn View(comptime read_only: bool) type {
             const Slots = Variadic(Format.DataIndex, Format.Endian, read_only);
@@ -106,6 +116,27 @@ pub fn DataPage(comptime Format: type) type {
 
                 pub fn blockCount(self: *const ViewSelf) usize {
                     return self.header().block_count.get();
+                }
+
+                /// Returns the compact serialized size of this page.
+                pub fn encodedBytes(self: *const ViewSelf) Error!usize {
+                    const slot_dir = try self.slots();
+                    return @sizeOf(Header) + try slot_dir.usedBytes();
+                }
+
+                /// Rewrites this page into an exactly sized output buffer.
+                pub fn copyTo(self: *const ViewSelf, output: []u8) Error!void {
+                    if (output.len != try self.encodedBytes()) {
+                        return Error.BadPageSize;
+                    }
+                    var compact = try Self.View(false).init(output);
+                    try compact.format();
+                    for (0..self.blockCount()) |block_index| {
+                        try compact.append(
+                            try self.fenceKey(block_index),
+                            try self.codedBlock(block_index),
+                        );
+                    }
                 }
 
                 pub fn canAppend(

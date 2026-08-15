@@ -7,6 +7,7 @@ const storage = @import("../storage/storage.zig");
 const sstable = @import("sstable.zig");
 const Footer = @import("footer.zig").Footer;
 const DataPage = @import("data_page.zig").DataPage;
+const errors = @import("errors.zig");
 
 const BuildOptions = sstable.BuildOptions;
 const Settings = sstable.Settings;
@@ -17,6 +18,13 @@ pub fn Writer(
     comptime cmp: anytype,
     comptime CtxT: type,
 ) type {
+    comptime {
+        device.interfaces.assertLogDevice(LogT);
+        if (LogT.Offset != Format.Offset) {
+            @compileError("SSTable Writer LogT.Offset must equal Format.Offset");
+        }
+    }
+
     const PackedOffset = core.packed_int.PackedInt(Format.Offset, Format.Endian);
     const ByteCmp = struct {
         fn compare(_: void, a: u8, b: u8) core.algorithm.Order {
@@ -25,7 +33,8 @@ pub fn Writer(
     };
     const BlockWriter = codec.bounded_buffer.MemoryBlockWriter(u8);
     const BlockView = codec.bounded_buffer.MemoryBlockView(u8);
-    const CodedBlock = codec.front_coded_block.FrontCodedBlock(
+    const EntryMetadata = sstable.EntryMetadata(Format);
+    const CodedBlock = codec.front_coded_block.FrontCodedBlockWithMetadata(
         Format.DataIndex,
         Format.DataIndex,
         Format.DataIndex,
@@ -35,6 +44,7 @@ pub fn Writer(
         true,
         ByteCmp.compare,
         void,
+        EntryMetadata.byte_len,
     );
     const MutableDataPage = DataPage(Format).View(false);
     const FooterType = Footer(Format);
@@ -43,7 +53,7 @@ pub fn Writer(
     const IndexCache = storage.page_cache.PageCache(IndexDevice);
     const IndexStorage = struct {
         pub const PageId = Format.PageId;
-        pub const Error = error{};
+        pub const Error = errors.IndexStorage;
         root: ?PageId = null,
         pub fn getRoot(self: *const @This()) ?PageId {
             return self.root;
@@ -105,17 +115,8 @@ pub fn Writer(
             IndexDevice.Error ||
             IndexCache.Error ||
             IndexModel.Error ||
-            error{
-                EmptyTable,
-                Finished,
-                EntryCountMismatch,
-                DuplicateKey,
-                UnorderedKey,
-                KeyTooLarge,
-                ValueTooLarge,
-                DataPageTooSmall,
-                CountOverflow,
-            };
+            errors.Writer;
+
         allocator: std.mem.Allocator,
         log: *LogT,
         options: BuildOptions,
@@ -126,6 +127,7 @@ pub fn Writer(
         last_key: std.ArrayList(u8),
         data_page_last_key: std.ArrayList(u8),
         data_page_bytes: []u8,
+        compact_page_bytes: []u8,
         data_page: MutableDataPage,
         index_state: *IndexState,
         bloom_bytes: []u8,
@@ -135,8 +137,11 @@ pub fn Writer(
         data_length: Format.Offset = 0,
         data_page_count: Format.DataIndex = 0,
         entry_count: usize = 0,
+        min_lsn: Format.Lsn = 0,
+        max_lsn: Format.Lsn = 0,
         block_entry_count: usize = 0,
         finished: bool = false,
+
         pub fn init(
             allocator: std.mem.Allocator,
             log: *LogT,
@@ -153,19 +158,29 @@ pub fn Writer(
                 bloom_params.bitset_words,
                 @sizeOf(u64),
             ) catch return Error.CountOverflow;
+
             const block_bytes = try allocator.alloc(u8, options.settings.max_coded_block_bytes);
             errdefer allocator.free(block_bytes);
+
             const block_scratch = try allocator.alloc(u8, options.settings.max_key_bytes);
             errdefer allocator.free(block_scratch);
+
             const data_page_bytes = try allocator.alloc(u8, options.settings.data_page_bytes);
             errdefer allocator.free(data_page_bytes);
+
+            const compact_page_bytes = try allocator.alloc(u8, options.settings.data_page_bytes);
+            errdefer allocator.free(compact_page_bytes);
+
             const bloom_bytes = try allocator.alloc(u8, bloom_bytes_len);
             errdefer allocator.free(bloom_bytes);
             @memset(bloom_bytes, 0);
+
             const index_state = try IndexState.init(allocator, options.settings, ctx);
             errdefer index_state.deinit(allocator);
+
             var data_page = try MutableDataPage.init(data_page_bytes);
             try data_page.format();
+
             const block_builder = try CodedBlock.Builder.init(
                 BlockWriter.init(block_bytes),
                 block_scratch,
@@ -181,6 +196,7 @@ pub fn Writer(
                 .last_key = .empty,
                 .data_page_last_key = .empty,
                 .data_page_bytes = data_page_bytes,
+                .compact_page_bytes = compact_page_bytes,
                 .data_page = data_page,
                 .index_state = index_state,
                 .bloom_bytes = bloom_bytes,
@@ -190,6 +206,17 @@ pub fn Writer(
             };
         }
         pub fn add(self: *Self, key: []const u8, value: []const u8) Error!void {
+            return self.addWithMetadata(key, value, .{
+                .flags = .value,
+                .lsn = 0,
+            });
+        }
+        pub fn addWithMetadata(
+            self: *Self,
+            key: []const u8,
+            value: []const u8,
+            metadata: EntryMetadata,
+        ) Error!void {
             if (self.finished) {
                 return Error.Finished;
             }
@@ -199,7 +226,7 @@ pub fn Writer(
             if (value.len > self.options.settings.max_value_bytes) {
                 return Error.ValueTooLarge;
             }
-            if (self.entry_count >= self.options.entry_count) {
+            if (self.options.enforce_entry_count and self.entry_count >= self.options.entry_count) {
                 return Error.EntryCountMismatch;
             }
             if (self.last_key.items.len != 0) {
@@ -213,7 +240,8 @@ pub fn Writer(
                     },
                 }
             }
-            if (!self.block_builder.canAdd(key, value) or
+            const metadata_bytes = metadata.toBytes();
+            if (!self.block_builder.canAddWithMetadata(key, value, &metadata_bytes) or
                 self.block_entry_count >= self.options.settings.max_entries_per_coded_block)
             {
                 if (self.block_entry_count == 0) {
@@ -221,13 +249,26 @@ pub fn Writer(
                 }
                 try self.sealBlock();
             }
-            try self.block_builder.add(key, value);
+            try self.block_builder.addWithMetadata(key, value, &metadata_bytes);
+            if (self.entry_count == 0) {
+                self.min_lsn = metadata.lsn;
+                self.max_lsn = metadata.lsn;
+            } else {
+                self.min_lsn = @min(self.min_lsn, metadata.lsn);
+                self.max_lsn = @max(self.max_lsn, metadata.lsn);
+            }
             self.block_entry_count += 1;
             self.last_key.clearRetainingCapacity();
             try self.last_key.appendSlice(self.allocator, key);
             var bloom = try BloomBits.initMutable(self.bloom_bytes, self.bloom_bit_count);
             core.bloom.add(&bloom, key, self.bloom_hash_count);
             self.entry_count += 1;
+        }
+        pub fn addTombstone(self: *Self, key: []const u8, lsn: Format.Lsn) Error!void {
+            return self.addWithMetadata(key, "", .{
+                .flags = .tombstone,
+                .lsn = lsn,
+            });
         }
         pub fn finish(self: *Self) Error!void {
             if (self.finished) {
@@ -236,7 +277,7 @@ pub fn Writer(
             if (self.entry_count == 0) {
                 return Error.EmptyTable;
             }
-            if (self.entry_count != self.options.entry_count) {
+            if (self.options.enforce_entry_count and self.entry_count != self.options.entry_count) {
                 return Error.EntryCountMismatch;
             }
             try self.sealBlock();
@@ -251,6 +292,8 @@ pub fn Writer(
             try footer.format(.{
                 .comparator_id = self.options.comparator_id,
                 .entry_count = @intCast(self.entry_count),
+                .min_lsn = self.min_lsn,
+                .max_lsn = self.max_lsn,
                 .data_offset = self.data_offset,
                 .data_length = self.data_length,
                 .data_page_count = self.data_page_count,
@@ -262,6 +305,7 @@ pub fn Writer(
                 .index_page_size = @intCast(self.options.settings.index_page_bytes),
                 .index_page_count = index.page_count,
                 .index_root_page_id = index.root_page_id,
+                .entry_metadata_bytes = EntryMetadata.byte_len,
                 .settings = self.options.settings,
             });
             try self.log.append(footer_bytes);
@@ -279,6 +323,7 @@ pub fn Writer(
             self.allocator.free(self.block_bytes);
             self.allocator.free(self.block_scratch);
             self.allocator.free(self.data_page_bytes);
+            self.allocator.free(self.compact_page_bytes);
             self.allocator.free(self.bloom_bytes);
         }
         fn sealBlock(self: *Self) Error!void {
@@ -308,10 +353,13 @@ pub fn Writer(
                 return;
             }
             const offset = self.log.size();
-            try self.log.append(self.data_page_bytes);
+            const encoded_bytes = try self.data_page.encodedBytes();
+            const compact_page = self.compact_page_bytes[0..encoded_bytes];
+            try self.data_page.copyTo(compact_page);
+            try self.log.append(compact_page);
             const packed_location = Location{
                 .offset = PackedOffset.init(offset),
-                .length = PackedOffset.init(@intCast(self.data_page_bytes.len)),
+                .length = PackedOffset.init(@intCast(compact_page.len)),
             };
             if (!try self.index_state.tree.insert(
                 self.data_page_last_key.items,
@@ -322,7 +370,7 @@ pub fn Writer(
             self.data_length = std.math.add(
                 Format.Offset,
                 self.data_length,
-                @intCast(self.data_page_bytes.len),
+                @intCast(compact_page.len),
             ) catch return Error.CountOverflow;
             self.data_page_count = std.math.add(
                 Format.DataIndex,

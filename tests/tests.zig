@@ -29,6 +29,7 @@ test {
     _ = @import("skip_list/paged.zig");
 
     _ = @import("slots/variadic.zig");
+    _ = @import("slots/trailing.zig");
     _ = @import("slots/fixed.zig");
 
     _ = @import("slot_chain/slot_chain.zig");
@@ -47,6 +48,7 @@ test {
     _ = @import("fsm/skip_list_integration.zig");
 
     _ = @import("device/memory_block.zig");
+    _ = @import("device/memory_log.zig");
     _ = @import("device/file_block.zig");
 
     _ = @import("codec/fron_coded_block.zig");

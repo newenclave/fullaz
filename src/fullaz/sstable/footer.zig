@@ -2,17 +2,20 @@ const std = @import("std");
 const PackedFloat = @import("../core/packed_int.zig").PackedFloat;
 const PackedInt = @import("../core/packed_int.zig").PackedInt;
 const sstable = @import("sstable.zig");
+const errors = @import("errors.zig");
 
 pub fn Footer(comptime Format: type) type {
     const PackedOffset = PackedInt(Format.Offset, Format.Endian);
     const PackedPageId = PackedInt(Format.PageId, Format.Endian);
     const PackedDataIndex = PackedInt(Format.DataIndex, Format.Endian);
+    const PackedLsn = PackedInt(Format.Lsn, Format.Endian);
     const PackedU16 = PackedInt(u16, Format.Endian);
     const PackedU32 = PackedInt(u32, Format.Endian);
     const PackedF64 = PackedFloat(f64, Format.Endian);
 
     const magic: u32 = 0x5353_5446;
-    const version: u16 = 1;
+    const version: u16 = 2;
+    const entry_metadata_bytes = 1 + @sizeOf(Format.Lsn);
 
     const HeaderImpl = extern struct {
         magic: PackedU32,
@@ -22,6 +25,8 @@ pub fn Footer(comptime Format: type) type {
         checksum: PackedU32,
         comparator_id: PackedU32,
         entry_count: PackedOffset,
+        min_lsn: PackedLsn,
+        max_lsn: PackedLsn,
         data_offset: PackedOffset,
         data_length: PackedOffset,
         data_page_count: PackedDataIndex,
@@ -38,6 +43,7 @@ pub fn Footer(comptime Format: type) type {
         data_page_bytes: PackedDataIndex,
         max_key_bytes: PackedDataIndex,
         max_value_bytes: PackedDataIndex,
+        entry_metadata_bytes: PackedU16,
         bloom_false_positive_rate: PackedF64,
     };
 
@@ -54,17 +60,7 @@ pub fn Footer(comptime Format: type) type {
 
         pub const Header = HeaderImpl;
         pub const Trailer = TrailerImpl;
-        pub const Error = error{
-            BufferTooSmall,
-            BadMagic,
-            BadVersion,
-            BadHeaderSize,
-            BadFooterSize,
-            BadChecksum,
-            BadSettings,
-            BadRegion,
-            BadTrailer,
-        };
+        pub const Error = errors.Footer;
 
         pub fn formatTrailer(bytes: []u8, footer_size: usize) Error!void {
             if (bytes.len != @sizeOf(Trailer)) {
@@ -102,6 +98,8 @@ pub fn Footer(comptime Format: type) type {
         pub const Info = struct {
             comparator_id: u32,
             entry_count: Format.Offset,
+            min_lsn: Format.Lsn = 0,
+            max_lsn: Format.Lsn = 0,
             data_offset: Format.Offset,
             data_length: Format.Offset,
             data_page_count: Format.DataIndex,
@@ -113,6 +111,7 @@ pub fn Footer(comptime Format: type) type {
             index_page_size: Format.DataIndex,
             index_page_count: Format.PageId,
             index_root_page_id: Format.PageId,
+            entry_metadata_bytes: usize = entry_metadata_bytes,
             settings: sstable.Settings,
         };
 
@@ -156,6 +155,8 @@ pub fn Footer(comptime Format: type) type {
                     hdr.checksum.set(0);
                     hdr.comparator_id.set(footer_info.comparator_id);
                     hdr.entry_count.set(footer_info.entry_count);
+                    hdr.min_lsn.set(footer_info.min_lsn);
+                    hdr.max_lsn.set(footer_info.max_lsn);
                     hdr.data_offset.set(footer_info.data_offset);
                     hdr.data_length.set(footer_info.data_length);
                     hdr.data_page_count.set(footer_info.data_page_count);
@@ -176,6 +177,7 @@ pub fn Footer(comptime Format: type) type {
                     hdr.data_page_bytes.set(@intCast(footer_info.settings.data_page_bytes));
                     hdr.max_key_bytes.set(@intCast(footer_info.settings.max_key_bytes));
                     hdr.max_value_bytes.set(@intCast(footer_info.settings.max_value_bytes));
+                    hdr.entry_metadata_bytes.set(@intCast(footer_info.entry_metadata_bytes));
                     hdr.bloom_false_positive_rate.set(footer_info.settings.bloom_false_positive_rate);
                     hdr.checksum.set(checksum(self.bytes));
                 }
@@ -209,6 +211,8 @@ pub fn Footer(comptime Format: type) type {
                     return .{
                         .comparator_id = hdr.comparator_id.get(),
                         .entry_count = hdr.entry_count.get(),
+                        .min_lsn = hdr.min_lsn.get(),
+                        .max_lsn = hdr.max_lsn.get(),
                         .data_offset = hdr.data_offset.get(),
                         .data_length = hdr.data_length.get(),
                         .data_page_count = hdr.data_page_count.get(),
@@ -220,6 +224,7 @@ pub fn Footer(comptime Format: type) type {
                         .index_page_size = hdr.index_page_size.get(),
                         .index_page_count = hdr.index_page_count.get(),
                         .index_root_page_id = hdr.index_root_page_id.get(),
+                        .entry_metadata_bytes = hdr.entry_metadata_bytes.get(),
                         .settings = .{
                             .max_entries_per_coded_block = try toUsize(
                                 hdr.max_entries_per_coded_block.get(),
@@ -254,6 +259,12 @@ pub fn Footer(comptime Format: type) type {
                 return Error.BadFooterSize;
             }
             if (info.settings.index_page_bytes != footer_size) {
+                return Error.BadSettings;
+            }
+            if (info.entry_metadata_bytes != entry_metadata_bytes) {
+                return Error.BadSettings;
+            }
+            if (info.min_lsn > info.max_lsn) {
                 return Error.BadSettings;
             }
             if (info.settings.max_entries_per_coded_block == 0 or

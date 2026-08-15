@@ -29,13 +29,15 @@ pub fn assertWriter(comptime WriterT: type) void {
 }
 
 /// A reader looks up byte keys using caller-owned scratch storage.
-/// The returned value borrows that scratch and is invalidated by its next use.
+/// Its returned entry exposes both the value and storage metadata; the value
+/// borrows that scratch and is invalidated by its next use.
 ///
 /// ```zig
 /// const Reader = struct {
 ///     pub const Error = error{};
 ///     pub const ReadScratchType = struct {};
-///     pub fn find(self: *Reader, key: []const u8, scratch: *ReadScratchType) Error!?[]const u8 { _ = self; _ = key; _ = scratch; return null; }
+///     pub const Entry = struct { value: []const u8 };
+///     pub fn find(self: *Reader, key: []const u8, scratch: *ReadScratchType) Error!?Entry { _ = self; _ = key; _ = scratch; return null; }
 ///     pub fn deinit(self: *Reader) void { _ = self; }
 /// };
 /// comptime assertReader(Reader);
@@ -43,12 +45,13 @@ pub fn assertWriter(comptime WriterT: type) void {
 pub fn assertReader(comptime ReaderT: type) void {
     requiresErrorDeclaration(ReaderT, "Error");
     requiresTypeDeclaration(ReaderT, "ReadScratchType");
+    requiresTypeDeclaration(ReaderT, "Entry");
     const Error = ReaderT.Error;
 
     requiresFnSignature(
         ReaderT,
         "find",
-        fn (*ReaderT, []const u8, *ReaderT.ReadScratchType) Error!?[]const u8,
+        fn (*ReaderT, []const u8, *ReaderT.ReadScratchType) Error!?ReaderT.Entry,
     );
     requiresFnSignature(ReaderT, "deinit", fn (*ReaderT) void);
 }
