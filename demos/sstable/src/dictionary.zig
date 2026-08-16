@@ -3,7 +3,7 @@ const fullaz = @import("fullaz");
 
 pub const max_entries: usize = 4_096;
 pub const max_key_bytes: usize = 128;
-pub const max_value_bytes: usize = 256;
+pub const max_value_bytes: usize = 1024;
 pub const comparator_id: u32 = 1;
 
 const Format = fullaz.sstable.SstableFormat(u64, u32, u32, .little);
@@ -17,8 +17,8 @@ pub const ReadScratch = Reader.ReadScratchType;
 
 pub const settings: fullaz.sstable.Settings = .{
     .max_entries_per_coded_block = max_entries,
-    .max_coded_block_bytes = 512,
-    .data_page_bytes = 2 * 1024,
+    .max_coded_block_bytes = 2 * 1024,
+    .data_page_bytes = 4 * 1024,
     .index_page_bytes = 1024,
     .max_key_bytes = max_key_bytes,
     .max_value_bytes = max_value_bytes,
