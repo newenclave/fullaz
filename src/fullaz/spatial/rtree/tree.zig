@@ -81,17 +81,38 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             return .{ .model = model };
         }
 
-        // ---- search: report values whose box overlaps the query window ---- //
+        // ---- search: report values whose box has positive overlap with the query window ---- //
         pub fn search(self: *Self, query: Key, ctx: anytype, cb: anytype) !void {
             const acc = self.model.accessor();
             const root = acc.getRoot() orelse {
                 return;
             };
-            try self.searchNode(root, query, ctx, cb);
+            try self.searchNode(root, query, ctx, cb, .overlap);
         }
 
+        // ---- searchIntersecting: report values sharing any point with the query window ---- //
+        pub fn searchIntersecting(self: *Self, query: Key, ctx: anytype, cb: anytype) !void {
+            const acc = self.model.accessor();
+            const root = acc.getRoot() orelse {
+                return;
+            };
+            try self.searchNode(root, query, ctx, cb, .intersection);
+        }
+
+        const SearchMode = enum {
+            overlap,
+            intersection,
+        };
+
         // cb here is: fn(ctx: anytype, mbr: Key, value: ValueIn) anyerror!void //
-        fn searchNode(self: *Self, id: Pid, query: Key, ctx: anytype, cb: anytype) !void {
+        fn searchNode(
+            self: *Self,
+            id: Pid,
+            query: Key,
+            ctx: anytype,
+            cb: anytype,
+            comptime search_mode: SearchMode,
+        ) !void {
             const acc = self.model.accessor();
             if (try acc.isLeafId(id)) {
                 var leaf = (try acc.loadLeaf(id)).?;
@@ -100,7 +121,11 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 var i: usize = 0;
                 while (i < n) : (i += 1) {
                     const mbr = try leaf.getMbr(i);
-                    if (mbr.overlaps(&query)) {
+                    const matches = switch (search_mode) {
+                        .intersection => mbr.intersects(&query),
+                        .overlap => mbr.overlaps(&query),
+                    };
+                    if (matches) {
                         try cb(ctx, mbr, try leaf.getValue(i));
                     }
                 }
@@ -111,8 +136,18 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 var i: usize = 0;
                 while (i < n) : (i += 1) {
                     const mbr = try inode.getMbr(i);
-                    if (mbr.overlaps(&query)) {
-                        try self.searchNode(try inode.getChild(i), query, ctx, cb);
+                    const matches = switch (search_mode) {
+                        .intersection => mbr.intersects(&query),
+                        .overlap => mbr.overlaps(&query),
+                    };
+                    if (matches) {
+                        try self.searchNode(
+                            try inode.getChild(i),
+                            query,
+                            ctx,
+                            cb,
+                            search_mode,
+                        );
                     }
                 }
             }

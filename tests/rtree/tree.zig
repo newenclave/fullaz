@@ -48,6 +48,24 @@ test "RTree: single insert is findable" {
     try testing.expectEqual(@as(usize, 0), miss.count);
 }
 
+test "RTree: searchIntersecting includes touching boxes" {
+    var m = try Model.init(testing.allocator);
+    defer m.deinit();
+    var t = Tree.init(&m);
+
+    try t.insert(box(0, 0, 10, 10), 7);
+
+    const query = box(10, 2, 20, 8);
+    var overlap_hits = Collector{};
+    try t.search(query, &overlap_hits, Collector.cb);
+    try testing.expectEqual(@as(usize, 0), overlap_hits.count);
+
+    var intersection_hits = Collector{};
+    try t.searchIntersecting(query, &intersection_hits, Collector.cb);
+    try testing.expect(intersection_hits.seen[7]);
+    try testing.expectEqual(@as(usize, 1), intersection_hits.count);
+}
+
 test "RTree: window query matches brute force after many inserts + splits" {
     var m = try Model.init(testing.allocator);
     defer m.deinit();
@@ -80,6 +98,14 @@ test "RTree: window query matches brute force after many inserts + splits" {
         while (i < N) : (i += 1) {
             const expected = boxes[i].overlaps(&q);
             try testing.expectEqual(expected, got.seen[i]);
+        }
+
+        var intersecting = Collector{};
+        try t.searchIntersecting(q, &intersecting, Collector.cb);
+        i = 0;
+        while (i < N) : (i += 1) {
+            const expected = boxes[i].intersects(&q);
+            try testing.expectEqual(expected, intersecting.seen[i]);
         }
     }
 }

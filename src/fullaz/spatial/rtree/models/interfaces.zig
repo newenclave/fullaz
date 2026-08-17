@@ -21,6 +21,7 @@ pub fn assertKey(comptime K: type) void {
     requiresFnSignature(K, "perimeter", fn (*const K) Coord);
     requiresFnSignature(K, "merged", fn (*const K, *const K) K);
     requiresFnSignature(K, "overlaps", fn (*const K, *const K) bool);
+    requiresFnSignature(K, "intersects", fn (*const K, *const K) bool);
     requiresFnSignature(K, "enlargement", fn (*const K, *const K) Coord);
     requiresFnSignature(K, "overlapMeasure", fn (*const K, *const K) Coord);
     requiresFnSignature(K, "center", fn (*const K) Point);

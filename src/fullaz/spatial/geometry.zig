@@ -1,6 +1,12 @@
 const std = @import("std");
 
 pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
+    comptime {
+        if (dim_v == 0) {
+            @compileError("BoundingBox dimension must be greater than zero");
+        }
+    }
+
     return struct {
         const Self = @This();
         pub const Coord = CoordT;
@@ -37,18 +43,95 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
             return true;
         }
 
-        pub fn measure(self: *const Self) Coord {
+        fn assertDimensionRange(comptime start: usize, comptime dims: usize) void {
+            if (dims == 0 or start > dimension or dims > dimension - start) {
+                @compileError("BoundingBox dimension range must be non-empty and within dimension");
+            }
+        }
+
+        pub fn measureN(self: *const Self, comptime start: usize, comptime dims: usize) Coord {
+            comptime assertDimensionRange(start, dims);
+
             var result: Coord = 1;
-            inline for (0..dimension) |i| {
-                result *= (self.high[i] - self.low[i]);
+            inline for (0..dims) |i| {
+                result *= (self.high[start + i] - self.low[start + i]);
+            }
+            return result;
+        }
+
+        pub fn measure(self: *const Self) Coord {
+            return self.measureN(0, dimension);
+        }
+
+        pub fn perimeterN(self: *const Self, comptime start: usize, comptime dims: usize) Coord {
+            comptime assertDimensionRange(start, dims);
+
+            var result: Coord = 0;
+            inline for (0..dims) |i| {
+                result += (self.high[start + i] - self.low[start + i]);
             }
             return result;
         }
 
         pub fn perimeter(self: *const Self) Coord {
+            return self.perimeterN(0, dimension);
+        }
+
+        pub fn surfaceAreaN(self: *const Self, comptime start: usize, comptime dims: usize) Coord {
+            comptime assertDimensionRange(start, dims);
+
             var result: Coord = 0;
-            inline for (0..dimension) |i| {
-                result += (self.high[i] - self.low[i]);
+            inline for (0..dims) |i| {
+                var face_measure: Coord = 1;
+                inline for (0..dims) |j| {
+                    if (i != j) {
+                        face_measure *= (self.high[start + j] - self.low[start + j]);
+                    }
+                }
+                result += face_measure;
+            }
+            return result * 2;
+        }
+
+        pub fn surfaceArea(self: *const Self) Coord {
+            return self.surfaceAreaN(0, dimension);
+        }
+
+        pub fn sliceN(self: *const Self, comptime start: usize, comptime dims: usize) BoundingBox(Coord, dims) {
+            comptime assertDimensionRange(start, dims);
+
+            var result = BoundingBox(Coord, dims).init();
+            inline for (0..dims) |i| {
+                result.low[i] = self.low[start + i];
+                result.high[i] = self.high[start + i];
+            }
+            return result;
+        }
+
+        pub fn embed(source: anytype, comptime start: usize) Self {
+            const SourceBox = switch (@typeInfo(@TypeOf(source))) {
+                .pointer => |pointer| pointer.child,
+                else => @compileError("BoundingBox.embed source must be a pointer to BoundingBox"),
+            };
+            comptime {
+                if (@typeInfo(SourceBox) != .@"struct" or
+                    !@hasDecl(SourceBox, "Coord") or
+                    !@hasDecl(SourceBox, "dimension") or
+                    !@hasField(SourceBox, "low") or
+                    !@hasField(SourceBox, "high"))
+                {
+                    @compileError("BoundingBox.embed source must be a BoundingBox");
+                }
+                if (SourceBox.Coord != Coord) {
+                    @compileError("BoundingBox.embed source coordinate type must match target");
+                }
+                assertDimensionRange(start, SourceBox.dimension);
+            }
+
+            var result = Self.init();
+            inline for (0..SourceBox.dimension) |i| {
+                result.low[start + i] = source.low[i];
+                result.high[start + i] = source.high[i];
             }
             return result;
         }
@@ -98,21 +181,51 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
             return true;
         }
 
-        pub fn enlargement(self: *const Self, other: *const Self) Coord {
-            return self.merged(other).measure() - self.measure();
+        pub fn intersects(self: *const Self, other: *const Self) bool {
+            inline for (0..dimension) |i| {
+                if ((self.high[i] < other.low[i]) or (other.high[i] < self.low[i])) {
+                    return false;
+                }
+            }
+            return true;
         }
 
-        pub fn overlapMeasure(self: *const Self, other: *const Self) Coord {
+        pub fn enlargementN(
+            self: *const Self,
+            other: *const Self,
+            comptime start: usize,
+            comptime dims: usize,
+        ) Coord {
+            return self.merged(other).measureN(start, dims) - self.measureN(start, dims);
+        }
+
+        pub fn enlargement(self: *const Self, other: *const Self) Coord {
+            return self.enlargementN(other, 0, dimension);
+        }
+
+        pub fn overlapMeasureN(
+            self: *const Self,
+            other: *const Self,
+            comptime start: usize,
+            comptime dims: usize,
+        ) Coord {
+            comptime assertDimensionRange(start, dims);
+
             var result: Coord = 1;
-            inline for (0..dimension) |i| {
-                const lo = @max(self.low[i], other.low[i]);
-                const hi = @min(self.high[i], other.high[i]);
+            inline for (0..dims) |i| {
+                const axis = start + i;
+                const lo = @max(self.low[axis], other.low[axis]);
+                const hi = @min(self.high[axis], other.high[axis]);
                 if (hi <= lo) {
                     return 0;
                 }
                 result *= (hi - lo);
             }
             return result;
+        }
+
+        pub fn overlapMeasure(self: *const Self, other: *const Self) Coord {
+            return self.overlapMeasureN(other, 0, dimension);
         }
 
         pub fn center(self: *const Self) Point {
