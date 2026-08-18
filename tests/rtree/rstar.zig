@@ -10,6 +10,7 @@ const RStar = rtree.RStarStrategy(BB);
 const Model = rtree.models.Memory(i64, 2, u64, 4);
 const Key = Model.KeyType;
 const RStarTree = rtree.RStarTree(Model);
+const FatRStarTree = rtree.FatRStarTree(Model, 10);
 
 fn box(x0: i64, y0: i64, x1: i64, y1: i64) BB {
     return BB.initWith(.{ x0, y0 }, .{ x1, y1 });
@@ -89,6 +90,37 @@ test "RStarTree: window query matches brute force after many inserts" {
     try testing.expect((try t.height()) >= 2);
 
     const queries = [_]Key{ box(0, 0, 5, 5), box(10, 10, 20, 20), box(0, 0, 30, 30), box(24, 24, 28, 28) };
+    for (queries) |q| {
+        var got = Collector{};
+        try t.search(q, &got, Collector.cb);
+        i = 0;
+        while (i < N) : (i += 1) {
+            try testing.expectEqual(boxes[i].overlaps(&q), got.seen[i]);
+        }
+    }
+}
+
+test "FatRStarTree: window query matches brute force after many inserts" {
+    var m = try Model.init(testing.allocator);
+    defer m.deinit();
+    var t = FatRStarTree.init(&m);
+
+    const N = 60;
+    var boxes: [N]Key = undefined;
+    var i: usize = 0;
+    while (i < N) : (i += 1) {
+        const x: i64 = @intCast((i * 7) % 25);
+        const y: i64 = @intCast((i * 11) % 25);
+        boxes[i] = box(x, y, x + 3, y + 3);
+        try t.insert(boxes[i], @intCast(i));
+    }
+
+    const queries = [_]Key{
+        box(0, 0, 5, 5),
+        box(10, 10, 20, 20),
+        box(0, 0, 30, 30),
+        box(24, 24, 28, 28),
+    };
     for (queries) |q| {
         var got = Collector{};
         try t.search(q, &got, Collector.cb);

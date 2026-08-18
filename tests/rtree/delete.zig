@@ -96,3 +96,7 @@ test "RTree delete: condense keeps the remaining set exact" {
 test "RStarTree delete: condense keeps the remaining set exact" {
     try runDeleteTest(rtree.RStarTree(Model));
 }
+
+test "FatRTree delete: condense keeps the remaining set exact" {
+    try runDeleteTest(rtree.FatRTree(Model, 10));
+}

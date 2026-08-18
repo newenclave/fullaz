@@ -1,8 +1,69 @@
 const std = @import("std");
+const contract_interfaces = @import("../../contracts/interfaces.zig");
 const interfaces = @import("models/interfaces.zig");
 const strategy_mod = @import("strategy.zig");
 
 pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
+    return TreeWithConfig(ModelT, StrategyFn, ExactConfig(ModelT.KeyType));
+}
+
+pub fn FatTree(
+    comptime ModelT: type,
+    comptime StrategyFn: fn (type) type,
+    comptime margin: ModelT.KeyType.Coord,
+) type {
+    comptime assertFatKey(ModelT.KeyType);
+    return TreeWithConfig(ModelT, StrategyFn, FatConfig(ModelT.KeyType, margin));
+}
+
+/// A fat key must satisfy the regular key contract and support containment and expansion.
+///
+/// ```zig
+/// const Key = struct {
+///     pub const Coord = i64;
+///     pub fn containsBox(self: *const Key, other: *const Key) bool { _ = self; _ = other; return true; }
+///     pub fn expanded(self: *const Key, margin: Coord) Key { _ = margin; return self.*; }
+///     // Also implement the operations required by `interfaces.assertKey`.
+/// };
+/// comptime assertFatKey(Key);
+/// ```
+pub fn assertFatKey(comptime KeyT: type) void {
+    interfaces.assertKey(KeyT);
+
+    const Coord = KeyT.Coord;
+    contract_interfaces.requiresFnSignature(KeyT, "containsBox", fn (*const KeyT, *const KeyT) bool);
+    contract_interfaces.requiresFnSignature(KeyT, "expanded", fn (*const KeyT, Coord) KeyT);
+}
+
+fn ExactConfig(comptime KeyT: type) type {
+    return struct {
+        pub fn makeInodeMbr(mbr: KeyT) KeyT {
+            return mbr;
+        }
+
+        pub fn mustUpdateInodeMbr(_: KeyT, _: KeyT) bool {
+            return true;
+        }
+    };
+}
+
+fn FatConfig(comptime KeyT: type, comptime margin: KeyT.Coord) type {
+    return struct {
+        pub fn makeInodeMbr(mbr: KeyT) KeyT {
+            return mbr.expanded(margin);
+        }
+
+        pub fn mustUpdateInodeMbr(stored: KeyT, child: KeyT) bool {
+            return !stored.containsBox(&child);
+        }
+    };
+}
+
+fn TreeWithConfig(
+    comptime ModelT: type,
+    comptime StrategyFn: fn (type) type,
+    comptime ConfigT: type,
+) type {
     comptime interfaces.assertModel(ModelT);
 
     const Key = ModelT.KeyType;
@@ -274,7 +335,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
         }
 
         // Same in place
-        fn reinsertInode(_: *Self, inode: *Inode, new_mbr: Key, new_child: Pid, ctx: *InsertCtx) Error!void {
+        fn reinsertInode(self: *Self, inode: *Inode, new_mbr: Key, new_child: Pid, ctx: *InsertCtx) Error!void {
             const n = try inode.size();
             const total = n + 1;
 
@@ -283,7 +344,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             while (i < n) : (i += 1) {
                 mbrs[i] = try inode.getMbr(i);
             }
-            mbrs[n] = new_mbr;
+            mbrs[n] = ConfigT.makeInodeMbr(new_mbr);
 
             var node_mbr = mbrs[0];
             i = 1;
@@ -306,7 +367,8 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             i = 0;
             while (i < n) : (i += 1) {
                 if (eject[i]) {
-                    ctx.pushSubtree(mbrs[i], try inode.getChild(i), level - 1);
+                    const child_id = try inode.getChild(i);
+                    ctx.pushSubtree(try self.nodeMbrOf(child_id), child_id, level - 1);
                 }
             }
             var cursor: usize = 0;
@@ -322,7 +384,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             if (eject[n]) {
                 ctx.pushSubtree(new_mbr, new_child, level - 1);
             } else {
-                try inode.insertChild(new_mbr, new_child);
+                try inode.insertChild(mbrs[n], new_child);
             }
         }
 
@@ -383,7 +445,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             while (i < n) : (i += 1) {
                 mbrs[i] = try inode.getMbr(i);
             }
-            mbrs[n] = new_mbr;
+            mbrs[n] = ConfigT.makeInodeMbr(new_mbr);
 
             var assign: [Max + 1]u8 = undefined;
             Strategy.splitEntries(mbrs[0..total], min_fill, assign[0..total]);
@@ -409,9 +471,9 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
             }
             try inode.compact();
             if (assign[n] != 0) {
-                try sibling.insertChild(new_mbr, new_child);
+                try sibling.insertChild(mbrs[n], new_child);
             } else {
-                try inode.insertChild(new_mbr, new_child);
+                try inode.insertChild(mbrs[n], new_child);
             }
             return sibling.id();
         }
@@ -426,12 +488,12 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 var parent = (try acc.loadInode(frame.id)).?;
                 defer acc.deinitInode(parent);
 
-                try parent.updateChildMbr(frame.idx, try self.nodeMbrOf(child_id));
+                try self.updateParentMbr(&parent, frame.idx, child_id);
 
                 if (split) |sib_id| {
                     const sib_mbr = try self.nodeMbrOf(sib_id);
                     if (try parent.canInsertChild(sib_mbr, sib_id)) {
-                        try parent.insertChild(sib_mbr, sib_id);
+                        try parent.insertChild(ConfigT.makeInodeMbr(sib_mbr), sib_id);
                         split = null;
                     } else {
                         // 'path.len > 0' here means 'parent' is not the root.
@@ -452,9 +514,23 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 var new_root = try acc.createInode();
                 defer acc.deinitInode(new_root);
                 try new_root.setLevel((try self.levelOf(child_id)) + 1);
-                try new_root.insertChild(try self.nodeMbrOf(child_id), child_id);
-                try new_root.insertChild(try self.nodeMbrOf(sib_id), sib_id);
+                try new_root.insertChild(
+                    ConfigT.makeInodeMbr(try self.nodeMbrOf(child_id)),
+                    child_id,
+                );
+                try new_root.insertChild(
+                    ConfigT.makeInodeMbr(try self.nodeMbrOf(sib_id)),
+                    sib_id,
+                );
                 try acc.setRoot(new_root.id());
+            }
+        }
+
+        fn updateParentMbr(self: *Self, parent: *Inode, child_idx: usize, child_id: Pid) Error!void {
+            const child_mbr = try self.nodeMbrOf(child_id);
+            const stored_mbr = try parent.getMbr(child_idx);
+            if (ConfigT.mustUpdateInodeMbr(stored_mbr, child_mbr)) {
+                try parent.updateChildMbr(child_idx, ConfigT.makeInodeMbr(child_mbr));
             }
         }
 
@@ -587,7 +663,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                         try acc.destroy(child_id);
                     }
                 } else {
-                    try parent.updateChildMbr(frame.idx, try self.nodeMbrOf(child_id));
+                    try self.updateParentMbr(&parent, frame.idx, child_id);
                 }
 
                 const is_root = path.len == 0;
@@ -596,8 +672,9 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                     const n = try parent.size();
                     var i: usize = 0;
                     while (i < n) : (i += 1) {
-                        s_mbr[sn] = try parent.getMbr(i);
-                        s_id[sn] = try parent.getChild(i);
+                        const subtree_id = try parent.getChild(i);
+                        s_mbr[sn] = try self.nodeMbrOf(subtree_id);
+                        s_id[sn] = subtree_id;
                         s_lvl[sn] = plvl - 1;
                         sn += 1;
                     }
@@ -685,8 +762,8 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 var nr = try acc.createInode();
                 defer acc.deinitInode(nr);
                 try nr.setLevel(target_level + 1);
-                try nr.insertChild(try self.nodeMbrOf(root), root);
-                try nr.insertChild(mbr, child_id);
+                try nr.insertChild(ConfigT.makeInodeMbr(try self.nodeMbrOf(root)), root);
+                try nr.insertChild(ConfigT.makeInodeMbr(mbr), child_id);
                 try acc.setRoot(nr.id());
                 return;
             }
@@ -713,7 +790,7 @@ pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
                 var inode = (try acc.loadInode(cur)).?;
                 defer acc.deinitInode(inode);
                 if (try inode.canInsertChild(mbr, child_id)) {
-                    try inode.insertChild(mbr, child_id);
+                    try inode.insertChild(ConfigT.makeInodeMbr(mbr), child_id);
                 } else {
                     split = try self.splitInode(&inode, mbr, child_id);
                 }

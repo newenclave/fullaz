@@ -7,6 +7,7 @@ const testing = std.testing;
 const Model = rtree.models.Memory(i64, 2, u64, 4); // max_entries = 4
 const Key = Model.KeyType;
 const Tree = rtree.RTree(Model);
+const FatTree = rtree.FatRTree(Model, 10);
 
 fn box(x0: i64, y0: i64, x1: i64, y1: i64) Key {
     return Key.initWith(.{ x0, y0 }, .{ x1, y1 });
@@ -106,6 +107,65 @@ test "RTree: window query matches brute force after many inserts + splits" {
         while (i < N) : (i += 1) {
             const expected = boxes[i].intersects(&q);
             try testing.expectEqual(expected, intersecting.seen[i]);
+        }
+    }
+}
+
+test "FatRTree: inode MBR contains child MBR with the configured margin" {
+    var m = try Model.init(testing.allocator);
+    defer m.deinit();
+    var t = FatTree.init(&m);
+
+    for (0..5) |i| {
+        const x: i64 = @intCast(i * 10);
+        try t.insert(box(x, 0, x + 2, 2), @intCast(i));
+    }
+
+    const acc = m.accessor();
+    const root = acc.getRoot().?;
+    try testing.expect(!(try acc.isLeafId(root)));
+    var inode = (try acc.loadInode(root)).?;
+    defer acc.deinitInode(inode);
+
+    const child_id = try inode.getChild(0);
+    var leaf = (try acc.loadLeaf(child_id)).?;
+    defer acc.deinitLeaf(leaf);
+
+    const child_mbr = try leaf.nodeMbr();
+    const stored_mbr = try inode.getMbr(0);
+    try testing.expect(stored_mbr.containsBox(&child_mbr));
+    try testing.expectEqual(child_mbr.low[0] - 10, stored_mbr.low[0]);
+    try testing.expectEqual(child_mbr.high[0] + 10, stored_mbr.high[0]);
+}
+
+test "FatRTree: window query matches brute force after many inserts + splits" {
+    var m = try Model.init(testing.allocator);
+    defer m.deinit();
+    var t = FatTree.init(&m);
+
+    const N = 60;
+    var boxes: [N]Key = undefined;
+    var i: usize = 0;
+    while (i < N) : (i += 1) {
+        const x: i64 = @intCast((i * 7) % 25);
+        const y: i64 = @intCast((i * 11) % 25);
+        boxes[i] = box(x, y, x + 3, y + 3);
+        try t.insert(boxes[i], @intCast(i));
+    }
+
+    const queries = [_]Key{
+        box(0, 0, 5, 5),
+        box(10, 10, 20, 20),
+        box(3, 3, 4, 4),
+        box(0, 0, 30, 30),
+        box(24, 24, 28, 28),
+    };
+    for (queries) |q| {
+        var got = Collector{};
+        try t.search(q, &got, Collector.cb);
+        i = 0;
+        while (i < N) : (i += 1) {
+            try testing.expectEqual(boxes[i].overlaps(&q), got.seen[i]);
         }
     }
 }

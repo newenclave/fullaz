@@ -151,6 +151,10 @@ test "RStarTree paged: window query matches brute force after many inserts + spl
     try windowQueryMatchesBruteForce(rtree.RStarTree(Model));
 }
 
+test "FatRTree paged: window query matches brute force after many inserts + splits" {
+    try windowQueryMatchesBruteForce(rtree.FatRTree(Model, 10));
+}
+
 test "RTree paged: delete keeps the exact remaining set" {
     const allocator = testing.allocator;
     var device = try Device.init(allocator, 4096);
