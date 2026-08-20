@@ -1,0 +1,18 @@
+const pages = @import("fullaz").pages;
+
+const InvalidTrait = struct {
+    pub const kind_name: []const u8 = "test.component";
+    pub const format_version: u32 = 1;
+    pub const page_kind_count: usize = 0xff00;
+
+    pub fn Binding(comptime BackendT: type) type {
+        _ = BackendT;
+        return struct {};
+    }
+};
+
+comptime {
+    const Invalid = pages.Schema(.{ .page_id = u32 })
+        .add("index", .{ .Trait = InvalidTrait });
+    _ = Invalid.fields;
+}
