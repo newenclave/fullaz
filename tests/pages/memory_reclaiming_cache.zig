@@ -148,3 +148,29 @@ test "Pages: memory reclaiming cache reuses pages in LIFO order and zeroes them"
     try std.testing.expectEqual(@as(usize, 2), device.blocksCount());
     try std.testing.expectEqual(@as(usize, 2), cache.physical_page_count);
 }
+
+test "Pages: memory reclaiming cache preserves a PID after failed reuse" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCache(Device);
+    const Cache = fullaz.pages.MemoryReclaimingCache(InnerCache);
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var inner = try InnerCache.init(&device, std.testing.allocator, 1);
+    defer inner.deinit();
+    var cache = Cache.init(std.testing.allocator, &inner);
+    defer cache.deinit();
+
+    var first = try cache.create();
+    const first_id = try first.pid();
+    first.deinit();
+    var second = try cache.create();
+    second.deinit();
+    try cache.free(first_id);
+
+    try device.truncateBlocks(device.blocksCount());
+    const available_before = inner.availableFrames();
+    try std.testing.expectError(error.InvalidId, cache.create());
+    try std.testing.expectEqual(available_before, inner.availableFrames());
+    try std.testing.expectEqualSlices(u32, &.{first_id}, cache.free_pages.items);
+}
