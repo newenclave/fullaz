@@ -1,0 +1,65 @@
+const std = @import("std");
+const page_cache_contract = @import("../contracts/page_cache.zig");
+
+pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
+    comptime page_cache_contract.requiresPageCache(InnerCacheT);
+
+    return struct {
+        const Self = @This();
+
+        pub const Handle = InnerCacheT.Handle;
+        pub const Pid = InnerCacheT.Pid;
+        pub const UnderlyingDevice = InnerCacheT.UnderlyingDevice;
+        pub const Error = InnerCacheT.Error ||
+            std.mem.Allocator.Error ||
+            error{
+                PageAlreadyFree,
+                PageIdExhausted,
+            };
+
+        allocator: std.mem.Allocator,
+        inner: *InnerCacheT,
+        free_pages: std.ArrayList(Pid) = .empty,
+        physical_page_count: usize = 0,
+
+        pub fn init(allocator: std.mem.Allocator, inner: *InnerCacheT) Self {
+            return .{
+                .allocator = allocator,
+                .inner = inner,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.free_pages.deinit(self.allocator);
+            self.* = undefined;
+        }
+
+        pub fn getTemporaryPage(self: *Self) Error!Handle {
+            return self.inner.getTemporaryPage();
+        }
+
+        pub fn fetch(self: *Self, page_id: Pid) Error!Handle {
+            return self.inner.fetch(page_id);
+        }
+
+        pub fn create(self: *Self) Error!Handle {
+            return self.inner.create();
+        }
+
+        pub fn flush(self: *Self, page_id: Pid) Error!void {
+            return self.inner.flush(page_id);
+        }
+
+        pub fn flushAll(self: *Self) Error!void {
+            return self.inner.flushAll();
+        }
+
+        pub fn pageSize(self: *const Self) usize {
+            return self.inner.pageSize();
+        }
+
+        comptime {
+            page_cache_contract.requiresPageCache(Self);
+        }
+    };
+}
