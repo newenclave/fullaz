@@ -212,6 +212,60 @@ fn checkRootHeightReduction(removed_key: []const u8) !void {
     try std.testing.expectEqual(@as(usize, 2), manager.destroyed_pages);
 }
 
+fn checkInodeMergeOrdering(descending: bool) !void {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Manager = DestroyTrackingStorageManager(PageCache);
+    const BptModel = bpt.models.PagedModel(PageCache, Manager, keyCmp, void);
+    const keys = [_][]const u8{
+        "00000001", "00000002", "00000003", "00000004",
+        "00000005", "00000006", "00000007", "00000008",
+        "00000009", "00000010", "00000011", "00000012",
+        "00000013", "00000014", "00000015", "00000016",
+    };
+
+    var device = try Device.init(allocator, 84);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 32);
+    defer cache.deinit();
+    var manager = Manager{ .cache = &cache };
+    var model = try BptModel.init(&cache, &manager, .{
+        .maximum_key_size = 8,
+        .maximum_value_size = 0,
+    }, {});
+    defer model.deinit();
+    var tree = bpt.Bpt(BptModel).init(&model, .force_split);
+    defer tree.deinit();
+
+    for (keys) |key| {
+        try std.testing.expect(try tree.insert(key, ""));
+    }
+    const accessor = model.accessor();
+    const child_id = blk: {
+        const root_inode = (try accessor.loadInode(manager.root.?)).?;
+        defer accessor.deinitInode(root_inode);
+        break :blk try root_inode.getChild(0);
+    };
+    const child_inode = try accessor.loadInode(child_id);
+    try std.testing.expect(child_inode != null);
+    accessor.deinitInode(child_inode);
+
+    if (descending) {
+        var index = keys.len;
+        while (index > 0) {
+            index -= 1;
+            try std.testing.expect(try tree.remove(keys[index]));
+        }
+    } else {
+        for (keys) |key| {
+            try std.testing.expect(try tree.remove(key));
+        }
+    }
+    try std.testing.expectEqual(null, manager.root);
+    try std.testing.expect(manager.destroyed_pages > 0);
+}
+
 test "Bpt paged: Create a tree" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
@@ -329,6 +383,14 @@ test "Pages: paged BPT releases nodes while reducing root height" {
 
 test "Pages: paged BPT releases a right leaf before destroying it" {
     try checkRootHeightReduction("00000001");
+}
+
+test "Pages: paged BPT releases inodes before destroying them" {
+    try checkInodeMergeOrdering(true);
+}
+
+test "Pages: paged BPT releases right inodes before destroying them" {
+    try checkInodeMergeOrdering(false);
 }
 
 test "test models functionality" {

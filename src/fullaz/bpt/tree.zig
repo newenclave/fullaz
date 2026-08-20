@@ -1064,41 +1064,56 @@ pub fn Bpt(comptime ModelT: type) type {
             return false;
         }
 
+        fn mergeInodes(
+            self: *Self,
+            left: *InodeType,
+            right: *InodeType,
+            parent: *InodeType,
+            right_pos: usize,
+        ) Error!void {
+            const separator_key_out = try parent.getKey(right_pos - 1);
+            const separator_key = self.model.keyOutAsLike(separator_key_out);
+            const last_left_child = try left.getChild(try left.size());
+
+            try left.insertChild(try left.size(), separator_key, last_left_child);
+            for (0..try right.size()) |index| {
+                const out_key = try right.getKey(index);
+                const child_id = try right.getChild(index);
+                const key = self.model.keyOutAsLike(out_key);
+
+                try left.insertChild(try left.size(), key, child_id);
+                try self.setChildParent(child_id, left.id());
+            }
+
+            const right_most_child = try right.getChild(try right.size());
+            try left.updateChild(try left.size(), right_most_child);
+            try self.setChildParent(right_most_child, left.id());
+            try self.swapChildren(parent, right_pos - 1, right_pos);
+            try parent.erase(right_pos - 1);
+        }
+
         fn inodeMergeWithRight(self: *Self, inode: *InodeType) Error!bool {
             const accessor = self.model.accessor();
             if (try self.findRightSibling(inode.getParent(), inode.id())) |right_id| {
                 if (try accessor.loadInode(right_id)) |right_sibling_const| {
-                    defer accessor.deinitInode(right_sibling_const);
-                    var right_sibling = right_sibling_const;
-                    if (try accessor.canMergeInodes(inode, &right_sibling)) {
+                    const merged = blk: {
+                        defer accessor.deinitInode(right_sibling_const);
+                        var right_sibling = right_sibling_const;
+                        if (!try accessor.canMergeInodes(inode, &right_sibling)) {
+                            break :blk false;
+                        }
                         if (try accessor.loadInode(inode.getParent())) |parent_const| {
                             defer accessor.deinitInode(parent_const);
                             var parent = parent_const;
-
                             const right_pos = try self.findChidIndexInParentId(parent.id(), right_id);
-                            const borrow_separator_key = try parent.getKey(right_pos - 1);
-                            const separator_key = self.model.keyOutAsLike(borrow_separator_key);
-                            const last_node_child = try inode.getChild(try inode.size());
-
-                            try inode.insertChild(try inode.size(), separator_key, last_node_child);
-                            for (0..try right_sibling.size()) |i| {
-                                const out_key = try right_sibling.getKey(i);
-                                const child_id = try right_sibling.getChild(i);
-                                const key = self.model.keyOutAsLike(out_key);
-
-                                try inode.insertChild(try inode.size(), key, child_id);
-                                try self.setChildParent(child_id, inode.id());
-                            }
-
-                            const right_most_child = try right_sibling.getChild(try right_sibling.size());
-                            try inode.updateChild(try inode.size(), right_most_child);
-                            try self.setChildParent(right_most_child, inode.id());
-                            try self.swapChildren(&parent, right_pos - 1, right_pos);
-
-                            try accessor.destroy(right_id);
-                            try parent.erase(right_pos - 1);
-                            return true;
+                            try self.mergeInodes(inode, &right_sibling, &parent, right_pos);
+                            break :blk true;
                         }
+                        break :blk false;
+                    };
+                    if (merged) {
+                        try accessor.destroy(right_id);
+                        return true;
                     }
                 }
             }
@@ -1111,9 +1126,26 @@ pub fn Bpt(comptime ModelT: type) type {
                 if (try accessor.loadInode(left_id)) |left_sibling_const| {
                     var left_sibling = left_sibling_const;
                     defer accessor.deinitInode(left_sibling);
-                    if (try self.inodeMergeWithRight(&left_sibling)) {
-                        accessor.deinitInode(inode.*);
-                        inode.* = try left_sibling.take();
+                    if (!try accessor.canMergeInodes(&left_sibling, inode)) {
+                        return false;
+                    }
+                    const destroyed_id = blk: {
+                        if (try accessor.loadInode(inode.getParent())) |parent_const| {
+                            defer accessor.deinitInode(parent_const);
+                            var parent = parent_const;
+                            const target_id = inode.id();
+                            const right_pos = try self.findChidIndexInParentId(parent.id(), target_id);
+                            try self.mergeInodes(&left_sibling, inode, &parent, right_pos);
+
+                            const survivor = try left_sibling.take();
+                            accessor.deinitInode(inode.*);
+                            inode.* = survivor;
+                            break :blk target_id;
+                        }
+                        break :blk null;
+                    };
+                    if (destroyed_id) |target_id| {
+                        try accessor.destroy(target_id);
                         return true;
                     }
                 }
