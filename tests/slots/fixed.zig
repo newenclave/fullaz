@@ -69,3 +69,59 @@ test "Slots Fixed: get free and used" {
     try testing.expectEqual(0, slot.getFirstFree());
     try testing.expectEqual(6, slot.getFirstUsed());
 }
+
+test "Slots Fixed: swapUsed swaps complete occupied records" {
+    var buffer = [_]u8{0} ** 128;
+    var slots = try TestSlots.init(&buffer);
+    try slots.format(4);
+
+    try slots.set(0, &.{ 1, 2, 3, 4 });
+    try slots.set(1, &.{ 5, 6, 7, 8 });
+    const size_before = try slots.size();
+
+    try slots.swapUsed(0, 1);
+
+    try testing.expectEqual(size_before, try slots.size());
+    try testing.expectEqualSlices(u8, &.{ 5, 6, 7, 8 }, try slots.get(0));
+    try testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4 }, try slots.get(1));
+    try testing.expect(try slots.isSet(0));
+    try testing.expect(try slots.isSet(1));
+}
+
+test "Slots Fixed: swapUsed validates occupied indexes" {
+    var buffer = [_]u8{0} ** 128;
+    var slots = try TestSlots.init(&buffer);
+    try slots.format(4);
+    try slots.set(0, &.{ 1, 2, 3, 4 });
+
+    try testing.expectError(error.OutOfBounds, slots.swapUsed(0, 1));
+    try testing.expectError(error.OutOfBounds, slots.swapUsed(0, try slots.capacity()));
+    try slots.swapUsed(0, 0);
+    try testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4 }, try slots.get(0));
+}
+
+test "Slots Fixed: swapUsed preserves records with big-endian metadata" {
+    const BigEndianSlots = Fixed(u16, u16, .big, false);
+    var buffer = [_]u8{0} ** 128;
+    var slots = try BigEndianSlots.init(&buffer);
+    try slots.format(3);
+    try slots.set(0, &.{ 0xaa, 0xbb, 0xcc });
+    try slots.set(1, &.{ 0x11, 0x22, 0x33 });
+
+    try slots.swapUsed(0, 1);
+
+    try testing.expectEqualSlices(u8, &.{ 0x11, 0x22, 0x33 }, try slots.get(0));
+    try testing.expectEqualSlices(u8, &.{ 0xaa, 0xbb, 0xcc }, try slots.get(1));
+}
+
+test "Slots Fixed: size does not imply a dense occupied prefix" {
+    var buffer = [_]u8{0} ** 128;
+    var slots = try TestSlots.init(&buffer);
+    try slots.format(4);
+    try slots.set(0, &.{ 1, 1, 1, 1 });
+    try slots.set(2, &.{ 2, 2, 2, 2 });
+
+    try testing.expectEqual(@as(usize, 2), try slots.size());
+    try testing.expectEqual(@as(?usize, 1), try slots.getFirstFree());
+    try testing.expect(try slots.isSet(2));
+}

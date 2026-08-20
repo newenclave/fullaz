@@ -705,6 +705,28 @@ pub fn VariadicImpl(
             );
         }
 
+        /// Swaps two live directory entries without moving their payload bytes.
+        pub fn swapEntries(self: *Self, a: usize, b: usize) Error!void {
+            if (read_only) {
+                @compileError("Cannot swap entries in const buffer");
+            }
+            var entries_mut = self.entriesMut();
+            if (a >= entries_mut.len or b >= entries_mut.len) {
+                return Error.OutOfBounds;
+            }
+            if (slotOffset(entries_mut[a].offset.get()) == SLOT_INVALID or
+                slotOffset(entries_mut[b].offset.get()) == SLOT_INVALID)
+            {
+                return Error.InvalidIndex;
+            }
+            if (a == b) {
+                return;
+            }
+            const tmp = entries_mut[a];
+            entries_mut[a] = entries_mut[b];
+            entries_mut[b] = tmp;
+        }
+
         pub fn entries(self: *const Self) ConstEntrySlice {
             const header_ptr = self.header();
             const first_entry_ptr: [*]const Entry = @ptrCast(&self.body[@sizeOf(Header)]);

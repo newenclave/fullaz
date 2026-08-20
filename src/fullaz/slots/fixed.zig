@@ -140,6 +140,24 @@ pub fn FixedImpl(
             return try self.getSlotMut(pos);
         }
 
+        /// Swaps the complete bytes of two occupied slots without changing the bitmap.
+        pub fn swapUsed(self: *Self, a: usize, b: usize) Error!void {
+            if (read_only) {
+                @compileError("Unable swap slots in readonly data");
+            }
+            if (a == b) {
+                _ = try self.getMut(a);
+                return;
+            }
+
+            const left = try self.getMut(a);
+            const right = try self.getMut(b);
+            std.debug.assert(left.len == right.len);
+            for (left, right) |*left_byte, *right_byte| {
+                std.mem.swap(u8, left_byte, right_byte);
+            }
+        }
+
         pub fn free(self: *Self, pos: usize) Error!void {
             if (read_only) {
                 @compileError("Unable free slot on readonly data");
