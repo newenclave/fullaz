@@ -6,6 +6,7 @@ const page_cache_contract = @import("../../contracts/page_cache.zig");
 const low_level_bpt = @import("../../bpt/bpt.zig");
 
 fn Manager(comptime BackendT: type) type {
+    @setEvalBranchQuota(10_000);
     interfaces.requiresTypeDeclaration(BackendT, "PageId");
     interfaces.requiresTypeDeclaration(BackendT, "CacheType");
     const PageIdT = BackendT.PageId;
