@@ -102,3 +102,21 @@ test "SlotHeap page: leaf FSM location accessor rejects partial null" {
 
     try std.testing.expectError(error.InconsistentLayout, Accessor.read(&page));
 }
+
+test "SlotHeap page: leaf FSM location accessor rejects reserved sentinels" {
+    const Format = SlotHeap(u32, u16, .little);
+    const Accessor = LeafPageLocationAccessor(u32, u16, .little);
+    const HeaderView = fullaz.page.header.View(u32, u16, .little, false);
+
+    var page: [256]u8 = undefined;
+    var header_view = HeaderView.init(&page);
+    header_view.formatPage(23, 5, @sizeOf(Format.LeafSubheader), 0);
+    const leaf: *Format.LeafSubheader = @ptrCast(@alignCast(&header_view.subheaderMut()[0]));
+    leaf.formatHeader(8, 9);
+
+    try std.testing.expectError(
+        error.InconsistentLayout,
+        Accessor.write(&page, .{ .page_id = std.math.maxInt(u32), .slot_id = 0 }),
+    );
+    try std.testing.expectEqual(@as(?Accessor.Location, null), try Accessor.read(&page));
+}

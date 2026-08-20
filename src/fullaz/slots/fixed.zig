@@ -23,6 +23,7 @@ pub fn FixedImpl(
     const BufferType = if (read_only) []const u8 else []u8;
 
     const BitSet = bit_set.BitSet(BitSetDataT, Endian);
+    const PackedBitSetWord = PackedInt(BitSetDataT, Endian);
     const SizeType = PackedInt(SizeT, Endian);
 
     const Magic = PackedInt(u16, Endian);
@@ -39,6 +40,7 @@ pub fn FixedImpl(
 
         pub const Error = errors.SpaceError ||
             errors.IndexError ||
+            errors.LayoutError ||
             BitSet.Error;
 
         hdr_buf: BufferType,
@@ -65,6 +67,45 @@ pub fn FixedImpl(
             hdr.bitmask_words.set(@as(SizeT, @intCast(maximum_objects.bitmap_words)));
             var bm = try self.bitsetMut();
             try bm.reset();
+        }
+
+        pub fn validate(self: *const Self) Error!void {
+            const hdr = self.header();
+            const slot_size: usize = @intCast(hdr.one_slot_size.get());
+            if (slot_size == 0) {
+                return Error.InconsistentLayout;
+            }
+            const expected = maxObjectsByWords(self.body.len + self.hdr_buf.len, slot_size);
+            if (hdr.capacity.get() != expected.objects or
+                hdr.bitmask_words.get() != expected.bitmap_words)
+            {
+                return Error.InconsistentLayout;
+            }
+
+            const bitmap_bytes = std.math.mul(
+                usize,
+                @as(usize, @intCast(expected.bitmap_words)),
+                @sizeOf(BitSetDataT),
+            ) catch return Error.InconsistentLayout;
+            const slot_bytes = std.math.mul(
+                usize,
+                @as(usize, @intCast(expected.objects)),
+                slot_size,
+            ) catch return Error.InconsistentLayout;
+            if (bitmap_bytes > self.body.len or slot_bytes > self.body.len - bitmap_bytes) {
+                return Error.InconsistentLayout;
+            }
+
+            const bits_per_word = @bitSizeOf(BitSetDataT);
+            const remainder = @as(usize, @intCast(expected.objects)) % bits_per_word;
+            if (remainder != 0 and expected.bitmap_words != 0) {
+                const words: [*]const PackedBitSetWord = @ptrCast(self.body.ptr);
+                const last_word = words[@as(usize, @intCast(expected.bitmap_words)) - 1].get();
+                const valid_mask = (@as(BitSetDataT, 1) << @intCast(remainder)) - 1;
+                if ((last_word & ~valid_mask) != 0) {
+                    return Error.InconsistentLayout;
+                }
+            }
         }
 
         pub fn maxObjectsByWords(full_len: usize, slot_size: usize) bit_set.CapacityResult {

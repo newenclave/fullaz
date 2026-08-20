@@ -56,6 +56,11 @@ pub fn LeafPageLocationAccessor(
         }
 
         pub fn write(data: []u8, location: Location) Error!void {
+            if (location.page_id == std.math.maxInt(PageIdT) or
+                location.slot_id == std.math.maxInt(IndexT))
+            {
+                return Error.InconsistentLayout;
+            }
             const stored = &(try subheaderMut(data)).fsm_location;
             FsmLocation.set(stored, location);
         }

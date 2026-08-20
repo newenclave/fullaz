@@ -96,6 +96,16 @@ pub fn VariadicImpl(
             return offset | slotFlags(flags);
         }
 
+        fn checkedFixedLength(len: T) ?usize {
+            const minimum = @max(@as(usize, @intCast(len)), @sizeOf(FreedEntry));
+            const rounded = std.math.add(usize, minimum, @as(usize, align_value) - 1) catch return null;
+            const fixed = core.memory.alignDown(usize, rounded, @as(usize, align_value));
+            if (fixed > std.math.maxInt(T)) {
+                return null;
+            }
+            return fixed;
+        }
+
         fn dataEnd(self: *const Self) usize {
             return core.memory.alignDown(usize, self.body.len, @as(usize, align_value));
         }
@@ -118,6 +128,131 @@ pub fn VariadicImpl(
             header_ptr.free_begin.set(@intCast(@sizeOf(Header)));
             header_ptr.free_end.set(@intCast(self.dataEnd()));
             header_ptr.freed.set(0);
+        }
+
+        pub fn validate(self: *const Self) Error!void {
+            const data_end = self.dataEnd();
+            const header_ptr = self.header();
+            const entry_count: usize = @intCast(header_ptr.entry_count.get());
+            const directory_bytes = std.math.mul(usize, entry_count, @sizeOf(Entry)) catch {
+                return Error.InconsistentLayout;
+            };
+            const expected_free_begin = std.math.add(usize, @sizeOf(Header), directory_bytes) catch {
+                return Error.InconsistentLayout;
+            };
+            const free_begin: usize = @intCast(header_ptr.free_begin.get());
+            const free_end: usize = @intCast(header_ptr.free_end.get());
+            if (expected_free_begin > data_end or free_begin != expected_free_begin or
+                free_end < free_begin or free_end > data_end or
+                free_end != core.memory.alignDown(usize, free_end, @as(usize, align_value)))
+            {
+                return Error.InconsistentLayout;
+            }
+
+            const freed: usize = @intCast(header_ptr.freed.get());
+            if (freed != 0 and
+                (freed < free_end or freed > data_end -| @sizeOf(FreedEntry) or
+                    freed != core.memory.alignDown(usize, freed, @as(usize, align_value))))
+            {
+                return Error.InconsistentLayout;
+            }
+
+            const first_entry_ptr: [*]const Entry = @ptrCast(&self.body[@sizeOf(Header)]);
+            const slot_entries = first_entry_ptr[0..entry_count];
+            for (slot_entries, 0..) |entry, index| {
+                const offset: usize = @intCast(slotOffset(entry.offset.get()));
+                const length: usize = @intCast(entry.length.get());
+                if (offset == SLOT_INVALID) {
+                    if (length != 0) {
+                        return Error.InconsistentLayout;
+                    }
+                    continue;
+                }
+                const fixed_length = checkedFixedLength(entry.length.get()) orelse {
+                    return Error.InconsistentLayout;
+                };
+                if (offset < free_begin or offset < free_end or
+                    offset != core.memory.alignDown(usize, offset, @as(usize, align_value)) or
+                    fixed_length > data_end - offset)
+                {
+                    return Error.InconsistentLayout;
+                }
+
+                for (slot_entries[0..index]) |other| {
+                    const other_offset: usize = @intCast(slotOffset(other.offset.get()));
+                    if (other_offset == SLOT_INVALID) {
+                        continue;
+                    }
+                    const other_length = checkedFixedLength(other.length.get()) orelse {
+                        return Error.InconsistentLayout;
+                    };
+                    if (offset < other_offset + other_length and other_offset < offset + fixed_length) {
+                        return Error.InconsistentLayout;
+                    }
+                }
+            }
+
+            const max_free_nodes = data_end / @sizeOf(FreedEntry);
+            var previous_offset: T = SLOT_INVALID;
+            var current_offset = header_ptr.freed.get();
+            var free_nodes: usize = 0;
+            while (current_offset != SLOT_INVALID) {
+                free_nodes += 1;
+                if (free_nodes > max_free_nodes) {
+                    return Error.InconsistentLayout;
+                }
+
+                const offset: usize = @intCast(current_offset);
+                if (offset < free_end or offset > data_end -| @sizeOf(FreedEntry) or
+                    offset != core.memory.alignDown(usize, offset, @as(usize, align_value)))
+                {
+                    return Error.InconsistentLayout;
+                }
+                const free_entry: *const FreedEntry = @ptrCast(&self.body[offset]);
+                const free_length: usize = @intCast(free_entry.length.get());
+                const fixed_free_length = checkedFixedLength(free_entry.length.get()) orelse {
+                    return Error.InconsistentLayout;
+                };
+                if (free_entry.prev.get() != previous_offset or
+                    free_length < @sizeOf(FreedEntry) or
+                    free_length != fixed_free_length or
+                    free_length > data_end - offset)
+                {
+                    return Error.InconsistentLayout;
+                }
+
+                for (slot_entries) |entry| {
+                    const live_offset: usize = @intCast(slotOffset(entry.offset.get()));
+                    if (live_offset == SLOT_INVALID) {
+                        continue;
+                    }
+                    const live_length = checkedFixedLength(entry.length.get()) orelse {
+                        return Error.InconsistentLayout;
+                    };
+                    if (offset < live_offset + live_length and live_offset < offset + free_length) {
+                        return Error.InconsistentLayout;
+                    }
+                }
+
+                var earlier_offset = header_ptr.freed.get();
+                var earlier_nodes: usize = 0;
+                while (earlier_offset != current_offset) {
+                    earlier_nodes += 1;
+                    if (earlier_offset == SLOT_INVALID or earlier_nodes >= free_nodes) {
+                        return Error.InconsistentLayout;
+                    }
+                    const earlier: usize = @intCast(earlier_offset);
+                    const earlier_entry: *const FreedEntry = @ptrCast(&self.body[earlier]);
+                    const earlier_length: usize = @intCast(earlier_entry.length.get());
+                    if (offset < earlier + earlier_length and earlier < offset + free_length) {
+                        return Error.InconsistentLayout;
+                    }
+                    earlier_offset = earlier_entry.next.get();
+                }
+
+                previous_offset = current_offset;
+                current_offset = free_entry.next.get();
+            }
         }
 
         pub fn fullSlotSize(obj_len: usize) usize {

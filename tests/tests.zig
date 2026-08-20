@@ -35,6 +35,8 @@ test {
     _ = @import("slot_chain/slot_chain.zig");
     _ = @import("slot_stack/slot_stack.zig");
     _ = @import("slot_queue/slot_queue.zig");
+    _ = @import("slot_heap/paged_view.zig");
+    _ = @import("slot_heap/interfaces.zig");
     _ = @import("page_chain/page_chain.zig");
 
     _ = @import("chain/storage.zig");

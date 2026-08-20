@@ -13,6 +13,7 @@ pub const page = @import("fullaz/page/page.zig");
 pub const storage = @import("fullaz/storage/storage.zig");
 
 pub const skip_list = @import("fullaz/skip_list/skip_list.zig");
+pub const slot_heap = @import("fullaz/slot_heap/slot_heap.zig");
 
 pub const spatial = @import("fullaz/spatial/spatial.zig");
 
