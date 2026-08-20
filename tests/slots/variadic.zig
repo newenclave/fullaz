@@ -289,6 +289,80 @@ test "Slot Variadic: removeShrink" {
     try verifyData(&slots, 1, "Third"); // Shifted down
 }
 
+test "Slot Variadic: swapEntries swaps directory entries without moving payload" {
+    var buffer: [256]u8 = undefined;
+    var slots = try TestVariadicAligned4.init(&buffer);
+    slots.formatHeader();
+
+    _ = try slots.insert("a");
+    _ = try slots.insert("considerably-longer");
+    try slots.setFlags(0, 1);
+    try slots.setFlags(1, 2);
+    const first_offset = slots.entries()[0].offset.get();
+    const second_offset = slots.entries()[1].offset.get();
+
+    try slots.swapEntries(0, 1);
+
+    try testing.expectEqual(second_offset, slots.entries()[0].offset.get());
+    try testing.expectEqual(first_offset, slots.entries()[1].offset.get());
+    try testing.expectEqualSlices(u8, "considerably-longer", try slots.get(0));
+    try testing.expectEqualSlices(u8, "a", try slots.get(1));
+    try testing.expectEqual(@as(u16, 2), try slots.getFlags(0));
+    try testing.expectEqual(@as(u16, 1), try slots.getFlags(1));
+}
+
+test "Slot Variadic: swapped entries survive both compaction paths" {
+    var buffer: [256]u8 = undefined;
+    var compact_buffer: [256]u8 = undefined;
+    var slots = try TestVariadic.init(&buffer);
+    slots.formatHeader();
+    _ = try slots.insert("first");
+    _ = try slots.insert("discarded-middle");
+    _ = try slots.insert("third-is-longer");
+    try slots.free(1);
+    try slots.swapEntries(0, 2);
+
+    try slots.compactInPlace();
+    try testing.expectEqualSlices(u8, "third-is-longer", try slots.get(0));
+    try testing.expectEqualSlices(u8, "first", try slots.get(2));
+
+    try slots.compactWithBuffer(&compact_buffer);
+    try testing.expectEqualSlices(u8, "third-is-longer", try slots.get(0));
+    try testing.expectEqualSlices(u8, "first", try slots.get(2));
+}
+
+test "Slot Variadic: swap then remove last implements heap-style removal" {
+    var buffer: [256]u8 = undefined;
+    var slots = try TestVariadic.init(&buffer);
+    slots.formatHeader();
+    _ = try slots.insert("top");
+    _ = try slots.insert("middle");
+    _ = try slots.insert("last");
+    const available_before = try slots.availableAfterCompact();
+
+    try slots.swapEntries(0, 2);
+    try slots.remove(2);
+
+    try testing.expectEqual(@as(usize, 2), slots.size());
+    try testing.expectEqualSlices(u8, "last", try slots.get(0));
+    try testing.expectEqualSlices(u8, "middle", try slots.get(1));
+    try testing.expect(try slots.availableAfterCompact() > available_before);
+}
+
+test "Slot Variadic: swapEntries validates live indexes" {
+    var buffer: [256]u8 = undefined;
+    var slots = try TestVariadic.init(&buffer);
+    slots.formatHeader();
+    _ = try slots.insert("live");
+    _ = try slots.insert("freed");
+    try slots.free(1);
+
+    try testing.expectError(error.InvalidIndex, slots.swapEntries(0, 1));
+    try testing.expectError(error.OutOfBounds, slots.swapEntries(0, 2));
+    try slots.swapEntries(0, 0);
+    try testing.expectEqualSlices(u8, "live", try slots.get(0));
+}
+
 test "Slot Variadic: removeIf filters by flags and preserves survivor order" {
     const Context = struct {
         seen: [4]usize = undefined,

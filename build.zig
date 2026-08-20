@@ -3,11 +3,20 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const verbose_tests = b.option(bool, "verbose-tests", "Enable debug output in tests") orelse false;
+    const full_validation = b.option(
+        bool,
+        "full-validation",
+        "Enable expensive full-structure validation",
+    ) orelse false;
+    const fullaz_options = b.addOptions();
+    fullaz_options.addOption(bool, "full_validation", full_validation);
 
     const mod = b.addModule("fullaz", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
+    mod.addOptions("build_options", fullaz_options);
 
     const unit_tests = b.addModule("fullaz_tests", .{
         .root_source_file = b.path("tests/tests.zig"),
@@ -15,10 +24,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const verbose_tests = b.option(bool, "verbose-tests", "Enable debug output in tests") orelse false;
     const test_options = b.addOptions();
     test_options.addOption(bool, "verbose_tests", verbose_tests);
-
     const test_printer = b.createModule(.{
         .root_source_file = b.path("tests/printer.zig"),
         .target = target,
@@ -61,7 +68,6 @@ pub fn build(b: *std.Build) void {
     }
 
     mod_tests.root_module.addImport("fullaz", mod);
-    mod_tests.root_module.addOptions("build_options", test_options);
     mod_tests.root_module.addImport("test_printer", test_printer);
 
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
@@ -104,6 +110,7 @@ pub fn build(b: *std.Build) void {
         .target = wasm_target,
         .optimize = .ReleaseSmall,
     });
+    fullaz_wasm.addOptions("build_options", fullaz_options);
 
     // Shared terminal plumbing for the full-screen demos. Not a demo itself,
     // so it gets a module and a test step rather than an addDemo call.
