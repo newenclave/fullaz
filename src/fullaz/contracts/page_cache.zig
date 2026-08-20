@@ -57,6 +57,7 @@ pub fn requiresTransactionalPageCache(comptime T: type) void {
     requiresFnSignature(WriteBatch, "commit", fn (*WriteBatch) T.Error!void);
     requiresFnSignature(WriteBatch, "discard", fn (*WriteBatch) T.Error!void);
     requiresFnSignature(T, "begin", fn (*T) T.Error!WriteBatch);
+    requiresFnSignature(T, "transactionActive", fn (*const T) bool);
 }
 
 pub fn requiresAppendOnlyDensePageCache(comptime T: type) void {

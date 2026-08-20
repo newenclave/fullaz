@@ -5,6 +5,7 @@ const Backend = struct {};
 const Binding = struct {
     pub const Runtime = struct {};
     pub const Proxy = Runtime;
+    pub const ConstProxy = Runtime;
     pub const InitOptions = struct {};
     pub const TransactionState = void;
     pub const Error = anyerror;
@@ -28,7 +29,7 @@ const Binding = struct {
         return runtime;
     }
 
-    pub fn proxyConst(runtime: *const Runtime) *const Proxy {
+    pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
         return runtime;
     }
 };

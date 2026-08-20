@@ -176,7 +176,13 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         pub const UnderlyingDevice = DeviceT;
         pub const Pid = UnderlyingDevice.BlockId;
         /// Successful create() calls append 0-based dense IDs and failures consume no ID.
-        pub const append_only_dense_page_ids: bool = true;
+        pub const append_only_dense_page_ids: bool = if (@hasDecl(
+            UnderlyingDevice,
+            "append_only_dense_block_ids",
+        ) and @TypeOf(UnderlyingDevice.append_only_dense_block_ids) == bool)
+            UnderlyingDevice.append_only_dense_block_ids
+        else
+            false;
 
         const FrameHashMap = std.AutoHashMap(Pid, *Frame);
 
@@ -198,17 +204,28 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         frames_cache: FrameHashMap = undefined,
         locked: bool = false,
         appended_in_batch: usize = 0,
+        batch_generation: u64 = 0,
         wal: WalPolicy = undefined,
 
         pub const WriteBatch = struct {
             cache: *Self,
+            generation: u64,
+            active: bool = true,
 
             pub fn commit(self: *WriteBatch) Error!void {
-                return self.cache.commitBatch();
+                if (!self.active) {
+                    return Error.TransactionInactive;
+                }
+                try self.cache.commitBatch(self.generation);
+                self.active = false;
             }
 
             pub fn discard(self: *WriteBatch) Error!void {
-                return self.cache.discardBatch();
+                if (!self.active) {
+                    return Error.TransactionInactive;
+                }
+                try self.cache.discardBatch(self.generation);
+                self.active = false;
             }
         };
 
@@ -258,7 +275,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         pub fn deinit(self: *Self) void {
             if (self.locked) {
                 // roll it back if batch is still active
-                self.discardBatch() catch {};
+                self.discardBatch(self.batch_generation) catch {};
             }
             for (self.policy.framesSlice()) |*frame| {
                 if (frame.ref_count != 0) {
@@ -351,6 +368,13 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         }
 
         pub fn flush(self: *Self, pid: Pid) Error!void {
+            if (self.locked) {
+                return Error.BatchActive;
+            }
+            return self.flushPage(pid);
+        }
+
+        fn flushPage(self: *Self, pid: Pid) Error!void {
             if (self.frames_cache.get(pid)) |frame| {
                 if (frame.frame_type == .dirty) {
                     try self.device.writeBlock(frame.pid, frame.data);
@@ -360,6 +384,13 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         }
 
         pub fn flushAll(self: *Self) Error!void {
+            if (self.locked) {
+                return Error.BatchActive;
+            }
+            return self.flushAllInternal();
+        }
+
+        fn flushAllInternal(self: *Self) Error!void {
             var it = self.frames_cache.iterator();
             while (it.next()) |entry| {
                 const frame = entry.value_ptr.*;
@@ -379,10 +410,17 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             try self.flushAll();
             self.locked = true;
             self.appended_in_batch = 0;
-            return WriteBatch{ .cache = self };
+            self.batch_generation +%= 1;
+            return .{
+                .cache = self,
+                .generation = self.batch_generation,
+            };
         }
 
-        fn commitBatch(self: *Self) Error!void {
+        fn commitBatch(self: *Self, generation: u64) Error!void {
+            if (!self.locked or generation != self.batch_generation) {
+                return Error.TransactionInactive;
+            }
             if (WalPolicy.enabled) {
                 // Write-ahead: log every dirty page + a commit record,
                 // fsync the log (the commit point),
@@ -398,17 +436,20 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                     }
                 }
                 try self.wal.sealCommit(count);
-                try self.flushAll();
+                try self.flushAllInternal();
                 try self.device.sync();
                 try self.wal.checkpoint();
             } else {
-                try self.flushAll();
+                try self.flushAllInternal();
             }
             self.appended_in_batch = 0;
             self.locked = false;
         }
 
-        fn discardBatch(self: *Self) Error!void {
+        fn discardBatch(self: *Self, generation: u64) Error!void {
+            if (!self.locked or generation != self.batch_generation) {
+                return Error.TransactionInactive;
+            }
             const fslice = self.policy.framesSlice();
             for (fslice) |*frame| {
                 if (frame.frame_type == .dirty and frame.ref_count != 0) {
@@ -430,6 +471,10 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             }
             self.appended_in_batch = 0;
             self.locked = false;
+        }
+
+        pub fn transactionActive(self: *const Self) bool {
+            return self.locked;
         }
 
         fn acquireFrame(self: *Self) Error!*Frame {

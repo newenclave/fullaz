@@ -101,6 +101,7 @@ pub fn descriptor(comptime TraitT: type) Descriptor {
 /// const Binding = struct {
 ///     pub const Runtime = struct {};
 ///     pub const Proxy = Runtime;
+///     pub const ConstProxy = Runtime;
 ///     pub const InitOptions = struct {};
 ///     pub const TransactionState = void;
 ///     pub const Error = error{};
@@ -120,23 +121,26 @@ pub fn descriptor(comptime TraitT: type) Descriptor {
 ///     pub fn captureTransactionState(_: *const Runtime) TransactionState {}
 ///     pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
 ///     pub fn proxy(runtime: *Runtime) *Proxy { return runtime; }
-///     pub fn proxyConst(runtime: *const Runtime) *const Proxy { return runtime; }
+///     pub fn proxyConst(runtime: *const Runtime) *const ConstProxy { return runtime; }
 /// };
 /// comptime assertBinding(Binding, Backend);
 /// ```
 ///
 /// `initRuntime` must release all resources it acquired before returning an
-/// error. `TransactionState` captures only metadata outside page-cache state;
-/// restoring it must be infallible.
+/// error. `TransactionState` must be non-owning and trivially copied; it
+/// captures only metadata outside page-cache state, and restoring it must be
+/// infallible.
 pub fn assertBinding(comptime BindingT: type, comptime BackendT: type) void {
     interfaces.requiresTypeDeclaration(BindingT, "Runtime");
     interfaces.requiresTypeDeclaration(BindingT, "Proxy");
+    interfaces.requiresTypeDeclaration(BindingT, "ConstProxy");
     interfaces.requiresTypeDeclaration(BindingT, "InitOptions");
     interfaces.requiresTypeDeclaration(BindingT, "TransactionState");
     interfaces.requiresErrorDeclaration(BindingT, "Error");
 
     const Runtime = BindingT.Runtime;
     const Proxy = BindingT.Proxy;
+    const ConstProxy = BindingT.ConstProxy;
     const InitOptions = BindingT.InitOptions;
     const TransactionState = BindingT.TransactionState;
     const Error = BindingT.Error;
@@ -165,7 +169,7 @@ pub fn assertBinding(comptime BindingT: type, comptime BackendT: type) void {
         fn (*Runtime, TransactionState) void,
     );
     interfaces.requiresFnSignature(BindingT, "proxy", fn (*Runtime) *Proxy);
-    interfaces.requiresFnSignature(BindingT, "proxyConst", fn (*const Runtime) *const Proxy);
+    interfaces.requiresFnSignature(BindingT, "proxyConst", fn (*const Runtime) *const ConstProxy);
 }
 
 pub fn bindingFor(comptime value: Descriptor, comptime BackendT: type) type {

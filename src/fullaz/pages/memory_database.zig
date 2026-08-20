@@ -186,7 +186,7 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
             componentErrors(bindings, 0) ||
             error{InvalidCacheFrames};
 
-        core_: *Core,
+        core_: *align(@alignOf(Core)) anyopaque,
 
         pub const Transaction = struct {
             const TransactionSelf = @This();
@@ -209,7 +209,7 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
             pub fn getConst(
                 self: *const TransactionSelf,
                 comptime name: []const u8,
-            ) *const proxyType(name) {
+            ) *const constProxyType(name) {
                 std.debug.assert(self.active);
                 const Binding = bindingType(name);
                 const core: *const Core = self.core;
@@ -254,6 +254,18 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
 
         fn proxyType(comptime name: []const u8) type {
             return bindingType(name).Proxy;
+        }
+
+        fn constProxyType(comptime name: []const u8) type {
+            return bindingType(name).ConstProxy;
+        }
+
+        fn corePtr(self: *Self) *Core {
+            return @ptrCast(self.core_);
+        }
+
+        fn coreConstPtr(self: *const Self) *const Core {
+            return @ptrCast(self.core_);
         }
 
         fn deinitComponentPrefix(core: *Core, initialized_count: usize) void {
@@ -324,37 +336,61 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
 
         /// Starts the only mutable access scope. Active transactions roll back on deinit.
         pub fn begin(self: *Self) Error!Transaction {
-            if (self.core_.transaction_active) {
+            const core_ptr = self.corePtr();
+            if (core_ptr.transaction_active) {
                 return Error.BatchActive;
             }
-            const component_states = captureTransactionStates(self.core_);
-            const cache_batch = try self.core_.cache.begin();
-            self.core_.transaction_active = true;
+            const component_states = captureTransactionStates(core_ptr);
+            const cache_batch = try core_ptr.cache.begin();
+            core_ptr.transaction_active = true;
             return .{
-                .core = self.core_,
+                .core = core_ptr,
                 .cache_batch = cache_batch,
                 .component_states = component_states,
             };
         }
 
-        pub fn getConst(self: *const Self, comptime name: []const u8) *const proxyType(name) {
+        pub fn getConst(self: *const Self, comptime name: []const u8) *const constProxyType(name) {
             const Binding = bindingType(name);
-            const core: *const Core = self.core_;
-            const runtime: *const runtimeType(name) = &@field(core.components, name);
+            const core_ptr = self.coreConstPtr();
+            const runtime: *const runtimeType(name) = &@field(core_ptr.components, name);
             return Binding.proxyConst(runtime);
         }
 
+        pub const Diagnostics = struct {
+            core_address: usize,
+            cache_address: usize,
+            device_address: usize,
+            page_size: usize,
+            physical_page_count: usize,
+            device_page_count: usize,
+            free_page_count: usize,
+        };
+
+        pub fn diagnostics(self: *const Self) Diagnostics {
+            const core_ptr = self.coreConstPtr();
+            return .{
+                .core_address = @intFromPtr(core_ptr),
+                .cache_address = @intFromPtr(&core_ptr.cache),
+                .device_address = @intFromPtr(&core_ptr.device),
+                .page_size = core_ptr.cache.pageSize(),
+                .physical_page_count = core_ptr.cache.physical_page_count,
+                .device_page_count = core_ptr.device.blocksCount(),
+                .free_page_count = core_ptr.cache.free_pages.items.len,
+            };
+        }
+
         pub fn deinit(self: *Self) void {
-            const core = self.core_;
-            if (core.transaction_active) {
+            const core_ptr = self.corePtr();
+            if (core_ptr.transaction_active) {
                 @panic("MemoryDatabase.deinit called with an active transaction");
             }
-            const allocator = core.allocator;
-            deinitComponentPrefix(core, SchemaT.fields.len);
-            core.cache.deinit();
-            core.raw_cache.deinit();
-            core.device.deinit();
-            allocator.destroy(core);
+            const allocator = core_ptr.allocator;
+            deinitComponentPrefix(core_ptr, SchemaT.fields.len);
+            core_ptr.cache.deinit();
+            core_ptr.raw_cache.deinit();
+            core_ptr.device.deinit();
+            allocator.destroy(core_ptr);
             self.* = undefined;
         }
     };

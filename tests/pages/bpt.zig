@@ -157,16 +157,19 @@ test "Pages: paged BPT binding initializes a typed runtime in place" {
     defer Binding.deinitRuntime(&runtime);
 
     const tree = Binding.proxy(&runtime);
-    try std.testing.expect(tree == &runtime.tree);
-    try std.testing.expect(tree.model == &runtime.model);
+    try std.testing.expect(tree == &runtime.proxy);
+    var transaction = try cache.begin();
+    errdefer transaction.discard() catch {};
     try std.testing.expect(try tree.insert("hello", "world"));
-    var found = (try tree.find("hello")).?;
+    try transaction.commit();
+
+    const runtime_const: *const Binding.Runtime = &runtime;
+    const tree_const = Binding.proxyConst(runtime_const);
+    try std.testing.expect(tree_const == &runtime.const_proxy);
+    var found = (try tree_const.find("hello")).?;
     defer found.deinit();
     const entry = (try found.get()).?;
     try std.testing.expectEqualStrings("world", entry.value);
-
-    const runtime_const: *const Binding.Runtime = &runtime;
-    try std.testing.expect(Binding.proxyConst(runtime_const) == &runtime.tree);
 }
 
 test "Pages: paged BPT reclaims the first leaf after a failed insert" {
@@ -246,9 +249,13 @@ test "Pages: paged BPT binding requires and copies non-void compare context" {
     context.descending = false;
 
     const tree = Binding.proxy(&runtime);
+    var transaction = try cache.begin();
+    errdefer transaction.discard() catch {};
     try std.testing.expect(try tree.insert("alpha", "first"));
     try std.testing.expect(try tree.insert("beta", "second"));
-    var iterator = (try tree.iterator()).?;
+    try transaction.commit();
+
+    var iterator = (try Binding.proxyConst(&runtime).iterator()).?;
     defer iterator.deinit();
     const first = (try iterator.next()).?;
     try std.testing.expectEqualStrings("beta", first.key);

@@ -36,6 +36,7 @@ pub const CacheError = error{
     BatchActive,
     BatchTooLarge,
     PageBusy,
+    TransactionInactive,
 };
 
 pub const IndexError = error{

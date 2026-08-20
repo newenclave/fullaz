@@ -10,6 +10,7 @@ fn TestBinding(comptime BackendT: type) type {
         pub const Proxy = struct {
             value: u32,
         };
+        pub const ConstProxy = Proxy;
         pub const Runtime = struct {
             proxy_value: Proxy,
         };
@@ -46,7 +47,7 @@ fn TestBinding(comptime BackendT: type) type {
             return &runtime.proxy_value;
         }
 
-        pub fn proxyConst(runtime: *const Runtime) *const Proxy {
+        pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
             return &runtime.proxy_value;
         }
     };

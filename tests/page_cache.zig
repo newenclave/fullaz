@@ -596,6 +596,60 @@ test "PageCache batch: pinned discard leaves the transaction intact" {
     try testing.expectEqual(@as(u8, 0xaa), (try restored.data())[0]);
 }
 
+test "PageCache batch: flush cannot bypass rollback" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 3);
+    defer cache.deinit();
+    {
+        var created = try cache.create();
+        defer created.deinit();
+        (try created.dataMut())[0] = 0xaa;
+    }
+    try cache.flushAll();
+
+    var transaction = try cache.begin();
+    var existing = try cache.fetch(0);
+    (try existing.dataMut())[0] = 0xbb;
+    var appended = try cache.create();
+    const appended_id = try appended.pid();
+    try testing.expectError(error.BatchActive, cache.flush(0));
+    try testing.expectError(error.BatchActive, cache.flushAll());
+    existing.deinit();
+    appended.deinit();
+    try transaction.discard();
+
+    try testing.expectEqual(@as(usize, 1), device.blocksCount());
+    var restored = try cache.fetch(0);
+    defer restored.deinit();
+    try testing.expectEqual(@as(u8, 0xaa), (try restored.data())[0]);
+    try testing.expectError(error.InvalidId, cache.fetch(appended_id));
+}
+
+test "PageCache batch: completed and stale handles are rejected" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 2);
+    defer cache.deinit();
+
+    var completed = try cache.begin();
+    var stale = completed;
+    try completed.commit();
+    try testing.expectError(error.TransactionInactive, completed.commit());
+    try testing.expectError(error.TransactionInactive, completed.discard());
+
+    var current = try cache.begin();
+    try testing.expectError(error.TransactionInactive, stale.commit());
+    try testing.expectError(error.TransactionInactive, stale.discard());
+    try current.discard();
+}
+
 test "PageCache batch: dirty overflow returns BatchTooLarge" {
     const allocator = testing.allocator;
     const Dev = MemoryDevice(u32);

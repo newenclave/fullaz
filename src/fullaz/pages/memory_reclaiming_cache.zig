@@ -17,7 +17,6 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
                 PageIdExhausted,
                 PageNotAllocated,
                 PageStillPinned,
-                TransactionInactive,
             };
 
         pub const WriteBatch = struct {
@@ -160,6 +159,10 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
 
         pub fn isPinned(self: *const Self, page_id: Pid) bool {
             return self.inner.isPinned(page_id);
+        }
+
+        pub fn transactionActive(self: *const Self) bool {
+            return self.inner.transactionActive();
         }
 
         comptime {

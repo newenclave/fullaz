@@ -11,7 +11,7 @@ fn Manager(comptime BackendT: type) type {
     interfaces.requiresTypeDeclaration(BackendT, "CacheType");
     const PageIdT = BackendT.PageId;
     const CacheT = BackendT.CacheType;
-    comptime page_cache_contract.requiresPageCache(CacheT);
+    comptime page_cache_contract.requiresTransactionalPageCache(CacheT);
     if (PageIdT != CacheT.Pid) {
         @compileError("Pages backend PageId must match CacheType.Pid");
     }
@@ -163,15 +163,117 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 configured_compare,
                 CompareContextT,
             );
-            const ProxyT = low_level_bpt.Bpt(ModelT);
+            const TreeT = low_level_bpt.Bpt(ModelT);
+            const MutableProxyT = struct {
+                const Self = @This();
+
+                pub const Error = TreeT.Error || CacheT.Error;
+                pub const Iterator = TreeT.Iterator;
+
+                tree_ptr: *align(@alignOf(TreeT)) anyopaque,
+                cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+
+                fn init(tree_value: *TreeT, cache_value: *CacheT) Self {
+                    return .{ .tree_ptr = tree_value, .cache_ptr = cache_value };
+                }
+
+                fn tree(self: *const Self) *TreeT {
+                    return @ptrCast(self.tree_ptr);
+                }
+
+                fn cache(self: *const Self) *CacheT {
+                    return @ptrCast(self.cache_ptr);
+                }
+
+                fn requireTransaction(self: *const Self) Error!void {
+                    if (!self.cache().transactionActive()) {
+                        return Error.TransactionInactive;
+                    }
+                }
+
+                pub fn iterator(self: *const Self) Error!?Iterator {
+                    return self.tree().iterator();
+                }
+
+                pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
+                    return self.tree().iteratorFromEnd();
+                }
+
+                pub fn find(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
+                    return self.tree().find(key);
+                }
+
+                pub fn lowerBound(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
+                    return self.tree().lowerBound(key);
+                }
+
+                pub fn insert(
+                    self: *Self,
+                    key: ModelT.KeyLikeType,
+                    value: ModelT.ValueInType,
+                ) Error!bool {
+                    try self.requireTransaction();
+                    return self.tree().insert(key, value);
+                }
+
+                pub fn update(
+                    self: *Self,
+                    key: ModelT.KeyLikeType,
+                    value: ModelT.ValueInType,
+                ) Error!bool {
+                    try self.requireTransaction();
+                    return self.tree().update(key, value);
+                }
+
+                pub fn remove(self: *Self, key: ModelT.KeyLikeType) Error!bool {
+                    try self.requireTransaction();
+                    return self.tree().remove(key);
+                }
+            };
+            const ConstProxyT = struct {
+                const Self = @This();
+
+                pub const Error = TreeT.Error;
+                pub const Iterator = TreeT.Iterator;
+
+                tree_ptr: *align(@alignOf(TreeT)) const anyopaque,
+
+                fn init(tree_value: *const TreeT) Self {
+                    return .{ .tree_ptr = tree_value };
+                }
+
+                fn tree(self: *const Self) *const TreeT {
+                    return @ptrCast(self.tree_ptr);
+                }
+
+                pub fn iterator(self: *const Self) Error!?Iterator {
+                    return self.tree().iterator();
+                }
+
+                pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
+                    return self.tree().iteratorFromEnd();
+                }
+
+                pub fn find(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
+                    return self.tree().find(key);
+                }
+
+                pub fn lowerBound(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
+                    return self.tree().lowerBound(key);
+                }
+            };
             const BindingT = struct {
                 pub const Manager = ManagerT;
                 pub const Model = ModelT;
-                pub const Proxy = ProxyT;
+                pub const Tree = TreeT;
+                pub const Proxy = MutableProxyT;
+                pub const ConstProxy = ConstProxyT;
                 pub const Runtime = struct {
                     manager: ManagerT,
                     model: ModelT,
-                    tree: ProxyT,
+                    tree: TreeT,
+                    proxy: Proxy,
+                    const_proxy: ConstProxy,
                 };
                 pub const InitOptions = if (CompareContextT == void)
                     struct { compare_context: void = {} }
@@ -206,7 +308,9 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                         },
                         init_options.compare_context,
                     );
-                    runtime.tree = ProxyT.init(&runtime.model, configured_rebalance_policy);
+                    runtime.tree = TreeT.init(&runtime.model, configured_rebalance_policy);
+                    runtime.proxy = Proxy.init(&runtime.tree, backend.cache());
+                    runtime.const_proxy = ConstProxy.init(&runtime.tree);
                 }
 
                 pub fn deinitRuntime(runtime: *Runtime) void {
@@ -224,11 +328,11 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 }
 
                 pub fn proxy(runtime: *Runtime) *Proxy {
-                    return &runtime.tree;
+                    return &runtime.proxy;
                 }
 
-                pub fn proxyConst(runtime: *const Runtime) *const Proxy {
-                    return &runtime.tree;
+                pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
+                    return &runtime.const_proxy;
                 }
             };
             comptime component.assertBinding(BindingT, BackendT);
