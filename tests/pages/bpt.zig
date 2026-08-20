@@ -37,7 +37,12 @@ fn TestBackend(comptime CacheT: type) type {
         pub const PageId = CacheT.Pid;
         pub const CacheType = CacheT;
 
+        allocator_value: std.mem.Allocator,
         cache_ptr: *CacheT,
+
+        pub fn allocator(self: *const Self) std.mem.Allocator {
+            return self.allocator_value;
+        }
 
         pub fn cache(self: *Self) *CacheType {
             return self.cache_ptr;
@@ -102,7 +107,10 @@ test "Pages: paged BPT binding generates a reclaiming storage manager" {
     defer inner.deinit();
     var cache = Cache.init(std.testing.allocator, &inner);
     defer cache.deinit();
-    var backend = Backend{ .cache_ptr = &cache };
+    var backend = Backend{
+        .allocator_value = std.testing.allocator,
+        .cache_ptr = &cache,
+    };
     var manager = Manager.init(&backend);
 
     try std.testing.expectEqual(null, manager.getRoot());
@@ -136,7 +144,10 @@ test "Pages: paged BPT binding initializes a typed runtime in place" {
     defer inner.deinit();
     var cache = Cache.init(std.testing.allocator, &inner);
     defer cache.deinit();
-    var backend = Backend{ .cache_ptr = &cache };
+    var backend = Backend{
+        .allocator_value = std.testing.allocator,
+        .cache_ptr = &cache,
+    };
     var runtime: Binding.Runtime = undefined;
 
     try std.testing.expectError(
@@ -156,10 +167,9 @@ test "Pages: paged BPT binding initializes a typed runtime in place" {
     );
     defer Binding.deinitRuntime(&runtime);
 
-    const tree = Binding.proxy(&runtime);
-    try std.testing.expect(tree == &runtime.proxy);
     var transaction = try cache.begin();
     errdefer transaction.discard() catch {};
+    const tree = Binding.proxy(&runtime);
     try std.testing.expect(try tree.insert("hello", "world"));
     try transaction.commit();
 
@@ -192,7 +202,10 @@ test "Pages: paged BPT reclaims the first leaf after a failed insert" {
     defer inner.deinit();
     var cache = Cache.init(std.testing.allocator, &inner);
     defer cache.deinit();
-    var backend = Backend{ .cache_ptr = &cache };
+    var backend = Backend{
+        .allocator_value = std.testing.allocator,
+        .cache_ptr = &cache,
+    };
     var runtime: Binding.Runtime = undefined;
     try Binding.initRuntime(
         &runtime,
@@ -236,7 +249,10 @@ test "Pages: paged BPT binding requires and copies non-void compare context" {
     defer inner.deinit();
     var cache = Cache.init(std.testing.allocator, &inner);
     defer cache.deinit();
-    var backend = Backend{ .cache_ptr = &cache };
+    var backend = Backend{
+        .allocator_value = std.testing.allocator,
+        .cache_ptr = &cache,
+    };
     var runtime: Binding.Runtime = undefined;
     var context = CompareContext{ .descending = true };
     try Binding.initRuntime(
@@ -248,9 +264,9 @@ test "Pages: paged BPT binding requires and copies non-void compare context" {
     defer Binding.deinitRuntime(&runtime);
     context.descending = false;
 
-    const tree = Binding.proxy(&runtime);
     var transaction = try cache.begin();
     errdefer transaction.discard() catch {};
+    const tree = Binding.proxy(&runtime);
     try std.testing.expect(try tree.insert("alpha", "first"));
     try std.testing.expect(try tree.insert("beta", "second"));
     try transaction.commit();

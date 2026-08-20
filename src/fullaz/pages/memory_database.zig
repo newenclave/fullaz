@@ -165,6 +165,9 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
         backend: Backend,
         components: Components,
         transaction_active: bool,
+        transaction_generation: u64,
+        transaction_cache_batch: Cache.WriteBatch,
+        transaction_component_states: TransactionStates,
     };
 
     return struct {
@@ -191,18 +194,31 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
         pub const Transaction = struct {
             const TransactionSelf = @This();
 
-            core: *Core,
-            cache_batch: Cache.WriteBatch,
-            component_states: TransactionStates,
-            active: bool = true,
+            core_: *align(@alignOf(Core)) anyopaque,
+            generation_: u64,
+
+            fn corePtr(self: *const TransactionSelf) *Core {
+                return @ptrCast(self.core_);
+            }
+
+            fn activeCore(self: *const TransactionSelf) Error!*Core {
+                const core_ptr = self.corePtr();
+                if (!core_ptr.transaction_active or
+                    core_ptr.transaction_generation != self.generation_)
+                {
+                    return Error.TransactionInactive;
+                }
+                return core_ptr;
+            }
 
             pub fn get(
                 self: *TransactionSelf,
                 comptime name: []const u8,
-            ) *proxyType(name) {
-                std.debug.assert(self.active);
+            ) proxyType(name) {
+                const core_ptr = self.activeCore() catch
+                    @panic("MemoryDatabase transaction is inactive");
                 const Binding = bindingType(name);
-                const runtime: *runtimeType(name) = &@field(self.core.components, name);
+                const runtime: *runtimeType(name) = &@field(core_ptr.components, name);
                 return Binding.proxy(runtime);
             }
 
@@ -210,36 +226,30 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
                 self: *const TransactionSelf,
                 comptime name: []const u8,
             ) *const constProxyType(name) {
-                std.debug.assert(self.active);
+                const core_ptr = self.activeCore() catch
+                    @panic("MemoryDatabase transaction is inactive");
                 const Binding = bindingType(name);
-                const core: *const Core = self.core;
-                const runtime: *const runtimeType(name) = &@field(core.components, name);
+                const runtime: *const runtimeType(name) = &@field(core_ptr.components, name);
                 return Binding.proxyConst(runtime);
             }
 
             pub fn commit(self: *TransactionSelf) Error!void {
-                if (!self.active) {
-                    return Error.TransactionInactive;
-                }
-                try self.cache_batch.commit();
-                self.core.transaction_active = false;
-                self.active = false;
+                const core_ptr = try self.activeCore();
+                try core_ptr.transaction_cache_batch.commit();
+                core_ptr.transaction_active = false;
             }
 
             pub fn rollback(self: *TransactionSelf) Error!void {
-                if (!self.active) {
-                    return Error.TransactionInactive;
-                }
-                try self.cache_batch.discard();
-                restoreTransactionStates(self.core, self.component_states);
-                self.core.transaction_active = false;
-                self.active = false;
+                const core_ptr = try self.activeCore();
+                try core_ptr.transaction_cache_batch.discard();
+                restoreTransactionStates(core_ptr, core_ptr.transaction_component_states);
+                core_ptr.transaction_active = false;
             }
 
             pub fn deinit(self: *TransactionSelf) void {
-                if (self.active) {
+                if (self.activeCore()) |_| {
                     self.rollback() catch @panic("Failed to roll back MemoryDatabase transaction");
-                }
+                } else |_| {}
             }
         };
 
@@ -318,6 +328,7 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
             core.backend = Backend.init(allocator, &core.cache);
             core.components = undefined;
             core.transaction_active = false;
+            core.transaction_generation = 0;
 
             var initialized_components: usize = 0;
             errdefer deinitComponentPrefix(core, initialized_components);
@@ -340,13 +351,13 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
             if (core_ptr.transaction_active) {
                 return Error.BatchActive;
             }
-            const component_states = captureTransactionStates(core_ptr);
-            const cache_batch = try core_ptr.cache.begin();
+            core_ptr.transaction_component_states = captureTransactionStates(core_ptr);
+            core_ptr.transaction_cache_batch = try core_ptr.cache.begin();
+            core_ptr.transaction_generation +%= 1;
             core_ptr.transaction_active = true;
             return .{
-                .core = core_ptr,
-                .cache_batch = cache_batch,
-                .component_states = component_states,
+                .core_ = core_ptr,
+                .generation_ = core_ptr.transaction_generation,
             };
         }
 

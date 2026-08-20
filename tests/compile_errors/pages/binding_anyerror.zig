@@ -25,8 +25,8 @@ const Binding = struct {
 
     pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
 
-    pub fn proxy(runtime: *Runtime) *Proxy {
-        return runtime;
+    pub fn proxy(runtime: *Runtime) Proxy {
+        return runtime.*;
     }
 
     pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {

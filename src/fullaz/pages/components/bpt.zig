@@ -154,6 +154,11 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
         pub const rebalance_policy = configured_rebalance_policy;
 
         pub fn Binding(comptime BackendT: type) type {
+            interfaces.requiresFnSignature(
+                BackendT,
+                "allocator",
+                fn (*const BackendT) std.mem.Allocator,
+            );
             const ManagerT = Manager(BackendT);
             comptime low_level_bpt.models.interfaces.requiresStorageManager(ManagerT);
             const CacheT = BackendT.CacheType;
@@ -164,17 +169,80 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 CompareContextT,
             );
             const TreeT = low_level_bpt.Bpt(ModelT);
+            const ReadIteratorT = struct {
+                const Self = @This();
+                const Inner = TreeT.Iterator;
+                const GetReturn = @typeInfo(@TypeOf(Inner.get)).@"fn".return_type.?;
+                const NextReturn = @typeInfo(@TypeOf(Inner.next)).@"fn".return_type.?;
+                const PrevReturn = @typeInfo(@TypeOf(Inner.prev)).@"fn".return_type.?;
+
+                iterator_ptr: *align(@alignOf(Inner)) anyopaque,
+                allocator_value: std.mem.Allocator,
+
+                fn wrap(
+                    allocator_value: std.mem.Allocator,
+                    inner_optional: ?Inner,
+                ) std.mem.Allocator.Error!?Self {
+                    if (inner_optional) |inner_value| {
+                        var owned = inner_value;
+                        const ptr = allocator_value.create(Inner) catch |err| {
+                            owned.deinit();
+                            return err;
+                        };
+                        ptr.* = owned;
+                        return .{
+                            .iterator_ptr = ptr,
+                            .allocator_value = allocator_value,
+                        };
+                    }
+                    return null;
+                }
+
+                fn inner(self: *const Self) *Inner {
+                    return @ptrCast(self.iterator_ptr);
+                }
+
+                pub fn get(self: *const Self) GetReturn {
+                    return self.inner().get();
+                }
+
+                pub fn next(self: *Self) NextReturn {
+                    return self.inner().next();
+                }
+
+                pub fn prev(self: *Self) PrevReturn {
+                    return self.inner().prev();
+                }
+
+                pub fn deinit(self: *Self) void {
+                    const ptr = self.inner();
+                    ptr.deinit();
+                    self.allocator_value.destroy(ptr);
+                    self.* = undefined;
+                }
+            };
             const MutableProxyT = struct {
                 const Self = @This();
 
                 pub const Error = TreeT.Error || CacheT.Error;
-                pub const Iterator = TreeT.Iterator;
+                pub const Iterator = ReadIteratorT;
 
                 tree_ptr: *align(@alignOf(TreeT)) anyopaque,
                 cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                allocator_value: std.mem.Allocator,
+                transaction_generation: ?u64,
 
-                fn init(tree_value: *TreeT, cache_value: *CacheT) Self {
-                    return .{ .tree_ptr = tree_value, .cache_ptr = cache_value };
+                fn init(
+                    tree_value: *TreeT,
+                    cache_value: *CacheT,
+                    allocator_value: std.mem.Allocator,
+                ) Self {
+                    return .{
+                        .tree_ptr = tree_value,
+                        .cache_ptr = cache_value,
+                        .allocator_value = allocator_value,
+                        .transaction_generation = cache_value.transactionGeneration(),
+                    };
                 }
 
                 fn tree(self: *const Self) *TreeT {
@@ -186,60 +254,90 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 }
 
                 fn requireTransaction(self: *const Self) Error!void {
-                    if (!self.cache().transactionActive()) {
+                    if (self.transaction_generation == null or
+                        self.cache().transactionGeneration() != self.transaction_generation)
+                    {
                         return Error.TransactionInactive;
                     }
                 }
 
                 pub fn iterator(self: *const Self) Error!?Iterator {
-                    return self.tree().iterator();
+                    return ReadIteratorT.wrap(
+                        self.allocator_value,
+                        try self.tree().iterator(),
+                    );
                 }
 
                 pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
-                    return self.tree().iteratorFromEnd();
+                    return ReadIteratorT.wrap(
+                        self.allocator_value,
+                        try self.tree().iteratorFromEnd(),
+                    );
                 }
 
                 pub fn find(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
-                    return self.tree().find(key);
+                    return ReadIteratorT.wrap(
+                        self.allocator_value,
+                        try self.tree().find(key),
+                    );
                 }
 
                 pub fn lowerBound(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
-                    return self.tree().lowerBound(key);
+                    return ReadIteratorT.wrap(
+                        self.allocator_value,
+                        try self.tree().lowerBound(key),
+                    );
                 }
 
                 pub fn insert(
-                    self: *Self,
+                    self: *const Self,
                     key: ModelT.KeyLikeType,
                     value: ModelT.ValueInType,
                 ) Error!bool {
                     try self.requireTransaction();
-                    return self.tree().insert(key, value);
+                    return self.tree().insert(key, value) catch |err| {
+                        self.cache().markTransactionFailed();
+                        return err;
+                    };
                 }
 
                 pub fn update(
-                    self: *Self,
+                    self: *const Self,
                     key: ModelT.KeyLikeType,
                     value: ModelT.ValueInType,
                 ) Error!bool {
                     try self.requireTransaction();
-                    return self.tree().update(key, value);
+                    return self.tree().update(key, value) catch |err| {
+                        self.cache().markTransactionFailed();
+                        return err;
+                    };
                 }
 
-                pub fn remove(self: *Self, key: ModelT.KeyLikeType) Error!bool {
+                pub fn remove(self: *const Self, key: ModelT.KeyLikeType) Error!bool {
                     try self.requireTransaction();
-                    return self.tree().remove(key);
+                    return self.tree().remove(key) catch |err| {
+                        self.cache().markTransactionFailed();
+                        return err;
+                    };
                 }
             };
             const ConstProxyT = struct {
                 const Self = @This();
 
                 pub const Error = TreeT.Error;
-                pub const Iterator = TreeT.Iterator;
+                pub const Iterator = ReadIteratorT;
 
                 tree_ptr: *align(@alignOf(TreeT)) const anyopaque,
+                allocator_value: std.mem.Allocator,
 
-                fn init(tree_value: *const TreeT) Self {
-                    return .{ .tree_ptr = tree_value };
+                fn init(
+                    tree_value: *const TreeT,
+                    allocator_value: std.mem.Allocator,
+                ) Self {
+                    return .{
+                        .tree_ptr = tree_value,
+                        .allocator_value = allocator_value,
+                    };
                 }
 
                 fn tree(self: *const Self) *const TreeT {
@@ -247,19 +345,31 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 }
 
                 pub fn iterator(self: *const Self) Error!?Iterator {
-                    return self.tree().iterator();
+                    return ReadIteratorT.wrap(
+                        self.allocator_value,
+                        try self.tree().iterator(),
+                    );
                 }
 
                 pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
-                    return self.tree().iteratorFromEnd();
+                    return ReadIteratorT.wrap(
+                        self.allocator_value,
+                        try self.tree().iteratorFromEnd(),
+                    );
                 }
 
                 pub fn find(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
-                    return self.tree().find(key);
+                    return ReadIteratorT.wrap(
+                        self.allocator_value,
+                        try self.tree().find(key),
+                    );
                 }
 
                 pub fn lowerBound(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
-                    return self.tree().lowerBound(key);
+                    return ReadIteratorT.wrap(
+                        self.allocator_value,
+                        try self.tree().lowerBound(key),
+                    );
                 }
             };
             const BindingT = struct {
@@ -272,8 +382,8 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     manager: ManagerT,
                     model: ModelT,
                     tree: TreeT,
-                    proxy: Proxy,
                     const_proxy: ConstProxy,
+                    allocator_value: std.mem.Allocator,
                 };
                 pub const InitOptions = if (CompareContextT == void)
                     struct { compare_context: void = {} }
@@ -309,8 +419,11 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                         init_options.compare_context,
                     );
                     runtime.tree = TreeT.init(&runtime.model, configured_rebalance_policy);
-                    runtime.proxy = Proxy.init(&runtime.tree, backend.cache());
-                    runtime.const_proxy = ConstProxy.init(&runtime.tree);
+                    runtime.allocator_value = backend.allocator();
+                    runtime.const_proxy = ConstProxy.init(
+                        &runtime.tree,
+                        runtime.allocator_value,
+                    );
                 }
 
                 pub fn deinitRuntime(runtime: *Runtime) void {
@@ -327,8 +440,12 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     runtime.manager.root = state;
                 }
 
-                pub fn proxy(runtime: *Runtime) *Proxy {
-                    return &runtime.proxy;
+                pub fn proxy(runtime: *Runtime) Proxy {
+                    return Proxy.init(
+                        &runtime.tree,
+                        runtime.manager.cache_ptr,
+                        runtime.allocator_value,
+                    );
                 }
 
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {

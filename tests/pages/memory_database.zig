@@ -63,8 +63,8 @@ const SyntheticTrait = struct {
 
             pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
 
-            pub fn proxy(runtime: *Runtime) *Proxy {
-                return runtime;
+            pub fn proxy(runtime: *Runtime) Proxy {
+                return runtime.*;
             }
 
             pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
@@ -132,8 +132,8 @@ fn LifecycleTrait(comptime id: u8, comptime fail_init: bool) type {
 
                 pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
 
-                pub fn proxy(runtime: *Runtime) *Proxy {
-                    return runtime;
+                pub fn proxy(runtime: *Runtime) Proxy {
+                    return runtime.*;
                 }
 
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
@@ -367,16 +367,24 @@ test "Pages: memory database returns an exact typed BPT proxy" {
     var transaction = try database.begin();
     defer transaction.deinit();
     const tree = transaction.get("index");
-    try std.testing.expect(@TypeOf(tree) == *Binding.Proxy);
+    try std.testing.expect(@TypeOf(tree) == Binding.Proxy);
     try std.testing.expect(!@hasDecl(Binding.ConstProxy, "insert"));
+    try std.testing.expect(!@hasField(Binding.ConstProxy.Iterator, "node"));
+    try std.testing.expect(!@hasField(Binding.ConstProxy.Iterator, "model"));
     try std.testing.expect(try tree.insert("hello", "world"));
     try transaction.commit();
     try std.testing.expectError(error.TransactionInactive, tree.insert("outside", "transaction"));
 
     var found = (try database.getConst("index").find("hello")).?;
-    defer found.deinit();
     const entry = (try found.get()).?;
     try std.testing.expectEqualStrings("world", entry.value);
+    found.deinit();
+
+    var next_transaction = try database.begin();
+    defer next_transaction.deinit();
+    try std.testing.expectError(error.TransactionInactive, tree.insert("stale", "proxy"));
+    try std.testing.expect(try next_transaction.get("index").insert("inside", "transaction"));
+    try next_transaction.rollback();
 
     const database_const: *const Db = &database;
     const tree_const = database_const.getConst("index");
@@ -402,8 +410,9 @@ test "Pages: memory database transaction commits or restores pages and roots" {
     defer database.deinit();
 
     var rolled_back = try database.begin();
+    var stale = rolled_back;
     const rolled_back_tree = rolled_back.get("index");
-    try std.testing.expect(@TypeOf(rolled_back_tree) == *Binding.Proxy);
+    try std.testing.expect(@TypeOf(rolled_back_tree) == Binding.Proxy);
     try std.testing.expect(try rolled_back_tree.insert("discarded", "value"));
     try std.testing.expectError(error.BatchActive, database.begin());
     try rolled_back.rollback();
@@ -415,6 +424,7 @@ test "Pages: memory database transaction commits or restores pages and roots" {
 
     var committed = try database.begin();
     defer committed.deinit();
+    try std.testing.expectError(error.TransactionInactive, stale.commit());
     try std.testing.expect(try committed.get("index").insert("committed", "value"));
     try committed.commit();
 
@@ -424,6 +434,32 @@ test "Pages: memory database transaction commits or restores pages and roots" {
     var found = (try database.getConst("index").find("committed")).?;
     defer found.deinit();
     try std.testing.expectEqualStrings("value", (try found.get()).?.value);
+}
+
+test "Pages: read facade releases a low-level iterator after allocation failure" {
+    const Schema = pages.Schema(.{ .page_id = u32 })
+        .add("index", pages.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 64,
+        .maximum_value_size = 128,
+    }));
+    const Db = pages.MemoryDatabase(Schema);
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+
+    var database = try Db.init(failing.allocator(), .{
+        .page_size = 4096,
+        .cache_frames = 4,
+    });
+    defer database.deinit();
+    var transaction = try database.begin();
+    defer transaction.deinit();
+    try std.testing.expect(try transaction.get("index").insert("key", "value"));
+    try transaction.commit();
+
+    failing.fail_index = failing.alloc_index;
+    try std.testing.expectError(error.OutOfMemory, database.getConst("index").find("key"));
 }
 
 test "Pages: transaction restores a failed root leaf split" {
@@ -512,6 +548,7 @@ test "Pages: transaction restores a failed cascading split" {
             error.BatchTooLarge,
             transaction.get("index").insert("00000007", ""),
         );
+        try std.testing.expectError(error.TransactionRollbackOnly, transaction.commit());
     }
 
     const diagnostics_after = database.diagnostics();

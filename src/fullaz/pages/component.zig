@@ -120,7 +120,7 @@ pub fn descriptor(comptime TraitT: type) Descriptor {
 ///     pub fn deinitRuntime(_: *Runtime) void {}
 ///     pub fn captureTransactionState(_: *const Runtime) TransactionState {}
 ///     pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
-///     pub fn proxy(runtime: *Runtime) *Proxy { return runtime; }
+///     pub fn proxy(runtime: *Runtime) Proxy { return runtime.*; }
 ///     pub fn proxyConst(runtime: *const Runtime) *const ConstProxy { return runtime; }
 /// };
 /// comptime assertBinding(Binding, Backend);
@@ -168,7 +168,7 @@ pub fn assertBinding(comptime BindingT: type, comptime BackendT: type) void {
         "restoreTransactionState",
         fn (*Runtime, TransactionState) void,
     );
-    interfaces.requiresFnSignature(BindingT, "proxy", fn (*Runtime) *Proxy);
+    interfaces.requiresFnSignature(BindingT, "proxy", fn (*Runtime) Proxy);
     interfaces.requiresFnSignature(BindingT, "proxyConst", fn (*const Runtime) *const ConstProxy);
 }
 

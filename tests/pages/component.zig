@@ -43,8 +43,8 @@ fn TestBinding(comptime BackendT: type) type {
             runtime.proxy_value = state;
         }
 
-        pub fn proxy(runtime: *Runtime) *Proxy {
-            return &runtime.proxy_value;
+        pub fn proxy(runtime: *Runtime) Proxy {
+            return runtime.proxy_value;
         }
 
         pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
@@ -110,7 +110,6 @@ test "Pages: binding exposes a borrowed typed proxy" {
     const proxy = Binding.proxy(&runtime);
     try std.testing.expectEqual(@as(u32, 42), proxy.value);
     try std.testing.expectEqual(@as(usize, 1), backend.initialized);
-    try std.testing.expect(proxy == &runtime.proxy_value);
 
     const runtime_const: *const Binding.Runtime = &runtime;
     const proxy_const = Binding.proxyConst(runtime_const);

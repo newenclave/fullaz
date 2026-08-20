@@ -165,6 +165,14 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
             return self.inner.transactionActive();
         }
 
+        pub fn transactionGeneration(self: *const Self) ?u64 {
+            return self.inner.transactionGeneration();
+        }
+
+        pub fn markTransactionFailed(self: *Self) void {
+            self.inner.markTransactionFailed();
+        }
+
         comptime {
             page_cache_contract.requiresTransactionalPageCache(Self);
         }

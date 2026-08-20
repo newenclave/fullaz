@@ -650,6 +650,21 @@ test "PageCache batch: completed and stale handles are rejected" {
     try current.discard();
 }
 
+test "PageCache batch: failed mutation makes commit rollback-only" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 2);
+    defer cache.deinit();
+    var transaction = try cache.begin();
+    cache.markTransactionFailed();
+
+    try testing.expectError(error.TransactionRollbackOnly, transaction.commit());
+    try transaction.discard();
+}
+
 test "PageCache batch: dirty overflow returns BatchTooLarge" {
     const allocator = testing.allocator;
     const Dev = MemoryDevice(u32);

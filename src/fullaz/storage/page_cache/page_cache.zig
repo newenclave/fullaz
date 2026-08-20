@@ -205,6 +205,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         locked: bool = false,
         appended_in_batch: usize = 0,
         batch_generation: u64 = 0,
+        transaction_failed: bool = false,
         wal: WalPolicy = undefined,
 
         pub const WriteBatch = struct {
@@ -410,6 +411,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             try self.flushAll();
             self.locked = true;
             self.appended_in_batch = 0;
+            self.transaction_failed = false;
             self.batch_generation +%= 1;
             return .{
                 .cache = self,
@@ -420,6 +422,9 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         fn commitBatch(self: *Self, generation: u64) Error!void {
             if (!self.locked or generation != self.batch_generation) {
                 return Error.TransactionInactive;
+            }
+            if (self.transaction_failed) {
+                return Error.TransactionRollbackOnly;
             }
             if (WalPolicy.enabled) {
                 // Write-ahead: log every dirty page + a commit record,
@@ -443,6 +448,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                 try self.flushAllInternal();
             }
             self.appended_in_batch = 0;
+            self.transaction_failed = false;
             self.locked = false;
         }
 
@@ -470,11 +476,22 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                 }
             }
             self.appended_in_batch = 0;
+            self.transaction_failed = false;
             self.locked = false;
         }
 
         pub fn transactionActive(self: *const Self) bool {
             return self.locked;
+        }
+
+        pub fn transactionGeneration(self: *const Self) ?u64 {
+            return if (self.locked) self.batch_generation else null;
+        }
+
+        pub fn markTransactionFailed(self: *Self) void {
+            if (self.locked) {
+                self.transaction_failed = true;
+            }
         }
 
         fn acquireFrame(self: *Self) Error!*Frame {
