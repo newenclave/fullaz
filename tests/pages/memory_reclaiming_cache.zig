@@ -104,3 +104,47 @@ test "Pages: memory reclaiming cache frees pages without allocating" {
     try std.testing.expectError(error.PageNotAllocated, cache.free(2));
     try std.testing.expectError(error.PageNotAllocated, cache.free(std.math.maxInt(u32)));
 }
+
+test "Pages: memory reclaiming cache reuses pages in LIFO order and zeroes them" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCache(Device);
+    const Cache = fullaz.pages.MemoryReclaimingCache(InnerCache);
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var inner = try InnerCache.init(&device, std.testing.allocator, 2);
+    defer inner.deinit();
+    var cache = Cache.init(std.testing.allocator, &inner);
+    defer cache.deinit();
+
+    var first = try cache.create();
+    const first_id = try first.pid();
+    @memset(try first.dataMut(), 0xaa);
+    first.deinit();
+    var second = try cache.create();
+    const second_id = try second.pid();
+    @memset(try second.dataMut(), 0xbb);
+    second.deinit();
+
+    try cache.free(first_id);
+    try cache.free(second_id);
+
+    {
+        var reused_second = try cache.create();
+        defer reused_second.deinit();
+        try std.testing.expectEqual(second_id, try reused_second.pid());
+        for (try reused_second.data()) |byte| {
+            try std.testing.expectEqual(@as(u8, 0), byte);
+        }
+    }
+
+    var reused_first = try cache.create();
+    defer reused_first.deinit();
+    try std.testing.expectEqual(first_id, try reused_first.pid());
+    for (try reused_first.data()) |byte| {
+        try std.testing.expectEqual(@as(u8, 0), byte);
+    }
+    try std.testing.expectEqual(@as(usize, 0), cache.free_pages.items.len);
+    try std.testing.expectEqual(@as(usize, 2), device.blocksCount());
+    try std.testing.expectEqual(@as(usize, 2), cache.physical_page_count);
+}

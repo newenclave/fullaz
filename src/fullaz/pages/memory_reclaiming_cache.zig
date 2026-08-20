@@ -45,6 +45,15 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
         }
 
         pub fn create(self: *Self) Error!Handle {
+            if (self.free_pages.items.len > 0) {
+                const page_id = self.free_pages.items[self.free_pages.items.len - 1];
+                var handle = try self.inner.fetch(page_id);
+                errdefer handle.deinit();
+                @memset(try handle.dataMut(), 0);
+                self.free_pages.items.len -= 1;
+                return handle;
+            }
+
             const next_page_id = std.math.cast(Pid, self.physical_page_count) orelse
                 return Error.PageIdExhausted;
             if (next_page_id == std.math.maxInt(Pid)) {
