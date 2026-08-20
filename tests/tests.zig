@@ -62,6 +62,7 @@ test {
     _ = @import("page/extensions.zig");
     _ = @import("page/links.zig");
     _ = @import("page/orthtree.zig");
+    _ = @import("page/slot_heap.zig");
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
     _ = @import("long_store.zig");

@@ -6,3 +6,4 @@ pub const freed = @import("freed.zig");
 pub const bpt = @import("bpt.zig");
 pub const orthtree = @import("orthtree.zig");
 pub const rtree = @import("rtree.zig");
+pub const slot_heap = @import("slot_heap.zig");
