@@ -184,14 +184,14 @@ pub fn Reader(
             root: Format.PageId,
             settings: Settings,
             ctx: CtxT,
-        ) (std.mem.Allocator.Error || IndexCache.Error)!*Self {
+        ) (std.mem.Allocator.Error || IndexCache.Error || IndexModel.Error)!*Self {
             const state = try allocator.create(@This());
             errdefer allocator.destroy(state);
             state.device = index_device;
             state.storage = .{ .root = root };
             state.cache = try IndexCache.init(&state.device, allocator, 8);
             errdefer state.cache.deinit();
-            state.model = IndexModel.init(
+            state.model = try IndexModel.init(
                 &state.cache,
                 &state.storage,
                 .{

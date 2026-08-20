@@ -6,6 +6,39 @@ const isBlockDevice = @import("fullaz").device.interfaces.isBlockDevice;
 
 const testing = std.testing;
 
+const MemoryPolicyTestFrame = struct {
+    const Self = @This();
+
+    frame_id: usize,
+    data: []u8,
+    next: ?*Self,
+    prev: ?*Self,
+
+    pub fn init() Self {
+        return .{
+            .frame_id = 0,
+            .data = &[_]u8{},
+            .next = null,
+            .prev = null,
+        };
+    }
+};
+
+fn exerciseMemoryPolicyInit(allocator: std.mem.Allocator) !void {
+    const Policy = @import("fullaz").storage.memory_policy.DefaultMemoryPolicy(MemoryPolicyTestFrame);
+    var policy = try Policy.init(allocator, 256, 4);
+    defer policy.deinit();
+}
+
+test "Pages: memory policy init releases partial allocations" {
+    try testing.checkAllAllocationFailures(testing.allocator, exerciseMemoryPolicyInit, .{});
+}
+
+test "Pages: memory policy init rejects byte-count overflow" {
+    const Policy = @import("fullaz").storage.memory_policy.DefaultMemoryPolicy(MemoryPolicyTestFrame);
+    try testing.expectError(error.OutOfMemory, Policy.init(testing.allocator, std.math.maxInt(usize), 2));
+}
+
 test "PageCache: init and deinit" {
     const allocator = testing.allocator;
     var device = try MemoryDevice(u32).init(allocator, 256);

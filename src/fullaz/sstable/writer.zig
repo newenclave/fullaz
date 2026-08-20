@@ -76,7 +76,7 @@ pub fn Writer(
             allocator: std.mem.Allocator,
             settings: Settings,
             ctx: CtxT,
-        ) (std.mem.Allocator.Error || IndexDevice.Error || IndexCache.Error)!*@This() {
+        ) (std.mem.Allocator.Error || IndexDevice.Error || IndexCache.Error || IndexModel.Error)!*@This() {
             const state = try allocator.create(@This());
             errdefer allocator.destroy(state);
             state.device = try IndexDevice.init(allocator, settings.index_page_bytes);
@@ -84,7 +84,7 @@ pub fn Writer(
             state.cache = try IndexCache.init(&state.device, allocator, 8);
             errdefer state.cache.deinit();
             state.storage = .{};
-            state.model = IndexModel.init(
+            state.model = try IndexModel.init(
                 &state.cache,
                 &state.storage,
                 .{

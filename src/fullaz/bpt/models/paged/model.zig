@@ -54,9 +54,13 @@ pub fn PagedModel(
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
         PageCacheT.Error ||
+        StorageManagerT.Error ||
         errors.OrderError ||
         errors.BptError ||
-        error{KeyTooLarge} ||
+        error{
+            KeyTooLarge,
+            InvalidSettings,
+        } ||
         error{};
 
     const LeafImpl = struct {
@@ -619,7 +623,32 @@ pub fn PagedModel(
 
         accessor_state: AccessorType,
 
-        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings, ctx: CtxT) Self {
+        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings, ctx: CtxT) Error!Self {
+            if (settings.leaf_page_kind == settings.inode_page_kind) {
+                return Error.InvalidSettings;
+            }
+            const maximum_leaf_content = std.math.add(
+                usize,
+                settings.maximum_key_size,
+                settings.maximum_value_size,
+            ) catch return Error.InvalidSettings;
+            const maximum_leaf_slot = std.math.add(
+                usize,
+                maximum_leaf_content,
+                @sizeOf(BptPage.LeafSlotHeader),
+            ) catch return Error.InvalidSettings;
+            const maximum_inode_slot = std.math.add(
+                usize,
+                settings.maximum_key_size,
+                @sizeOf(BptPage.InodeSlotHeader),
+            ) catch return Error.InvalidSettings;
+            if (std.math.cast(u16, settings.maximum_key_size) == null or
+                std.math.cast(u16, maximum_leaf_slot) == null or
+                std.math.cast(u16, maximum_inode_slot) == null)
+            {
+                return Error.InvalidSettings;
+            }
+
             const context = Context{
                 .cache = device,
                 .storage_mgr = storage_mgr,
