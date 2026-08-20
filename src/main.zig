@@ -26,8 +26,12 @@ pub fn main() !void {
     });
     defer db.deinit();
 
-    _ = try db.get("index").insert("hello", "world");
-    var found = (try db.get("index").find("hello")).?;
+    var transaction = try db.begin();
+    defer transaction.deinit();
+    _ = try transaction.get("index").insert("hello", "world");
+    try transaction.commit();
+
+    var found = (try db.getConst("index").find("hello")).?;
     defer found.deinit();
     const entry = (try found.get()).?;
     std.debug.print("{s}: {s}\n", .{ entry.key, entry.value });

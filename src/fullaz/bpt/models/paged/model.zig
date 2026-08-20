@@ -371,14 +371,13 @@ pub fn PagedModel(
                 return Error.KeyTooLarge;
             }
 
-            var tmp_page = try self.ctx.cache.getTemporaryPage();
-            defer tmp_page.deinit();
-
             var view = PageViewTypeConst.init(try self.handle.data());
             const current_available = try view.canInsert(pos, key, child_id);
             if (current_available == .not_enough) {
                 return Error.NodeFull;
             } else if (current_available == .need_compact) {
+                var tmp_page = try self.ctx.cache.getTemporaryPage();
+                defer tmp_page.deinit();
                 var view_mut = PageViewType.init(try self.handle.dataMut());
                 var slots_dir = try view_mut.slotsDirMut();
                 slots_dir.compactWithBuffer(try tmp_page.dataMut()) catch {
@@ -490,6 +489,10 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
+            errdefer {
+                ph.deinit();
+                self.ctx.storage_mgr.destroyPage(pid) catch {};
+            }
             var page_view = LeafImpl.PageViewType.init(try ph.dataMut());
             try page_view.formatPage(self.ctx.settings.leaf_page_kind, pid, 0);
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
@@ -499,6 +502,10 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
+            errdefer {
+                ph.deinit();
+                self.ctx.storage_mgr.destroyPage(pid) catch {};
+            }
             var page_view = InodeImpl.PageViewType.init(try ph.dataMut());
             try page_view.formatPage(self.ctx.settings.inode_page_kind, pid, 0);
             return InodeImpl.init(try ph.take(), pid, &self.ctx);

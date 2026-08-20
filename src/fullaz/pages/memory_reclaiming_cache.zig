@@ -2,7 +2,7 @@ const std = @import("std");
 const page_cache_contract = @import("../contracts/page_cache.zig");
 
 pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
-    comptime page_cache_contract.requiresPinAwarePageCache(InnerCacheT);
+    comptime page_cache_contract.requiresAppendOnlyDensePageCache(InnerCacheT);
 
     return struct {
         const Self = @This();
@@ -17,7 +17,38 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
                 PageIdExhausted,
                 PageNotAllocated,
                 PageStillPinned,
+                TransactionInactive,
             };
+
+        pub const WriteBatch = struct {
+            cache: *Self,
+            inner: InnerCacheT.WriteBatch,
+            free_pages_snapshot: std.ArrayList(Pid),
+            physical_page_count_snapshot: usize,
+            active: bool = true,
+
+            pub fn commit(self: *WriteBatch) Error!void {
+                if (!self.active) {
+                    return Error.TransactionInactive;
+                }
+                try self.inner.commit();
+                self.free_pages_snapshot.deinit(self.cache.allocator);
+                self.active = false;
+            }
+
+            pub fn discard(self: *WriteBatch) Error!void {
+                if (!self.active) {
+                    return Error.TransactionInactive;
+                }
+                try self.inner.discard();
+
+                self.cache.free_pages.deinit(self.cache.allocator);
+                self.cache.free_pages = self.free_pages_snapshot;
+                self.free_pages_snapshot = .empty;
+                self.cache.physical_page_count = self.physical_page_count_snapshot;
+                self.active = false;
+            }
+        };
 
         allocator: std.mem.Allocator,
         inner: *InnerCacheT,
@@ -39,6 +70,23 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
 
         pub fn getTemporaryPage(self: *Self) Error!Handle {
             return self.inner.getTemporaryPage();
+        }
+
+        pub fn begin(self: *Self) Error!WriteBatch {
+            var free_pages_snapshot: std.ArrayList(Pid) = .empty;
+            errdefer free_pages_snapshot.deinit(self.allocator);
+            try free_pages_snapshot.ensureTotalCapacity(
+                self.allocator,
+                self.physical_page_count,
+            );
+            free_pages_snapshot.appendSliceAssumeCapacity(self.free_pages.items);
+
+            return .{
+                .cache = self,
+                .inner = try self.inner.begin(),
+                .free_pages_snapshot = free_pages_snapshot,
+                .physical_page_count_snapshot = self.physical_page_count,
+            };
         }
 
         pub fn fetch(self: *Self, page_id: Pid) Error!Handle {
@@ -71,6 +119,11 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
             try self.free_pages.ensureTotalCapacity(self.allocator, next_page_count);
 
             const handle = try self.inner.create();
+            const actual_page_id = handle.pid() catch
+                @panic("Append-only dense page cache returned an invalid handle");
+            if (actual_page_id != next_page_id) {
+                @panic("Append-only dense page cache returned a non-sequential page ID");
+            }
             self.physical_page_count = next_page_count;
             return handle;
         }
@@ -105,8 +158,12 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
             return self.inner.pageSize();
         }
 
+        pub fn isPinned(self: *const Self, page_id: Pid) bool {
+            return self.inner.isPinned(page_id);
+        }
+
         comptime {
-            page_cache_contract.requiresPageCache(Self);
+            page_cache_contract.requiresTransactionalPageCache(Self);
         }
     };
 }

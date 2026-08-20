@@ -49,3 +49,33 @@ pub fn requiresPinAwarePageCache(comptime T: type) void {
     requiresPageCache(T);
     requiresFnSignature(T, "isPinned", fn (*const T, T.Pid) bool);
 }
+
+pub fn requiresTransactionalPageCache(comptime T: type) void {
+    requiresPinAwarePageCache(T);
+    requiresTypeDeclaration(T, "WriteBatch");
+    const WriteBatch = T.WriteBatch;
+    requiresFnSignature(WriteBatch, "commit", fn (*WriteBatch) T.Error!void);
+    requiresFnSignature(WriteBatch, "discard", fn (*WriteBatch) T.Error!void);
+    requiresFnSignature(T, "begin", fn (*T) T.Error!WriteBatch);
+}
+
+pub fn requiresAppendOnlyDensePageCache(comptime T: type) void {
+    requiresTransactionalPageCache(T);
+    switch (@typeInfo(T.Pid)) {
+        .int => |int_info| {
+            if (int_info.signedness != .unsigned) {
+                @compileError("Append-only dense PageCache.Pid must be unsigned");
+            }
+        },
+        else => @compileError("Append-only dense PageCache.Pid must be an integer"),
+    }
+    if (!@hasDecl(T, "append_only_dense_page_ids")) {
+        @compileError("PageCache must declare append_only_dense_page_ids: bool");
+    }
+    if (@TypeOf(T.append_only_dense_page_ids) != bool) {
+        @compileError("PageCache append_only_dense_page_ids must be bool");
+    }
+    if (!T.append_only_dense_page_ids) {
+        @compileError("PageCache must guarantee append-only dense page IDs");
+    }
+}

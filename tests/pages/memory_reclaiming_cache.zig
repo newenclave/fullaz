@@ -13,6 +13,7 @@ test "Pages: memory reclaiming cache forwards basic page-cache operations" {
     var cache = Cache.init(std.testing.allocator, &inner);
     defer cache.deinit();
 
+    try std.testing.expect(InnerCache.append_only_dense_page_ids);
     try std.testing.expectEqual(@as(usize, 256), cache.pageSize());
     var temporary = try cache.getTemporaryPage();
     temporary.deinit();
@@ -193,5 +194,39 @@ test "Pages: memory reclaiming cache preserves a PID after failed reuse" {
     const available_before = inner.availableFrames();
     try std.testing.expectError(error.InvalidId, cache.create());
     try std.testing.expectEqual(available_before, inner.availableFrames());
+    try std.testing.expectEqualSlices(u32, &.{first_id}, cache.free_pages.items);
+}
+
+test "Pages: memory reclaiming cache transaction restores allocation state" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCache(Device);
+    const Cache = fullaz.pages.MemoryReclaimingCache(InnerCache);
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var inner = try InnerCache.init(&device, std.testing.allocator, 4);
+    defer inner.deinit();
+    var cache = Cache.init(std.testing.allocator, &inner);
+    defer cache.deinit();
+
+    var first = try cache.create();
+    const first_id = try first.pid();
+    first.deinit();
+    var second = try cache.create();
+    const second_id = try second.pid();
+    second.deinit();
+    try cache.free(first_id);
+
+    var transaction = try cache.begin();
+    var reused = try cache.create();
+    try std.testing.expectEqual(first_id, try reused.pid());
+    reused.deinit();
+    var appended = try cache.create();
+    appended.deinit();
+    try cache.free(second_id);
+    try transaction.discard();
+
+    try std.testing.expectEqual(@as(usize, 2), cache.physical_page_count);
+    try std.testing.expectEqual(@as(usize, 2), device.blocksCount());
     try std.testing.expectEqualSlices(u32, &.{first_id}, cache.free_pages.items);
 }

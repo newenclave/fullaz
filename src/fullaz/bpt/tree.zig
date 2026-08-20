@@ -1511,6 +1511,7 @@ pub fn Bpt(comptime ModelT: type) type {
             defer accessor.deinitInode(right);
 
             const middle_key = try accessor.borrowKeyfromInode(inode, mid);
+            errdefer accessor.deinitBorrowKey(middle_key);
 
             try right.setParent(inode.getParent());
             for (mid + 1..maximum) |i| {

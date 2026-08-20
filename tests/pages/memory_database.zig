@@ -41,6 +41,7 @@ const SyntheticTrait = struct {
             pub const Runtime = struct {};
             pub const Proxy = Runtime;
             pub const InitOptions = struct {};
+            pub const TransactionState = void;
             pub const Error = error{SyntheticFailure};
 
             pub fn initRuntime(
@@ -56,6 +57,10 @@ const SyntheticTrait = struct {
             }
 
             pub fn deinitRuntime(_: *Runtime) void {}
+
+            pub fn captureTransactionState(_: *const Runtime) TransactionState {}
+
+            pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
 
             pub fn proxy(runtime: *Runtime) *Proxy {
                 return runtime;
@@ -98,6 +103,7 @@ fn LifecycleTrait(comptime id: u8, comptime fail_init: bool) type {
                 pub const InitOptions = struct {
                     state: *LifecycleState,
                 };
+                pub const TransactionState = void;
                 pub const Error = error{SyntheticFailure};
 
                 pub fn initRuntime(
@@ -119,6 +125,10 @@ fn LifecycleTrait(comptime id: u8, comptime fail_init: bool) type {
                     runtime.state.push(std.ascii.toUpper(id));
                     runtime.* = undefined;
                 }
+
+                pub fn captureTransactionState(_: *const Runtime) TransactionState {}
+
+                pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
 
                 pub fn proxy(runtime: *Runtime) *Proxy {
                     return runtime;
@@ -353,10 +363,14 @@ test "Pages: memory database returns an exact typed BPT proxy" {
     });
     defer database.deinit();
 
-    const tree = database.get("index");
+    var transaction = try database.begin();
+    defer transaction.deinit();
+    const tree = transaction.get("index");
     try std.testing.expect(@TypeOf(tree) == *Binding.Proxy);
     try std.testing.expect(try tree.insert("hello", "world"));
-    var found = (try tree.find("hello")).?;
+    try transaction.commit();
+
+    var found = (try database.getConst("index").find("hello")).?;
     defer found.deinit();
     const entry = (try found.get()).?;
     try std.testing.expectEqualStrings("world", entry.value);
@@ -365,6 +379,101 @@ test "Pages: memory database returns an exact typed BPT proxy" {
     const tree_const = database_const.getConst("index");
     try std.testing.expect(@TypeOf(tree_const) == *const Binding.Proxy);
     try std.testing.expect(tree_const == tree);
+}
+
+test "Pages: memory database transaction commits or restores pages and roots" {
+    const Schema = pages.Schema(.{ .page_id = u32 })
+        .add("index", pages.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 64,
+        .maximum_value_size = 128,
+    }));
+    const Db = pages.MemoryDatabase(Schema);
+    const Binding = Schema.trait("index").Binding(Db.BackendType);
+
+    var database = try Db.init(std.testing.allocator, .{
+        .page_size = 4096,
+        .cache_frames = 4,
+    });
+    defer database.deinit();
+
+    var rolled_back = try database.begin();
+    const rolled_back_tree = rolled_back.get("index");
+    try std.testing.expect(@TypeOf(rolled_back_tree) == *Binding.Proxy);
+    try std.testing.expect(try rolled_back_tree.insert("discarded", "value"));
+    try std.testing.expectError(error.BatchActive, database.begin());
+    try rolled_back.rollback();
+
+    try std.testing.expectEqual(null, database.core_.components.index.manager.getRoot());
+    try std.testing.expectEqual(@as(usize, 0), database.core_.cache.physical_page_count);
+    try std.testing.expectEqual(@as(usize, 0), database.core_.device.blocksCount());
+    try std.testing.expectEqual(null, try database.getConst("index").find("discarded"));
+
+    var committed = try database.begin();
+    defer committed.deinit();
+    try std.testing.expect(try committed.get("index").insert("committed", "value"));
+    try committed.commit();
+
+    try std.testing.expect(database.core_.components.index.manager.getRoot() != null);
+    try std.testing.expectEqual(@as(usize, 1), database.core_.cache.physical_page_count);
+    try std.testing.expectEqual(@as(usize, 1), database.core_.device.blocksCount());
+    var found = (try database.getConst("index").find("committed")).?;
+    defer found.deinit();
+    try std.testing.expectEqualStrings("value", (try found.get()).?.value);
+}
+
+test "Pages: transaction restores a failed root leaf split" {
+    const Schema = pages.Schema(.{ .page_id = u32 })
+        .add("index", pages.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 8,
+        .maximum_value_size = 0,
+        .rebalance_policy = .force_split,
+    }));
+    const Db = pages.MemoryDatabase(Schema);
+
+    var database = try Db.init(std.testing.allocator, .{
+        .page_size = 84,
+        .cache_frames = 2,
+    });
+    defer database.deinit();
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const tree = transaction.get("index");
+        try std.testing.expect(try tree.insert("00000001", ""));
+        try std.testing.expect(try tree.insert("00000002", ""));
+        try std.testing.expect(try tree.insert("00000003", ""));
+        try transaction.commit();
+    }
+
+    const root_before = database.core_.components.index.manager.getRoot();
+    const physical_before = database.core_.cache.physical_page_count;
+    const blocks_before = database.core_.device.blocksCount();
+    const free_before = database.core_.cache.free_pages.items.len;
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        try std.testing.expectError(
+            error.BatchTooLarge,
+            transaction.get("index").insert("00000004", ""),
+        );
+    }
+
+    try std.testing.expectEqual(root_before, database.core_.components.index.manager.getRoot());
+    try std.testing.expectEqual(physical_before, database.core_.cache.physical_page_count);
+    try std.testing.expectEqual(blocks_before, database.core_.device.blocksCount());
+    try std.testing.expectEqual(free_before, database.core_.cache.free_pages.items.len);
+    inline for ([_][]const u8{ "00000001", "00000002", "00000003" }) |key| {
+        var found = (try database.getConst("index").find(key)).?;
+        found.deinit();
+    }
+    try std.testing.expectEqual(null, try database.getConst("index").find("00000004"));
 }
 
 test "Pages: two BPT components share one cache and keep independent roots" {
@@ -393,10 +502,13 @@ test "Pages: two BPT components share one cache and keep independent roots" {
     });
     defer database.deinit();
 
-    const index = database.get("index");
-    const secondary = database.get("secondary");
+    var transaction = try database.begin();
+    defer transaction.deinit();
+    const index = transaction.get("index");
+    const secondary = transaction.get("secondary");
     try std.testing.expect(try index.insert("shared", "primary"));
     try std.testing.expect(try secondary.insert("shared", "secondary"));
+    try transaction.commit();
 
     const index_runtime = &database.core_.components.index;
     const secondary_runtime = &database.core_.components.secondary;
@@ -408,12 +520,12 @@ test "Pages: two BPT components share one cache and keep independent roots" {
     );
 
     {
-        var found = (try index.find("shared")).?;
+        var found = (try database.getConst("index").find("shared")).?;
         defer found.deinit();
         try std.testing.expectEqualStrings("primary", (try found.get()).?.value);
     }
     {
-        var found = (try secondary.find("shared")).?;
+        var found = (try database.getConst("secondary").find("shared")).?;
         defer found.deinit();
         try std.testing.expectEqualStrings("secondary", (try found.get()).?.value);
     }
@@ -441,7 +553,9 @@ test "Pages: BPT deletion returns pages to the shared reuse pool" {
         .cache_frames = 32,
     });
     defer database.deinit();
-    const tree = database.get("index");
+    var transaction = try database.begin();
+    defer transaction.deinit();
+    const tree = transaction.get("index");
 
     for (keys) |key| {
         try std.testing.expect(try tree.insert(key, ""));
@@ -464,6 +578,7 @@ test "Pages: BPT deletion returns pages to the shared reuse pool" {
     try std.testing.expectEqual(physical_pages, database.core_.cache.physical_page_count);
     try std.testing.expectEqual(physical_pages, database.core_.device.blocksCount());
     try std.testing.expectEqual(physical_pages - 1, database.core_.cache.free_pages.items.len);
+    try transaction.commit();
 }
 
 test "Pages: failed BPT initialization rolls back the complete backend" {

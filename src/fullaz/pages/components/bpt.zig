@@ -177,6 +177,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     struct { compare_context: void = {} }
                 else
                     struct { compare_context: CompareContextT };
+                pub const TransactionState = ?ManagerT.PageId;
                 pub const Error = Proxy.Error || error{InvalidPageKinds};
 
                 pub fn initRuntime(
@@ -212,6 +213,14 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     runtime.tree.deinit();
                     runtime.model.deinit();
                     runtime.* = undefined;
+                }
+
+                pub fn captureTransactionState(runtime: *const Runtime) TransactionState {
+                    return runtime.manager.getRoot();
+                }
+
+                pub fn restoreTransactionState(runtime: *Runtime, state: TransactionState) void {
+                    runtime.manager.root = state;
                 }
 
                 pub fn proxy(runtime: *Runtime) *Proxy {

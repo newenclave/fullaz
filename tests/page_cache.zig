@@ -142,6 +142,24 @@ test "PageCache: create reserves the frame map before appending" {
     try testing.expectEqual(available_before, cache.availableFrames());
 }
 
+test "PageCache: failed append does not leave a dirty free frame" {
+    const allocator = testing.allocator;
+    const Device = MemoryDevice(u32);
+    var failing = testing.FailingAllocator.init(allocator, .{});
+    var device = try Device.init(failing.allocator(), 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Device).init(&device, allocator, 1);
+    defer cache.deinit();
+    var temporary = try cache.getTemporaryPage();
+    temporary.deinit();
+
+    failing.fail_index = failing.alloc_index;
+    try testing.expectError(error.OutOfMemory, cache.create());
+    try testing.expect(!cache.policy.framesSlice()[0].isDirty());
+    try testing.expectEqual(@as(usize, 0), device.blocksCount());
+}
+
 test "PageCache: markDirty and flush" {
     const allocator = testing.allocator;
     var device = try MemoryDevice(u32).init(allocator, 256);
@@ -546,6 +564,36 @@ test "PageCache batch: discard reverts content and file growth" {
     var h = try cache.fetch(0);
     defer h.deinit();
     try testing.expectEqual(@as(u8, 0xAA), (try h.data())[0]);
+}
+
+test "PageCache batch: pinned discard leaves the transaction intact" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 2);
+    defer cache.deinit();
+    {
+        var created = try cache.create();
+        defer created.deinit();
+        (try created.dataMut())[0] = 0xaa;
+    }
+    try cache.flushAll();
+
+    var transaction = try cache.begin();
+    var pinned = try cache.fetch(0);
+    (try pinned.dataMut())[0] = 0xbb;
+    try testing.expectError(error.PageBusy, transaction.discard());
+    try testing.expect(cache.locked);
+    try testing.expectEqual(@as(u8, 0xbb), (try pinned.data())[0]);
+
+    pinned.deinit();
+    try transaction.discard();
+    try testing.expect(!cache.locked);
+    var restored = try cache.fetch(0);
+    defer restored.deinit();
+    try testing.expectEqual(@as(u8, 0xaa), (try restored.data())[0]);
 }
 
 test "PageCache batch: dirty overflow returns BatchTooLarge" {

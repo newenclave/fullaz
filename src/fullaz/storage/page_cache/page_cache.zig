@@ -175,6 +175,8 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
 
         pub const UnderlyingDevice = DeviceT;
         pub const Pid = UnderlyingDevice.BlockId;
+        /// Successful create() calls append 0-based dense IDs and failures consume no ID.
+        pub const append_only_dense_page_ids: bool = true;
 
         const FrameHashMap = std.AutoHashMap(Pid, *Frame);
 
@@ -319,9 +321,9 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             const ff = try self.acquireFrame();
             errdefer self.policy.pushFree(ff);
             try self.frames_cache.ensureUnusedCapacity(1);
-            ff.frame_type = .dirty;
 
             ff.pid = try self.device.appendBlock();
+            ff.frame_type = .dirty;
 
             // New page, zeroed
             @memset(ff.data, 0);
@@ -407,8 +409,17 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         }
 
         fn discardBatch(self: *Self) Error!void {
-            // Drop every dirty frame without writing it.
             const fslice = self.policy.framesSlice();
+            for (fslice) |*frame| {
+                if (frame.frame_type == .dirty and frame.ref_count != 0) {
+                    return Error.PageBusy;
+                }
+            }
+
+            // Keep the transaction intact if truncation itself fails.
+            try self.device.truncateBlocks(self.appended_in_batch);
+
+            // Drop every dirty frame without writing it.
             for (fslice) |*frame| {
                 if (frame.frame_type == .dirty) {
                     frame.frame_type = .clean;
@@ -417,9 +428,6 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                     self.policy.pushFree(frame);
                 }
             }
-            // Undo the blocks that create() eagerly appended during the batch.
-            //      file device does not extend the file on appendBlock, but the memoryBlock does.
-            try self.device.truncateBlocks(self.appended_in_batch);
             self.appended_in_batch = 0;
             self.locked = false;
         }

@@ -57,7 +57,7 @@ pub fn Reader(
         pub fn setRoot(self: *Self, root: ?PageId) Error!void {
             self.root = root;
         }
-        pub fn destroyPage(_: Self, _: PageId) Error!void {}
+        pub fn destroyPage(_: *Self, _: PageId) Error!void {}
     };
 
     const LogBlock = struct {

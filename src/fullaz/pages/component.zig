@@ -102,6 +102,7 @@ pub fn descriptor(comptime TraitT: type) Descriptor {
 ///     pub const Runtime = struct {};
 ///     pub const Proxy = Runtime;
 ///     pub const InitOptions = struct {};
+///     pub const TransactionState = void;
 ///     pub const Error = error{};
 ///
 ///     pub fn initRuntime(
@@ -116,21 +117,32 @@ pub fn descriptor(comptime TraitT: type) Descriptor {
 ///         _ = options;
 ///     }
 ///     pub fn deinitRuntime(_: *Runtime) void {}
+///     pub fn captureTransactionState(_: *const Runtime) TransactionState {}
+///     pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
 ///     pub fn proxy(runtime: *Runtime) *Proxy { return runtime; }
 ///     pub fn proxyConst(runtime: *const Runtime) *const Proxy { return runtime; }
 /// };
 /// comptime assertBinding(Binding, Backend);
 /// ```
+///
+/// `initRuntime` must release all resources it acquired before returning an
+/// error. `TransactionState` captures only metadata outside page-cache state;
+/// restoring it must be infallible.
 pub fn assertBinding(comptime BindingT: type, comptime BackendT: type) void {
     interfaces.requiresTypeDeclaration(BindingT, "Runtime");
     interfaces.requiresTypeDeclaration(BindingT, "Proxy");
     interfaces.requiresTypeDeclaration(BindingT, "InitOptions");
+    interfaces.requiresTypeDeclaration(BindingT, "TransactionState");
     interfaces.requiresErrorDeclaration(BindingT, "Error");
 
     const Runtime = BindingT.Runtime;
     const Proxy = BindingT.Proxy;
     const InitOptions = BindingT.InitOptions;
+    const TransactionState = BindingT.TransactionState;
     const Error = BindingT.Error;
+    if (@typeInfo(Error).error_set == null) {
+        @compileError("Pages component binding Error cannot be anyerror");
+    }
     const options_info = @typeInfo(InitOptions);
     if (options_info != .@"struct" or options_info.@"struct".is_tuple) {
         @compileError("Pages component binding InitOptions must be a named struct");
@@ -142,6 +154,16 @@ pub fn assertBinding(comptime BindingT: type, comptime BackendT: type) void {
         fn (*Runtime, *BackendT, PageKindRange, InitOptions) Error!void,
     );
     interfaces.requiresFnSignature(BindingT, "deinitRuntime", fn (*Runtime) void);
+    interfaces.requiresFnSignature(
+        BindingT,
+        "captureTransactionState",
+        fn (*const Runtime) TransactionState,
+    );
+    interfaces.requiresFnSignature(
+        BindingT,
+        "restoreTransactionState",
+        fn (*Runtime, TransactionState) void,
+    );
     interfaces.requiresFnSignature(BindingT, "proxy", fn (*Runtime) *Proxy);
     interfaces.requiresFnSignature(BindingT, "proxyConst", fn (*const Runtime) *const Proxy);
 }

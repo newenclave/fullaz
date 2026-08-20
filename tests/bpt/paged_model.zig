@@ -1127,6 +1127,21 @@ test "InodeImpl: insertChild and getKey/getChild" {
     try std.testing.expectEqual(@as(u32, 100), child_id);
 }
 
+test "InodeImpl: fresh insertion does not require a scratch frame" {
+    const allocator = std.testing.allocator;
+    var ctx = try TestContext(4096, 1).init(allocator);
+    defer ctx.deinit();
+
+    const accessor = ctx.accessor();
+    var inode = try accessor.createInode();
+    defer accessor.deinitInode(inode);
+
+    try inode.insertChild(0, "key", 100);
+    try std.testing.expectEqual(@as(usize, 1), try inode.size());
+    try std.testing.expectEqualStrings("key", try inode.getKey(0));
+    try std.testing.expectEqual(@as(u32, 100), try inode.getChild(0));
+}
+
 test "InodeImpl: insert multiple children and verify order" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);

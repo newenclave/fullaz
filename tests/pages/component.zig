@@ -16,6 +16,7 @@ fn TestBinding(comptime BackendT: type) type {
         pub const InitOptions = struct {
             value: u32 = 0,
         };
+        pub const TransactionState = Proxy;
         pub const Error = error{InvalidPageKinds};
 
         pub fn initRuntime(
@@ -31,6 +32,14 @@ fn TestBinding(comptime BackendT: type) type {
 
         pub fn deinitRuntime(runtime: *Runtime) void {
             runtime.proxy_value.value = 0;
+        }
+
+        pub fn captureTransactionState(runtime: *const Runtime) TransactionState {
+            return runtime.proxy_value;
+        }
+
+        pub fn restoreTransactionState(runtime: *Runtime, state: TransactionState) void {
+            runtime.proxy_value = state;
         }
 
         pub fn proxy(runtime: *Runtime) *Proxy {

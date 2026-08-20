@@ -141,6 +141,10 @@ pub fn build(b: *std.Build) void {
             .source = "tests/compile_errors/pages/bpt_unknown_option.zig",
             .expected = "Unknown pages.bpt option: leaf_page_kind",
         },
+        .{
+            .source = "tests/compile_errors/pages/binding_anyerror.zig",
+            .expected = "Pages component binding Error cannot be anyerror",
+        },
     }) |fixture| {
         addCompileErrorFixture(
             b,
