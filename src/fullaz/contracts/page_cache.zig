@@ -12,6 +12,7 @@ pub fn requiresHandle(comptime T: type) void {
     const Error = T.Error;
     const Pid = T.Pid;
     const LayoutLock = T.LayoutLock;
+    requiresFnSignature(T, "deinit", fn (*T) void);
     requiresFnSignature(T, "markDirty", fn (*T) Error!void);
     requiresFnSignature(T, "pid", fn (*const T) Error!Pid);
     requiresFnSignature(T, "data", fn (*const T) Error![]const u8);
@@ -26,6 +27,7 @@ pub fn requiresPageCache(comptime T: type) void {
     requiresErrorDeclaration(T, "Error");
     requiresTypeDeclaration(T, "Handle");
     requiresTypeDeclaration(T, "Pid");
+    requiresTypeDeclaration(T, "UnderlyingDevice");
     const Error = T.Error;
     const Handle = T.Handle;
 
