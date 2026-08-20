@@ -45,18 +45,21 @@ pub fn Reader(
     const DataPageConst = DataPage(Format).View(true);
     const BloomBits = core.bitset.BitSet(u64, Format.Endian);
     const Location = extern struct { offset: PackedOffset, length: PackedOffset };
+
     const IndexStorage = struct {
+        const Self = @This();
         pub const PageId = Format.PageId;
         pub const Error = errors.IndexStorage;
         root: ?PageId,
-        pub fn getRoot(self: *const @This()) ?PageId {
+        pub fn getRoot(self: *const Self) ?PageId {
             return self.root;
         }
-        pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
+        pub fn setRoot(self: *Self, root: ?PageId) Error!void {
             self.root = root;
         }
-        pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
+        pub fn destroyPage(_: Self, _: PageId) Error!void {}
     };
+
     const LogBlock = struct {
         pub const BlockId = Format.PageId;
         pub const Error = LogT.Error || errors.IndexLogBlock;

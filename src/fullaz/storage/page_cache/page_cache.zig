@@ -317,12 +317,11 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
 
         pub fn create(self: *Self) Error!Handle {
             const ff = try self.acquireFrame();
+            errdefer self.policy.pushFree(ff);
+            try self.frames_cache.ensureUnusedCapacity(1);
             ff.frame_type = .dirty;
 
-            ff.pid = self.device.appendBlock() catch |err| {
-                self.policy.pushFree(ff);
-                return err;
-            };
+            ff.pid = try self.device.appendBlock();
 
             // New page, zeroed
             @memset(ff.data, 0);
@@ -330,12 +329,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                 self.appended_in_batch += 1;
             }
             self.policy.pushHead(ff);
-            errdefer {
-                self.policy.unlink(ff);
-                self.policy.pushFree(ff);
-                // Note: block is already appended to device, can't easily undo
-            }
-            try self.frames_cache.put(ff.pid, ff);
+            self.frames_cache.putAssumeCapacityNoClobber(ff.pid, ff);
             return PageHandle.init(ff);
         }
 
@@ -347,6 +341,11 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                 }
             }
             return count;
+        }
+
+        pub fn isPinned(self: *const Self, pid: Pid) bool {
+            const frame = self.frames_cache.get(pid) orelse return false;
+            return frame.isPinned();
         }
 
         pub fn flush(self: *Self, pid: Pid) Error!void {

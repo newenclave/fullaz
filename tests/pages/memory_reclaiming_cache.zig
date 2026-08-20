@@ -105,6 +105,27 @@ test "Pages: memory reclaiming cache frees pages without allocating" {
     try std.testing.expectError(error.PageNotAllocated, cache.free(std.math.maxInt(u32)));
 }
 
+test "Pages: memory reclaiming cache rejects pinned and freed pages" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCache(Device);
+    const Cache = fullaz.pages.MemoryReclaimingCache(InnerCache);
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var inner = try InnerCache.init(&device, std.testing.allocator, 2);
+    defer inner.deinit();
+    var cache = Cache.init(std.testing.allocator, &inner);
+    defer cache.deinit();
+
+    var handle = try cache.create();
+    const page_id = try handle.pid();
+    try std.testing.expectError(error.PageStillPinned, cache.free(page_id));
+    handle.deinit();
+
+    try cache.free(page_id);
+    try std.testing.expectError(error.PageNotAllocated, cache.fetch(page_id));
+}
+
 test "Pages: memory reclaiming cache reuses pages in LIFO order and zeroes them" {
     const Device = fullaz.device.MemoryBlock(u32);
     const InnerCache = fullaz.storage.page_cache.PageCache(Device);

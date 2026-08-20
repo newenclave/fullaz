@@ -2,7 +2,7 @@ const std = @import("std");
 const page_cache_contract = @import("../contracts/page_cache.zig");
 
 pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
-    comptime page_cache_contract.requiresPageCache(InnerCacheT);
+    comptime page_cache_contract.requiresPinAwarePageCache(InnerCacheT);
 
     return struct {
         const Self = @This();
@@ -16,6 +16,7 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
                 PageAlreadyFree,
                 PageIdExhausted,
                 PageNotAllocated,
+                PageStillPinned,
             };
 
         allocator: std.mem.Allocator,
@@ -41,6 +42,9 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
         }
 
         pub fn fetch(self: *Self, page_id: Pid) Error!Handle {
+            if (std.mem.indexOfScalar(Pid, self.free_pages.items, page_id) != null) {
+                return Error.PageNotAllocated;
+            }
             return self.inner.fetch(page_id);
         }
 
@@ -80,6 +84,9 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
             }
             if (std.mem.indexOfScalar(Pid, self.free_pages.items, page_id) != null) {
                 return Error.PageAlreadyFree;
+            }
+            if (self.inner.isPinned(page_id)) {
+                return Error.PageStillPinned;
             }
 
             std.debug.assert(self.free_pages.items.len < self.free_pages.capacity);

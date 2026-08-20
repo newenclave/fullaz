@@ -386,6 +386,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 }
             } else {
                 var leaf = try accessor.createLeaf();
+                errdefer accessor.destroy(leaf.id()) catch {};
                 defer accessor.deinitLeaf(leaf);
                 try leaf.insertValue(0, key, value);
                 //std.debug.print("Created leaf node with id: {}\n", .{leafId.id()});
@@ -531,6 +532,7 @@ pub fn Bpt(comptime ModelT: type) type {
                         break :blk try root_inode.getChild(0);
                     };
                     if (child_id) |id| {
+                        try self.setChildParent(id, null);
                         try accessor.setRoot(id);
                         try accessor.destroy(root_id);
                     }
@@ -1540,7 +1542,7 @@ pub fn Bpt(comptime ModelT: type) type {
             try inode.updateChild(b, child_a);
         }
 
-        fn setChildParent(self: *Self, child_id: NodeIdType, parent_id: NodeIdType) Error!void {
+        fn setChildParent(self: *Self, child_id: NodeIdType, parent_id: ?NodeIdType) Error!void {
             const accessor = self.model.accessor();
             if (try accessor.loadInode(child_id)) |child_inode_const| {
                 defer accessor.deinitInode(child_inode_const);

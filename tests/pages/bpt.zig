@@ -169,6 +169,46 @@ test "Pages: paged BPT binding initializes a typed runtime in place" {
     try std.testing.expect(Binding.proxyConst(runtime_const) == &runtime.tree);
 }
 
+test "Pages: paged BPT reclaims the first leaf after a failed insert" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCache(Device);
+    const Cache = fullaz.pages.MemoryReclaimingCache(InnerCache);
+    const Backend = TestBackend(Cache);
+    const Trait = fullaz.pages.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 4,
+        .maximum_value_size = 16,
+    }).Trait;
+    const Binding = Trait.Binding(Backend);
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var inner = try InnerCache.init(&device, std.testing.allocator, 2);
+    defer inner.deinit();
+    var cache = Cache.init(std.testing.allocator, &inner);
+    defer cache.deinit();
+    var backend = Backend{ .cache_ptr = &cache };
+    var runtime: Binding.Runtime = undefined;
+    try Binding.initRuntime(
+        &runtime,
+        &backend,
+        .{ .base = 0x0100, .count = 2 },
+        .{},
+    );
+    defer Binding.deinitRuntime(&runtime);
+
+    try std.testing.expectError(error.KeyTooLarge, runtime.tree.insert("oversized", "value"));
+    try std.testing.expectEqual(null, runtime.manager.getRoot());
+    try std.testing.expectEqualSlices(u32, &.{0}, cache.free_pages.items);
+
+    try std.testing.expect(try runtime.tree.insert("key", "value"));
+    try std.testing.expectEqual(@as(u32, 0), runtime.manager.getRoot().?);
+    try std.testing.expectEqual(@as(usize, 0), cache.free_pages.items.len);
+    try std.testing.expectEqual(@as(usize, 1), device.blocksCount());
+}
+
 test "Pages: paged BPT binding requires and copies non-void compare context" {
     const Device = fullaz.device.MemoryBlock(u32);
     const InnerCache = fullaz.storage.page_cache.PageCache(Device);

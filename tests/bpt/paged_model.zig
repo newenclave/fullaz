@@ -210,6 +210,18 @@ fn checkRootHeightReduction(removed_key: []const u8) !void {
     try std.testing.expect(try tree.remove(removed_key));
     try std.testing.expect(manager.root != inode_root);
     try std.testing.expectEqual(@as(usize, 2), manager.destroyed_pages);
+
+    const promoted_root = manager.root.?;
+    const accessor = model.accessor();
+    if (try accessor.loadLeaf(promoted_root)) |leaf| {
+        defer accessor.deinitLeaf(leaf);
+        try std.testing.expectEqual(null, leaf.getParent());
+    } else if (try accessor.loadInode(promoted_root)) |inode| {
+        defer accessor.deinitInode(inode);
+        try std.testing.expectEqual(null, inode.getParent());
+    } else {
+        return error.TestUnexpectedResult;
+    }
 }
 
 fn checkInodeMergeOrdering(descending: bool) !void {

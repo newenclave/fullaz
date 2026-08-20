@@ -125,6 +125,23 @@ test "PageCache: create allocates new page" {
     }
 }
 
+test "PageCache: create reserves the frame map before appending" {
+    const allocator = testing.allocator;
+    const Device = MemoryDevice(u32);
+    var device = try Device.init(allocator, 256);
+    defer device.deinit();
+
+    var failing = testing.FailingAllocator.init(allocator, .{});
+    var cache = try PageCache(Device).init(&device, failing.allocator(), 4);
+    defer cache.deinit();
+
+    const available_before = cache.availableFrames();
+    failing.fail_index = failing.alloc_index;
+    try testing.expectError(error.OutOfMemory, cache.create());
+    try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    try testing.expectEqual(available_before, cache.availableFrames());
+}
+
 test "PageCache: markDirty and flush" {
     const allocator = testing.allocator;
     var device = try MemoryDevice(u32).init(allocator, 256);
