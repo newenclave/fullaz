@@ -135,6 +135,36 @@ test "Bpt paged: Create a tree" {
     //tree.insert("hello", "world");
 }
 
+test "Pages: paged BPT rejects invalid scalar settings" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+    const Settings = bpt.models.paged.Settings;
+
+    var store_mgr = NoneStorageManager{};
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+
+    const invalid_settings = [_]Settings{
+        .{ .leaf_page_kind = 7, .inode_page_kind = 7 },
+        .{ .maximum_key_size = std.math.maxInt(usize), .maximum_value_size = 1 },
+        .{ .maximum_key_size = @as(usize, std.math.maxInt(u16)) + 1, .maximum_value_size = 0 },
+        .{ .maximum_key_size = std.math.maxInt(u16), .maximum_value_size = 0 },
+        .{ .maximum_key_size = std.math.maxInt(u16) - 3, .maximum_value_size = 0 },
+    };
+    for (invalid_settings) |settings| {
+        const available_before = cache.availableFrames();
+        try std.testing.expectError(
+            error.InvalidSettings,
+            BptModel.init(&cache, &store_mgr, settings, {}),
+        );
+        try std.testing.expectEqual(available_before, cache.availableFrames());
+    }
+}
+
 test "test models functionality" {
     const allocator = std.testing.allocator;
     var ctx = try TestContext(4096, 8).init(allocator);
@@ -2311,7 +2341,7 @@ test "Bpt/paged Remove random values" {
     const random = prng.random();
 
     const allocator = std.testing.allocator;
-    var ctx = try TestContext(4096 / 6, 32).init(allocator);
+    var ctx = try TestContext(4096 / 4, 32).init(allocator);
     defer ctx.deinit();
     var tree = ctx.createTree();
 
@@ -2382,7 +2412,7 @@ test "Bpt/paged Remove random values banch operations" {
     const random = prng.random();
 
     const allocator = std.testing.allocator;
-    var ctx = try TestContext(4096 / 6, 16).init(allocator);
+    var ctx = try TestContext(4096 / 4, 16).init(allocator);
     defer ctx.deinit();
     var tree = ctx.createTree();
 

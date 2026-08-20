@@ -649,6 +649,29 @@ pub fn PagedModel(
                 return Error.InvalidSettings;
             }
 
+            var scratch = try device.getTemporaryPage();
+            defer scratch.deinit();
+            const scratch_data = try scratch.dataMut();
+            const minimum_page_bytes = BptPage.PageViewType.header_size + @max(
+                @sizeOf(BptPage.LeafSubheader),
+                @sizeOf(BptPage.InodeSubheader),
+            );
+            if (scratch_data.len < minimum_page_bytes or scratch_data.len > std.math.maxInt(u16)) {
+                return Error.InvalidSettings;
+            }
+
+            var leaf = BptPage.LeafSubheaderView.init(scratch_data);
+            leaf.formatPage(settings.leaf_page_kind, 0, 0) catch return Error.InvalidSettings;
+            if ((leaf.capacityFor(maximum_leaf_content) catch return Error.InvalidSettings) < 3) {
+                return Error.InvalidSettings;
+            }
+
+            var inode = BptPage.InodeSubheaderView.init(scratch_data);
+            inode.formatPage(settings.inode_page_kind, 0, 0) catch return Error.InvalidSettings;
+            if ((inode.capacityFor(settings.maximum_key_size) catch return Error.InvalidSettings) < 3) {
+                return Error.InvalidSettings;
+            }
+
             const context = Context{
                 .cache = device,
                 .storage_mgr = storage_mgr,
