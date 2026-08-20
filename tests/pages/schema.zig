@@ -45,3 +45,27 @@ test "Pages: schema add is immutable and assigns consecutive page kinds" {
         Two.fields[1].page_kinds,
     );
 }
+
+test "Pages: schema lookup preserves exact component metadata" {
+    const FirstTrait = TestTrait("test.first", &.{ "leaf", "inode" });
+    const SecondTrait = TestTrait("test.second", &.{"data"});
+    const Schema = pages.Schema(.{ .page_id = u32 })
+        .add("index", .{ .Trait = FirstTrait })
+        .add("jobs", .{ .Trait = SecondTrait });
+
+    try std.testing.expect(Schema.contains("index"));
+    try std.testing.expect(Schema.contains("jobs"));
+    try std.testing.expect(!Schema.contains("missing"));
+    try std.testing.expectEqual(@as(usize, 0), Schema.indexOf("index"));
+    try std.testing.expectEqual(@as(usize, 1), Schema.indexOf("jobs"));
+    try std.testing.expect(Schema.descriptor("index").Trait == FirstTrait);
+    try std.testing.expect(Schema.trait("jobs") == SecondTrait);
+    try std.testing.expectEqual(
+        pages.PageKindRange{ .base = 0x0100, .count = 2 },
+        Schema.pageKinds("index"),
+    );
+    try std.testing.expectEqual(
+        pages.PageKindRange{ .base = 0x0102, .count = 1 },
+        Schema.pageKinds("jobs"),
+    );
+}

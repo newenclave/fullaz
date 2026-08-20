@@ -12,51 +12,82 @@ pub const Field = struct {
 
 fn schemaFromFields(comptime PageIdT: type, comptime configured_fields: anytype) type {
     const fields_info = @typeInfo(@TypeOf(configured_fields));
-    const field_count = switch (fields_info) {
-        .array => |array| blk: {
+    switch (fields_info) {
+        .array => |array| {
             if (array.child != Field) {
                 @compileError("Pages Schema fields must be Field values");
             }
-            break :blk array.len;
         },
         else => @compileError("Pages Schema fields must be an array"),
-    };
+    }
 
     return struct {
         pub const PageId = PageIdT;
         pub const fields = configured_fields;
 
+        pub fn contains(comptime name: []const u8) bool {
+            inline for (configured_fields) |field| {
+                if (comptime std.mem.eql(u8, name, field.name)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        pub fn indexOf(comptime name: []const u8) usize {
+            inline for (configured_fields, 0..) |field, index| {
+                if (comptime std.mem.eql(u8, name, field.name)) {
+                    return index;
+                }
+            }
+            @compileError("Unknown pages Schema component: " ++ name);
+        }
+
+        pub fn descriptor(comptime name: []const u8) component.Descriptor {
+            const index = comptime indexOf(name);
+            return configured_fields[index].descriptor;
+        }
+
+        pub fn trait(comptime name: []const u8) type {
+            return descriptor(name).Trait;
+        }
+
+        pub fn pageKinds(comptime name: []const u8) component.PageKindRange {
+            const index = comptime indexOf(name);
+            return configured_fields[index].page_kinds;
+        }
+
         pub fn add(
             comptime name: []const u8,
-            comptime descriptor: component.Descriptor,
+            comptime new_descriptor: component.Descriptor,
         ) type {
             validateName(name);
-            comptime component.assertTrait(descriptor.Trait);
+            comptime component.assertTrait(new_descriptor.Trait);
             inline for (configured_fields) |field| {
                 if (std.mem.eql(u8, name, field.name)) {
                     @compileError("Duplicate pages Schema component: " ++ name);
                 }
             }
 
-            const base: u32 = if (field_count == 0)
+            const base: u32 = if (configured_fields.len == 0)
                 first_component_page_kind
             else
-                configured_fields[field_count - 1].page_kinds.endExclusive();
+                configured_fields[configured_fields.len - 1].page_kinds.endExclusive();
             const available: usize = @as(usize, reserved_page_kind) - @as(usize, base);
-            if (descriptor.Trait.page_kind_count > available) {
+            if (new_descriptor.Trait.page_kind_count > available) {
                 @compileError("Pages Schema page-kind space exhausted");
             }
 
-            var next_fields: [field_count + 1]Field = undefined;
+            var next_fields: [configured_fields.len + 1]Field = undefined;
             inline for (configured_fields, 0..) |field, index| {
                 next_fields[index] = field;
             }
-            next_fields[field_count] = .{
+            next_fields[configured_fields.len] = .{
                 .name = name,
-                .descriptor = descriptor,
+                .descriptor = new_descriptor,
                 .page_kinds = .{
                     .base = @intCast(base),
-                    .count = @intCast(descriptor.Trait.page_kind_count),
+                    .count = @intCast(new_descriptor.Trait.page_kind_count),
                 },
             };
             return schemaFromFields(PageIdT, next_fields);

@@ -88,6 +88,30 @@ pub fn build(b: *std.Build) void {
     //const run_exe_tests = b.addRunArtifact(exe_tests);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
+    const pages_compile_errors_step = b.step(
+        "test-pages-compile-errors",
+        "Check pages compile-time diagnostics",
+    );
+    for ([_]CompileErrorFixture{
+        .{
+            .source = "tests/compile_errors/pages/duplicate_component.zig",
+            .expected = "Duplicate pages Schema component: index",
+        },
+        .{
+            .source = "tests/compile_errors/pages/unknown_component.zig",
+            .expected = "Unknown pages Schema component: missing",
+        },
+    }) |fixture| {
+        addCompileErrorFixture(
+            b,
+            pages_compile_errors_step,
+            mod,
+            target,
+            optimize,
+            fixture,
+        );
+    }
+    test_step.dependOn(pages_compile_errors_step);
     //test_step.dependOn(&run_exe_tests.step);
 
     // Add install-tests step for debugging
@@ -267,6 +291,30 @@ const Demo = struct {
     web_dir: []const u8,
     web_index: []const u8,
 };
+
+const CompileErrorFixture = struct {
+    source: []const u8,
+    expected: []const u8,
+};
+
+fn addCompileErrorFixture(
+    b: *std.Build,
+    step: *std.Build.Step,
+    fullaz: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    fixture: CompileErrorFixture,
+) void {
+    const fixture_module = b.createModule(.{
+        .root_source_file = b.path(fixture.source),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "fullaz", .module = fullaz }},
+    });
+    const compile = b.addTest(.{ .root_module = fixture_module });
+    compile.expect_errors = .{ .contains = fixture.expected };
+    step.dependOn(&compile.step);
+}
 
 fn applyTestFilter(b: *std.Build, compile: *std.Build.Step.Compile, filter: ?[]const u8) void {
     const wanted = filter orelse return;
