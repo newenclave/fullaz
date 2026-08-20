@@ -74,6 +74,7 @@ fn isKnownOption(comptime name: []const u8) bool {
 }
 
 pub fn bpt(comptime options: anytype) component.Descriptor {
+    @setEvalBranchQuota(20_000);
     const OptionsT = @TypeOf(options);
     const options_info = @typeInfo(OptionsT);
     if (options_info != .@"struct" or options_info.@"struct".is_tuple) {

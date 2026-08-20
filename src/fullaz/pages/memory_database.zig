@@ -5,6 +5,7 @@ const page_cache = @import("../storage/page_cache/page_cache.zig");
 const MemoryReclaimingCache = @import("memory_reclaiming_cache.zig").MemoryReclaimingCache;
 
 fn componentBindings(comptime SchemaT: type, comptime BackendT: type) [SchemaT.fields.len]type {
+    @setEvalBranchQuota(100_000);
     var bindings: [SchemaT.fields.len]type = undefined;
     inline for (SchemaT.fields, 0..) |field, index| {
         bindings[index] = component.bindingFor(field.descriptor, BackendT);
@@ -174,10 +175,21 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
             return bindingType(name).Runtime;
         }
 
-        pub fn init(allocator: std.mem.Allocator, options: InitOptions) Error!Self {
-            if (comptime SchemaT.fields.len != 0) {
-                @compileError("MemoryDatabase component initialization is not implemented yet");
+        fn proxyType(comptime name: []const u8) type {
+            return bindingType(name).Proxy;
+        }
+
+        fn deinitComponentPrefix(core: *Core, initialized_count: usize) void {
+            inline for (0..SchemaT.fields.len) |reverse_index| {
+                const index = SchemaT.fields.len - 1 - reverse_index;
+                if (index < initialized_count) {
+                    const field = SchemaT.fields[index];
+                    bindings[index].deinitRuntime(&@field(core.components, field.name));
+                }
             }
+        }
+
+        pub fn init(allocator: std.mem.Allocator, options: InitOptions) Error!Self {
             if (options.cache_frames == 0) {
                 return Error.InvalidCacheFrames;
             }
@@ -194,15 +206,42 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
             );
             errdefer core.raw_cache.deinit();
             core.cache = Cache.init(allocator, &core.raw_cache);
+            errdefer core.cache.deinit();
             core.backend = Backend.init(allocator, &core.cache);
-            core.components = .{};
+            core.components = undefined;
+
+            var initialized_components: usize = 0;
+            errdefer deinitComponentPrefix(core, initialized_components);
+            inline for (SchemaT.fields, 0..) |field, index| {
+                try bindings[index].initRuntime(
+                    &@field(core.components, field.name),
+                    &core.backend,
+                    field.page_kinds,
+                    @field(options.components, field.name),
+                );
+                initialized_components = index + 1;
+            }
 
             return .{ .core_ = core };
+        }
+
+        pub fn get(self: *Self, comptime name: []const u8) *proxyType(name) {
+            const Binding = bindingType(name);
+            const runtime: *runtimeType(name) = &@field(self.core_.components, name);
+            return Binding.proxy(runtime);
+        }
+
+        pub fn getConst(self: *const Self, comptime name: []const u8) *const proxyType(name) {
+            const Binding = bindingType(name);
+            const core: *const Core = self.core_;
+            const runtime: *const runtimeType(name) = &@field(core.components, name);
+            return Binding.proxyConst(runtime);
         }
 
         pub fn deinit(self: *Self) void {
             const core = self.core_;
             const allocator = core.allocator;
+            deinitComponentPrefix(core, SchemaT.fields.len);
             core.cache.deinit();
             core.raw_cache.deinit();
             core.device.deinit();
