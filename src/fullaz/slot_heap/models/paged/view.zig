@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const errors = @import("../../../core/errors.zig");
 const header = @import("../../../page/header.zig");
 const slot_heap_page = @import("../../../page/slot_heap.zig");
@@ -144,15 +145,19 @@ pub fn View(
             }
 
             const slot_dir = try self.slotsDir();
-            try slot_dir.validate();
-            const entry_count = slot_dir.entries().len;
-            var i: usize = 0;
-            while (i < entry_count) : (i += 1) {
-                if ((try slot_dir.get(i)).len < key_size) {
-                    return ErrorSet.BadData;
+            if (build_options.full_validation) {
+                try slot_dir.validate();
+                const entry_count = slot_dir.entries().len;
+                var i: usize = 0;
+                while (i < entry_count) : (i += 1) {
+                    if ((try slot_dir.get(i)).len < key_size) {
+                        return ErrorSet.BadData;
+                    }
                 }
+                _ = try slot_dir.usedBytes();
+            } else {
+                try slot_dir.validateStructural();
             }
-            _ = try slot_dir.usedBytes();
         }
 
         pub fn header(self: *const Self) *const HeaderView.PageHeader {
@@ -228,7 +233,11 @@ pub fn View(
                 return ErrorSet.NotEnoughSpace;
             }
             var slot_dir = try self.slotsDirMut();
-            try slot_dir.validate();
+            if (build_options.full_validation) {
+                try slot_dir.validate();
+            } else {
+                try slot_dir.validateStructural();
+            }
             const index = slot_dir.entries().len;
             const bytes = try slot_dir.reserveGetAt(index, slot_len);
             @memcpy(bytes[0..key.len], key);
@@ -374,17 +383,19 @@ pub fn View(
             if (try slot_dir.slotSize() != expected_slot_size) {
                 return ErrorSet.BadData;
             }
-            const count = try slot_dir.size();
-            const slot_capacity = try slot_dir.capacity();
-            var i: usize = 0;
-            while (i < slot_capacity) : (i += 1) {
-                if ((try slot_dir.isSet(i)) != (i < count)) {
-                    return ErrorSet.BadData;
+            if (build_options.full_validation) {
+                const count = try slot_dir.size();
+                const slot_capacity = try slot_dir.capacity();
+                var i: usize = 0;
+                while (i < slot_capacity) : (i += 1) {
+                    if ((try slot_dir.isSet(i)) != (i < count)) {
+                        return ErrorSet.BadData;
+                    }
                 }
-            }
-            i = 0;
-            while (i < count) : (i += 1) {
-                _ = try self.get(i);
+                i = 0;
+                while (i < count) : (i += 1) {
+                    _ = try self.get(i);
+                }
             }
         }
 
@@ -569,6 +580,7 @@ pub fn View(
 
     return struct {
         pub const Error = ErrorSet;
+        pub const full_validation_enabled = build_options.full_validation;
         pub const LocationType = Location;
         pub const FormatType = Format;
         pub const Leaf = LeafPageView;

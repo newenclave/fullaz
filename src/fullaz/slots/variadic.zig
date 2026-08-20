@@ -130,7 +130,7 @@ pub fn VariadicImpl(
             header_ptr.freed.set(0);
         }
 
-        pub fn validate(self: *const Self) Error!void {
+        pub fn validateStructural(self: *const Self) Error!void {
             const data_end = self.dataEnd();
             const header_ptr = self.header();
             const entry_count: usize = @intCast(header_ptr.entry_count.get());
@@ -156,6 +156,16 @@ pub fn VariadicImpl(
             {
                 return Error.InconsistentLayout;
             }
+        }
+
+        pub fn validate(self: *const Self) Error!void {
+            try self.validateStructural();
+
+            const data_end = self.dataEnd();
+            const header_ptr = self.header();
+            const entry_count: usize = @intCast(header_ptr.entry_count.get());
+            const free_begin: usize = @intCast(header_ptr.free_begin.get());
+            const free_end: usize = @intCast(header_ptr.free_end.get());
 
             const first_entry_ptr: [*]const Entry = @ptrCast(&self.body[@sizeOf(Header)]);
             const slot_entries = first_entry_ptr[0..entry_count];
@@ -365,7 +375,7 @@ pub fn VariadicImpl(
             if (hdr.free_end.get() == slot_offset) {
                 hdr.free_end.set(slot_offset + self.fixLength(slot_length));
             } else {
-                self.pushFreeSlot(slot_offset, slots[entry].length.get());
+                try self.pushFreeSlot(slot_offset, slots[entry].length.get());
             }
 
             slots[entry].offset.set(SLOT_INVALID);
@@ -396,7 +406,7 @@ pub fn VariadicImpl(
             if (hdr.free_end.get() == slot_offset) {
                 hdr.free_end.set(slot_offset + self.fixLength(slot_length));
             } else {
-                self.pushFreeSlot(slot_offset, slots[entry].length.get());
+                try self.pushFreeSlot(slot_offset, slots[entry].length.get());
             }
 
             try self.shrink(entry);
@@ -451,7 +461,7 @@ pub fn VariadicImpl(
                 if (hdr.free_end.get() == slot_offset) {
                     hdr.free_end.set(slot_offset + self.fixLength(slot.length.get()));
                 } else {
-                    self.pushFreeSlot(slot_offset, slot.length.get());
+                    try self.pushFreeSlot(slot_offset, slot.length.get());
                 }
                 removed += 1;
             }
@@ -476,7 +486,7 @@ pub fn VariadicImpl(
                 return .enough;
             }
 
-            if (self.findFreeSlot(@as(T, @intCast(fix_len)))) |_| {
+            if (try self.findFreeSlot(@as(T, @intCast(fix_len)))) |_| {
                 return .enough;
             }
 
@@ -511,7 +521,7 @@ pub fn VariadicImpl(
                 return .enough;
             }
 
-            if (self.findFreeSlot(@as(T, @intCast(fix_len)))) |_| {
+            if (try self.findFreeSlot(@as(T, @intCast(fix_len)))) |_| {
                 if (available >= @sizeOf(Entry)) {
                     return .enough;
                 }
@@ -731,7 +741,7 @@ pub fn VariadicImpl(
                 if (remain_slot_len >= @as(usize, @sizeOf(FreedEntry))) {
                     const new_free_offset = @as(T, @intCast(offset + fixed_len));
                     const new_free_length = @as(T, @intCast(remain_slot_len));
-                    self.pushFreeSlot(new_free_offset, new_free_length);
+                    try self.pushFreeSlot(new_free_offset, new_free_length);
                 }
 
                 return self.body[offset .. offset + len];
@@ -768,18 +778,18 @@ pub fn VariadicImpl(
             const available = self.availableSpace();
 
             if ((fix_len + entry_len) > available) {
-                if (self.findFreeSlot(@intCast(fix_len))) |fs_info| {
+                if (try self.findFreeSlot(@intCast(fix_len))) |fs_info| {
                     const fs = fs_info.ptr;
                     const slot_len = fs.length.get();
 
                     const slot_offset: usize = @intCast(fs_info.offset);
-                    self.popFreeSlot(fs);
+                    try self.popFreeSlot(fs_info);
 
                     const remain_slot_len = slot_len - @as(T, @intCast(fix_len));
                     if (remain_slot_len >= @as(T, @sizeOf(FreedEntry))) {
                         const new_free_offset = @as(T, @intCast(slot_offset)) + @as(T, @intCast(fix_len));
                         const new_free_length = remain_slot_len;
-                        self.pushFreeSlot(new_free_offset, new_free_length);
+                        try self.pushFreeSlot(new_free_offset, new_free_length);
                     }
 
                     const buf = self.body[slot_offset .. slot_offset + @as(usize, @intCast(slot_len))];
@@ -934,46 +944,78 @@ pub fn VariadicImpl(
         }
 
         // Free slots management
-        fn pushFreeSlot(self: *Self, offset: T, length: T) void {
+        fn pushFreeSlot(self: *Self, offset: T, length: T) Error!void {
             if (read_only) {
                 @compileError("Cannot push free slot into const buffer");
             }
+            const byte_offset: usize = @intCast(offset);
+            const data_end = self.dataEnd();
+            const free_end: usize = @intCast(self.header().free_end.get());
+            const fixed_length = checkedFixedLength(length) orelse {
+                return Error.InconsistentLayout;
+            };
+            if (offset == SLOT_INVALID or byte_offset < free_end or
+                byte_offset != core.memory.alignDown(usize, byte_offset, @as(usize, align_value)) or
+                fixed_length < @sizeOf(FreedEntry) or fixed_length > data_end -| byte_offset)
+            {
+                return Error.InconsistentLayout;
+            }
             var hdr = self.headerMut();
             const freed_head = hdr.freed.get();
+            const old_head_ptr: ?*FreedEntry = if (freed_head == SLOT_INVALID)
+                null
+            else
+                @constCast(try self.freeSlotAt(freed_head));
 
             var freed_entry: FreedEntry = .{};
             freed_entry.prev.set(0);
             freed_entry.next.set(freed_head);
-            freed_entry.length.set(self.fixLength(length));
+            freed_entry.length.set(@intCast(fixed_length));
 
-            const freed_offset_usize: usize = @intCast(offset);
-            const freed_entry_ptr: *FreedEntry = @ptrCast(&self.body[freed_offset_usize]);
+            const freed_entry_ptr: *FreedEntry = @ptrCast(&self.body[byte_offset]);
             freed_entry_ptr.* = freed_entry;
 
-            if (freed_head != 0) {
-                const old_head_ptr: *FreedEntry = @ptrCast(&self.body[@intCast(freed_head)]);
-                old_head_ptr.prev.set(offset);
+            if (old_head_ptr) |old_head| {
+                old_head.prev.set(offset);
             }
 
             hdr.freed.set(offset);
         }
 
-        fn popFreeSlot(self: *Self, fs: *const FreedEntry) void {
+        fn popFreeSlot(self: *Self, info: FreeSlotInfo) Error!void {
             if (read_only) {
                 @compileError("Cannot pop free slot from const buffer");
             }
+            const fs = info.ptr;
             var hdr = self.headerMut();
             const prev = fs.prev.get();
             const next = fs.next.get();
-            if (prev != SLOT_INVALID) {
-                const prev_ptr: *FreedEntry = @ptrCast(&self.body[@intCast(prev)]);
-                prev_ptr.next.set(next);
+            const prev_ptr: ?*FreedEntry = if (prev == SLOT_INVALID)
+                null
+            else
+                @constCast(try self.freeSlotAt(prev));
+            const next_ptr: ?*FreedEntry = if (next == SLOT_INVALID)
+                null
+            else
+                @constCast(try self.freeSlotAt(next));
+            if (prev_ptr) |previous| {
+                if (previous.next.get() != info.offset) {
+                    return Error.InconsistentLayout;
+                }
+            }
+            if (next_ptr) |following| {
+                if (following.prev.get() != info.offset) {
+                    return Error.InconsistentLayout;
+                }
+            }
+
+            if (prev_ptr) |previous| {
+                previous.next.set(next);
             } else {
                 hdr.freed.set(next);
             }
-            if (next != SLOT_INVALID) {
-                const next_ptr: *FreedEntry = @ptrCast(&self.body[@intCast(next)]);
-                next_ptr.prev.set(prev);
+            if (next_ptr) |following| {
+                following.prev.set(prev);
             }
         }
 
@@ -982,11 +1024,21 @@ pub fn VariadicImpl(
             offset: T,
         };
 
-        fn findFreeSlot(self: *const Self, needed: T) ?FreeSlotInfo {
+        fn findFreeSlot(self: *const Self, needed: T) Error!?FreeSlotInfo {
             const fixed_len = self.fixLength(needed);
             var current_offset = self.header().freed.get();
+            var previous_offset: T = SLOT_INVALID;
+            const max_free_nodes = self.dataEnd() / @sizeOf(FreedEntry);
+            var visited: usize = 0;
             while (current_offset != SLOT_INVALID) {
-                const current_ptr: *const FreedEntry = @ptrCast(&self.body[@intCast(current_offset)]);
+                visited += 1;
+                if (visited > max_free_nodes) {
+                    return Error.InconsistentLayout;
+                }
+                const current_ptr = try self.freeSlotAt(current_offset);
+                if (current_ptr.prev.get() != previous_offset) {
+                    return Error.InconsistentLayout;
+                }
                 const current_len = current_ptr.length.get();
                 if (current_len >= fixed_len) {
                     return .{
@@ -994,9 +1046,33 @@ pub fn VariadicImpl(
                         .offset = current_offset,
                     };
                 }
+                previous_offset = current_offset;
                 current_offset = current_ptr.next.get();
             }
             return null;
+        }
+
+        fn freeSlotAt(self: *const Self, offset: T) Error!*const FreedEntry {
+            const byte_offset: usize = @intCast(offset);
+            const data_end = self.dataEnd();
+            const free_end: usize = @intCast(self.header().free_end.get());
+            if (offset == SLOT_INVALID or byte_offset < free_end or
+                byte_offset > data_end -| @sizeOf(FreedEntry) or
+                byte_offset != core.memory.alignDown(usize, byte_offset, @as(usize, align_value)))
+            {
+                return Error.InconsistentLayout;
+            }
+            const entry: *const FreedEntry = @ptrCast(&self.body[byte_offset]);
+            const length: usize = @intCast(entry.length.get());
+            const fixed_length = checkedFixedLength(entry.length.get()) orelse {
+                return Error.InconsistentLayout;
+            };
+            if (length < @sizeOf(FreedEntry) or length != fixed_length or
+                length > data_end - byte_offset)
+            {
+                return Error.InconsistentLayout;
+            }
+            return entry;
         }
     };
 }

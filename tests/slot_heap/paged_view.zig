@@ -1,5 +1,19 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
+const validation_enabled = fullaz.slot_heap.models.paged.View(
+    u32,
+    u16,
+    .little,
+    true,
+).full_validation_enabled;
+
+fn expectFullValidationError(expected: anyerror, actual: anytype) !void {
+    if (validation_enabled) {
+        try std.testing.expectError(expected, actual);
+    } else {
+        try actual;
+    }
+}
 
 const MutableView = fullaz.slot_heap.models.paged.View(u32, u16, .little, false);
 const ConstView = fullaz.slot_heap.models.paged.View(u32, u16, .little, true);
@@ -69,7 +83,7 @@ test "SlotHeap paged view: leaf rejects freed directory holes" {
     var slots_dir = try leaf.slotsDirMut();
     try slots_dir.free(0);
 
-    try std.testing.expectError(error.BadData, leaf.validatePage(7, 31, 4, 9));
+    try expectFullValidationError(error.BadData, leaf.validatePage(7, 31, 4, 9));
 }
 
 test "SlotHeap paged view: leaf rejects corrupted variadic bounds" {
@@ -79,7 +93,10 @@ test "SlotHeap paged view: leaf rejects corrupted variadic bounds" {
     var slots_dir = try leaf.slotsDirMut();
     slots_dir.headerMut().entry_count.set(std.math.maxInt(u16));
 
-    try std.testing.expectError(error.InconsistentLayout, leaf.validatePage(7, 31, 4, 9));
+    try std.testing.expectError(
+        error.InconsistentLayout,
+        leaf.validatePage(7, 31, 4, 9),
+    );
 }
 
 test "SlotHeap paged view: leaf rejects invalid entry with forged length" {
@@ -91,7 +108,10 @@ test "SlotHeap paged view: leaf rejects invalid entry with forged length" {
     try slots_dir.free(0);
     slots_dir.entriesMut()[0].length.set(4);
 
-    try std.testing.expectError(error.InconsistentLayout, leaf.validatePage(7, 31, 4, 9));
+    try expectFullValidationError(
+        error.InconsistentLayout,
+        leaf.validatePage(7, 31, 4, 9),
+    );
 }
 
 test "SlotHeap paged view: leaf rejects overlapping payloads" {
@@ -103,7 +123,10 @@ test "SlotHeap paged view: leaf rejects overlapping payloads" {
     var slots_dir = try leaf.slotsDirMut();
     slots_dir.entriesMut()[1].offset = slots_dir.entries()[0].offset;
 
-    try std.testing.expectError(error.InconsistentLayout, leaf.validatePage(7, 31, 4, 9));
+    try expectFullValidationError(
+        error.InconsistentLayout,
+        leaf.validatePage(7, 31, 4, 9),
+    );
 }
 
 test "SlotHeap paged view: leaf rejects corrupted free-list head" {
@@ -115,7 +138,45 @@ test "SlotHeap paged view: leaf rejects corrupted free-list head" {
     var slots_dir = try leaf.slotsDirMut();
     slots_dir.headerMut().freed.set(slots_dir.entries()[0].offset.get());
 
-    try std.testing.expectError(error.InconsistentLayout, leaf.validatePage(7, 31, 4, 9));
+    try expectFullValidationError(
+        error.InconsistentLayout,
+        leaf.validatePage(7, 31, 4, 9),
+    );
+}
+
+test "SlotHeap paged view: structural free-list traversal rejects invalid links" {
+    var page: [256]u8 = undefined;
+    var leaf = MutableView.Leaf.init(&page);
+    try leaf.formatPage(31, 7, 4, 9);
+    _ = try leaf.append("k001", "first-value");
+    _ = try leaf.append("k002", "second-value");
+    var slots_dir = try leaf.slotsDirMut();
+    try slots_dir.free(0);
+    try slots_dir.free(1);
+
+    const head: usize = @intCast(slots_dir.header().freed.get());
+    std.mem.writeInt(u16, slots_dir.body[head + 2 ..][0..2], 1, .little);
+
+    if (validation_enabled) {
+        try std.testing.expectError(
+            error.InconsistentLayout,
+            leaf.validatePage(7, 31, 4, 9),
+        );
+    } else {
+        try leaf.validatePage(7, 31, 4, 9);
+    }
+    try std.testing.expectError(error.InconsistentLayout, leaf.canAppend(200));
+}
+
+test "SlotHeap paged view: mutation rejects an invalid persisted slot offset" {
+    var page: [256]u8 = undefined;
+    var leaf = MutableView.Leaf.init(&page);
+    try leaf.formatPage(31, 7, 4, 9);
+    _ = try leaf.append("k001", "value");
+    var slots_dir = try leaf.slotsDirMut();
+    slots_dir.entriesMut()[0].offset.set(2);
+
+    try std.testing.expectError(error.InconsistentLayout, leaf.removeLast());
 }
 
 test "SlotHeap paged view: inode entries use a dense fixed-slot heap" {
@@ -177,7 +238,7 @@ test "SlotHeap paged view: inode validation rejects sparse occupancy" {
     var slots_dir = try inode.slotsDirMut();
     try slots_dir.free(0);
 
-    try std.testing.expectError(error.BadData, inode.validatePage(11, 32, 4, 9));
+    try expectFullValidationError(error.BadData, inode.validatePage(11, 32, 4, 9));
 }
 
 test "SlotHeap paged view: inode rejects corrupted fixed-slot bounds" {
