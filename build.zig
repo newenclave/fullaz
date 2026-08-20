@@ -101,6 +101,26 @@ pub fn build(b: *std.Build) void {
             .source = "tests/compile_errors/pages/unknown_component.zig",
             .expected = "Unknown pages Schema component: missing",
         },
+        .{
+            .source = "tests/compile_errors/pages/missing_page_id.zig",
+            .expected = "Pages Schema options must declare page_id as a type",
+        },
+        .{
+            .source = "tests/compile_errors/pages/reserved_name.zig",
+            .expected = "Pages Schema component name uses a reserved $ path segment",
+        },
+        .{
+            .source = "tests/compile_errors/pages/missing_kind_name.zig",
+            .expected = "Pages component trait must declare kind_name: []const u8",
+        },
+        .{
+            .source = "tests/compile_errors/pages/duplicate_page_role.zig",
+            .expected = "Duplicate pages component page role: data",
+        },
+        .{
+            .source = "tests/compile_errors/pages/page_kind_exhaustion.zig",
+            .expected = "Pages component page_kind_count exceeds available page-kind space",
+        },
     }) |fixture| {
         addCompileErrorFixture(
             b,

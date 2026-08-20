@@ -63,6 +63,10 @@ pub fn assertTrait(comptime TraitT: type) void {
     if (TraitT.page_kind_count == 0) {
         @compileError("Pages component page_kind_count cannot be zero");
     }
+    const maximum_component_page_kinds = std.math.maxInt(PageKind) - 0x0100;
+    if (TraitT.page_kind_count > maximum_component_page_kinds) {
+        @compileError("Pages component page_kind_count exceeds available page-kind space");
+    }
     if (!@hasDecl(TraitT, "page_roles") or
         @TypeOf(TraitT.page_roles) != [TraitT.page_kind_count][]const u8)
     {
