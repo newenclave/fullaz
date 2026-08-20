@@ -940,10 +940,13 @@ pub fn Bpt(comptime ModelT: type) type {
 
                 if (try self.findRightSibling(parent_const.id(), leaf.id())) |right_id| {
                     if (try accessor.loadLeaf(right_id)) |right_sibling_const| {
-                        defer accessor.deinitLeaf(right_sibling_const);
-
-                        var right_sibling = right_sibling_const;
-                        if (try accessor.canMergeLeafs(leaf, &right_sibling)) {
+                        // we need to deinit leaf defore destroy
+                        const right_pos = blk: {
+                            defer accessor.deinitLeaf(right_sibling_const);
+                            var right_sibling = right_sibling_const;
+                            if (!try accessor.canMergeLeafs(leaf, &right_sibling)) {
+                                break :blk null;
+                            }
                             for (0..try right_sibling.size()) |i| {
                                 const out_key = try right_sibling.getKey(i);
                                 const out_value = try right_sibling.getValue(i);
@@ -961,11 +964,13 @@ pub fn Bpt(comptime ModelT: type) type {
                                     try next_leaf.setPrev(leaf.id());
                                 }
                             }
-                            const right_pos = try self.findChidIndexInParentId(parent_const.id(), right_id);
+                            break :blk try self.findChidIndexInParentId(parent_const.id(), right_id);
+                        };
+                        if (right_pos) |pos| {
                             var parent = parent_const;
-                            try self.swapChildren(&parent, right_pos - 1, right_pos);
+                            try self.swapChildren(&parent, pos - 1, pos);
                             try accessor.destroy(right_id);
-                            try parent.erase(right_pos - 1);
+                            try parent.erase(pos - 1);
                             return true;
                         }
                     }
@@ -1004,10 +1009,13 @@ pub fn Bpt(comptime ModelT: type) type {
 
                 if (try self.findLeftSibling(parent_const.id(), leaf.id())) |left_id| {
                     if (try accessor.loadLeaf(left_id)) |left_sibling_const| {
-                        defer accessor.deinitLeaf(left_sibling_const);
-
-                        var left_sibling = left_sibling_const;
-                        if (try accessor.canMergeLeafs(leaf, &left_sibling)) {
+                        // we need to deinit leaf defore destroy
+                        const left_pos = blk: {
+                            defer accessor.deinitLeaf(left_sibling_const);
+                            var left_sibling = left_sibling_const;
+                            if (!try accessor.canMergeLeafs(leaf, &left_sibling)) {
+                                break :blk null;
+                            }
                             for (0..try left_sibling.size()) |i| {
                                 const out_key = try left_sibling.getKey(i);
                                 const out_value = try left_sibling.getValue(i);
@@ -1025,10 +1033,12 @@ pub fn Bpt(comptime ModelT: type) type {
                                     try prev_leaf.setNext(leaf.id());
                                 }
                             }
-                            const left_pos = try self.findChidIndexInParentId(parent_const.id(), left_id);
+                            break :blk try self.findChidIndexInParentId(parent_const.id(), left_id);
+                        };
+                        if (left_pos) |pos| {
                             var parent = parent_const;
                             try accessor.destroy(left_id);
-                            try parent.erase(left_pos);
+                            try parent.erase(pos);
                             return true;
                         }
                     }

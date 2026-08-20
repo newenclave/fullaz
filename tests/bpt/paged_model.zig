@@ -176,6 +176,42 @@ fn checkBptLayoutSettings(
     try std.testing.expectEqual(available_before, cache.availableFrames());
 }
 
+fn checkRootHeightReduction(removed_key: []const u8) !void {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Manager = DestroyTrackingStorageManager(PageCache);
+    const BptModel = bpt.models.PagedModel(PageCache, Manager, keyCmp, void);
+
+    var device = try Device.init(allocator, 84);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+    var manager = Manager{ .cache = &cache };
+    var model = try BptModel.init(&cache, &manager, .{
+        .maximum_key_size = 8,
+        .maximum_value_size = 0,
+    }, {});
+    defer model.deinit();
+    var tree = bpt.Bpt(BptModel).init(&model, .force_split);
+    defer tree.deinit();
+
+    for ([_][]const u8{ "00000001", "00000002", "00000003", "00000004" }) |key| {
+        try std.testing.expect(try tree.insert(key, ""));
+    }
+    const inode_root = manager.root.?;
+    {
+        const accessor = model.accessor();
+        const inode = (try accessor.loadInode(inode_root)).?;
+        defer accessor.deinitInode(inode);
+        try std.testing.expectEqual(@as(usize, 1), try inode.size());
+    }
+
+    try std.testing.expect(try tree.remove(removed_key));
+    try std.testing.expect(manager.root != inode_root);
+    try std.testing.expectEqual(@as(usize, 2), manager.destroyed_pages);
+}
+
 test "Bpt paged: Create a tree" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
@@ -285,6 +321,14 @@ test "Pages: paged BPT releases an empty root before destroying it" {
     try std.testing.expect(try tree.remove("only"));
     try std.testing.expectEqual(null, manager.root);
     try std.testing.expectEqual(@as(usize, 1), manager.destroyed_pages);
+}
+
+test "Pages: paged BPT releases nodes while reducing root height" {
+    try checkRootHeightReduction("00000004");
+}
+
+test "Pages: paged BPT releases a right leaf before destroying it" {
+    try checkRootHeightReduction("00000001");
 }
 
 test "test models functionality" {
