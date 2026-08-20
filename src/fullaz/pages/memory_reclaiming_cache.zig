@@ -15,6 +15,7 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
             error{
                 PageAlreadyFree,
                 PageIdExhausted,
+                PageNotAllocated,
             };
 
         allocator: std.mem.Allocator,
@@ -22,6 +23,7 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
         free_pages: std.ArrayList(Pid) = .empty,
         physical_page_count: usize = 0,
 
+        /// Starts tracking a fresh inner cache whose persistent pages are created through this wrapper.
         pub fn init(allocator: std.mem.Allocator, inner: *InnerCacheT) Self {
             return .{
                 .allocator = allocator,
@@ -43,7 +45,36 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
         }
 
         pub fn create(self: *Self) Error!Handle {
-            return self.inner.create();
+            const next_page_id = std.math.cast(Pid, self.physical_page_count) orelse
+                return Error.PageIdExhausted;
+            if (next_page_id == std.math.maxInt(Pid)) {
+                return Error.PageIdExhausted;
+            }
+            const next_page_count = std.math.add(
+                usize,
+                self.physical_page_count,
+                1,
+            ) catch return Error.PageIdExhausted;
+            try self.free_pages.ensureTotalCapacity(self.allocator, next_page_count);
+
+            const handle = try self.inner.create();
+            self.physical_page_count = next_page_count;
+            return handle;
+        }
+
+        /// Records an unpinned persistent page for reuse without allocating.
+        pub fn free(self: *Self, page_id: Pid) Error!void {
+            const page_index = std.math.cast(usize, page_id) orelse
+                return Error.PageNotAllocated;
+            if (page_index >= self.physical_page_count) {
+                return Error.PageNotAllocated;
+            }
+            if (std.mem.indexOfScalar(Pid, self.free_pages.items, page_id) != null) {
+                return Error.PageAlreadyFree;
+            }
+
+            std.debug.assert(self.free_pages.items.len < self.free_pages.capacity);
+            self.free_pages.appendAssumeCapacity(page_id);
         }
 
         pub fn flush(self: *Self, page_id: Pid) Error!void {
