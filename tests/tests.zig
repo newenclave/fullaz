@@ -70,7 +70,9 @@ test {
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
     _ = @import("pages/component.zig");
+    _ = @import("pages/bpt.zig");
     _ = @import("pages/memory_reclaiming_cache.zig");
+    _ = @import("pages/memory_database.zig");
     _ = @import("pages/schema.zig");
     _ = @import("long_store.zig");
     _ = @import("free_list.zig");

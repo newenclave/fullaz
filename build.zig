@@ -121,6 +121,26 @@ pub fn build(b: *std.Build) void {
             .source = "tests/compile_errors/pages/page_kind_exhaustion.zig",
             .expected = "Pages component page_kind_count exceeds available page-kind space",
         },
+        .{
+            .source = "tests/compile_errors/pages/bpt_missing_compare.zig",
+            .expected = "Missing pages.bpt option: compare",
+        },
+        .{
+            .source = "tests/compile_errors/pages/bpt_fallible_compare.zig",
+            .expected = "pages.bpt compare has an invalid signature",
+        },
+        .{
+            .source = "tests/compile_errors/pages/bpt_zero_comparator_id.zig",
+            .expected = "pages.bpt comparator_id cannot be zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/bpt_zero_format_version.zig",
+            .expected = "pages.bpt format_version cannot be zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/bpt_unknown_option.zig",
+            .expected = "Unknown pages.bpt option: leaf_page_kind",
+        },
     }) |fixture| {
         addCompileErrorFixture(
             b,
