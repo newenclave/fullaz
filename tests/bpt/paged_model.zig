@@ -116,6 +116,34 @@ fn TestContext(comptime page_size: usize, comptime cache_frames: usize) type {
     };
 }
 
+fn checkBptLayoutSettings(
+    page_size: usize,
+    settings: bpt.models.paged.Settings,
+    valid: bool,
+) !void {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+
+    var store_mgr = NoneStorageManager{};
+    var device = try Device.init(allocator, page_size);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 2);
+    defer cache.deinit();
+
+    const available_before = cache.availableFrames();
+    if (valid) {
+        _ = try BptModel.init(&cache, &store_mgr, settings, {});
+    } else {
+        try std.testing.expectError(
+            error.InvalidSettings,
+            BptModel.init(&cache, &store_mgr, settings, {}),
+        );
+    }
+    try std.testing.expectEqual(available_before, cache.availableFrames());
+}
+
 test "Bpt paged: Create a tree" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
@@ -163,6 +191,23 @@ test "Pages: paged BPT rejects invalid scalar settings" {
         );
         try std.testing.expectEqual(available_before, cache.availableFrames());
     }
+}
+
+test "Pages: paged BPT validates physical page layouts" {
+    try checkBptLayoutSettings(8, .{}, false);
+    try checkBptLayoutSettings(@as(usize, std.math.maxInt(u16)) + 1, .{}, false);
+    try checkBptLayoutSettings(256, .{
+        .maximum_key_size = 8,
+        .maximum_value_size = 64,
+    }, false);
+    try checkBptLayoutSettings(251, .{
+        .maximum_key_size = 64,
+        .maximum_value_size = 0,
+    }, false);
+    try checkBptLayoutSettings(252, .{
+        .maximum_key_size = 64,
+        .maximum_value_size = 0,
+    }, true);
 }
 
 test "test models functionality" {
