@@ -18,7 +18,7 @@ pub fn Bpt(comptime ModelT: type) type {
         model: *ModelT,
         rebalance_policy: RebalancePolicy = .neighbor_share,
 
-        const Error = ModelT.Error || errors.BptError;
+        pub const Error = ModelT.Error || errors.BptError;
 
         const Self = @This();
         // model types
