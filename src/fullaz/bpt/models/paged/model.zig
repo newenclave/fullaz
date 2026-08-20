@@ -683,7 +683,7 @@ pub fn PagedModel(
             };
         }
 
-        pub fn deinit() void {
+        pub fn deinit(_: *Self) void {
             // nothing to yet
         }
 

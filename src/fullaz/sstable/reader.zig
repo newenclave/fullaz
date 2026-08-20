@@ -205,7 +205,7 @@ pub fn Reader(
         }
         fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
             self.tree.deinit();
-            IndexModel.deinit();
+            self.model.deinit();
             self.cache.deinit();
             switch (self.device) {
                 .memory => |*memory| {

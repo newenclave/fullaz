@@ -67,6 +67,7 @@ pub fn Directory(comptime PageCacheType: type) type {
             }
             var sm = DirSM{ .cache = self.cache, .root = self.root };
             var model = try Model.init(self.cache, &sm, settings, {});
+            defer model.deinit();
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
@@ -81,6 +82,7 @@ pub fn Directory(comptime PageCacheType: type) type {
             var sm = DirSM{ .cache = self.cache, .root = self.root };
 
             var model = try Model.init(self.cache, &sm, settings, {});
+            defer model.deinit();
 
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
@@ -94,6 +96,7 @@ pub fn Directory(comptime PageCacheType: type) type {
         pub fn update(self: *Self, name: []const u8, node: Inode) !bool {
             var sm = DirSM{ .cache = self.cache, .root = self.root };
             var model = try Model.init(self.cache, &sm, settings, {});
+            defer model.deinit();
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
@@ -107,6 +110,7 @@ pub fn Directory(comptime PageCacheType: type) type {
         pub fn remove(self: *Self, name: []const u8) !bool {
             var sm = DirSM{ .cache = self.cache, .root = self.root };
             var model = try Model.init(self.cache, &sm, settings, {});
+            defer model.deinit();
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
@@ -122,6 +126,7 @@ pub fn Directory(comptime PageCacheType: type) type {
         ) !void {
             var sm = DirSM{ .cache = self.cache, .root = self.root };
             var model = try Model.init(self.cache, &sm, settings, {});
+            defer model.deinit();
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 

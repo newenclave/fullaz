@@ -430,10 +430,17 @@ pub fn Bpt(comptime ModelT: type) type {
             if (accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
                 if (search.leaf) |leaf_const| {
-                    var leaf = leaf_const;
-                    defer accessor.deinitLeaf(leaf);
-                    if (search.found) {
+                    const removed = blk: {
+                        var leaf = leaf_const;
+                        defer accessor.deinitLeaf(leaf);
+                        if (!search.found) {
+                            break :blk false;
+                        }
                         try self.removeImpl(&leaf, search.position);
+                        break :blk true;
+                    };
+                    if (removed) {
+                        try self.fixEmptyRoot();
                         return true;
                     }
                 }
@@ -453,7 +460,6 @@ pub fn Bpt(comptime ModelT: type) type {
                 try self.fixParentIndex(leaf);
             }
             try self.leafHandleUnderflow(leaf, self.model.keyBorrowAsLike(&key));
-            try self.fixEmptyRoot();
         }
 
         fn inodeHandleUnderflow(self: *Self, inode: *InodeType, key: KeyLikeType) Error!void {
@@ -486,7 +492,6 @@ pub fn Bpt(comptime ModelT: type) type {
                 var parent = parent_const;
                 defer accessor.deinitInode(parent);
                 try self.inodeHandleUnderflow(&parent, key);
-                try self.fixEmptyRoot();
             }
         }
 
@@ -509,16 +514,24 @@ pub fn Bpt(comptime ModelT: type) type {
             const accessor = self.model.accessor();
             if (accessor.getRoot()) |root_id| {
                 if (try accessor.loadLeaf(root_id)) |root_leaf| {
-                    defer accessor.deinitLeaf(root_leaf);
-                    if (try root_leaf.size() == 0) {
+                    const empty = blk: {
+                        defer accessor.deinitLeaf(root_leaf);
+                        break :blk try root_leaf.size() == 0;
+                    };
+                    if (empty) {
                         try accessor.setRoot(null);
                         try accessor.destroy(root_id);
                     }
                 } else if (try accessor.loadInode(root_id)) |root_inode| {
-                    defer accessor.deinitInode(root_inode);
-                    if (try root_inode.size() == 0) {
-                        const child_id = try root_inode.getChild(0);
-                        try accessor.setRoot(child_id);
+                    const child_id = blk: {
+                        defer accessor.deinitInode(root_inode);
+                        if (try root_inode.size() != 0) {
+                            break :blk null;
+                        }
+                        break :blk try root_inode.getChild(0);
+                    };
+                    if (child_id) |id| {
+                        try accessor.setRoot(id);
                         try accessor.destroy(root_id);
                     }
                 }
