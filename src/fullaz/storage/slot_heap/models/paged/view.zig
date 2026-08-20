@@ -1,9 +1,9 @@
 const std = @import("std");
 const build_options = @import("build_options");
-const errors = @import("../../../core/errors.zig");
-const header = @import("../../../page/header.zig");
-const slot_heap_page = @import("../../../page/slot_heap.zig");
-const slots = @import("../../../slots/slots.zig");
+const errors = @import("../../../../core/errors.zig");
+const header = @import("../../../../page/header.zig");
+const slot_heap_page = @import("../../../../page/slot_heap.zig");
+const slots = @import("../../../../slots/slots.zig");
 
 pub fn View(
     comptime PageIdT: type,

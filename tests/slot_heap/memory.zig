@@ -5,8 +5,8 @@ fn compare(_: void, left: []const u8, right: []const u8) std.math.Order {
     return std.mem.order(u8, left, right);
 }
 
-const Model = fullaz.slot_heap.models.Memory(compare, void);
-const Heap = fullaz.slot_heap.Heap(Model);
+const Model = fullaz.storage.slot_heap.models.Memory(compare, void);
+const Heap = fullaz.storage.slot_heap.Heap(Model);
 
 const CheckSummary = struct {
     key: [4]u8,
@@ -138,7 +138,7 @@ fn initModel() !Model {
 }
 
 test "SlotHeap memory model satisfies the contract" {
-    comptime fullaz.slot_heap.models.interfaces.assertModel(Model);
+    comptime fullaz.storage.slot_heap.models.interfaces.assertModel(Model);
 }
 
 test "SlotHeap memory: empty top and pop fail" {

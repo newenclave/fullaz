@@ -1,7 +1,7 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
 
-const interfaces = fullaz.slot_heap.models.interfaces;
+const interfaces = fullaz.storage.slot_heap.models.interfaces;
 const WinnerChange = interfaces.WinnerChange;
 
 const MockError = error{Example};

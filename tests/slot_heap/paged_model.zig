@@ -11,7 +11,7 @@ const FsmModel = fullaz.storage.fsm.models.Memory(u32, u16);
 const Fsm = fullaz.storage.fsm.Fsm(FsmModel);
 const WideFsmModel = fullaz.storage.fsm.models.Memory(u32, u32);
 const WideFsm = fullaz.storage.fsm.Fsm(WideFsmModel);
-const TestLocation = fullaz.slot_heap.models.paged.View(u32, u16, .little, true).LocationType;
+const TestLocation = fullaz.storage.slot_heap.models.paged.View(u32, u16, .little, true).LocationType;
 
 const StorageManager = struct {
     pub const PageId = u32;
@@ -78,15 +78,15 @@ const StorageManager = struct {
     }
 };
 
-const Model = fullaz.slot_heap.models.Paged(
+const Model = fullaz.storage.slot_heap.models.Paged(
     PageCache,
     StorageManager,
     Fsm,
     compare,
     void,
 );
-const Heap = fullaz.slot_heap.Heap(Model);
-const WideModel = fullaz.slot_heap.models.Paged(
+const Heap = fullaz.storage.slot_heap.Heap(Model);
+const WideModel = fullaz.storage.slot_heap.models.Paged(
     PageCache,
     StorageManager,
     WideFsm,
@@ -143,7 +143,7 @@ const TestContext = struct {
 };
 
 test "SlotHeap paged model: contract and settings" {
-    comptime fullaz.slot_heap.models.interfaces.assertModel(Model);
+    comptime fullaz.storage.slot_heap.models.interfaces.assertModel(Model);
 
     var device = try Device.init(std.testing.allocator, 128);
     defer device.deinit();

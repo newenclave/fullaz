@@ -1,6 +1,7 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
-const validation_enabled = fullaz.slot_heap.models.paged.View(
+
+const validation_enabled = fullaz.storage.slot_heap.models.paged.View(
     u32,
     u16,
     .little,
@@ -15,8 +16,8 @@ fn expectFullValidationError(expected: anyerror, actual: anytype) !void {
     }
 }
 
-const MutableView = fullaz.slot_heap.models.paged.View(u32, u16, .little, false);
-const ConstView = fullaz.slot_heap.models.paged.View(u32, u16, .little, true);
+const MutableView = fullaz.storage.slot_heap.models.paged.View(u32, u16, .little, false);
+const ConstView = fullaz.storage.slot_heap.models.paged.View(u32, u16, .little, true);
 
 test "SlotHeap paged view: leaf entries round trip, swap, and remove last" {
     var page: [256]u8 = undefined;

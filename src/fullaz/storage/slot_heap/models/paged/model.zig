@@ -1,9 +1,9 @@
 const std = @import("std");
-const contracts = @import("../../../contracts/contracts.zig");
-const contract_interfaces = @import("../../../contracts/interfaces.zig");
-const errors = @import("../../../core/errors.zig");
-const page_header = @import("../../../page/header.zig");
-const slots = @import("../../../slots/slots.zig");
+const contracts = @import("../../../../contracts/contracts.zig");
+const contract_interfaces = @import("../../../../contracts/interfaces.zig");
+const errors = @import("../../../../core/errors.zig");
+const page_header = @import("../../../../page/header.zig");
+const slots = @import("../../../../slots/slots.zig");
 const interfaces = @import("../interfaces.zig");
 const view_mod = @import("view.zig");
 

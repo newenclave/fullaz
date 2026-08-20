@@ -9,3 +9,4 @@ pub const page_chain = @import("page_chain/page_chain.zig");
 pub const slot_chain = @import("slot_chain/slot_chain.zig");
 pub const slot_stack = @import("slot_stack/slot_stack.zig");
 pub const slot_queue = @import("slot_queue/slot_queue.zig");
+pub const slot_heap = @import("slot_heap/slot_heap.zig");
