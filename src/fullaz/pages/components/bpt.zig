@@ -1,49 +1,9 @@
 const std = @import("std");
 const component = @import("../component.zig");
+const single_root_manager = @import("single_root_manager.zig");
 const algorithm = @import("../../core/algorithm.zig");
 const interfaces = @import("../../contracts/interfaces.zig");
-const page_cache_contract = @import("../../contracts/page_cache.zig");
 const low_level_bpt = @import("../../bpt/bpt.zig");
-
-fn Manager(comptime BackendT: type) type {
-    @setEvalBranchQuota(10_000);
-    interfaces.requiresTypeDeclaration(BackendT, "PageId");
-    interfaces.requiresTypeDeclaration(BackendT, "CacheType");
-    const PageIdT = BackendT.PageId;
-    const CacheT = BackendT.CacheType;
-    comptime page_cache_contract.requiresTransactionalPageCache(CacheT);
-    if (PageIdT != CacheT.Pid) {
-        @compileError("Pages backend PageId must match CacheType.Pid");
-    }
-    interfaces.requiresFnSignature(BackendT, "cache", fn (*BackendT) *CacheT);
-    interfaces.requiresFnSignature(CacheT, "free", fn (*CacheT, PageIdT) CacheT.Error!void);
-
-    return struct {
-        const Self = @This();
-
-        pub const PageId = PageIdT;
-        pub const Error = CacheT.Error;
-
-        cache_ptr: *CacheT,
-        root: ?PageId = null,
-
-        pub fn init(backend: *BackendT) Self {
-            return .{ .cache_ptr = backend.cache() };
-        }
-
-        pub fn getRoot(self: *const Self) ?PageId {
-            return self.root;
-        }
-
-        pub fn setRoot(self: *Self, root: ?PageId) Error!void {
-            self.root = root;
-        }
-
-        pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
-            return self.cache_ptr.free(page_id);
-        }
-    };
-}
 
 fn requireOption(comptime OptionsT: type, comptime name: []const u8) void {
     if (!@hasField(OptionsT, name)) {
@@ -159,7 +119,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 "allocator",
                 fn (*const BackendT) std.mem.Allocator,
             );
-            const ManagerT = Manager(BackendT);
+            const ManagerT = single_root_manager.SingleRootManager(BackendT);
             comptime low_level_bpt.models.interfaces.requiresStorageManager(ManagerT);
             const CacheT = BackendT.CacheType;
             const ModelT = low_level_bpt.models.PagedModel(
@@ -437,7 +397,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 }
 
                 pub fn restoreTransactionState(runtime: *Runtime, state: TransactionState) void {
-                    runtime.manager.root = state;
+                    runtime.manager.restoreRoot(state);
                 }
 
                 pub fn proxy(runtime: *Runtime) Proxy {
