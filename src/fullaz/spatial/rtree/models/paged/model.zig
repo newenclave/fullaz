@@ -2,6 +2,7 @@ const std = @import("std");
 const rtree_view = @import("view.zig");
 const interfaces = @import("../interfaces.zig");
 const geometry = @import("../../../geometry.zig");
+const page_rtree = @import("../../../../page/rtree.zig");
 const errors = @import("../../../../core/errors.zig");
 
 pub const Settings = struct {
@@ -29,6 +30,7 @@ pub fn PagedModel(
     const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
+    const RtreePage = page_rtree.Rtree(BlockIdType, u16, CoordT, dims, Endian);
 
     const RtreeView = rtree_view.View(BlockIdType, u16, CoordT, dims, Endian, false);
     const RtreeViewConst = rtree_view.View(BlockIdType, u16, CoordT, dims, Endian, true);
@@ -50,7 +52,12 @@ pub fn PagedModel(
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
         PageCacheT.Error ||
-        error{ ValueTooLarge, NodeFull };
+        StorageManagerT.Error ||
+        error{
+            ValueTooLarge,
+            NodeFull,
+            InvalidSettings,
+        };
 
     const idOrNull = struct {
         fn call(id: BlockIdType) ?BlockIdType {
@@ -166,6 +173,9 @@ pub fn PagedModel(
             }
             const status = blk: {
                 const view = ConstView.init(try self.handle.data());
+                if ((try view.entries()) >= max_entries_v) {
+                    return Error.NodeFull;
+                }
                 break :blk try view.canAppend(value.len);
             };
             if (status == .not_enough) return Error.NodeFull;
@@ -292,6 +302,9 @@ pub fn PagedModel(
         pub fn insertChild(self: *Self, mbr: Key, child: BlockIdType) Error!void {
             const status = blk: {
                 const view = ConstView.init(try self.handle.data());
+                if ((try view.entries()) >= max_entries_v) {
+                    return Error.NodeFull;
+                }
                 break :blk try view.canAppend();
             };
             if (status == .not_enough) return Error.NodeFull;
@@ -340,6 +353,10 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
+            errdefer {
+                ph.deinit();
+                self.ctx.storage_mgr.destroyPage(pid) catch {};
+            }
             var view = LeafImpl.MutView.init(try ph.dataMut());
             try view.formatPage(self.ctx.settings.leaf_page_kind, pid, 0);
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
@@ -349,6 +366,10 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
+            errdefer {
+                ph.deinit();
+                self.ctx.storage_mgr.destroyPage(pid) catch {};
+            }
             var view = InodeImpl.MutView.init(try ph.dataMut());
             try view.formatPage(self.ctx.settings.inode_page_kind, pid, 0);
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
@@ -417,7 +438,49 @@ pub fn PagedModel(
 
         accessor_state: AccessorType,
 
-        pub fn init(cache: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Self {
+        pub fn init(
+            cache: *PageCacheT,
+            storage_mgr: *StorageManagerT,
+            settings: Settings,
+        ) Error!Self {
+            if (settings.leaf_page_kind == settings.inode_page_kind) {
+                return Error.InvalidSettings;
+            }
+            const maximum_leaf_slot = std.math.add(
+                usize,
+                @sizeOf(RtreePage.LeafSlotHeader),
+                max_value_size,
+            ) catch return Error.InvalidSettings;
+            const maximum_inode_slot = @sizeOf(RtreePage.InodeSlotHeader);
+            if (std.math.cast(u16, maximum_leaf_slot) == null or
+                std.math.cast(u16, maximum_inode_slot) == null)
+            {
+                return Error.InvalidSettings;
+            }
+
+            var scratch = try cache.getTemporaryPage();
+            defer scratch.deinit();
+            const scratch_data = try scratch.dataMut();
+            const minimum_page_bytes = RtreeView.PageViewType.header_size + @max(
+                @sizeOf(RtreePage.LeafSubheader),
+                @sizeOf(RtreePage.InodeSubheader),
+            );
+            if (scratch_data.len < minimum_page_bytes or scratch_data.len > std.math.maxInt(u16)) {
+                return Error.InvalidSettings;
+            }
+
+            var leaf = RtreeView.LeafSubheaderView.init(scratch_data);
+            leaf.formatPage(settings.leaf_page_kind, 0, 0) catch return Error.InvalidSettings;
+            if ((leaf.capacityFor(max_value_size) catch return Error.InvalidSettings) < 3) {
+                return Error.InvalidSettings;
+            }
+
+            var inode = RtreeView.InodeSubheaderView.init(scratch_data);
+            inode.formatPage(settings.inode_page_kind, 0, 0) catch return Error.InvalidSettings;
+            if ((inode.capacityFor() catch return Error.InvalidSettings) < 3) {
+                return Error.InvalidSettings;
+            }
+
             return .{
                 .accessor_state = AccessorImpl.init(.{
                     .cache = cache,

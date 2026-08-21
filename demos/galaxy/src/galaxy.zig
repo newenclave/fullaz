@@ -81,7 +81,7 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
             s.* = Storage.init(cache, root);
             const m = try gpa.create(Model);
             errdefer gpa.destroy(m);
-            m.* = Model.init(cache, s, .{});
+            m.* = try Model.init(cache, s, .{});
             return .{ .s = s, .m = m };
         }
 
