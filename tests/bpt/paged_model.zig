@@ -1,4 +1,5 @@
 const std = @import("std");
+const fullaz = @import("fullaz");
 const algorithm = @import("fullaz").core.algorithm;
 const bpt = @import("fullaz").bpt;
 const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
@@ -174,6 +175,60 @@ fn checkBptLayoutSettings(
         );
     }
     try std.testing.expectEqual(available_before, cache.availableFrames());
+}
+
+test "BPT paged model: accessor validates persisted page structure" {
+    const Context = TestContext(4096, 16);
+    var context = try Context.init(std.testing.allocator);
+    defer context.deinit();
+    const accessor = context.accessor();
+    const available_before = context.cache.availableFrames();
+
+    var leaf = try accessor.createLeaf();
+    const leaf_id = leaf.id();
+    accessor.deinitLeaf(leaf);
+    try std.testing.expect(try accessor.isLeafId(leaf_id));
+    try std.testing.expectEqual(@as(?Context.BptModel.InodeType, null), try accessor.loadInode(leaf_id));
+
+    var inode = try accessor.createInode();
+    const inode_id = inode.id();
+    accessor.deinitInode(inode);
+    try std.testing.expect(!try accessor.isLeafId(inode_id));
+    try std.testing.expectEqual(@as(?Context.BptModel.LeafType, null), try accessor.loadLeaf(inode_id));
+
+    var foreign_handle = try context.cache.create();
+    const foreign_id = try foreign_handle.pid();
+    var foreign_view = fullaz.page.header.View(u32, u16, .little, false).init(
+        try foreign_handle.dataMut(),
+    );
+    foreign_view.formatPage(99, foreign_id, 0, 0);
+    foreign_handle.deinit();
+    try std.testing.expectError(error.BadType, accessor.loadLeaf(foreign_id));
+    try std.testing.expectError(error.BadType, accessor.isLeafId(foreign_id));
+
+    var malformed_handle = try context.cache.fetch(leaf_id);
+    var malformed_view = fullaz.page.header.View(u32, u16, .little, false).init(
+        try malformed_handle.dataMut(),
+    );
+    malformed_view.headerMut().subheader_size.set(0);
+    malformed_handle.deinit();
+    try std.testing.expectError(error.BadData, accessor.loadLeaf(leaf_id));
+    try std.testing.expectError(error.BadData, accessor.loadInode(leaf_id));
+    try std.testing.expectError(error.BadData, accessor.isLeafId(leaf_id));
+
+    var invalid_end_leaf = try accessor.createLeaf();
+    const invalid_end_id = invalid_end_leaf.id();
+    accessor.deinitLeaf(invalid_end_leaf);
+    var invalid_end_handle = try context.cache.fetch(invalid_end_id);
+    var invalid_end_view = fullaz.page.header.View(u32, u16, .little, false).init(
+        try invalid_end_handle.dataMut(),
+    );
+    invalid_end_view.headerMut().page_end.set(0);
+    invalid_end_handle.deinit();
+    try std.testing.expectError(error.InvalidPageEnd, accessor.loadLeaf(invalid_end_id));
+
+    try std.testing.expectError(error.BadData, accessor.isLeafId(std.math.maxInt(u32)));
+    try std.testing.expectEqual(available_before, context.cache.availableFrames());
 }
 
 fn checkRootHeightReduction(removed_key: []const u8) !void {
@@ -1638,6 +1693,7 @@ test "PageCache: no frame leaks after mixed Leaf and Inode operations" {
         var inode = try accessor.createInode();
         const inode_id = inode.id();
         try inode.insertChild(0, "persistent", 42);
+        try inode.updateChild(1, 43);
         accessor.deinitInode(inode);
 
         // Load the same inode
@@ -1808,6 +1864,7 @@ test "Accessor: loadInode returns inode for inode page" {
     var inode = try accessor.createInode();
     const inode_id = inode.id();
     try inode.insertChild(0, "testkey", 42);
+    try inode.updateChild(1, 43);
     accessor.deinitInode(inode);
 
     // Load it as an inode - should succeed

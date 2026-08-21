@@ -2,6 +2,7 @@ const std = @import("std");
 const component = @import("../component.zig");
 const single_root_manager = @import("single_root_manager.zig");
 const low_level_rtree = @import("../../spatial/rtree/rtree.zig");
+const PackedInt = @import("../../core/packed_int.zig").PackedInt;
 
 fn requireOption(comptime OptionsT: type, comptime name: []const u8) void {
     if (!@hasField(OptionsT, name)) {
@@ -350,6 +351,35 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
                 pub const InitOptions = struct {};
                 pub const TransactionState = ?ManagerT.PageId;
                 pub const Error = Proxy.Error || error{InvalidPageKinds};
+                pub const StaticMetadata = struct {
+                    const PackedPageId = PackedInt(CacheT.Pid, .little);
+
+                    pub const Storage = extern struct {
+                        // Page zero is reserved for the database superblock, so zero denotes no root.
+                        root: PackedPageId,
+                    };
+                    pub const Error = error{BadMetadata};
+
+                    pub fn capture(runtime: *const Runtime) Storage {
+                        return .{ .root = PackedPageId.init(runtime.manager.getRoot() orelse 0) };
+                    }
+
+                    pub fn restore(runtime: *Runtime, storage: *const Storage) void {
+                        const root = storage.root.get();
+                        runtime.manager.restoreRoot(if (root == 0) null else root);
+                    }
+
+                    pub fn validate(storage: *const Storage, page_count: usize) @This().Error!void {
+                        const root = storage.root.get();
+                        if (root == 0) {
+                            return;
+                        }
+                        const root_index = std.math.cast(usize, root) orelse return error.BadMetadata;
+                        if (root_index >= page_count) {
+                            return error.BadMetadata;
+                        }
+                    }
+                };
 
                 pub fn initRuntime(
                     runtime: *Runtime,

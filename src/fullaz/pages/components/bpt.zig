@@ -3,6 +3,7 @@ const component = @import("../component.zig");
 const single_root_manager = @import("single_root_manager.zig");
 const algorithm = @import("../../core/algorithm.zig");
 const interfaces = @import("../../contracts/interfaces.zig");
+const PackedInt = @import("../../core/packed_int.zig").PackedInt;
 const low_level_bpt = @import("../../bpt/bpt.zig");
 
 fn requireOption(comptime OptionsT: type, comptime name: []const u8) void {
@@ -351,6 +352,35 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     struct { compare_context: CompareContextT };
                 pub const TransactionState = ?ManagerT.PageId;
                 pub const Error = Proxy.Error || error{InvalidPageKinds};
+                pub const StaticMetadata = struct {
+                    const PackedPageId = PackedInt(CacheT.Pid, .little);
+
+                    pub const Storage = extern struct {
+                        // Page zero is reserved for the database superblock, so zero denotes no root.
+                        root: PackedPageId,
+                    };
+                    pub const Error = error{BadMetadata};
+
+                    pub fn capture(runtime: *const Runtime) Storage {
+                        return .{ .root = PackedPageId.init(runtime.manager.getRoot() orelse 0) };
+                    }
+
+                    pub fn restore(runtime: *Runtime, storage: *const Storage) void {
+                        const root = storage.root.get();
+                        runtime.manager.restoreRoot(if (root == 0) null else root);
+                    }
+
+                    pub fn validate(storage: *const Storage, page_count: usize) @This().Error!void {
+                        const root = storage.root.get();
+                        if (root == 0) {
+                            return;
+                        }
+                        const root_index = std.math.cast(usize, root) orelse return error.BadMetadata;
+                        if (root_index >= page_count) {
+                            return error.BadMetadata;
+                        }
+                    }
+                };
 
                 pub fn initRuntime(
                     runtime: *Runtime,

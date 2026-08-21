@@ -1,6 +1,10 @@
 const std = @import("std");
 
 test {
+    _ = @import("pages/persistent_reclaiming_cache.zig");
+    _ = @import("pages/static_superblock.zig");
+    _ = @import("pages/schema_fingerprint.zig");
+    _ = @import("pages/static_database.zig");
     _ = @import("core/wordt.zig");
     _ = @import("core/bitset.zig");
     _ = @import("core/static_vector.zig");
@@ -9,6 +13,7 @@ test {
 
     _ = @import("bpt/memory_model.zig");
     _ = @import("bpt/paged_model.zig");
+    _ = @import("bpt/paged_view.zig");
     _ = @import("bpt/wbpt_memory_model.zig");
     _ = @import("bpt/wbpt_paged_model.zig");
     _ = @import("spatial/geometry.zig");

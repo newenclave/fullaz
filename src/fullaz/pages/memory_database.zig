@@ -1,96 +1,12 @@
 const std = @import("std");
-const component = @import("component.zig");
 const device = @import("../device/device.zig");
 const page_cache = @import("../storage/page_cache/page_cache.zig");
 const MemoryReclaimingCache = @import("memory_reclaiming_cache.zig").MemoryReclaimingCache;
-
-fn componentBindings(comptime SchemaT: type, comptime BackendT: type) [SchemaT.fields.len]type {
-    @setEvalBranchQuota(100_000);
-    var bindings: [SchemaT.fields.len]type = undefined;
-    inline for (SchemaT.fields, 0..) |field, index| {
-        bindings[index] = component.bindingFor(field.descriptor, BackendT);
-    }
-    return bindings;
-}
-
-fn ComponentsStorage(comptime SchemaT: type, comptime bindings: anytype) type {
-    const field_count = SchemaT.fields.len;
-    comptime var field_names: [field_count][]const u8 = undefined;
-    comptime var field_types: [field_count]type = undefined;
-    comptime var field_attrs: [field_count]std.builtin.Type.StructField.Attributes = undefined;
-    inline for (SchemaT.fields, 0..) |field, index| {
-        field_names[index] = field.name;
-        field_types[index] = bindings[index].Runtime;
-        field_attrs[index] = .{};
-    }
-    return @Struct(
-        .auto,
-        null,
-        &field_names,
-        &field_types,
-        &field_attrs,
-    );
-}
-
-fn ComponentTransactionStates(comptime SchemaT: type, comptime bindings: anytype) type {
-    const field_count = SchemaT.fields.len;
-    comptime var field_names: [field_count][]const u8 = undefined;
-    comptime var field_types: [field_count]type = undefined;
-    comptime var field_attrs: [field_count]std.builtin.Type.StructField.Attributes = undefined;
-    inline for (SchemaT.fields, 0..) |field, index| {
-        field_names[index] = field.name;
-        field_types[index] = bindings[index].TransactionState;
-        field_attrs[index] = .{};
-    }
-    return @Struct(
-        .auto,
-        null,
-        &field_names,
-        &field_types,
-        &field_attrs,
-    );
-}
-
-fn canDefaultInit(comptime T: type) bool {
-    const type_info = @typeInfo(T);
-    if (type_info != .@"struct" or type_info.@"struct".is_tuple) {
-        @compileError("Pages component InitOptions must be a named struct");
-    }
-    inline for (type_info.@"struct".fields) |field| {
-        if (field.default_value_ptr == null) {
-            return false;
-        }
-    }
-    return true;
-}
-
-fn ComponentInitOptions(comptime SchemaT: type, comptime bindings: anytype) type {
-    const field_count = SchemaT.fields.len;
-    comptime var field_names: [field_count][]const u8 = undefined;
-    comptime var field_types: [field_count]type = undefined;
-    comptime var field_attrs: [field_count]std.builtin.Type.StructField.Attributes = undefined;
-    inline for (SchemaT.fields, 0..) |field, index| {
-        const Options = bindings[index].InitOptions;
-        field_names[index] = field.name;
-        field_types[index] = Options;
-        field_attrs[index] = .{};
-        if (canDefaultInit(Options)) {
-            const default_value: Options = .{};
-            field_attrs[index].default_value_ptr = &default_value;
-        }
-    }
-    return @Struct(
-        .auto,
-        null,
-        &field_names,
-        &field_types,
-        &field_attrs,
-    );
-}
+const shape = @import("database_shape.zig");
 
 fn DatabaseInitOptions(comptime ComponentOptionsT: type) type {
     const default_cache_frames: usize = 64;
-    const components_default_ptr: ?*const anyopaque = if (canDefaultInit(ComponentOptionsT)) blk: {
+    const components_default_ptr: ?*const anyopaque = if (shape.canDefaultInit(ComponentOptionsT)) blk: {
         const default_value: ComponentOptionsT = .{};
         break :blk &default_value;
     } else null;
@@ -108,13 +24,6 @@ fn DatabaseInitOptions(comptime ComponentOptionsT: type) type {
         &field_types,
         &field_attrs,
     );
-}
-
-fn componentErrors(comptime bindings: anytype, comptime index: usize) type {
-    if (index == bindings.len) {
-        return error{};
-    }
-    return bindings[index].Error || componentErrors(bindings, index + 1);
 }
 
 pub fn MemoryDatabase(comptime SchemaT: type) type {
@@ -152,10 +61,10 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
             return self.cache_ptr;
         }
     };
-    const bindings = componentBindings(SchemaT, Backend);
-    const Components = ComponentsStorage(SchemaT, bindings);
-    const TransactionStates = ComponentTransactionStates(SchemaT, bindings);
-    const ComponentOptions = ComponentInitOptions(SchemaT, bindings);
+    const bindings = shape.bindings(SchemaT, Backend);
+    const Components = shape.runtimes(SchemaT, bindings);
+    const TransactionStates = shape.transactionStates(SchemaT, bindings);
+    const ComponentOptions = shape.initOptions(SchemaT, bindings);
     const Options = DatabaseInitOptions(ComponentOptions);
     const Core = struct {
         allocator: std.mem.Allocator,
@@ -186,7 +95,7 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
             Device.Error ||
             RawCache.Error ||
             Cache.Error ||
-            componentErrors(bindings, 0) ||
+            shape.componentErrors(bindings, 0) ||
             error{InvalidCacheFrames};
 
         core_: *align(@alignOf(Core)) anyopaque,
