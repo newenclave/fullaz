@@ -1,6 +1,7 @@
 const std = @import("std");
 const contract_interfaces = @import("../../contracts/interfaces.zig");
 const interfaces = @import("models/interfaces.zig");
+const limits = @import("limits.zig");
 const strategy_mod = @import("strategy.zig");
 
 pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
@@ -83,7 +84,7 @@ fn TreeWithConfig(
         pub const Error = ModelT.Error;
         pub const min_fill: usize = @max(2, Max * 2 / 5); // 40% is minimum.
 
-        const max_depth = 64;
+        const max_depth = limits.max_depth;
         const orphan_cap = max_depth * min_fill;
 
         const Frame = struct {

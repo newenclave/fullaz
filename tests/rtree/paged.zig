@@ -187,6 +187,65 @@ test "RTree paged: model rejects invalid physical settings" {
     }
 }
 
+test "RTree paged: accessor validates persisted page structure" {
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try Model.init(&cache, &store_mgr, .{});
+    const accessor = model.accessor();
+    const available_before = cache.availableFrames();
+
+    var leaf = try accessor.createLeaf();
+    const leaf_id = leaf.id();
+    accessor.deinitLeaf(leaf);
+    try testing.expect(try accessor.isLeafId(leaf_id));
+    try testing.expectEqual(@as(?Model.InodeType, null), try accessor.loadInode(leaf_id));
+
+    var inode = try accessor.createInode();
+    const inode_id = inode.id();
+    try testing.expectEqual(@as(usize, 1), try inode.getLevel());
+    accessor.deinitInode(inode);
+    try testing.expect(!try accessor.isLeafId(inode_id));
+    try testing.expectEqual(@as(?Model.LeafType, null), try accessor.loadLeaf(inode_id));
+
+    var foreign_handle = try cache.create();
+    const foreign_id = try foreign_handle.pid();
+    var foreign_view = fullaz.page.header.View(u32, u16, .little, false).init(
+        try foreign_handle.dataMut(),
+    );
+    foreign_view.formatPage(99, foreign_id, 0, 0);
+    foreign_handle.deinit();
+    try testing.expectError(error.BadType, accessor.loadLeaf(foreign_id));
+    try testing.expectError(error.BadType, accessor.isLeafId(foreign_id));
+
+    var malformed_handle = try cache.fetch(leaf_id);
+    var malformed_view = fullaz.page.header.View(u32, u16, .little, false).init(
+        try malformed_handle.dataMut(),
+    );
+    malformed_view.headerMut().subheader_size.set(0);
+    malformed_handle.deinit();
+    try testing.expectError(error.BadData, accessor.loadLeaf(leaf_id));
+    try testing.expectError(error.BadData, accessor.loadInode(leaf_id));
+    try testing.expectError(error.BadData, accessor.isLeafId(leaf_id));
+
+    var invalid_end_leaf = try accessor.createLeaf();
+    const invalid_end_id = invalid_end_leaf.id();
+    accessor.deinitLeaf(invalid_end_leaf);
+    var invalid_end_handle = try cache.fetch(invalid_end_id);
+    var invalid_end_view = fullaz.page.header.View(u32, u16, .little, false).init(
+        try invalid_end_handle.dataMut(),
+    );
+    invalid_end_view.headerMut().page_end.set(0);
+    invalid_end_handle.deinit();
+    try testing.expectError(error.InvalidPageEnd, accessor.loadLeaf(invalid_end_id));
+
+    try testing.expectError(error.BadData, accessor.isLeafId(std.math.maxInt(u32)));
+    try testing.expectEqual(available_before, cache.availableFrames());
+}
+
 test "RTree paged: single insert is findable" {
     const allocator = testing.allocator;
     var device = try Device.init(allocator, 4096);

@@ -19,6 +19,7 @@ test {
     _ = @import("rtree/linear.zig");
     _ = @import("rtree/delete.zig");
     _ = @import("rtree/paged.zig");
+    _ = @import("rtree/paged_view.zig");
 
     _ = @import("aabb_tree/tree.zig");
 
