@@ -6,6 +6,12 @@ pub fn StaticSuperblock(comptime MetadataT: type) type {
     const U32 = PackedInt(u32, .little);
     const U64 = PackedInt(u64, .little);
 
+    comptime {
+        if (@typeInfo(MetadataT) != .@"struct" or @typeInfo(MetadataT).@"struct".layout != .@"extern") {
+            @compileError("StaticSuperblock metadata must be an extern struct");
+        }
+    }
+
     return struct {
         const Self = @This();
 
@@ -34,6 +40,12 @@ pub fn StaticSuperblock(comptime MetadataT: type) type {
 
         pub const magic = "FULLAZDB";
         pub const version = 1;
+
+        comptime {
+            if (@sizeOf(Storage) > std.math.maxInt(u16)) {
+                @compileError("StaticSuperblock storage exceeds u16 layout-size field");
+            }
+        }
 
         pub fn format(
             page: []u8,

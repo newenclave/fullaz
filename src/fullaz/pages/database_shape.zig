@@ -11,6 +11,17 @@ pub fn bindings(comptime SchemaT: type, comptime BackendT: type) [SchemaT.fields
     return result;
 }
 
+pub fn assertStaticSchema(comptime SchemaT: type) void {
+    inline for (SchemaT.fields) |field| {
+        const Trait = field.descriptor.Trait;
+        if (comptime std.mem.eql(u8, Trait.kind_name, "fullaz.bpt.paged") and
+            Trait.CompareContext != void)
+        {
+            @compileError("StaticDatabase BPT components require CompareContext = void");
+        }
+    }
+}
+
 pub fn runtimes(comptime SchemaT: type, comptime bindings_: anytype) type {
     const field_count = SchemaT.fields.len;
     comptime var names: [field_count][]const u8 = undefined;
@@ -91,6 +102,7 @@ pub fn staticMetadata(comptime SchemaT: type, comptime bindings_: anytype) type 
         if (!@hasDecl(Binding, "StaticMetadata")) {
             @compileError("StaticDatabase component binding requires StaticMetadata");
         }
+        component.assertStaticMetadata(Binding, Binding.StaticMetadata);
         names[index + 1] = field.name;
         types[index + 1] = Binding.StaticMetadata.Storage;
         attributes[index + 1] = .{};

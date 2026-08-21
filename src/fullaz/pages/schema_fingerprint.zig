@@ -10,6 +10,8 @@ pub fn digest(comptime SchemaT: type) [32]u8 {
     inline for (SchemaT.fields) |field| {
         const Trait = field.descriptor.Trait;
         writeBytes(&hasher, field.name);
+        writeInt(&hasher, u16, field.page_kinds.base);
+        writeInt(&hasher, u16, field.page_kinds.count);
         writeBytes(&hasher, Trait.kind_name);
         writeInt(&hasher, u32, Trait.format_version);
         writeInt(&hasher, u32, Trait.page_kind_count);

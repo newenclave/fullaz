@@ -172,6 +172,34 @@ pub fn assertBinding(comptime BindingT: type, comptime BackendT: type) void {
     interfaces.requiresFnSignature(BindingT, "proxyConst", fn (*const Runtime) *const ConstProxy);
 }
 
+/// Verifies persistent root metadata supplied by a concrete component binding.
+///
+/// ```zig
+/// const StaticMetadata = struct {
+///     pub const Storage = extern struct { root: PackedPageId };
+///     pub const Error = error{BadMetadata};
+///     pub fn capture(_: *const Runtime) Storage { return undefined; }
+///     pub fn restore(_: *Runtime, _: *const Storage) void {}
+///     pub fn validate(_: *const Storage, _: usize) Error!void {}
+/// };
+/// comptime assertStaticMetadata(Binding, StaticMetadata);
+/// ```
+pub fn assertStaticMetadata(comptime BindingT: type, comptime MetadataT: type) void {
+    interfaces.requiresTypeDeclaration(MetadataT, "Storage");
+    interfaces.requiresErrorDeclaration(MetadataT, "Error");
+    const Storage = MetadataT.Storage;
+    const Error = MetadataT.Error;
+    if (@typeInfo(Storage) != .@"struct" or @typeInfo(Storage).@"struct".layout != .@"extern") {
+        @compileError("Pages StaticMetadata.Storage must be an extern struct");
+    }
+    if (@typeInfo(Error).error_set == null) {
+        @compileError("Pages StaticMetadata.Error cannot be anyerror");
+    }
+    interfaces.requiresFnSignature(MetadataT, "capture", fn (*const BindingT.Runtime) Storage);
+    interfaces.requiresFnSignature(MetadataT, "restore", fn (*BindingT.Runtime, *const Storage) void);
+    interfaces.requiresFnSignature(MetadataT, "validate", fn (*const Storage, usize) Error!void);
+}
+
 pub fn bindingFor(comptime value: Descriptor, comptime BackendT: type) type {
     comptime assertTrait(value.Trait);
     const binding = value.Trait.Binding(BackendT);

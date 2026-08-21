@@ -193,6 +193,10 @@ pub fn build(b: *std.Build) void {
             .source = "tests/compile_errors/pages/binding_anyerror.zig",
             .expected = "Pages component binding Error cannot be anyerror",
         },
+        .{
+            .source = "tests/compile_errors/pages/static_bpt_compare_context.zig",
+            .expected = "StaticDatabase BPT components require CompareContext = void",
+        },
     }) |fixture| {
         addCompileErrorFixture(
             b,

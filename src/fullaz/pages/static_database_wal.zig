@@ -1,22 +1,26 @@
 const std = @import("std");
 const device_interfaces = @import("../device/interfaces.zig");
 const page_cache = @import("../storage/page_cache/page_cache.zig");
+const memory_policy = @import("../storage/page_cache/memory_policy.zig");
+const wal = @import("../storage/wal/wal.zig");
 const StaticDatabaseCommon = @import("static_database_common.zig").StaticDatabaseCommon;
 const schema_fingerprint = @import("schema_fingerprint.zig");
 const shape = @import("database_shape.zig");
 
-/// A page-zero-superblock database that owns the supplied block device.
-pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
+/// A page-zero-superblock database that owns the supplied block device and WAL log.
+pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, comptime LogDeviceT: type) type {
     if (!@hasDecl(SchemaT, "PageId") or !@hasDecl(SchemaT, "fields")) {
-        @compileError("StaticDatabase requires a pages Schema type");
+        @compileError("StaticDatabaseWithWal requires a pages Schema type");
     }
     comptime shape.assertStaticSchema(SchemaT);
     comptime device_interfaces.assertBlockDevice(DeviceT);
     if (DeviceT.BlockId != SchemaT.PageId) {
-        @compileError("StaticDatabase DeviceT.BlockId must match SchemaT.PageId");
+        @compileError("StaticDatabaseWithWal DeviceT.BlockId must match SchemaT.PageId");
     }
+    comptime device_interfaces.assertLogDevice(LogDeviceT);
 
-    const RawCache = page_cache.PageCache(DeviceT);
+    const WalT = wal.Wal(LogDeviceT, SchemaT.PageId, .little);
+    const RawCache = page_cache.PageCacheImpl(DeviceT, memory_policy.DefaultMemoryPolicy, WalT);
     const Common = StaticDatabaseCommon(SchemaT, DeviceT, RawCache);
     const Store = Common.StoreType;
     const Cache = Common.CacheType;
@@ -31,6 +35,7 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
     const Core = struct {
         allocator: std.mem.Allocator,
         device: DeviceT,
+        log: LogDeviceT,
         identity: Superblock.Identity,
         raw_cache: RawCache,
         store: Store,
@@ -48,6 +53,8 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
 
         pub const Schema = SchemaT;
         pub const DeviceType = DeviceT;
+        pub const LogDeviceType = LogDeviceT;
+        pub const WalType = WalT;
         pub const RawCacheType = RawCache;
         pub const CacheType = Cache;
         pub const BackendType = Backend;
@@ -58,6 +65,8 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
         pub const SuperblockType = Superblock;
         pub const InitOptions = Options;
         pub const Error = DeviceT.Error ||
+            LogDeviceT.Error ||
+            WalT.Error ||
             RawCache.Error ||
             Cache.Error ||
             Superblock.Error ||
@@ -66,6 +75,7 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
             error{
                 InvalidCacheFrames,
                 DeviceNotEmpty,
+                LogNotEmpty,
                 InvalidImageId,
                 MissingSuperblock,
                 PageCountMismatch,
@@ -215,7 +225,12 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
             );
         }
 
-        fn initCore(allocator: std.mem.Allocator, device_value: DeviceT, options: InitOptions) Error!*Core {
+        fn initCore(
+            allocator: std.mem.Allocator,
+            device_value: DeviceT,
+            log_value: LogDeviceT,
+            options: InitOptions,
+        ) Error!*Core {
             if (options.cache_frames == 0) {
                 return error.InvalidCacheFrames;
             }
@@ -227,8 +242,20 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
             core.allocator = allocator;
             core.device = device_value;
             errdefer core.device.deinit();
+            core.log = log_value;
+            errdefer core.log.deinit();
             core.identity = identity(options);
-            core.raw_cache = try RawCache.init(&core.device, allocator, options.cache_frames);
+            var wal_value = try WalT.initWithIdentity(
+                allocator,
+                &core.log,
+                @intCast(core.device.blockSize()),
+                .{
+                    .image_id = core.identity.image_id,
+                    .schema_digest = core.identity.schema_digest,
+                },
+            );
+            errdefer wal_value.deinit();
+            core.raw_cache = try RawCache.initWal(&core.device, allocator, options.cache_frames, wal_value);
             errdefer core.raw_cache.deinit();
             core.store = .{ .device = &core.device };
             core.cache = Cache.init(&core.raw_cache, &core.store);
@@ -239,15 +266,24 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
             return core;
         }
 
-        /// Formats an empty supplied device and takes ownership of it on success.
-        pub fn format(allocator: std.mem.Allocator, device_value: DeviceT, options: InitOptions) Error!Self {
+        /// Formats empty supplied device and log and takes ownership on success.
+        pub fn format(
+            allocator: std.mem.Allocator,
+            device_value: DeviceT,
+            log_value: LogDeviceT,
+            options: InitOptions,
+        ) Error!Self {
             if (device_value.blocksCount() != 0) {
                 return error.DeviceNotEmpty;
             }
-            const core = try initCore(allocator, device_value, options);
+            if (log_value.size() != 0) {
+                return error.LogNotEmpty;
+            }
+            const core = try initCore(allocator, device_value, log_value, options);
             errdefer {
                 core.cache.deinit();
                 core.raw_cache.deinit();
+                core.log.deinit();
                 core.device.deinit();
                 allocator.destroy(core);
             }
@@ -273,15 +309,21 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
             return .{ .core_ = core };
         }
 
-        /// Opens an existing database and takes ownership of the supplied device on success.
-        pub fn open(allocator: std.mem.Allocator, device_value: DeviceT, options: InitOptions) Error!Self {
+        /// Opens existing supplied device and log and takes ownership on success.
+        pub fn open(
+            allocator: std.mem.Allocator,
+            device_value: DeviceT,
+            log_value: LogDeviceT,
+            options: InitOptions,
+        ) Error!Self {
             if (device_value.blocksCount() == 0) {
                 return error.MissingSuperblock;
             }
-            const core = try initCore(allocator, device_value, options);
+            const core = try initCore(allocator, device_value, log_value, options);
             errdefer {
                 core.cache.deinit();
                 core.raw_cache.deinit();
+                core.log.deinit();
                 core.device.deinit();
                 allocator.destroy(core);
             }
@@ -326,15 +368,6 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
             core.transaction_cache_batch = try core.cache.begin();
             core.transaction_generation +%= 1;
             core.transaction_active = true;
-            writeSuperblock(core, false) catch |err| {
-                core.transaction_cache_batch.discard() catch {};
-                core.transaction_active = false;
-                return err;
-            };
-            var page = try core.raw_cache.fetch(0);
-            defer page.deinit();
-            try core.device.writeBlock(0, @constCast(try page.data()));
-            try core.device.sync();
             return .{ .core_ = core, .generation_ = core.transaction_generation };
         }
 
@@ -347,7 +380,7 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
             page_size: usize,
             page_count: usize,
             free_root: ?SchemaT.PageId,
-            wal_enabled: bool = false,
+            wal_enabled: bool = true,
         };
 
         pub fn diagnostics(self: *const Self) Diagnostics {
@@ -368,6 +401,7 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
             deinitComponentPrefix(core, SchemaT.fields.len);
             core.cache.deinit();
             core.raw_cache.deinit();
+            core.log.deinit();
             core.device.deinit();
             allocator.destroy(core);
             self.* = undefined;

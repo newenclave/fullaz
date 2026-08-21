@@ -19,6 +19,7 @@ pub const MemoryDatabase = memory_database.MemoryDatabase;
 pub const StaticDatabase = static_database.StaticDatabase;
 pub const StaticDatabaseWithWal = static_database_wal.StaticDatabaseWithWal;
 pub const assertBinding = component.assertBinding;
+pub const assertStaticMetadata = component.assertStaticMetadata;
 pub const assertTrait = component.assertTrait;
 pub const bpt = bpt_component.bpt;
 pub const rtree = rtree_component.rtree;

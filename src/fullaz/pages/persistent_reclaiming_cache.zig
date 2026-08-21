@@ -100,6 +100,11 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
                 @memset(try handle.dataMut(), 0);
                 return handle;
             }
+            const next_page_id = std.math.cast(PageId, self.store.pageCount()) orelse
+                return Error.PageIdExhausted;
+            if (next_page_id == nil) {
+                return Error.PageIdExhausted;
+            }
             return self.inner.create();
         }
 
