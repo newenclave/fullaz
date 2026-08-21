@@ -51,6 +51,10 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
         pub fn pageCount(self: *const @This()) usize {
             return self.device.blocksCount();
         }
+
+        pub fn isReserved(_: *const @This(), page_id: PageId) bool {
+            return page_id == 0;
+        }
     };
     const Cache = PersistentReclaimingCache(RawCache, Store);
     const Backend = struct {
@@ -369,6 +373,7 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
                 &core.components,
                 &storage.metadata,
             );
+            try core.cache.validateFreeList();
             return .{ .core_ = core };
         }
 

@@ -18,6 +18,7 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
         interfaces.requiresFnSignature(StoreT, "getRoot", fn (*const StoreT) ?StoreT.PageId);
         interfaces.requiresFnSignature(StoreT, "setRoot", fn (*StoreT, ?StoreT.PageId) StoreT.Error!void);
         interfaces.requiresFnSignature(StoreT, "pageCount", fn (*const StoreT) usize);
+        interfaces.requiresFnSignature(StoreT, "isReserved", fn (*const StoreT, StoreT.PageId) bool);
     }
 
     const PageId = InnerCacheT.Pid;
@@ -104,7 +105,10 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
 
         pub fn free(self: *Self, page_id: PageId) Error!void {
             const page_index = std.math.cast(usize, page_id) orelse return Error.PageNotAllocated;
-            if (page_id == nil or page_index >= self.store.pageCount()) {
+            if (page_id == nil or
+                page_index >= self.store.pageCount() or
+                self.store.isReserved(page_id))
+            {
                 return Error.PageNotAllocated;
             }
             if (self.inner.isPinned(page_id)) {
@@ -151,6 +155,28 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             self.inner.markTransactionFailed();
         }
 
+        /// Validates the persisted free-list before it is used after a reopen.
+        pub fn validateFreeList(self: *Self) Error!void {
+            var current = self.store.getRoot();
+            var steps: usize = 0;
+            const page_count = self.store.pageCount();
+            while (current) |page_id| {
+                const page_index = std.math.cast(usize, page_id) orelse return Error.BadFreeList;
+                if (page_id == nil or
+                    page_index >= page_count or
+                    self.store.isReserved(page_id) or
+                    steps >= page_count)
+                {
+                    return Error.BadFreeList;
+                }
+                var handle = try self.inner.fetch(page_id);
+                defer handle.deinit();
+                const next = FreedView.init(try handle.data()).header().next.get();
+                current = if (next == nil) null else next;
+                steps += 1;
+            }
+        }
+
         fn pop(self: *Self) Error!?PageId {
             const head = self.store.getRoot() orelse return null;
             var handle = try self.inner.fetch(head);
@@ -165,6 +191,9 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             var steps: usize = 0;
             const max_steps = self.store.pageCount();
             while (current) |candidate| {
+                if (candidate == nil or self.store.isReserved(candidate)) {
+                    return Error.BadFreeList;
+                }
                 if (candidate == page_id) {
                     return true;
                 }

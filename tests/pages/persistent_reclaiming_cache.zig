@@ -22,6 +22,10 @@ test "Pages: persistent reclaiming cache reuses and rolls back free-list roots" 
         pub fn pageCount(self: *const @This()) usize {
             return self.page_count;
         }
+
+        pub fn isReserved(_: *const @This(), _: PageId) bool {
+            return false;
+        }
     };
     const Cache = fullaz.pages.PersistentReclaimingCache(InnerCache, Store);
 

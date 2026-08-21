@@ -5,6 +5,7 @@ test {
     _ = @import("pages/static_superblock.zig");
     _ = @import("pages/schema_fingerprint.zig");
     _ = @import("pages/static_database.zig");
+    _ = @import("pages/static_database_wal.zig");
     _ = @import("core/wordt.zig");
     _ = @import("core/bitset.zig");
     _ = @import("core/static_vector.zig");
