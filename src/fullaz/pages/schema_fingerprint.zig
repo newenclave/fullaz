@@ -1,63 +1,63 @@
 const std = @import("std");
 
 /// Returns a stable digest of the persistent component layout and settings.
-/// Function pointers are deliberately excluded: static BPT bindings require a
-/// void compare context and identify the comparator through comparator_id.
+/// Component-specific persistent settings are written by each trait's
+/// `fingerprint` hook. Function pointers are deliberately excluded; traits
+/// identify callbacks through durable IDs instead.
 pub fn digest(comptime SchemaT: type) [32]u8 {
     var hasher = std.crypto.hash.Blake3.init(.{});
+    var writer = Writer{ .hasher = &hasher };
     hasher.update("fullaz.pages.static-schema.v1");
-    writeInt(&hasher, u16, @bitSizeOf(SchemaT.PageId));
+    writer.writeInt(u16, @bitSizeOf(SchemaT.PageId));
     inline for (SchemaT.fields) |field| {
         const Trait = field.descriptor.Trait;
-        writeBytes(&hasher, field.name);
-        writeInt(&hasher, u16, field.page_kinds.base);
-        writeInt(&hasher, u16, field.page_kinds.count);
-        writeBytes(&hasher, Trait.kind_name);
-        writeInt(&hasher, u32, Trait.format_version);
-        writeInt(&hasher, u32, Trait.page_kind_count);
+        writer.writeBytes(field.name);
+        writer.writeInt(u16, field.page_kinds.base);
+        writer.writeInt(u16, field.page_kinds.count);
+        writer.writeBytes(Trait.kind_name);
+        writer.writeInt(u32, Trait.format_version);
+        writer.writeInt(u32, Trait.page_kind_count);
         inline for (Trait.page_roles) |role| {
-            writeBytes(&hasher, role);
+            writer.writeBytes(role);
         }
-        if (@hasDecl(Trait, "comparator_id")) {
-            writeInt(&hasher, u32, Trait.comparator_id);
-            writeInt(&hasher, usize, Trait.maximum_key_size);
-            writeInt(&hasher, usize, Trait.maximum_value_size);
-            writeBytes(&hasher, @tagName(Trait.rebalance_policy));
+        if (!@hasDecl(Trait, "fingerprint") or
+            @TypeOf(Trait.fingerprint) != fn (*Writer) void)
+        {
+            @compileError("Pages component trait must declare fingerprint(writer: *FingerprintWriter)");
         }
-        if (@hasDecl(Trait, "dimensions")) {
-            writeInt(&hasher, usize, Trait.dimensions);
-            writeInt(&hasher, usize, Trait.maximum_entries);
-            writeInt(&hasher, usize, Trait.maximum_value_size);
-            writeCoord(&hasher, Trait.Coord);
-        }
+        Trait.fingerprint(&writer);
     }
     var result: [32]u8 = undefined;
     hasher.final(&result);
     return result;
 }
 
-fn writeBytes(hasher: *std.crypto.hash.Blake3, bytes: []const u8) void {
-    writeInt(hasher, u32, @intCast(bytes.len));
-    hasher.update(bytes);
-}
+pub const Writer = struct {
+    hasher: *std.crypto.hash.Blake3,
 
-fn writeInt(hasher: *std.crypto.hash.Blake3, comptime T: type, value: T) void {
-    var bytes: [@sizeOf(T)]u8 = undefined;
-    std.mem.writeInt(T, &bytes, value, .little);
-    hasher.update(&bytes);
-}
-
-fn writeCoord(hasher: *std.crypto.hash.Blake3, comptime CoordT: type) void {
-    switch (@typeInfo(CoordT)) {
-        .int => |info| {
-            hasher.update("int");
-            writeInt(hasher, u16, info.bits);
-            hasher.update(if (info.signedness == .signed) "signed" else "unsigned");
-        },
-        .float => |info| {
-            hasher.update("float");
-            writeInt(hasher, u16, info.bits);
-        },
-        else => @compileError("StaticDatabase schema coordinate must be numeric"),
+    pub fn writeBytes(self: *Writer, bytes: []const u8) void {
+        self.writeInt(u32, @intCast(bytes.len));
+        self.hasher.update(bytes);
     }
-}
+
+    pub fn writeInt(self: *Writer, comptime T: type, value: T) void {
+        var bytes: [@sizeOf(T)]u8 = undefined;
+        std.mem.writeInt(T, &bytes, value, .little);
+        self.hasher.update(&bytes);
+    }
+
+    pub fn writeCoord(self: *Writer, comptime CoordT: type) void {
+        switch (@typeInfo(CoordT)) {
+            .int => |info| {
+                self.hasher.update("int");
+                self.writeInt(u16, info.bits);
+                self.hasher.update(if (info.signedness == .signed) "signed" else "unsigned");
+            },
+            .float => |info| {
+                self.hasher.update("float");
+                self.writeInt(u16, info.bits);
+            },
+            else => @compileError("StaticDatabase schema coordinate must be numeric"),
+        }
+    }
+};

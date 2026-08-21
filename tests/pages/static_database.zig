@@ -9,6 +9,10 @@ fn compare(_: void, left: []const u8, right: []const u8) fullaz.core.algorithm.O
     };
 }
 
+fn slotCompare(_: void, left: []const u8, right: []const u8) std.math.Order {
+    return std.mem.order(u8, left, right);
+}
+
 fn prep(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
@@ -22,6 +26,56 @@ const Collector = struct {
         self.sum += std.mem.readInt(u32, value[0..4], .little);
     }
 };
+
+test "Pages: static database reopens SlotHeap metadata" {
+    const Schema = fullaz.pages.Schema(.{ .page_id = u32 }).add(
+        "heap",
+        fullaz.pages.slotHeap(.{
+            .compare = slotCompare,
+            .CompareContext = void,
+            .comparator_id = 1,
+            .maximum_key_size = 4,
+            .maximum_value_size = 16,
+        }),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz.pages.StaticDatabase(Schema, Device);
+    const io = std.testing.io;
+    const path = ".zig-cache/static_slot_heap.img";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{6} ** 16,
+        .components = .{ .heap = .{} },
+    };
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 512),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        try transaction.get("heap").push("0002", "two");
+        try transaction.get("heap").push("0001", "one");
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, path, 512),
+            options,
+        );
+        defer database.deinit();
+        try std.testing.expectEqual(@as(u64, 2), try database.getConst("heap").count());
+        var transaction = try database.begin();
+        var top = try transaction.get("heap").top();
+        defer top.deinit();
+        try std.testing.expectEqualSlices(u8, "0001", try top.key());
+        try transaction.rollback();
+    }
+}
 
 test "Pages: static database formats, opens, and persists reclaimed BPT pages" {
     const Schema = fullaz.pages.Schema(.{ .page_id = u32 }).add(

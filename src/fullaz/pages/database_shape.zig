@@ -19,6 +19,11 @@ pub fn assertStaticSchema(comptime SchemaT: type) void {
         {
             @compileError("StaticDatabase BPT components require CompareContext = void");
         }
+        if (comptime std.mem.eql(u8, Trait.kind_name, "fullaz.slot-heap.paged") and
+            Trait.CompareContext != void)
+        {
+            @compileError("StaticDatabase ordered components require CompareContext = void");
+        }
     }
 }
 

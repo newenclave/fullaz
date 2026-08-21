@@ -9,8 +9,63 @@ fn compare(_: void, left: []const u8, right: []const u8) fullaz.core.algorithm.O
     };
 }
 
+fn slotCompare(_: void, left: []const u8, right: []const u8) std.math.Order {
+    return std.mem.order(u8, left, right);
+}
+
 fn prep(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
+}
+
+test "Pages: WAL static database reopens SlotHeap metadata" {
+    const Schema = fullaz.pages.Schema(.{ .page_id = u32 }).add(
+        "heap",
+        fullaz.pages.slotHeap(.{
+            .compare = slotCompare,
+            .CompareContext = void,
+            .comparator_id = 1,
+            .maximum_key_size = 4,
+            .maximum_value_size = 16,
+        }),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz.pages.StaticDatabaseWithWal(Schema, Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/static_slot_heap_wal.img";
+    const log_path = ".zig-cache/static_slot_heap_wal.log";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{5} ** 16,
+        .components = .{ .heap = .{} },
+    };
+    prep(io, image_path);
+    prep(io, log_path);
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 512),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        try transaction.get("heap").push("0002", "two");
+        try transaction.get("heap").push("0001", "one");
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 512),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        try std.testing.expectEqual(@as(u64, 2), try database.getConst("heap").count());
+    }
 }
 
 test "Pages: WAL static database persists BPT and validates WAL identity" {

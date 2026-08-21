@@ -3,6 +3,7 @@ const component = @import("../component.zig");
 const single_root_manager = @import("single_root_manager.zig");
 const low_level_rtree = @import("../../spatial/rtree/rtree.zig");
 const PackedInt = @import("../../core/packed_int.zig").PackedInt;
+const FingerprintWriter = @import("../schema_fingerprint.zig").Writer;
 
 fn requireOption(comptime OptionsT: type, comptime name: []const u8) void {
     if (!@hasField(OptionsT, name)) {
@@ -157,6 +158,13 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
         pub const dimensions: usize = configured_dimensions;
         pub const maximum_entries: usize = configured_maximum_entries;
         pub const maximum_value_size: usize = configured_maximum_value_size;
+
+        pub fn fingerprint(writer: *FingerprintWriter) void {
+            writer.writeInt(usize, dimensions);
+            writer.writeInt(usize, maximum_entries);
+            writer.writeInt(usize, maximum_value_size);
+            writer.writeCoord(Coord);
+        }
 
         pub fn Binding(comptime BackendT: type) type {
             const ManagerT = single_root_manager.SingleRootManager(BackendT);

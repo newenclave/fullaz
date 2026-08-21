@@ -5,6 +5,7 @@ const algorithm = @import("../../core/algorithm.zig");
 const interfaces = @import("../../contracts/interfaces.zig");
 const PackedInt = @import("../../core/packed_int.zig").PackedInt;
 const low_level_bpt = @import("../../bpt/bpt.zig");
+const FingerprintWriter = @import("../schema_fingerprint.zig").Writer;
 
 fn requireOption(comptime OptionsT: type, comptime name: []const u8) void {
     if (!@hasField(OptionsT, name)) {
@@ -113,6 +114,13 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
         pub const maximum_key_size: usize = configured_maximum_key_size;
         pub const maximum_value_size: usize = configured_maximum_value_size;
         pub const rebalance_policy = configured_rebalance_policy;
+
+        pub fn fingerprint(writer: *FingerprintWriter) void {
+            writer.writeInt(u32, comparator_id);
+            writer.writeInt(usize, maximum_key_size);
+            writer.writeInt(usize, maximum_value_size);
+            writer.writeBytes(@tagName(rebalance_policy));
+        }
 
         pub fn Binding(comptime BackendT: type) type {
             interfaces.requiresFnSignature(

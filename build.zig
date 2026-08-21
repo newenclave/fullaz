@@ -142,6 +142,18 @@ pub fn build(b: *std.Build) void {
             .expected = "Unknown pages.bpt option: leaf_page_kind",
         },
         .{
+            .source = "tests/compile_errors/pages/slot_heap_missing_compare.zig",
+            .expected = "Missing pages.slotHeap option: compare",
+        },
+        .{
+            .source = "tests/compile_errors/pages/slot_heap_zero_maximum_level.zig",
+            .expected = "pages.slotHeap comparator_id, maximum_key_size, and maximum_level must be non-zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/slot_heap_unknown_option.zig",
+            .expected = "Unknown pages.slotHeap option: leaf_page_kind",
+        },
+        .{
             .source = "tests/compile_errors/pages/rtree_missing_coord.zig",
             .expected = "Missing pages.rtree option: Coord",
         },
