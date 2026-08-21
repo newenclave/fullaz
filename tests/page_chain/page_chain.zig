@@ -8,6 +8,40 @@ const printer = @import("test_printer");
 
 const extensions = fullaz.page.extensions;
 
+test "PageChain: destroyChunk releases its page before reclamation" {
+    const Device = devices.MemoryBlock(u32);
+    const RawCache = page_cache.PageCache(Device);
+    const Cache = fullaz.pages.MemoryReclaimingCache(RawCache);
+    const Manager = struct {
+        pub const PageId = u32;
+        pub const Size = u32;
+        pub const Error = Cache.Error;
+
+        cache: *Cache,
+
+        pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
+            return self.cache.free(page_id);
+        }
+    };
+    const Chain = page_chain.ForwardHandle(Cache, Manager, void, .little);
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var raw_cache = try RawCache.init(&device, std.testing.allocator, 2);
+    defer raw_cache.deinit();
+    var cache = Cache.init(std.testing.allocator, &raw_cache);
+    defer cache.deinit();
+    var manager = Manager{ .cache = &cache };
+    var chain = try Chain.init(&cache, &manager, .{ .chunk_page_kind = 77 });
+    defer chain.deinit();
+
+    var chunk = try chain.createChunk();
+    const page_id = try chunk.id();
+    try chain.destroyChunk(chunk);
+
+    try std.testing.expectError(error.PageNotAllocated, cache.fetch(page_id));
+}
+
 const TestTrait = struct {
     const Self = @This();
     pub const Storage = extern struct {

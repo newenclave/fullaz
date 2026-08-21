@@ -56,6 +56,7 @@ test {
     _ = @import("fsm/location_accessor.zig");
     _ = @import("fsm/header_location_accessor.zig");
     _ = @import("fsm/paged_slab.zig");
+    _ = @import("fsm/size_classes.zig");
     _ = @import("fsm/skip_list_integration.zig");
 
     _ = @import("device/memory_block.zig");

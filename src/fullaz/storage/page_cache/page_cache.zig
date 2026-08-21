@@ -243,7 +243,12 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             };
         }
 
-        pub fn initWal(underlying_device: *UnderlyingDevice, allocator: std.mem.Allocator, init_maximum_pages: usize, wal: WalPolicy) Error!Self {
+        pub fn initWal(
+            underlying_device: *UnderlyingDevice,
+            allocator: std.mem.Allocator,
+            init_maximum_pages: usize,
+            wal: WalPolicy,
+        ) Error!Self {
             if (!WalPolicy.enabled) {
                 @compileError("initWal requires a WAL policy; use init for NoWal");
             }
@@ -257,6 +262,10 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             // trying to recore from the WAL
             try self.recover();
             return self;
+        }
+
+        pub fn pageCount(self: *const Self) usize {
+            return self.device.blocksCount();
         }
 
         fn recover(self: *Self) Error!void {

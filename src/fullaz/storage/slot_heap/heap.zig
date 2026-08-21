@@ -72,6 +72,7 @@ pub fn Heap(comptime ModelT: type) type {
         pub const Error = ModelT.Error || error{
             CorruptTree,
             EmptySet,
+            MaxDepth,
         };
 
         pub const Peek = struct {
@@ -139,6 +140,10 @@ pub fn Heap(comptime ModelT: type) type {
         }
 
         pub fn push(self: *Self, key: KeyIn, value: ValueIn) Error!void {
+            const previous_hint = self.insertion_hint;
+            errdefer {
+                self.insertion_hint = previous_hint;
+            }
             const required = try self.model.requiredLeafSpace(key, value);
             const acc = self.model.accessor();
 
@@ -298,7 +303,7 @@ pub fn Heap(comptime ModelT: type) type {
             }
 
             if (root_level == child_level) {
-                const new_root_level = checkedNextLevel(root_level) orelse return Error.CorruptTree;
+                const new_root_level = try self.checkedNextLevel(root_level);
                 var new_root = InodeGuard.init(acc, try acc.createInode(new_root_level));
                 const new_root_id = new_root.ptr().id();
                 errdefer acc.destroy(new_root_id) catch {};
@@ -314,7 +319,7 @@ pub fn Heap(comptime ModelT: type) type {
                 return acc.setCachedTop(try new_root.ptr().getWinner(0));
             }
 
-            const parent_level = checkedNextLevel(child_level) orelse return Error.CorruptTree;
+            const parent_level = try self.checkedNextLevel(child_level);
             if (try acc.getAvailableInode(parent_level)) |parent_id| {
                 const parent_value = try self.loadInode(parent_id);
                 var parent = InodeGuard.init(acc, parent_value);
@@ -500,6 +505,7 @@ pub fn Heap(comptime ModelT: type) type {
                 return Error.CorruptTree;
             }
             const level = try inode.getLevel();
+            try self.validateInodeLevel(level);
             const old_head = try acc.getAvailableInode(level);
             try inode.setAvailablePrev(null);
             try inode.setAvailableNext(old_head);
@@ -521,6 +527,7 @@ pub fn Heap(comptime ModelT: type) type {
                 return;
             }
             const level = try inode.getLevel();
+            try self.validateInodeLevel(level);
             const previous = try inode.getAvailablePrev();
             const next = try inode.getAvailableNext();
             if (previous) |previous_id| {
@@ -562,7 +569,9 @@ pub fn Heap(comptime ModelT: type) type {
             }
             var inode = try self.loadInode(node_id);
             defer acc.deinitInode(inode);
-            return inode.getLevel();
+            const level = try inode.getLevel();
+            try self.validateInodeLevel(level);
+            return level;
         }
 
         fn refreshCachedTop(self: *Self) Error!void {
@@ -583,9 +592,18 @@ pub fn Heap(comptime ModelT: type) type {
             return .{ .page_id = leaf_id, .slot_id = @as(SlotId, 0) };
         }
 
-        fn checkedNextLevel(level: usize) ?usize {
+        fn checkedNextLevel(self: *const Self, level: usize) Error!usize {
             const result = @addWithOverflow(level, 1);
-            return if (result[1] == 0) result[0] else null;
+            if (result[1] != 0 or result[0] > self.model.maxLevel()) {
+                return Error.MaxDepth;
+            }
+            return result[0];
+        }
+
+        fn validateInodeLevel(self: *const Self, level: usize) Error!void {
+            if (level == 0 or level > self.model.maxLevel()) {
+                return Error.CorruptTree;
+            }
         }
 
         fn loadInode(self: *Self, pid: NodeId) Error!Inode {

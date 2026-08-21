@@ -177,6 +177,9 @@ const Model = struct {
     pub fn requiredLeafSpace(_: *const Model, _: []const u8, _: []const u8) Error!u16 {
         return 0;
     }
+    pub fn maxLevel(_: *const Model) usize {
+        return 32;
+    }
     pub fn incrementEntriesCount(_: *Model) Error!void {}
     pub fn decrementEntriesCount(_: *Model) Error!void {}
     pub fn getEntriesCount(_: *const Model) Error!u64 {

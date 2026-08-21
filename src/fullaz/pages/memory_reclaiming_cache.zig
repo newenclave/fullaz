@@ -157,6 +157,10 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
             return self.inner.pageSize();
         }
 
+        pub fn pageCount(self: *const Self) usize {
+            return self.physical_page_count;
+        }
+
         pub fn isPinned(self: *const Self, page_id: Pid) bool {
             return self.inner.isPinned(page_id);
         }

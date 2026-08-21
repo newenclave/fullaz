@@ -43,6 +43,7 @@ pub fn requiresPageCache(comptime T: type) void {
     requiresFnSignature(T, "create", fn (*T) Error!Handle);
     requiresFnSignature(T, "flush", fn (*T, Pid) Error!void);
     requiresFnSignature(T, "flushAll", fn (*T) Error!void);
+    requiresFnSignature(T, "pageCount", fn (*const T) usize);
 }
 
 pub fn requiresPinAwarePageCache(comptime T: type) void {

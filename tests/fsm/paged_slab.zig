@@ -7,7 +7,7 @@ const dev = fullaz.device;
 const SizePolicy = struct {
     const Self = @This();
     pub const SizeClass = u16;
-    pub fn getSizeClass(_: *const Self, size: SizeClass) !SizeClass {
+    pub fn getSizeClass(_: *const Self, size: SizeClass) SizeClass {
         return size >> 8;
     }
     pub fn count(_: *const Self) usize {
@@ -137,7 +137,7 @@ const Spill = struct {
 
 fn fillUntilSpill(map: *Map, sm: *NoneStorageManager, cache: *PageCache, free: u16, extra: usize) !Spill {
     const policy = SizePolicy{};
-    const class = try policy.getSizeClass(free);
+    const class = policy.getSizeClass(free);
     var pids: [512]u32 = undefined;
     var first_root: ?u32 = null;
     var s: usize = 0;
@@ -232,6 +232,33 @@ test "Fsm paged: remove rejects a location that points to another data page slot
     try std.testing.expectError(Model.Error.BadData, map.remove(first));
 }
 
+test "Fsm paged: remove preserves an orphaned slab slot" {
+    const allocator = std.testing.allocator;
+    var sm = try NoneStorageManager.init(allocator);
+    defer sm.deinit();
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+
+    var model = Model.init(&cache, &sm, SizePolicy{}, .{});
+    var map = Map.init(&model);
+    defer map.deinit();
+
+    const data_pid = try makeDataPage(&cache);
+    try map.add(data_pid, 100);
+    const root = (try sm.getSizeClassRoot(0)).?;
+    try sm.setSizeClassRoot(0, null);
+
+    try std.testing.expectError(Model.Error.BadData, map.remove(data_pid));
+
+    const SlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, true).SlabPageView;
+    var page = try cache.fetch(root);
+    defer page.deinit();
+    const slab = SlabView.init(try page.data());
+    try std.testing.expectEqual(data_pid, (try slab.get(0)).?.pid);
+}
+
 test "Fsm paged: find rejects a class root with another persisted class" {
     const allocator = std.testing.allocator;
     var sm = try NoneStorageManager.init(allocator);
@@ -258,6 +285,60 @@ test "Fsm paged: find rejects a class root with another persisted class" {
     }
 
     try std.testing.expectError(Model.Error.BadData, map.find(100));
+}
+
+test "Fsm paged: find bounds a cyclic slab chain" {
+    const allocator = std.testing.allocator;
+    var sm = try NoneStorageManager.init(allocator);
+    defer sm.deinit();
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+
+    var model = Model.init(&cache, &sm, SizePolicy{}, .{});
+    var map = Map.init(&model);
+    defer map.deinit();
+
+    const data_pid = try makeDataPage(&cache);
+    try map.add(data_pid, 100);
+    const root = (try sm.getSizeClassRoot(0)).?;
+    {
+        const SlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, false).SlabPageView;
+        var page = try cache.fetch(root);
+        defer page.deinit();
+        var slab = SlabView.init(try page.dataMut());
+        try slab.setNext(root);
+    }
+
+    try std.testing.expectError(Model.Error.BadData, map.find(200));
+}
+
+test "Fsm paged: find rejects a broken backward slab link" {
+    const allocator = std.testing.allocator;
+    var sm = try NoneStorageManager.init(allocator);
+    defer sm.deinit();
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+
+    var model = Model.init(&cache, &sm, SizePolicy{}, .{});
+    var map = Map.init(&model);
+    defer map.deinit();
+
+    const data_pid = try makeDataPage(&cache);
+    try map.add(data_pid, 100);
+    const root = (try sm.getSizeClassRoot(0)).?;
+    {
+        const SlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, false).SlabPageView;
+        var page = try cache.fetch(root);
+        defer page.deinit();
+        var slab = SlabView.init(try page.dataMut());
+        try slab.setPrev(root);
+    }
+
+    try std.testing.expectError(Model.Error.BadData, map.find(200));
 }
 
 test "Fsm paged: remove rejects a plain page with the slab kind" {

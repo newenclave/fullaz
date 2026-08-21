@@ -9,7 +9,7 @@ const superblock = @import("superblock.zig");
 pub const NodeSizePolicy = struct {
     pub const SizeClass = u16;
 
-    pub fn getSizeClass(_: *const @This(), _: SizeClass) !SizeClass {
+    pub fn getSizeClass(_: *const @This(), _: SizeClass) SizeClass {
         return 0;
     }
 

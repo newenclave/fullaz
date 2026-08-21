@@ -230,6 +230,32 @@ test "SlotHeap memory: validates key and value sizes" {
     try std.testing.expectEqual(@as(u64, 0), try heap.count());
 }
 
+test "SlotHeap memory: rejects growth past the configured maximum level" {
+    var model = try Model.init(std.testing.allocator, {}, .{
+        .key_size = 4,
+        .maximum_value_size = 16,
+        .leaf_capacity_bytes = 32,
+        .inode_capacity = 2,
+        .max_levels = 2,
+    });
+    defer model.deinit();
+    var heap = Heap.init(&model);
+
+    var keys: [13][4]u8 = undefined;
+    for (0..keys.len) |index| {
+        _ = try std.fmt.bufPrint(&keys[index], "{d:0>4}", .{index});
+    }
+    var reached_limit = false;
+    for (&keys) |*key| {
+        heap.push(key, "v") catch |err| {
+            try std.testing.expectEqual(error.MaxDepth, err);
+            reached_limit = true;
+            break;
+        };
+    }
+    try std.testing.expect(reached_limit);
+}
+
 test "SlotHeap memory: randomized interleaved operations match an oracle" {
     var model = try initModel();
     defer model.deinit();

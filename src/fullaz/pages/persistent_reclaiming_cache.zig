@@ -144,6 +144,10 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             return self.inner.pageSize();
         }
 
+        pub fn pageCount(self: *const Self) usize {
+            return self.store.pageCount();
+        }
+
         pub fn isPinned(self: *const Self, page_id: PageId) bool {
             return self.inner.isPinned(page_id);
         }

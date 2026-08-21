@@ -61,7 +61,8 @@ pub fn HandleForwardImpl(
     const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
-    const has_tail = @hasDecl(StorageManagerT, "getLast") and @hasDecl(StorageManagerT, "setLast");
+    const has_tail = @hasDecl(StorageManagerT, "getLast") and
+        @hasDecl(StorageManagerT, "setLast");
 
     const EmptyStruct = extern struct {};
     const SubheaderType = if (SubheaderT == void) EmptyStruct else SubheaderT;
@@ -352,7 +353,12 @@ pub fn HandleForwardImpl(
         }
 
         fn iteratorOn(self: *const Self, page_id: PageId) Error!IteratorImpl {
-            return IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, page_id, .{ .on = 0 });
+            return IteratorImpl.init(
+                self.page_cache,
+                self.settings.chunk_page_kind,
+                page_id,
+                .{ .on = 0 },
+            );
         }
 
         /// Takes ownership of itr. On success, the returned iterator replaces it.
@@ -445,8 +451,8 @@ pub fn HandleForwardImpl(
 
         pub fn destroyChunk(self: *Self, ch: ChunkHandle) Error!void {
             var owned_chunk = ch;
-            defer owned_chunk.deinit();
             const pid = try owned_chunk.ph.pid();
+            owned_chunk.deinit();
             try self.mgr.destroyPage(pid);
         }
 
@@ -891,9 +897,17 @@ pub fn HandleBidirectionalImpl(
 
         pub fn iteratorFromEnd(self: *const Self) Error!Iterator {
             if (try self.lastId()) |page_id| {
-                return IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, page_id, .{ .on = 0 });
+                return IteratorImpl.init(
+                    self.page_cache,
+                    self.settings.chunk_page_kind,
+                    page_id,
+                    .{ .on = 0 },
+                );
             }
-            return IteratorImpl.initEmpty(self.page_cache, self.settings.chunk_page_kind);
+            return IteratorImpl.initEmpty(
+                self.page_cache,
+                self.settings.chunk_page_kind,
+            );
         }
 
         fn lastId(self: *const Self) Error!?PageId {
@@ -910,7 +924,12 @@ pub fn HandleBidirectionalImpl(
         }
 
         fn iteratorOn(self: *const Self, page_id: PageId) Error!IteratorImpl {
-            return IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, page_id, .{ .on = 0 });
+            return IteratorImpl.init(
+                self.page_cache,
+                self.settings.chunk_page_kind,
+                page_id,
+                .{ .on = 0 },
+            );
         }
 
         /// Takes ownership of itr. On success, the returned iterator replaces it.
@@ -923,11 +942,24 @@ pub fn HandleBidirectionalImpl(
                 const next = try current.getNext();
                 const prev = try current.getPrev();
                 var replacement = if (next) |next_id|
-                    try IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, next_id, .{ .on = 0 })
+                    try IteratorImpl.init(
+                        self.page_cache,
+                        self.settings.chunk_page_kind,
+                        next_id,
+                        .{ .on = 0 },
+                    )
                 else if (prev) |prev_id|
-                    try IteratorImpl.init(self.page_cache, self.settings.chunk_page_kind, prev_id, .after_last)
+                    try IteratorImpl.init(
+                        self.page_cache,
+                        self.settings.chunk_page_kind,
+                        prev_id,
+                        .after_last,
+                    )
                 else
-                    IteratorImpl.initEmpty(self.page_cache, self.settings.chunk_page_kind);
+                    IteratorImpl.initEmpty(
+                        self.page_cache,
+                        self.settings.chunk_page_kind,
+                    );
                 errdefer replacement.deinit();
 
                 try self.evictChunk(current);
@@ -960,8 +992,8 @@ pub fn HandleBidirectionalImpl(
 
         pub fn destroyChunk(self: *Self, ch: ChunkHandle) Error!void {
             var owned_chunk = ch;
-            defer owned_chunk.deinit();
             const pid = try owned_chunk.ph.pid();
+            owned_chunk.deinit();
             try self.mgr.destroyPage(pid);
         }
 

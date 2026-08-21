@@ -22,8 +22,8 @@ test "cloud: one size class means the fsm keeps a single root" {
     const policy = cloud.storage.NodeSizePolicy{};
 
     try testing.expectEqual(@as(usize, 1), policy.count());
-    try testing.expectEqual(@as(u16, 0), try policy.getSizeClass(1));
-    try testing.expectEqual(@as(u16, 0), try policy.getSizeClass(60_000));
+    try testing.expectEqual(@as(u16, 0), policy.getSizeClass(1));
+    try testing.expectEqual(@as(u16, 0), policy.getSizeClass(60_000));
 }
 
 const Fixture = struct {
