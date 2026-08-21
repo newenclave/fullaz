@@ -13,6 +13,48 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
         pub const dimension = dim_v;
         pub const Point = [dimension]Coord;
 
+        const is_integer = @typeInfo(Coord) == .int;
+
+        // R-tree scores must be ordered even when a valid box spans the native
+        // coordinate range. Saturation trades score precision for safe routing.
+        fn metricExtent(high: Coord, low: Coord) Coord {
+            if (high <= low) {
+                return 0;
+            }
+            if (comptime is_integer) {
+                return std.math.sub(Coord, high, low) catch std.math.maxInt(Coord);
+            }
+            const result = high - low;
+            return if (std.math.isFinite(result)) result else std.math.floatMax(Coord);
+        }
+
+        fn metricAdd(left: Coord, right: Coord) Coord {
+            if (comptime is_integer) {
+                return std.math.add(Coord, left, right) catch std.math.maxInt(Coord);
+            }
+            const result = left + right;
+            return if (std.math.isFinite(result)) result else std.math.floatMax(Coord);
+        }
+
+        fn metricMul(left: Coord, right: Coord) Coord {
+            if (comptime is_integer) {
+                return std.math.mul(Coord, left, right) catch std.math.maxInt(Coord);
+            }
+            const result = left * right;
+            return if (std.math.isFinite(result)) result else std.math.floatMax(Coord);
+        }
+
+        fn metricDifference(larger: Coord, smaller: Coord) Coord {
+            if (larger <= smaller) {
+                return 0;
+            }
+            if (comptime is_integer) {
+                return std.math.sub(Coord, larger, smaller) catch std.math.maxInt(Coord);
+            }
+            const result = larger - smaller;
+            return if (std.math.isFinite(result)) result else std.math.floatMax(Coord);
+        }
+
         low: Point = undefined,
         high: Point = undefined,
 
@@ -54,7 +96,10 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
 
             var result: Coord = 1;
             inline for (0..dims) |i| {
-                result *= (self.high[start + i] - self.low[start + i]);
+                result = metricMul(result, metricExtent(
+                    self.high[start + i],
+                    self.low[start + i],
+                ));
             }
             return result;
         }
@@ -68,7 +113,10 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
 
             var result: Coord = 0;
             inline for (0..dims) |i| {
-                result += (self.high[start + i] - self.low[start + i]);
+                result = metricAdd(result, metricExtent(
+                    self.high[start + i],
+                    self.low[start + i],
+                ));
             }
             return result;
         }
@@ -85,12 +133,15 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
                 var face_measure: Coord = 1;
                 inline for (0..dims) |j| {
                     if (i != j) {
-                        face_measure *= (self.high[start + j] - self.low[start + j]);
+                        face_measure = metricMul(face_measure, metricExtent(
+                            self.high[start + j],
+                            self.low[start + j],
+                        ));
                     }
                 }
-                result += face_measure;
+                result = metricAdd(result, face_measure);
             }
-            return result * 2;
+            return metricMul(result, 2);
         }
 
         pub fn surfaceArea(self: *const Self) Coord {
@@ -196,7 +247,10 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
             comptime start: usize,
             comptime dims: usize,
         ) Coord {
-            return self.merged(other).measureN(start, dims) - self.measureN(start, dims);
+            return metricDifference(
+                self.merged(other).measureN(start, dims),
+                self.measureN(start, dims),
+            );
         }
 
         pub fn enlargement(self: *const Self, other: *const Self) Coord {
@@ -219,7 +273,7 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
                 if (hi <= lo) {
                     return 0;
                 }
-                result *= (hi - lo);
+                result = metricMul(result, metricExtent(hi, lo));
             }
             return result;
         }

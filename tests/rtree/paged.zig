@@ -98,6 +98,95 @@ test "RTree paged: empty tree search yields nothing" {
     try testing.expectEqual(@as(usize, 0), try t.height());
 }
 
+test "RTree paged: model rejects invalid physical settings" {
+    const allocator = testing.allocator;
+
+    {
+        var device = try Device.init(allocator, 256);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 2);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+
+        try testing.expectError(
+            error.InvalidSettings,
+            Model.init(&cache, &store_mgr, .{
+                .leaf_page_kind = 7,
+                .inode_page_kind = 7,
+            }),
+        );
+        try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    }
+
+    {
+        var device = try Device.init(allocator, 64);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 2);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+
+        try testing.expectError(error.InvalidSettings, Model.init(&cache, &store_mgr, .{}));
+        try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    }
+
+    {
+        const OversizedValueModel = rtree.models.Paged(
+            PageCache,
+            NoneStorageManager,
+            i64,
+            2,
+            4,
+            65_536,
+            .little,
+        );
+        var device = try Device.init(allocator, 4096);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 2);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+
+        try testing.expectError(
+            error.InvalidSettings,
+            OversizedValueModel.init(&cache, &store_mgr, .{}),
+        );
+        try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    }
+
+    {
+        const OvercommittedEntryModel = rtree.models.Paged(
+            PageCache,
+            NoneStorageManager,
+            i64,
+            2,
+            128,
+            32,
+            .little,
+        );
+        var device = try Device.init(allocator, 4096);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 2);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+
+        try testing.expectError(
+            error.InvalidSettings,
+            OvercommittedEntryModel.init(&cache, &store_mgr, .{}),
+        );
+        try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    }
+
+    {
+        var device = try Device.init(allocator, 65_536);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 2);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+
+        try testing.expectError(error.InvalidSettings, Model.init(&cache, &store_mgr, .{}));
+        try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    }
+}
+
 test "RTree paged: single insert is findable" {
     const allocator = testing.allocator;
     var device = try Device.init(allocator, 4096);

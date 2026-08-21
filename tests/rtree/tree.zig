@@ -49,6 +49,29 @@ test "RTree: single insert is findable" {
     try testing.expectEqual(@as(usize, 0), miss.count);
 }
 
+test "RTree: extreme integer boxes split without metric overflow" {
+    var m = try Model.init(testing.allocator);
+    defer m.deinit();
+    var t = Tree.init(&m);
+
+    const extreme = box(
+        std.math.minInt(i64),
+        std.math.minInt(i64),
+        std.math.maxInt(i64),
+        std.math.maxInt(i64),
+    );
+    for (0..5) |index| {
+        try t.insert(extreme, @intCast(index));
+    }
+
+    var found = Collector{};
+    try t.search(extreme, &found, Collector.cb);
+    try testing.expectEqual(@as(usize, 5), found.count);
+    for (0..5) |index| {
+        try testing.expect(found.seen[index]);
+    }
+}
+
 test "RTree: searchIntersecting includes touching boxes" {
     var m = try Model.init(testing.allocator);
     defer m.deinit();

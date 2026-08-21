@@ -142,7 +142,30 @@ pub fn GuttmanStrategy(comptime KeyT: type) type {
         }
 
         fn waste(a: *const KeyT, b: *const KeyT) Coord {
-            return a.merged(b).measure() - a.measure() - b.measure();
+            const merged_measure = a.merged(b).measure();
+            const source_measure = saturatingAdd(a.measure(), b.measure());
+            return saturatingSubtract(merged_measure, source_measure);
+        }
+
+        fn saturatingAdd(left: Coord, right: Coord) Coord {
+            if (comptime @typeInfo(Coord) == .int) {
+                return std.math.add(Coord, left, right) catch std.math.maxInt(Coord);
+            }
+            const result = left + right;
+            return if (std.math.isFinite(result)) result else std.math.floatMax(Coord);
+        }
+
+        fn saturatingSubtract(left: Coord, right: Coord) Coord {
+            if (comptime @typeInfo(Coord) == .int) {
+                return std.math.sub(Coord, left, right) catch {
+                    return if (left < right) std.math.minInt(Coord) else std.math.maxInt(Coord);
+                };
+            }
+            const result = left - right;
+            if (std.math.isFinite(result)) {
+                return result;
+            }
+            return if (left < right) -std.math.floatMax(Coord) else std.math.floatMax(Coord);
         }
 
         fn assignRest(assignment: []u8, group: u8) void {

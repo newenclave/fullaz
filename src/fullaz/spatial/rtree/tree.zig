@@ -796,20 +796,33 @@ fn TreeWithConfig(
                 }
             }
             if (orphan_leaf) |olid| {
+                const OrphanEntry = struct {
+                    mbr: Key,
+                    value: ValueBuf,
+                };
+                var orphan_entries: [min_fill]OrphanEntry = undefined;
+                var orphan_count: usize = 0;
                 {
                     var leaf = (try acc.loadLeaf(olid)).?; // must be alive here
                     defer acc.deinitLeaf(leaf);
                     const n = try leaf.size();
                     var i: usize = 0;
                     while (i < n) : (i += 1) {
-                        try self.insertValue(
-                            try leaf.getMbr(i),
-                            self.model.valueOutAsIn(try leaf.getValue(i)),
-                            &ins_ctx,
-                        );
+                        orphan_entries[i] = .{
+                            .mbr = try leaf.getMbr(i),
+                            .value = self.model.copyValueOut(try leaf.getValue(i)),
+                        };
+                        orphan_count += 1;
                     }
                 }
                 try acc.destroy(olid);
+                for (orphan_entries[0..orphan_count]) |entry| {
+                    try self.insertValue(
+                        entry.mbr,
+                        self.model.valueBufAsIn(&entry.value),
+                        &ins_ctx,
+                    );
+                }
             }
 
             try self.drainReinserts(&ins_ctx);
@@ -844,6 +857,7 @@ fn TreeWithConfig(
 
             if ((try self.levelOf(root)) <= target_level) {
                 var nr = try acc.createInode();
+                errdefer acc.destroy(nr.id()) catch {};
                 defer acc.deinitInode(nr);
                 try nr.setLevel(target_level + 1);
                 try nr.insertChild(ConfigT.makeInodeMbr(try self.nodeMbrOf(root)), root);

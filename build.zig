@@ -142,6 +142,54 @@ pub fn build(b: *std.Build) void {
             .expected = "Unknown pages.bpt option: leaf_page_kind",
         },
         .{
+            .source = "tests/compile_errors/pages/rtree_missing_coord.zig",
+            .expected = "Missing pages.rtree option: Coord",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_missing_dimensions.zig",
+            .expected = "Missing pages.rtree option: dimensions",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_missing_maximum_entries.zig",
+            .expected = "Missing pages.rtree option: maximum_entries",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_missing_maximum_value_size.zig",
+            .expected = "Missing pages.rtree option: maximum_value_size",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_unknown_option.zig",
+            .expected = "Unknown pages.rtree option: endian",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_unsigned_coord.zig",
+            .expected = "pages.rtree Coord must be a signed integer or float",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_zero_dimensions.zig",
+            .expected = "pages.rtree dimensions must be greater than zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_small_maximum_entries.zig",
+            .expected = "pages.rtree maximum_entries must be at least 4",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_large_value.zig",
+            .expected = "pages.rtree maximum_value_size must fit u16",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_large_leaf_slot.zig",
+            .expected = "pages.rtree maximum leaf slot must fit u16",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_zero_format_version.zig",
+            .expected = "pages.rtree format_version cannot be zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_anyerror_callback.zig",
+            .expected = "pages.rtree callback error set cannot be anyerror",
+        },
+        .{
             .source = "tests/compile_errors/pages/binding_anyerror.zig",
             .expected = "Pages component binding Error cannot be anyerror",
         },

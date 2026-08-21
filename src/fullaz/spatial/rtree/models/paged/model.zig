@@ -180,10 +180,7 @@ pub fn PagedModel(
             };
             if (status == .not_enough) return Error.NodeFull;
             if (status == .need_compact) {
-                var tmp = try self.ctx.cache.getTemporaryPage();
-                defer tmp.deinit();
-                var view = MutView.init(try self.handle.dataMut());
-                try view.compact(try tmp.dataMut());
+                try self.compact();
             }
             var view = MutView.init(try self.handle.dataMut());
             try view.append(mbr, value);
@@ -309,10 +306,7 @@ pub fn PagedModel(
             };
             if (status == .not_enough) return Error.NodeFull;
             if (status == .need_compact) {
-                var tmp = try self.ctx.cache.getTemporaryPage();
-                defer tmp.deinit();
-                var view = MutView.init(try self.handle.dataMut());
-                try view.compact(try tmp.dataMut());
+                try self.compact();
             }
             var view = MutView.init(try self.handle.dataMut());
             try view.append(mbr, child);
@@ -471,13 +465,13 @@ pub fn PagedModel(
 
             var leaf = RtreeView.LeafSubheaderView.init(scratch_data);
             leaf.formatPage(settings.leaf_page_kind, 0, 0) catch return Error.InvalidSettings;
-            if ((leaf.capacityFor(max_value_size) catch return Error.InvalidSettings) < 3) {
+            if ((leaf.capacityFor(max_value_size) catch return Error.InvalidSettings) < max_entries_v) {
                 return Error.InvalidSettings;
             }
 
             var inode = RtreeView.InodeSubheaderView.init(scratch_data);
             inode.formatPage(settings.inode_page_kind, 0, 0) catch return Error.InvalidSettings;
-            if ((inode.capacityFor() catch return Error.InvalidSettings) < 3) {
+            if ((inode.capacityFor() catch return Error.InvalidSettings) < max_entries_v) {
                 return Error.InvalidSettings;
             }
 

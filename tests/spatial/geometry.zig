@@ -30,6 +30,22 @@ test "BoundingBox: measure and perimeter" {
     try testing.expectEqual(@as(i64, 5), b.perimeter()); // 2 + 3
 }
 
+test "BoundingBox: metrics saturate for extreme finite bounds" {
+    const extreme = BB.initWith(
+        .{ std.math.minInt(i64), std.math.minInt(i64) },
+        .{ std.math.maxInt(i64), std.math.maxInt(i64) },
+    );
+    const float_extreme = FB.initWith(
+        .{ -std.math.floatMax(f64), -std.math.floatMax(f64) },
+        .{ std.math.floatMax(f64), std.math.floatMax(f64) },
+    );
+
+    try testing.expectEqual(std.math.maxInt(i64), extreme.perimeter());
+    try testing.expectEqual(std.math.maxInt(i64), extreme.measure());
+    try testing.expectEqual(std.math.floatMax(f64), float_extreme.perimeter());
+    try testing.expectEqual(std.math.floatMax(f64), float_extreme.measure());
+}
+
 test "BoundingBox: range metrics use selected coordinates" {
     const b = BB4.initWith(.{ 0, 0, 0, 0 }, .{ 2, 3, 5, 7 });
     const changed_u = BB4.initWith(.{ 0, 0, 0, 0 }, .{ 2, 3, 5, 100 });
