@@ -108,6 +108,7 @@ let ex, mem;
 const map = L.map("map", { zoomControl: true }).setView([60.1699, 24.9384], 12);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" }).addTo(map);
 const ordersLayer = L.layerGroup().addTo(map);
+const selectionLayer = L.layerGroup().addTo(map);
 const orderLayers = new Map();
 let selectMode = false, addMode = false, rectStart = null, rectLayer = null, selectedPage = null;
 
@@ -141,6 +142,7 @@ function addOrderCore(id, value, low0, low1, high0, high1) {
   ensure(withBytes(encode.encode(id), (idPtr, idLen) => withBytes(encode.encode(value), (valPtr, valLen) =>
     ex.addOrder(idPtr, idLen, valPtr, valLen, low0, low1, high0, high1))));
   refresh();
+  queryVisibleArea();
   persist().catch(showError);
 }
 
@@ -166,6 +168,7 @@ function addSample() {
       ex.addOrder(idPtr, idLen, vPtr, vLen, l0, l1, h0, h1))));
   }
   refresh();
+  queryVisibleArea();
   document.getElementById("f-id").value = "00000006";
   persist().catch(showError);
   setStatus("sample orders added");
@@ -185,13 +188,31 @@ function completeNext() {
   const id = readStr(ex.completePtr(), 8);
   el.nextPanel.className = ""; el.nextPanel.replaceChildren("completed: ", Object.assign(document.createElement("b"), { textContent: id }));
   refresh();
+  queryVisibleArea();
   persist().catch(showError);
 }
 
 function setOrderHighlight(predicate) {
+  selectionLayer.clearLayers();
   for (const [key, layer] of orderLayers) {
-    const on = predicate(key);
-    layer.setStyle({ weight: on ? 4 : 2, radius: on ? 13 : 9, opacity: 1, fillOpacity: on ? 1 : .85 });
+    if (!predicate(key)) continue;
+    L.circleMarker(layer.getLatLng(), {
+      radius: 17,
+      color: "#172033",
+      weight: 5,
+      opacity: .92,
+      fill: false,
+      interactive: false,
+    }).addTo(selectionLayer);
+    L.circleMarker(layer.getLatLng(), {
+      radius: 17,
+      color: "#facc15",
+      weight: 2,
+      opacity: 1,
+      fill: false,
+      dashArray: "3 5",
+      interactive: false,
+    }).addTo(selectionLayer);
   }
 }
 
@@ -201,7 +222,7 @@ function renderOrders() {
   ensure(ex.snapshotOrders());
   const count = ex.ordersCount(), stride = ex.orderStride();
   const data = new DataView(mem.buffer, ex.ordersPtr(), count * stride);
-  orderLayers.clear(); ordersLayer.clearLayers();
+  orderLayers.clear(); ordersLayer.clearLayers(); selectionLayer.clearLayers();
   for (let i = 0; i < count; i++) {
     const b = i * stride;
     const id = readStr(ex.ordersPtr() + b, 8);
@@ -330,16 +351,66 @@ function setupSelect() {
   });
 }
 
-function runAreaQuery(low0, low1, high0, high1) {
+function queryArea(low0, low1, high0, high1) {
   const ok = ex.ordersInArea(low0, low1, high0, high1);
-  if (!ok) { el.areaPanel.className = "empty"; el.areaPanel.textContent = `error: ${errorText()}`; return; }
+  if (!ok) throw new Error(errorText());
   const count = ex.areaCount();
   const ids = [];
   for (let i = 0; i < count; i++) ids.push(readStr(ex.areaIdsPtr() + i * 8, 8));
-  const area = `[${low0.toFixed(2)},${low1.toFixed(2)}]..[${high0.toFixed(2)},${high1.toFixed(2)}]`;
+  return ids;
+}
+
+function showAreaQuery(label, ids, showIds = true, highlight = true) {
   el.areaPanel.className = "";
-  el.areaPanel.replaceChildren(area, " → ", count ? Object.assign(document.createElement("b"), { textContent: ids.join(", ") }) : "no orders");
-  setOrderHighlight(key => ids.includes(key));
+  const result = ids.length
+    ? showIds ? ids.join(", ") : `${ids.length} order${ids.length === 1 ? "" : "s"}`
+    : "no orders";
+  el.areaPanel.replaceChildren(label, " → ", ids.length ? Object.assign(document.createElement("b"), { textContent: result }) : result);
+  setOrderHighlight(highlight ? key => ids.includes(key) : () => false);
+}
+
+function runAreaQuery(low0, low1, high0, high1) {
+  try {
+    const area = `[${low0.toFixed(2)},${low1.toFixed(2)}]..[${high0.toFixed(2)},${high1.toFixed(2)}]`;
+    showAreaQuery(area, queryArea(low0, low1, high0, high1));
+  } catch (error) {
+    el.areaPanel.className = "empty";
+    el.areaPanel.textContent = `error: ${error.message || error}`;
+  }
+}
+
+function normalizeLongitude(longitude) {
+  return ((longitude + 180) % 360 + 360) % 360 - 180;
+}
+
+function queryVisibleArea() {
+  const bounds = map.getBounds();
+  const south = bounds.getSouth(), north = bounds.getNorth();
+  const west = bounds.getWest(), east = bounds.getEast();
+  const ids = new Set();
+  const collect = (lowLng, highLng) => {
+    for (const id of queryArea(south, lowLng, north, highLng)) ids.add(id);
+  };
+
+  if (east - west >= 360) {
+    collect(-180, 180);
+  } else {
+    const wrappedWest = normalizeLongitude(west);
+    const wrappedEast = normalizeLongitude(east);
+    if (wrappedWest <= wrappedEast) {
+      collect(wrappedWest, wrappedEast);
+    } else {
+      collect(wrappedWest, 180);
+      collect(-180, wrappedEast);
+    }
+  }
+
+  showAreaQuery(
+    `visible [${south.toFixed(2)},${west.toFixed(2)}]..[${north.toFixed(2)},${east.toFixed(2)}]`,
+    [...ids],
+    false,
+    false,
+  );
 }
 
 function showError(error) { console.error(error); setStatus(String(error.message || error), true); }
@@ -354,7 +425,7 @@ document.getElementById("show-inspector").onchange = e => {
   document.getElementById("inspector").classList.toggle("hidden", !e.target.checked);
   setTimeout(() => map.invalidateSize(), 0);
 };
-el.reset.onclick = () => run(() => { ensure(ex.format()); selectedPage = null; document.getElementById("f-id").value = "00000001"; refresh(); persist().catch(showError); setStatus("reset to an empty database"); });
+el.reset.onclick = () => run(() => { ensure(ex.format()); selectedPage = null; document.getElementById("f-id").value = "00000001"; refresh(); queryVisibleArea(); persist().catch(showError); setStatus("reset to an empty database"); });
 el.upload.onclick = () => el.fileUpload.click();
 el.fileUpload.onchange = async () => {
   const file = el.fileUpload.files[0];
@@ -364,6 +435,7 @@ el.fileUpload.onchange = async () => {
     importBytes(await file.arrayBuffer());
     selectedPage = null;
     refresh();
+    queryVisibleArea();
     await persist();
     setStatus(`loaded ${file.name}`);
   } catch (error) {
@@ -388,6 +460,8 @@ el.download.onclick = () => { try { const ptr = ex.imagePtr(); const bytes = new
     }
     setupSelect();
     refresh();
+    queryVisibleArea();
+    map.on("moveend", () => run(queryVisibleArea));
   } catch (error) { showError(error); }
 })();
 </script>
