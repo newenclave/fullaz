@@ -3,24 +3,59 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>fullaz-db dispatch</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-  body { max-width: 42rem; margin: 8vh auto; padding: 0 1.25rem; background: #10151c; color: #dbe7f3; font: 16px/1.5 system-ui, sans-serif; }
-  button { padding: .6rem .9rem; background: #3b82f6; color: white; border: 0; border-radius: .4rem; font: inherit; cursor: pointer; }
-  code { color: #93c5fd; }
+  :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background:#101721; color:#e3edf8; }
+  body { margin:0; min-height:100vh; display:grid; grid-template-columns:minmax(0,1fr) 360px; }
+  #map { min-height:100vh; background:#1a2632; }
+  aside { padding:24px; background:#111923; border-left:1px solid #2a394a; overflow:auto; }
+  h1 { margin:0; font-size:22px; letter-spacing:-.04em; } .eyebrow { color:#65c6ec; text-transform:uppercase; font-size:11px; letter-spacing:.12em; font-weight:700; }
+  .lede { color:#9aafc2; font-size:14px; } button { width:100%; padding:11px; border:0; border-radius:8px; background:#f59e0b; color:#1b1202; font-weight:750; cursor:pointer; }
+  .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:20px 0; } .metric { padding:10px; background:#182432; border-radius:7px; } .metric b { display:block; font-size:20px; } .metric span { color:#8ea2b6; font-size:11px; }
+  .step { display:grid; grid-template-columns:23px 1fr; gap:8px; margin:10px 0; color:#92a8bc; font-size:13px; } .dot { width:18px; height:18px; border-radius:50%; text-align:center; background:#263849; color:#7f99ae; font-size:12px; line-height:18px; } .step.done { color:#d8e6f1; } .step.done .dot { background:#167a58; color:#dffcf0; }
+  .card { margin-top:20px; padding:14px; border:1px solid #2a394a; border-radius:8px; background:#151f2b; } .card h2 { margin:0 0 8px; font-size:13px; } .card p { margin:4px 0; color:#9aafc2; font-size:12px; }
+  .leaflet-popup-content-wrapper { background:#152130; color:#e7f1f8; } .leaflet-popup-tip { background:#152130; }
+  @media(max-width:800px) { body { display:block; } #map { min-height:58vh; } aside { border-left:0; border-top:1px solid #2a394a; } }
 </style>
-<h1>fullaz-db dispatch</h1>
-<p>Replays one deterministic work-order transaction on an in-memory database.</p>
-<p>It composes B+ tree indexes, R-tree service areas, a slot heap, audit chain store, and editable runbook.</p>
-<button id="replay">Replay scenario</button>
-<p id="status">Loading WASM...</p>
+<div id="map"></div><aside>
+  <div class="eyebrow">fullaz-db / memory backend</div><h1>Dispatch board</h1>
+  <p class="lede">A deterministic work-order run backed by one composed transaction. The map is an OpenStreetMap view; marker state comes from WASM memory.</p>
+  <button id="replay">Replay database scenario</button>
+  <div class="metrics"><div class="metric"><b id="orders">-</b><span>orders / BPT</span></div><div class="metric"><b id="queue">-</b><span>queue / heap</span></div><div class="metric"><b id="audit">-</b><span>audit bytes</span></div></div>
+  <div id="steps"></div>
+  <div class="card"><h2>Operator runbook</h2><p>Inspect pump before dispatch.</p><p>WeightedSequence stores this editable document.</p></div>
+  <div class="card"><h2>Map semantics</h2><p>Markers are R-tree service-area representatives. Priority: critical, high, medium, low.</p></div>
+</aside>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
   (async () => {
     const bytes = await (await fetch("dispatch.wasm")).arrayBuffer();
     const wasm = (await WebAssembly.instantiate(bytes, {})).instance;
-    const status = document.querySelector("#status");
-    const replay = () => { status.textContent = wasm.exports.replay() === 0 ? "Scenario verified." : "Scenario failed."; };
+    const orders = ["North pump", "West valve", "River sensor", "School meter", "Station relay"];
+    const priorities = ["low", "medium", "high", "critical"];
+    const steps = ["Primary + status/due B+ tree indexes", "R-tree service areas", "SlotHeap dispatch queue", "ChainStore audit frames", "WeightedSequence runbook", "Rollback boundary verified"];
+    const map = L.map("map", { zoomControl:false }).setView([60.1699, 24.9384], 12);
+    L.control.zoom({ position:"bottomright" }).addTo(map);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19, attribution:"&copy; OpenStreetMap contributors" }).addTo(map);
+    let layer = L.layerGroup().addTo(map);
+    const renderSteps = ok => document.querySelector("#steps").innerHTML = steps.map((step, i) => `<div class="step ${ok ? "done" : ""}"><i class="dot">${ok ? "✓" : i + 1}</i><span>${step}</span></div>`).join("");
+    const replay = () => {
+      const ok = wasm.exports.replay() === 0;
+      document.querySelector("#orders").textContent = ok ? wasm.exports.ordersCount() : "!";
+      document.querySelector("#queue").textContent = ok ? wasm.exports.queueCount() : "!";
+      document.querySelector("#audit").textContent = ok ? wasm.exports.auditBytes() : "!";
+      renderSteps(ok); layer.clearLayers();
+      if (!ok) return;
+      const data = new Float64Array(wasm.exports.memory.buffer, wasm.exports.markersPtr(), wasm.exports.markersCount() * 4);
+      for (let i = 0; i < wasm.exports.markersCount(); i++) {
+        const [lat, lng, priority, state] = data.slice(i * 4, i * 4 + 4);
+        const color = ["#64748b", "#3b82f6", "#f59e0b", "#ef4444"][priority];
+        const marker = L.circleMarker([lat, lng], { radius:11, color, weight:2, fillColor:color, fillOpacity:.85 }).addTo(layer);
+        marker.bindPopup(`<b>${orders[i]}</b><br>status: ${state ? "assigned" : "open"}<br>priority: ${priorities[priority]}`);
+      }
+    };
     document.querySelector("#replay").onclick = replay;
     replay();
-  })().catch(error => { document.querySelector("#status").textContent = `WASM load failed: ${error}`; });
+  })().catch(error => { document.querySelector("#steps").textContent = `WASM load failed: ${error}`; });
 </script>
 </html>
