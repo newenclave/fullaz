@@ -1,5 +1,6 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
+const fullaz_db = @import("fullaz-db");
 
 fn compare(_: void, left: []const u8, right: []const u8) fullaz.core.algorithm.Order {
     return switch (std.mem.order(u8, left, right)) {
@@ -9,15 +10,15 @@ fn compare(_: void, left: []const u8, right: []const u8) fullaz.core.algorithm.O
     };
 }
 
-const Schema = fullaz.pages.Schema(.{ .page_id = u32 })
-    .add("index", fullaz.pages.bpt(.{
+const Schema = fullaz_db.Schema(.{ .page_id = u32 })
+    .add("index", fullaz_db.bpt(.{
     .compare = compare,
     .CompareContext = void,
     .comparator_id = 1,
     .maximum_key_size = 64,
     .maximum_value_size = 256,
 }));
-const Db = fullaz.pages.MemoryDatabase(Schema);
+const Db = fullaz_db.MemoryDatabase(Schema);
 
 pub fn main() !void {
     var db = try Db.init(std.heap.page_allocator, .{

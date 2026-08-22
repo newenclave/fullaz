@@ -1,4 +1,5 @@
 const fullaz = @import("fullaz");
+const fullaz_db = @import("fullaz-db");
 
 fn compare(
     _: void,
@@ -9,7 +10,7 @@ fn compare(
 }
 
 comptime {
-    _ = fullaz.pages.bpt(.{
+    _ = fullaz_db.bpt(.{
         .compare = compare,
         .CompareContext = void,
         .comparator_id = 1,

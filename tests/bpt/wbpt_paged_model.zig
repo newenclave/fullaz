@@ -1,5 +1,6 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
+const fullaz_db = @import("fullaz-db");
 const wbpt = fullaz.weighted_bpt;
 const algos = fullaz.core.algorithm;
 const PageCacheT = fullaz.storage.page_cache.PageCache;
@@ -65,7 +66,7 @@ fn insertAlphabet(tree: anytype, count: usize) !void {
 test "WBpt paged: root leaf is released before reclamation" {
     const Device = dev.MemoryBlock(u32);
     const RawCache = PageCacheT(Device);
-    const Cache = fullaz.pages.MemoryReclaimingCache(RawCache);
+    const Cache = fullaz_db.MemoryReclaimingCache(RawCache);
     const Manager = struct {
         pub const PageId = u32;
         pub const Error = Cache.Error;

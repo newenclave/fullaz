@@ -1,5 +1,6 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
+const fullaz_db = @import("fullaz-db");
 const page_chain = fullaz.storage.page_chain;
 
 const page_cache = @import("fullaz").storage.page_cache;
@@ -11,7 +12,7 @@ const extensions = fullaz.page.extensions;
 test "PageChain: destroyChunk releases its page before reclamation" {
     const Device = devices.MemoryBlock(u32);
     const RawCache = page_cache.PageCache(Device);
-    const Cache = fullaz.pages.MemoryReclaimingCache(RawCache);
+    const Cache = fullaz_db.MemoryReclaimingCache(RawCache);
     const Manager = struct {
         pub const PageId = u32;
         pub const Size = u32;

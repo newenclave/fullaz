@@ -1,4 +1,4 @@
-const pages = @import("fullaz").pages;
+const pages = @import("fullaz-db");
 
 const InvalidTrait = struct {
     pub const kind_name: []const u8 = "test.component";

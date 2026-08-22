@@ -82,12 +82,13 @@ pub fn PagedModel(
                 return Error.OutOfBounds;
             }
             const result_weight = try self.weight() - pos;
+            const result_len: usize = @intCast(result_weight);
             var tmp_page = try self.ctx.cache.getTemporaryPage();
             errdefer tmp_page.deinit();
             const page_data = try tmp_page.dataMut();
-            const new_data = page_data[0..result_weight];
-            @memcpy(new_data, self.val[self.val.len - result_weight ..]);
-            self.val = self.val[0 .. self.val.len - result_weight];
+            const new_data = page_data[0..result_len];
+            @memcpy(new_data, self.val[self.val.len - result_len ..]);
+            self.val = self.val[0 .. self.val.len - result_len];
             var result = Self.init(self.ctx, new_data);
             result.ph = tmp_page;
             return result;
@@ -97,12 +98,13 @@ pub fn PagedModel(
             if (pos > try self.weight()) {
                 return Error.OutOfBounds;
             }
+            const split_len: usize = @intCast(pos);
             var tmp_page = try self.ctx.cache.getTemporaryPage();
             errdefer tmp_page.deinit();
             const page_data = try tmp_page.dataMut();
-            const new_data = page_data[0..pos];
-            @memcpy(new_data, self.val[0..pos]);
-            self.val = self.val[pos..];
+            const new_data = page_data[0..split_len];
+            @memcpy(new_data, self.val[0..split_len]);
+            self.val = self.val[split_len..];
             var result = Self.init(self.ctx, new_data);
             result.ph = tmp_page;
             return result;
@@ -310,7 +312,10 @@ pub fn PagedModel(
                 var new_val = ValuePolicyType.init(self.ctx, val);
                 defer new_val.deinit();
 
-                const expected_split_format = target_val.expectedSplitDataFormat(try target_val.get(), pos.diff);
+                const expected_split_format = target_val.expectedSplitDataFormat(
+                    try target_val.get(),
+                    @intCast(pos.diff),
+                );
                 const new_val_size = (try new_val.get()).len;
 
                 const res = try view.canInsert2(expected_split_format.right, new_val_size);

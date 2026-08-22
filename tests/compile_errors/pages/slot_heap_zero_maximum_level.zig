@@ -1,5 +1,5 @@
 const std = @import("std");
-const pages = @import("fullaz").pages;
+const pages = @import("fullaz-db");
 
 fn compare(_: void, left: []const u8, right: []const u8) std.math.Order {
     return std.mem.order(u8, left, right);

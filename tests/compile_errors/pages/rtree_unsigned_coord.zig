@@ -1,7 +1,8 @@
 const fullaz = @import("fullaz");
+const fullaz_db = @import("fullaz-db");
 
 comptime {
-    _ = fullaz.pages.rtree(.{
+    _ = fullaz_db.rtree(.{
         .Coord = u64,
         .dimensions = 2,
         .maximum_entries = 4,

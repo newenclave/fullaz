@@ -8,6 +8,9 @@ const memory_policy_iface = @import("interfaces.zig");
 
 const wal_mod = @import("../wal/wal.zig");
 
+pub const MemoryReclaimingCache = @import("memory_reclaiming_cache.zig").MemoryReclaimingCache;
+pub const PersistentReclaimingCache = @import("persistent_reclaiming_cache.zig").PersistentReclaimingCache;
+
 pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (type) type, comptime WalPolicy: type) type {
     // Compile-time check that DeviceT is a valid block device
     comptime assertBlockDevice(DeviceT);

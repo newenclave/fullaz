@@ -145,7 +145,7 @@ test "ChainStore handle: open rejects inconsistent empty metadata" {
 test "ChainStore Blob: clear releases pages before reclamation" {
     const Device = devices.MemoryBlock(u32);
     const RawCache = page_cache.PageCache(Device);
-    const Cache = @import("fullaz").pages.MemoryReclaimingCache(RawCache);
+    const Cache = @import("fullaz-db").MemoryReclaimingCache(RawCache);
     const Manager = struct {
         pub const PageId = u32;
         pub const Size = u32;

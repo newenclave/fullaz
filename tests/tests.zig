@@ -1,11 +1,11 @@
 const std = @import("std");
 
 test {
-    _ = @import("pages/persistent_reclaiming_cache.zig");
-    _ = @import("pages/static_superblock.zig");
-    _ = @import("pages/schema_fingerprint.zig");
-    _ = @import("pages/static_database.zig");
-    _ = @import("pages/static_database_wal.zig");
+    _ = @import("page_cache/persistent_reclaiming_cache.zig");
+    _ = @import("fullaz-db/static_superblock.zig");
+    _ = @import("fullaz-db/schema_fingerprint.zig");
+    _ = @import("fullaz-db/static_database.zig");
+    _ = @import("fullaz-db/static_database_wal.zig");
     _ = @import("core/wordt.zig");
     _ = @import("core/bitset.zig");
     _ = @import("core/static_vector.zig");
@@ -77,14 +77,14 @@ test {
     _ = @import("page/slot_heap.zig");
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
-    _ = @import("pages/component.zig");
-    _ = @import("pages/bpt.zig");
-    _ = @import("pages/rtree.zig");
-    _ = @import("pages/memory_reclaiming_cache.zig");
-    _ = @import("pages/slot_heap_manager.zig");
-    _ = @import("pages/chain_store.zig");
-    _ = @import("pages/memory_database.zig");
-    _ = @import("pages/schema.zig");
+    _ = @import("fullaz-db/component.zig");
+    _ = @import("fullaz-db/bpt.zig");
+    _ = @import("fullaz-db/rtree.zig");
+    _ = @import("page_cache/memory_reclaiming_cache.zig");
+    _ = @import("fullaz-db/slot_heap_manager.zig");
+    _ = @import("fullaz-db/chain_store.zig");
+    _ = @import("fullaz-db/memory_database.zig");
+    _ = @import("fullaz-db/schema.zig");
     _ = @import("long_store.zig");
     _ = @import("free_list.zig");
     _ = @import("wal.zig");

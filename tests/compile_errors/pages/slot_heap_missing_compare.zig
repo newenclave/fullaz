@@ -1,4 +1,4 @@
-const pages = @import("fullaz").pages;
+const pages = @import("fullaz-db");
 
 comptime {
     _ = pages.slotHeap(.{
