@@ -277,6 +277,16 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
             return Binding.proxyConst(runtime);
         }
 
+        /// The full in-memory device image, in page order.
+        pub fn deviceBytes(self: *const Self) []const u8 {
+            return self.coreConstPtr().device.storage.items;
+        }
+
+        /// Page ids currently on the free list, in no particular order.
+        pub fn freePageIds(self: *const Self) []const SchemaT.PageId {
+            return self.coreConstPtr().cache.free_pages.items;
+        }
+
         pub const Diagnostics = struct {
             core_address: usize,
             cache_address: usize,

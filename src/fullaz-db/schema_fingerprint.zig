@@ -41,6 +41,9 @@ pub const Writer = struct {
     }
 
     pub fn writeInt(self: *Writer, comptime T: type, value: T) void {
+        if (T == usize or T == isize) {
+            @compileError("fullaz-db durable fingerprints cannot encode usize or isize");
+        }
         var bytes: [@sizeOf(T)]u8 = undefined;
         std.mem.writeInt(T, &bytes, value, .little);
         self.hasher.update(&bytes);

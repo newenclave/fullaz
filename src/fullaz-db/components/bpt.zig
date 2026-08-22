@@ -117,8 +117,8 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
 
         pub fn fingerprint(writer: *FingerprintWriter) void {
             writer.writeInt(u32, comparator_id);
-            writer.writeInt(usize, maximum_key_size);
-            writer.writeInt(usize, maximum_value_size);
+            writer.writeInt(u64, @intCast(maximum_key_size));
+            writer.writeInt(u64, @intCast(maximum_value_size));
             writer.writeBytes(@tagName(rebalance_policy));
         }
 

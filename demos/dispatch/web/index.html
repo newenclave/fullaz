@@ -1,61 +1,395 @@
 <!doctype html>
 <html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>fullaz-db dispatch</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>fullaz · dispatch</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
-  :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background:#101721; color:#e3edf8; }
-  body { margin:0; min-height:100vh; display:grid; grid-template-columns:minmax(0,1fr) 360px; }
-  #map { min-height:100vh; background:#1a2632; }
-  aside { padding:24px; background:#111923; border-left:1px solid #2a394a; overflow:auto; }
-  h1 { margin:0; font-size:22px; letter-spacing:-.04em; } .eyebrow { color:#65c6ec; text-transform:uppercase; font-size:11px; letter-spacing:.12em; font-weight:700; }
-  .lede { color:#9aafc2; font-size:14px; } button { width:100%; padding:11px; border:0; border-radius:8px; background:#f59e0b; color:#1b1202; font-weight:750; cursor:pointer; }
-  .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:20px 0; } .metric { padding:10px; background:#182432; border-radius:7px; } .metric b { display:block; font-size:20px; } .metric span { color:#8ea2b6; font-size:11px; }
-  .step { display:grid; grid-template-columns:23px 1fr; gap:8px; margin:10px 0; color:#92a8bc; font-size:13px; } .dot { width:18px; height:18px; border-radius:50%; text-align:center; background:#263849; color:#7f99ae; font-size:12px; line-height:18px; } .step.done { color:#d8e6f1; } .step.done .dot { background:#167a58; color:#dffcf0; }
-  .card { margin-top:20px; padding:14px; border:1px solid #2a394a; border-radius:8px; background:#151f2b; } .card h2 { margin:0 0 8px; font-size:13px; } .card p { margin:4px 0; color:#9aafc2; font-size:12px; }
-  .leaflet-popup-content-wrapper { background:#152130; color:#e7f1f8; } .leaflet-popup-tip { background:#152130; }
-  @media(max-width:800px) { body { display:block; } #map { min-height:58vh; } aside { border-left:0; border-top:1px solid #2a394a; } }
+  :root { color-scheme: dark; --bg: #0c1118; --panel: #121a24; --panel-2: #0c121c; --edge: #253449; --text: #dce7f5; --muted: #8294aa; --accent: #60a5fa; --bad: #fb7185; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-width: 320px; height: 100vh; background: var(--bg); color: var(--text); font: 13px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; min-height: 54px; padding: 10px 16px; border-bottom: 1px solid var(--edge); background: #0e1621; }
+  h1 { margin: 0; font-size: 16px; letter-spacing: .04em; } h1 span { color: var(--accent); }
+  #status { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+  .spacer { flex: 1; }
+  button, input, select { font: inherit; }
+  button { border: 1px solid #31435c; border-radius: 6px; padding: 7px 10px; color: var(--text); background: #182438; cursor: pointer; }
+  button:hover { color: #fff; border-color: var(--accent); }
+  button.primary { background: #1d4ed8; border-color: #3b82f6; }
+  button.warn { background: #b45309; border-color: #f59e0b; }
+  button.ghost { background: transparent; }
+  button.toggled { background: #7c2d12; border-color: #f97316; }
+  .toggle { display: flex; gap: 6px; align-items: center; color: var(--muted); cursor: pointer; user-select: none; }
+  .toggle input { width: auto; }
+  .top { display: grid; grid-template-columns: minmax(0, 1fr) 360px; flex: 1; min-height: 0; }
+  #map { min-height: 0; background: #1a2632; }
+  #map.selecting, #map.adding { cursor: crosshair; }
+  aside { padding: 16px; background: var(--panel); border-left: 1px solid var(--edge); overflow: auto; }
+  .eyebrow { color: #65c6ec; text-transform: uppercase; font-size: 11px; letter-spacing: .12em; font-weight: 700; }
+  h2 { margin: 0 0 10px; font-size: 15px; letter-spacing: -.02em; }
+  .field { margin-bottom: 8px; } .field label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+  input, select { width: 100%; padding: 6px 8px; color: var(--text); background: #090f18; border: 1px solid #28394f; border-radius: 5px; outline: 0; }
+  input:focus, select:focus { border-color: var(--accent); }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  .row button { flex: 1; }
+  .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 16px 0; }
+  .metric { padding: 10px; background: #182432; border-radius: 7px; text-align: center; }
+  .metric b { display: block; font-size: 20px; } .metric span { color: #8ea2b6; font-size: 11px; }
+  .card { margin-top: 16px; padding: 12px; border: 1px solid var(--edge); border-radius: 8px; background: #151f2b; }
+  .card h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  #next-panel, #area-panel { font-size: 13px; color: #c5d1df; } #next-panel b { color: #fbbf24; } #area-panel b { color: #34d399; }
+  .empty { color: var(--muted); }
+  #inspector { border-top: 1px solid var(--edge); min-height: 300px; max-height: 42vh; display: grid; grid-template-columns: minmax(0, 1fr) 280px; background: var(--panel); overflow: hidden; }
+  #inspector.hidden { display: none; }
+  #map-wrap { padding: 12px; overflow: auto; border-right: 1px solid var(--edge); }
+  #page-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(15px, 1fr)); gap: 3px; align-content: start; }
+  .page { aspect-ratio: 1; min-width: 15px; border: 1px solid #243041; border-radius: 2px; cursor: pointer; position: relative; padding: 0; }
+  .page:hover { outline: 1px solid #fff; z-index: 1; } .page.selected { outline: 2px solid #fff; z-index: 2; }
+  #legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 10px; color: var(--muted); }
+  #legend span { display: flex; gap: 5px; align-items: center; } #legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+  #page-detail { padding: 12px; overflow: auto; background: var(--panel-2); border-left: 1px solid var(--edge); }
+  #page-detail .meta { color: var(--muted); margin: 4px 0; } #page-detail b { color: var(--text); }
+  pre { margin: 8px 0 0; padding: 10px; background: #070b11; border: 1px solid #1e2b3d; border-radius: 5px; color: #b8c8d9; font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; overflow: auto; }
+  @media (max-width: 900px) { .top { grid-template-columns: 1fr; grid-template-rows: 55vh auto; } #map { min-height: 55vh; } aside { border-left: 0; border-top: 1px solid var(--edge); } #inspector { grid-template-columns: 1fr; max-height: none; } #page-detail { border-left: 0; border-top: 1px solid var(--edge); } }
 </style>
-<div id="map"></div><aside>
-  <div class="eyebrow">fullaz-db / memory backend</div><h1>Dispatch board</h1>
-  <p class="lede">A deterministic work-order run backed by one composed transaction. The map is an OpenStreetMap view; marker state comes from WASM memory.</p>
-  <button id="replay">Replay database scenario</button>
-  <div class="metrics"><div class="metric"><b id="orders">-</b><span>orders / BPT</span></div><div class="metric"><b id="queue">-</b><span>queue / heap</span></div><div class="metric"><b id="audit">-</b><span>audit bytes</span></div></div>
-  <div id="steps"></div>
-  <div class="card"><h2>Operator runbook</h2><p>Inspect pump before dispatch.</p><p>WeightedSequence stores this editable document.</p></div>
-  <div class="card"><h2>Map semantics</h2><p>Markers are R-tree service-area representatives. Priority: critical, high, medium, low.</p></div>
-</aside>
+</head>
+<body>
+<header>
+  <h1><span>fullaz</span> / dispatch</h1><span id="status">loading WASM...</span><span class="spacer"></span>
+  <label class="toggle"><input type="checkbox" id="show-inspector" /> inspector</label>
+  <button id="sample">load sample</button><button id="reset" class="ghost">reset</button><button id="upload">upload</button><input id="file-upload" type="file" accept=".img,application/octet-stream" hidden /><button id="download">download</button>
+</header>
+<div class="top">
+  <div id="map"></div>
+  <aside>
+    <div class="eyebrow">fullaz-db / memory backend</div><h2>Dispatch board</h2>
+    <p style="color:var(--muted);margin-top:0;">Add orders, query them by area, and execute the next due order. The page inspector below shows the physical image.</p>
+
+    <div class="field"><label>id / due time (8 chars, sortable)</label><input id="f-id" maxlength="8" value="20260822" /></div>
+    <div class="grid-2">
+      <div class="field"><label>priority</label><select id="f-priority"><option>critical</option><option>high</option><option selected>medium</option><option>low</option></select></div>
+      <div class="field"><label>status</label><select id="f-status"><option>open</option><option>assigned</option></select></div>
+    </div>
+    <div class="field"><label>description</label><input id="f-name" value="north pump" /></div>
+    <div class="field"><label>area size (± around click)</label><input id="f-size" type="number" value="0.01" step="0.01" /></div>
+    <div class="row"><button id="add-map" class="primary">add on map</button></div>
+
+    <div class="row">
+      <button id="select-area">select area</button>
+      <button id="next" class="warn">next due</button>
+      <button id="complete" class="warn">complete next</button>
+    </div>
+
+    <div class="metrics">
+      <div class="metric"><b id="orders">-</b><span>orders / BPT</span></div>
+      <div class="metric"><b id="queue">-</b><span>queue / heap</span></div>
+      <div class="metric"><b id="audit">-</b><span>audit bytes</span></div>
+    </div>
+
+    <div class="card"><h3>next due</h3><div id="next-panel" class="empty">No order due.</div></div>
+    <div class="card"><h3>area query</h3><div id="area-panel" class="empty">Drag a rectangle to query service areas.</div></div>
+  </aside>
+</div>
+<section id="inspector" class="hidden">
+  <div id="map-wrap"><div style="color:var(--muted)">physical image <b id="page-stats" style="color:var(--text)"></b> · click a page for bytes</div><div id="page-map"></div><div id="legend"></div></div>
+  <div id="page-detail"><div class="empty">Select a page to inspect its header and bytes.</div></div>
+</section>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  (async () => {
+const encode = new TextEncoder(), decode = new TextDecoder();
+const components = ["orders", "by_status_due", "service_areas", "dispatch_queue", "audit_log", "runbook"];
+const componentColors = ["#3b82f6", "#22d3ee", "#34d399", "#f59e0b", "#a78bfa", "#f472b6"];
+const rolesByComponent = [["leaf", "inode"], ["leaf", "inode"], ["leaf", "inode"], ["leaf", "inode", "fsm_slab"], ["chunk"], ["leaf", "inode"]];
+const el = { status: document.getElementById("status"), map: document.getElementById("map"), addMap: document.getElementById("add-map"), next: document.getElementById("next"), complete: document.getElementById("complete"), selectArea: document.getElementById("select-area"), sample: document.getElementById("sample"), reset: document.getElementById("reset"), upload: document.getElementById("upload"), fileUpload: document.getElementById("file-upload"), download: document.getElementById("download"), orders: document.getElementById("orders"), queue: document.getElementById("queue"), audit: document.getElementById("audit"), nextPanel: document.getElementById("next-panel"), areaPanel: document.getElementById("area-panel"), pageMap: document.getElementById("page-map"), pageDetail: document.getElementById("page-detail"), pageStats: document.getElementById("page-stats"), legend: document.getElementById("legend") };
+
+let ex, mem;
+const map = L.map("map", { zoomControl: true }).setView([60.1699, 24.9384], 12);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" }).addTo(map);
+const ordersLayer = L.layerGroup().addTo(map);
+const orderLayers = new Map();
+let selectMode = false, addMode = false, rectStart = null, rectLayer = null, selectedPage = null;
+
+function setStatus(message, bad = false) { el.status.textContent = message; el.status.style.color = bad ? "var(--bad)" : ""; }
+function errorText() { return decode.decode(new Uint8Array(mem.buffer, ex.lastErrorPtr(), ex.lastErrorLen())); }
+function ensure(ok) { if (!ok) throw new Error(errorText() || "operation failed"); }
+function withBytes(bytes, fn) { const ptr = bytes.length ? ex.allocate(bytes.length) : 0; if (bytes.length && !ptr) throw new Error("WASM allocation failed"); try { if (bytes.length) new Uint8Array(mem.buffer).set(bytes, ptr); return fn(ptr, bytes.length); } finally { if (ptr) ex.freeAllocation(ptr, bytes.length); } }
+function readStr(ptr, len) { return decode.decode(new Uint8Array(mem.buffer, ptr, len)); }
+
+const db = new Promise((resolve, reject) => { const req = indexedDB.open("fullaz-dispatch", 1); req.onupgradeneeded = () => req.result.createObjectStore("images"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+async function dbGet() { const store = (await db).transaction("images", "readonly").objectStore("images"); return new Promise((resolve, reject) => { const req = store.get("default"); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); }); }
+async function dbPut(bytes) { const store = (await db).transaction("images", "readwrite").objectStore("images"); return new Promise((resolve, reject) => { const req = store.put(bytes, "default"); req.onsuccess = () => resolve(); req.onerror = () => reject(req.error); }); }
+async function persist() { const ptr = ex.imagePtr(); ensure(ptr !== 0 || ex.imageLen() === 0); await dbPut(new Uint8Array(mem.buffer, ptr, ex.imageLen()).slice().buffer); }
+function importBytes(bytes) { const ptr = ex.allocate(bytes.byteLength); if (!ptr) throw new Error("WASM allocation failed"); try { new Uint8Array(mem.buffer).set(new Uint8Array(bytes), ptr); ensure(ex.importImage(ptr, bytes.byteLength)); } finally { ex.freeAllocation(ptr, bytes.byteLength); } }
+
+function addSize() { const v = parseFloat(document.getElementById("f-size").value); if (!Number.isFinite(v) || v < 0) throw new Error("size must be >= 0"); return v; }
+
+function bumpId(id) {
+  const n = parseInt(id, 10);
+  const next = (Number.isInteger(n) ? n : 0) + 1;
+  return String(next).padStart(8, "0").slice(0, 8);
+}
+
+function colorForId(id) {
+  const n = parseInt(id, 10);
+  const hue = ((Number.isFinite(n) ? n : 0) * 137.508) % 360;
+  return `hsl(${hue}, 75%, 55%)`;
+}
+
+function addOrderCore(id, value, low0, low1, high0, high1) {
+  ensure(withBytes(encode.encode(id), (idPtr, idLen) => withBytes(encode.encode(value), (valPtr, valLen) =>
+    ex.addOrder(idPtr, idLen, valPtr, valLen, low0, low1, high0, high1))));
+  refresh();
+  persist().catch(showError);
+}
+
+function addOrderAt(lat, lng) {
+  const id = document.getElementById("f-id").value;
+  if (id.length !== 8) throw new Error("id must be exactly 8 characters");
+  const value = `${document.getElementById("f-status").value}|${document.getElementById("f-priority").value}|${document.getElementById("f-name").value}`;
+  const half = addSize();
+  addOrderCore(id, value, lat - half, lng - half, lat + half, lng + half);
+  document.getElementById("f-id").value = bumpId(id);
+}
+
+function addSample() {
+  const sample = [
+    ["00000001", "open|high|north pump", 60.1687, 24.9362, 60.1711, 24.9390],
+    ["00000002", "open|medium|west valve", 60.1640, 24.9165, 60.1664, 24.9193],
+    ["00000003", "open|critical|river sensor", 60.1786, 24.9548, 60.1810, 24.9576],
+    ["00000004", "assigned|low|school meter", 60.1539, 24.9416, 60.1563, 24.9444],
+    ["00000005", "open|high|station relay", 60.1654, 24.9704, 60.1678, 24.9732],
+  ];
+  for (const [id, value, l0, l1, h0, h1] of sample) {
+    ensure(withBytes(encode.encode(id), (idPtr, idLen) => withBytes(encode.encode(value), (vPtr, vLen) =>
+      ex.addOrder(idPtr, idLen, vPtr, vLen, l0, l1, h0, h1))));
+  }
+  refresh();
+  document.getElementById("f-id").value = "00000006";
+  persist().catch(showError);
+  setStatus("sample orders added");
+}
+
+function showNext() {
+  const ok = ex.nextDue();
+  if (!ok) { el.nextPanel.className = "empty"; el.nextPanel.textContent = errorText() === "Empty" ? "No order due." : `error: ${errorText()}`; return; }
+  const id = readStr(ex.nextDuePtr(), 8);
+  el.nextPanel.className = ""; el.nextPanel.replaceChildren("next due: ", Object.assign(document.createElement("b"), { textContent: id }));
+  highlightOrder(id);
+}
+
+function completeNext() {
+  const ok = ex.completeNext();
+  if (!ok) { el.nextPanel.className = "empty"; el.nextPanel.textContent = errorText() === "Empty" ? "No order due." : `error: ${errorText()}`; return; }
+  const id = readStr(ex.completePtr(), 8);
+  el.nextPanel.className = ""; el.nextPanel.replaceChildren("completed: ", Object.assign(document.createElement("b"), { textContent: id }));
+  refresh();
+  persist().catch(showError);
+}
+
+function setOrderHighlight(predicate) {
+  for (const [key, layer] of orderLayers) {
+    const on = predicate(key);
+    layer.setStyle({ weight: on ? 4 : 2, radius: on ? 13 : 9, opacity: 1, fillOpacity: on ? 1 : .85 });
+  }
+}
+
+function highlightOrder(id) { setOrderHighlight(key => key === id); }
+
+function renderOrders() {
+  ensure(ex.snapshotOrders());
+  const count = ex.ordersCount(), stride = ex.orderStride();
+  const data = new DataView(mem.buffer, ex.ordersPtr(), count * stride);
+  orderLayers.clear(); ordersLayer.clearLayers();
+  for (let i = 0; i < count; i++) {
+    const b = i * stride;
+    const id = readStr(ex.ordersPtr() + b, 8);
+    const valueLen = data.getUint8(b + 72);
+    const value = readStr(ex.ordersPtr() + b + 8, valueLen);
+    const low0 = data.getFloat32(b + 76, true), low1 = data.getFloat32(b + 80, true);
+    const high0 = data.getFloat32(b + 84, true), high1 = data.getFloat32(b + 88, true);
+    const parts = value.split("|");
+    const status = parts[0] || "open", priority = parts[1] || "medium", name = parts[2] || value;
+    const color = colorForId(id);
+    const centerLat = (low0 + high0) / 2, centerLng = (low1 + high1) / 2;
+    const layer = L.circleMarker([centerLat, centerLng], { radius: 9, color, weight: 2, fillColor: color, fillOpacity: .85 }).addTo(ordersLayer);
+    const popup = document.createElement("div");
+    const title = document.createElement("b");
+    title.textContent = name;
+    popup.append(title, document.createElement("br"), `id: ${id}`, document.createElement("br"), `status: ${status}`, document.createElement("br"), `priority: ${priority}`, document.createElement("br"), `area: [${low0.toFixed(2)},${low1.toFixed(2)}]..[${high0.toFixed(2)},${high1.toFixed(2)}]`);
+    layer.bindPopup(popup);
+    orderLayers.set(id, layer);
+  }
+  el.orders.textContent = count;
+}
+
+function renderPages() {
+  ensure(ex.snapshotPages());
+  const count = ex.pagesCount(), stride = ex.pageStride();
+  const data = new DataView(mem.buffer, ex.pagesPtr(), count * stride);
+  el.pageMap.replaceChildren(); el.legend.replaceChildren();
+  el.pageStats.textContent = `${count} pages · ${count * ex.pageSize()} bytes`;
+  for (let i = 0; i < count; i++) {
+    const b = i * stride;
+    const pid = data.getUint32(b, true);
+    const component = data.getUint8(b + 6);
+    const role = data.getUint8(b + 7);
+    const used = data.getUint32(b + 8, true);
+    const capacity = data.getUint32(b + 12, true);
+    const node = document.createElement("button");
+    node.className = `page${selectedPage === pid ? " selected" : ""}`;
+    node.style.background = component === 0xFF ? "#334155" : componentColors[component] || "#f43f5e";
+    const label = component === 0xFF ? "free" : `${components[component]} · ${rolesByComponent[component][role] || role}`;
+    node.title = `PID ${pid}: ${label} · ${used}/${capacity} B`;
+    node.onclick = () => { selectedPage = pid; renderPages(); renderPageDetail(pid); };
+    el.pageMap.append(node);
+  }
+  for (let i = 0; i < components.length; i++) {
+    const span = document.createElement("span"), swatch = document.createElement("i");
+    swatch.style.background = componentColors[i];
+    span.append(swatch, document.createTextNode(components[i]));
+    el.legend.append(span);
+  }
+  const span = document.createElement("span"), swatch = document.createElement("i");
+  swatch.style.background = "#334155";
+  span.append(swatch, document.createTextNode("free"));
+  el.legend.append(span);
+}
+
+function renderPageDetail(pid) {
+  const pageSize = ex.pageSize();
+  const image = new Uint8Array(mem.buffer, ex.imagePtr(), ex.imageLen());
+  const page = image.slice(pid * pageSize, (pid + 1) * pageSize);
+  const dv = new DataView(page.buffer, page.byteOffset, page.byteLength);
+  const kind = dv.getUint16(0, true);
+  const headerSize = dv.getUint8(3);
+  const subheader = dv.getUint16(4, true);
+  const metadata = dv.getUint16(6, true);
+  const pageEnd = dv.getUint16(8, true);
+  const selfPid = dv.getUint32(10, true);
+  const crc = dv.getUint32(14, true);
+  const lines = [];
+  for (let at = 0; at < page.length; at += 16) {
+    const row = page.slice(at, at + 16);
+    const hex = [...row].map(x => x.toString(16).padStart(2, "0")).join(" ").padEnd(47);
+    const ascii = [...row].map(x => x >= 32 && x <= 126 ? String.fromCharCode(x) : ".").join("");
+    lines.push(`${(at).toString(16).padStart(4, "0")}  ${hex}  ${ascii}`);
+  }
+  const title = document.createElement("b");
+  title.textContent = `PID ${pid}`;
+  const first = document.createElement("div");
+  first.className = "meta";
+  first.textContent = `kind: 0x${kind.toString(16)} · self_pid: ${selfPid} · page_end: ${pageEnd}`;
+  const second = document.createElement("div");
+  second.className = "meta";
+  second.textContent = `header: ${headerSize} B · subheader: ${subheader} B · metadata: ${metadata} B · crc: 0x${crc.toString(16).padStart(8, "0")}`;
+  const pre = document.createElement("pre");
+  pre.textContent = lines.join("\n");
+  el.pageDetail.replaceChildren(title, first, second, pre);
+}
+
+function refresh() { renderOrders(); renderPages(); el.queue.textContent = ex.queueCount(); el.audit.textContent = ex.auditLen(); }
+
+function setSelectMode(on) {
+  selectMode = on;
+  el.map.classList.toggle("selecting", on);
+  el.selectArea.classList.toggle("toggled", on);
+  if (on) { setAddMode(false); map.dragging.disable(); } else { map.dragging.enable(); }
+}
+
+function setAddMode(on) {
+  addMode = on;
+  el.map.classList.toggle("adding", on);
+  el.addMap.classList.toggle("toggled", on);
+  if (on) { setSelectMode(false); }
+}
+
+map.on("click", e => {
+  if (!addMode) return;
+  addOrderAt(e.latlng.lat, e.latlng.lng);
+  setAddMode(false);
+});
+
+function setupSelect() {
+  map.on("mousedown", e => {
+    if (!selectMode) return;
+    rectStart = e.latlng;
+    rectLayer = L.rectangle([rectStart, rectStart], { color: "#f97316", weight: 2, dashArray: "4 4", fill: false }).addTo(map);
+  });
+  map.on("mousemove", e => {
+    if (!selectMode || !rectLayer || !rectStart) return;
+    rectLayer.setBounds(L.latLngBounds(rectStart, e.latlng));
+  });
+  map.on("mouseup", e => {
+    if (!selectMode || !rectLayer) return;
+    const b = rectLayer.getBounds();
+    map.removeLayer(rectLayer); rectLayer = null; rectStart = null;
+    setSelectMode(false);
+    runAreaQuery(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
+  });
+}
+
+function runAreaQuery(low0, low1, high0, high1) {
+  const ok = ex.ordersInArea(low0, low1, high0, high1);
+  if (!ok) { el.areaPanel.className = "empty"; el.areaPanel.textContent = `error: ${errorText()}`; return; }
+  const count = ex.areaCount();
+  const ids = [];
+  for (let i = 0; i < count; i++) ids.push(readStr(ex.areaIdsPtr() + i * 8, 8));
+  const area = `[${low0.toFixed(2)},${low1.toFixed(2)}]..[${high0.toFixed(2)},${high1.toFixed(2)}]`;
+  el.areaPanel.className = "";
+  el.areaPanel.replaceChildren(area, " → ", count ? Object.assign(document.createElement("b"), { textContent: ids.join(", ") }) : "no orders");
+  setOrderHighlight(key => ids.includes(key));
+}
+
+function showError(error) { console.error(error); setStatus(String(error.message || error), true); }
+function run(action) { try { action(); } catch (error) { showError(error); } }
+
+el.addMap.onclick = () => run(() => setAddMode(!addMode));
+el.sample.onclick = () => run(addSample);
+el.next.onclick = () => run(showNext);
+el.complete.onclick = () => run(completeNext);
+el.selectArea.onclick = () => setSelectMode(!selectMode);
+document.getElementById("show-inspector").onchange = e => {
+  document.getElementById("inspector").classList.toggle("hidden", !e.target.checked);
+  setTimeout(() => map.invalidateSize(), 0);
+};
+el.reset.onclick = () => run(() => { ensure(ex.format()); selectedPage = null; document.getElementById("f-id").value = "00000001"; refresh(); persist().catch(showError); setStatus("reset to an empty database"); });
+el.upload.onclick = () => el.fileUpload.click();
+el.fileUpload.onchange = async () => {
+  const file = el.fileUpload.files[0];
+  el.fileUpload.value = "";
+  if (!file) return;
+  try {
+    importBytes(await file.arrayBuffer());
+    selectedPage = null;
+    refresh();
+    await persist();
+    setStatus(`loaded ${file.name}`);
+  } catch (error) {
+    showError(error);
+  }
+};
+el.download.onclick = () => { try { const ptr = ex.imagePtr(); const bytes = new Uint8Array(mem.buffer, ptr, ex.imageLen()).slice(); const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" })), download: "dispatch.img" }); link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 1000); } catch (error) { showError(error); } };
+
+(async () => {
+  try {
     const bytes = await (await fetch("dispatch.wasm")).arrayBuffer();
     const wasm = (await WebAssembly.instantiate(bytes, {})).instance;
-    const orders = ["North pump", "West valve", "River sensor", "School meter", "Station relay"];
-    const priorities = ["low", "medium", "high", "critical"];
-    const steps = ["Primary + status/due B+ tree indexes", "R-tree service areas", "SlotHeap dispatch queue", "ChainStore audit frames", "WeightedSequence runbook", "Rollback boundary verified"];
-    const map = L.map("map", { zoomControl:false }).setView([60.1699, 24.9384], 12);
-    L.control.zoom({ position:"bottomright" }).addTo(map);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19, attribution:"&copy; OpenStreetMap contributors" }).addTo(map);
-    let layer = L.layerGroup().addTo(map);
-    const renderSteps = ok => document.querySelector("#steps").innerHTML = steps.map((step, i) => `<div class="step ${ok ? "done" : ""}"><i class="dot">${ok ? "✓" : i + 1}</i><span>${step}</span></div>`).join("");
-    const replay = () => {
-      const ok = wasm.exports.replay() === 0;
-      document.querySelector("#orders").textContent = ok ? wasm.exports.ordersCount() : "!";
-      document.querySelector("#queue").textContent = ok ? wasm.exports.queueCount() : "!";
-      document.querySelector("#audit").textContent = ok ? wasm.exports.auditBytes() : "!";
-      renderSteps(ok); layer.clearLayers();
-      if (!ok) return;
-      const data = new Float64Array(wasm.exports.memory.buffer, wasm.exports.markersPtr(), wasm.exports.markersCount() * 4);
-      for (let i = 0; i < wasm.exports.markersCount(); i++) {
-        const [lat, lng, priority, state] = data.slice(i * 4, i * 4 + 4);
-        const color = ["#64748b", "#3b82f6", "#f59e0b", "#ef4444"][priority];
-        const marker = L.circleMarker([lat, lng], { radius:11, color, weight:2, fillColor:color, fillOpacity:.85 }).addTo(layer);
-        marker.bindPopup(`<b>${orders[i]}</b><br>status: ${state ? "assigned" : "open"}<br>priority: ${priorities[priority]}`);
-      }
-    };
-    document.querySelector("#replay").onclick = replay;
-    replay();
-  })().catch(error => { document.querySelector("#steps").textContent = `WASM load failed: ${error}`; });
+    ex = wasm.exports; mem = wasm.exports.memory;
+    const saved = await dbGet();
+    if (saved) {
+      try { importBytes(saved); setStatus("restored IndexedDB image"); }
+      catch (_) { ensure(ex.format()); await persist(); setStatus("saved image was invalid; created a new one", true); }
+    } else {
+      ensure(ex.format());
+      await persist();
+      setStatus("new image saved to IndexedDB");
+    }
+    setupSelect();
+    refresh();
+  } catch (error) { showError(error); }
+})();
 </script>
+</body>
 </html>

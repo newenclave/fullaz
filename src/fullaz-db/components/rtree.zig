@@ -160,9 +160,9 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
         pub const maximum_value_size: usize = configured_maximum_value_size;
 
         pub fn fingerprint(writer: *FingerprintWriter) void {
-            writer.writeInt(usize, dimensions);
-            writer.writeInt(usize, maximum_entries);
-            writer.writeInt(usize, maximum_value_size);
+            writer.writeInt(u64, @intCast(dimensions));
+            writer.writeInt(u64, @intCast(maximum_entries));
+            writer.writeInt(u64, @intCast(maximum_value_size));
             writer.writeCoord(Coord);
         }
 

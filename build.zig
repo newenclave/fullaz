@@ -115,6 +115,10 @@ pub fn build(b: *std.Build) void {
             .expected = "fullaz-db Schema options must declare page_id as a type",
         },
         .{
+            .source = "tests/compile_errors/pages/page_id_usize.zig",
+            .expected = "fullaz-db Schema page_id must be a fixed-width byte-aligned unsigned integer",
+        },
+        .{
             .source = "tests/compile_errors/pages/reserved_name.zig",
             .expected = "fullaz-db Schema component name uses a reserved $ path segment",
         },
@@ -279,7 +283,21 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(dispatch_exe);
     const run_dispatch = b.addRunArtifact(dispatch_exe);
     run_dispatch.step.dependOn(b.getInstallStep());
-    b.step("run-dispatch", "Run the WAL-backed dispatch demo").dependOn(&run_dispatch.step);
+    if (b.args) |args| {
+        run_dispatch.addArgs(args);
+    } else {
+        run_dispatch.addArgs(&.{
+            ".zig-cache/dispatch-demo.img",
+            "--format",
+            "add",
+            "00000001",
+            "60.1699",
+            "24.9384",
+            "0.01",
+            "open|high|Helsinki demo",
+        });
+    }
+    b.step("run-dispatch", "Run the dispatch CLI demo").dependOn(&run_dispatch.step);
     //test_step.dependOn(&run_exe_tests.step);
 
     // Add install-tests step for debugging
@@ -292,6 +310,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const zigline_mod = zigline_dep.module("zigline");
+    dispatch_exe.root_module.addImport("zigline", zigline_mod);
 
     // Fresh module instances targeting wasm (the ones above are pinned to the
     // host). The engine + MemoryBlock storage are I/O-free, so they compile for
@@ -328,6 +347,8 @@ pub fn build(b: *std.Build) void {
             .target = wasm_target,
             .optimize = .ReleaseSmall,
             .imports = &.{
+                .{ .name = "fullaz", .module = fullaz_wasm },
+                .{ .name = "fullaz-db", .module = fullaz_db_wasm },
                 .{ .name = "dispatch", .module = dispatch_wasm },
             },
         }),

@@ -376,6 +376,11 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
             return Binding.proxyConst(&@field(self.coreConstPtr().components, name));
         }
 
+        /// The full in-memory device image, in page order (memory-backed devices only).
+        pub fn deviceBytes(self: *const Self) []const u8 {
+            return self.coreConstPtr().device.storage.items;
+        }
+
         pub const Diagnostics = struct {
             page_size: usize,
             page_count: usize,

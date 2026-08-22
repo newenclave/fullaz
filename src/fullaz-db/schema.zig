@@ -127,6 +127,9 @@ pub fn Schema(comptime options: anytype) type {
     if (page_id_info != .int or page_id_info.int.signedness != .unsigned) {
         @compileError("fullaz-db Schema page_id must be an unsigned integer");
     }
+    if (options.page_id == usize or @bitSizeOf(options.page_id) % 8 != 0) {
+        @compileError("fullaz-db Schema page_id must be a fixed-width byte-aligned unsigned integer");
+    }
 
     return schemaFromFields(options.page_id, [0]Field{});
 }

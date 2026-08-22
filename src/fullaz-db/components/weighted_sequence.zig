@@ -42,7 +42,7 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
         pub const page_roles: [page_kind_count][]const u8 = .{ "leaf", "inode" };
 
         pub fn fingerprint(writer: *FingerprintWriter) void {
-            writer.writeInt(usize, chunk_size);
+            writer.writeInt(u64, @intCast(chunk_size));
         }
 
         pub fn Binding(comptime BackendT: type) type {

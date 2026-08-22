@@ -96,9 +96,9 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
 
         pub fn fingerprint(writer: *FingerprintWriter) void {
             writer.writeInt(u32, comparator_id);
-            writer.writeInt(usize, maximum_key_size);
-            writer.writeInt(usize, maximum_value_size);
-            writer.writeInt(usize, maximum_level);
+            writer.writeInt(u64, @intCast(maximum_key_size));
+            writer.writeInt(u64, @intCast(maximum_value_size));
+            writer.writeInt(u64, @intCast(maximum_level));
             switch (size_classes) {
                 .one => writer.writeBytes("one"),
                 .logarithmic => |settings| {
@@ -201,8 +201,9 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                 };
                 const ReadProxy = struct {
                     pub const Error = HeapT.Error;
+                    pub const Peek = HeapT.Peek;
 
-                    heap: *const HeapT,
+                    heap: *HeapT,
 
                     pub fn count(self: *const @This()) @This().Error!u64 {
                         return self.heap.count();
@@ -210,6 +211,11 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
 
                     pub fn isEmpty(self: *const @This()) @This().Error!bool {
                         return self.heap.isEmpty();
+                    }
+
+                    /// Returned key/value slices borrow a pinned leaf until Peek.deinit().
+                    pub fn top(self: *const @This()) @This().Error!Peek {
+                        return self.heap.top();
                     }
                 };
 
