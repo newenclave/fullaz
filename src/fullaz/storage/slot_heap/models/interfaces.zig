@@ -180,6 +180,7 @@ pub fn assertModel(comptime ModelT: type) void {
         "requiredLeafSpace",
         fn (*const ModelT, ModelT.KeyInType, ModelT.ValueInType) Error!ModelT.SpaceType,
     );
+    requiresFnSignature(ModelT, "maxLevel", fn (*const ModelT) usize);
     requiresFnSignature(ModelT, "incrementEntriesCount", fn (*ModelT) Error!void);
     requiresFnSignature(ModelT, "decrementEntriesCount", fn (*ModelT) Error!void);
     requiresFnSignature(ModelT, "getEntriesCount", fn (*const ModelT) Error!ModelT.CountType);

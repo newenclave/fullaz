@@ -1,6 +1,7 @@
 const std = @import("std");
-const wbpt = @import("fullaz").weighted_bpt;
-const algos = @import("fullaz").core.algorithm;
+const fullaz = @import("fullaz");
+const wbpt = fullaz.weighted_bpt;
+const algos = fullaz.core.algorithm;
 const printer = @import("test_printer");
 
 const MemoryModel = wbpt.models.memory.Model;
@@ -158,6 +159,122 @@ test "WBpt: findByWeight positional lookup" {
     // at or beyond the total weight -> null
     try std.testing.expect((try tree.findByWeight(10, &buf)) == null);
     try std.testing.expect((try tree.findByWeight(100, &buf)) == null);
+}
+
+test "WBpt: iteratorAtWeight starts at containing value" {
+    const Model = MemoryModel(u8, 4);
+    const Tree = wbpt.WeightedBpt(Model);
+
+    var model = try Model.init(std.testing.allocator);
+    defer model.deinit();
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+
+    _ = try tree.insert(0, "Hello");
+    _ = try tree.insert(5, "World");
+
+    var at = (try tree.iteratorAtWeight(7)).?;
+    defer at.iterator.deinit();
+    var value = try at.iterator.get();
+    defer value.deinit();
+    try std.testing.expectEqualSlices(u8, "World", try value.get());
+    try std.testing.expectEqual(@as(u8, 2), at.intra_weight);
+    try std.testing.expect((try tree.iteratorAtWeight(10)) == null);
+}
+
+test "WeightedSequence: reads and inserts bounded chunks" {
+    const Model = MemoryModel(u8, 4);
+    const Tree = wbpt.WeightedBpt(Model);
+    const Sequence = fullaz.storage.weighted_seq.WeightedSeq(Tree, 3);
+
+    var model = try Model.init(std.testing.allocator);
+    defer model.deinit();
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+    var sequence = Sequence.init(&tree);
+
+    try sequence.append("abcdef");
+    try sequence.insert(3, "XYZ");
+    var output: [16]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 9), try sequence.readAt(0, &output));
+    try std.testing.expectEqualStrings("abcXYZdef", output[0..9]);
+    try std.testing.expectEqual(@as(usize, 4), try sequence.readAt(5, &output));
+    try std.testing.expectEqualStrings("Zdef", output[0..4]);
+    try sequence.erase(2, 5);
+    try std.testing.expectEqual(@as(usize, 4), try sequence.readAt(0, &output));
+    try std.testing.expectEqualStrings("abef", output[0..4]);
+    try sequence.replace(1, 2, "12345");
+    try std.testing.expectEqual(@as(usize, 7), try sequence.readAt(0, &output));
+    try std.testing.expectEqualStrings("a12345f", output[0..7]);
+    {
+        var iterator = try tree.iterator();
+        defer iterator.deinit();
+        var chunks: usize = 0;
+        while (!iterator.isEnd()) {
+            chunks += 1;
+            _ = try iterator.next();
+        }
+        try std.testing.expectEqual(@as(usize, 3), chunks);
+    }
+    try sequence.clear();
+    try std.testing.expectEqual(@as(u64, 0), try sequence.size());
+}
+
+test "WeightedSequence: random edits match a flat byte sequence" {
+    const Model = MemoryModel(u8, 4);
+    const Tree = wbpt.WeightedBpt(Model);
+    const Sequence = fullaz.storage.weighted_seq.WeightedSeq(Tree, 5);
+    const allocator = std.testing.allocator;
+
+    var model = try Model.init(allocator);
+    defer model.deinit();
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+    var sequence = Sequence.init(&tree);
+    var expected: std.ArrayList(u8) = .empty;
+    defer expected.deinit(allocator);
+    var random_source = std.Random.DefaultPrng.init(42);
+    const random = random_source.random();
+
+    for (0..100) |_| {
+        const offset = random.uintLessThan(usize, expected.items.len + 1);
+        const input_len = random.uintLessThan(usize, 5);
+        var input: [4]u8 = undefined;
+        for (input[0..input_len]) |*byte| {
+            byte.* = 'a' + random.uintLessThan(u8, 26);
+        }
+        switch (random.uintLessThan(u2, 3)) {
+            0 => {
+                try sequence.insert(@intCast(offset), input[0..input_len]);
+                try expected.insertSlice(allocator, offset, input[0..input_len]);
+            },
+            1 => {
+                const maximum_len = expected.items.len - offset;
+                const removed_len = random.uintLessThan(usize, maximum_len + 1);
+                try sequence.erase(@intCast(offset), @intCast(removed_len));
+                std.mem.copyForwards(u8, expected.items[offset..], expected.items[offset + removed_len ..]);
+                expected.items.len -= removed_len;
+            },
+            2 => {
+                const maximum_len = expected.items.len - offset;
+                const removed_len = random.uintLessThan(usize, maximum_len + 1);
+                try sequence.replace(
+                    @intCast(offset),
+                    @intCast(removed_len),
+                    input[0..input_len],
+                );
+                std.mem.copyForwards(u8, expected.items[offset..], expected.items[offset + removed_len ..]);
+                expected.items.len -= removed_len;
+                try expected.insertSlice(allocator, offset, input[0..input_len]);
+            },
+            else => unreachable,
+        }
+
+        var actual: [512]u8 = undefined;
+        try std.testing.expectEqual(expected.items.len, try sequence.size());
+        try std.testing.expectEqual(expected.items.len, try sequence.readAt(0, &actual));
+        try std.testing.expectEqualSlices(u8, expected.items, actual[0..expected.items.len]);
+    }
 }
 
 test "WBpt: stress test - random insertions" {

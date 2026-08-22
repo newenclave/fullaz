@@ -17,6 +17,7 @@ pub const Settings = struct {
     comparator_id: u32,
     leaf_page_kind: u16 = 0,
     inode_page_kind: u16 = 1,
+    maximum_level: usize = 32,
 };
 
 pub fn Paged(
@@ -548,7 +549,9 @@ pub fn Paged(
         }
 
         pub fn createInode(self: *Self, level: usize) Error!InodeImpl {
-            if (level == 0 or std.math.cast(SlotId, level) == null) {
+            if (level == 0 or level > self.ctx.settings.maximum_level or
+                std.math.cast(SlotId, level) == null)
+            {
                 return Error.MaxDepth;
             }
             var handle = try self.ctx.cache.create();
@@ -736,6 +739,8 @@ pub fn Paged(
         ) Error!Self {
             if (settings.key_size == 0 or
                 settings.leaf_page_kind == settings.inode_page_kind or
+                settings.maximum_level == 0 or
+                std.math.cast(SlotId, settings.maximum_level) == null or
                 std.math.cast(SlotId, settings.key_size) == null)
             {
                 return Error.InvalidSettings;
@@ -816,6 +821,10 @@ pub fn Paged(
                 return Error.ValueTooLarge;
             };
             return toSpace(byte_len);
+        }
+
+        pub fn maxLevel(self: *const Self) usize {
+            return self.accessor_state.ctx.settings.maximum_level;
         }
 
         pub fn incrementEntriesCount(self: *Self) Error!void {

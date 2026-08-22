@@ -555,10 +555,12 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
 
         pub fn createLeaf(self: *Self) ErrorSet!LeafType {
             const leaf = try self.allocator.create(NodeType);
+            errdefer self.allocator.destroy(leaf);
             leaf.* = .{ .leaf = MemoryLeafType.init() };
             // initialize leaf if needed
             const idx = self.nodes.items.len;
             try self.nodes.append(self.allocator, leaf);
+            errdefer std.debug.assert(self.nodes.pop().? == leaf);
             const san_ptr = if (IS_DEBUG) try self.allocator.create(u32) else null;
             const leafResult = LeafType.init(&leaf.leaf, idx, san_ptr);
             return leafResult;
@@ -566,10 +568,12 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
 
         pub fn createInode(self: *Self) ErrorSet!InodeType {
             const inode = try self.allocator.create(NodeType);
+            errdefer self.allocator.destroy(inode);
             inode.* = .{ .inode = MemoryInodeType.init() };
             // initialize inode if needed
             const idx = self.nodes.items.len;
             try self.nodes.append(self.allocator, inode);
+            errdefer std.debug.assert(self.nodes.pop().? == inode);
             const san_ptr = if (IS_DEBUG) try self.allocator.create(u32) else null;
             const inodeResult = InodeType.init(&inode.inode, idx, san_ptr);
             return inodeResult;

@@ -8,6 +8,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
     return struct {
         const Self = @This();
         pub const BlockId = BlockIdT;
+        pub const append_only_dense_block_ids: bool = true;
 
         pub const Error = errors.PageError || errors.FileError;
         pub const Options = struct {

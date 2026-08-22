@@ -1,6 +1,11 @@
 const std = @import("std");
 
 test {
+    _ = @import("page_cache/persistent_reclaiming_cache.zig");
+    _ = @import("fullaz-db/static_superblock.zig");
+    _ = @import("fullaz-db/schema_fingerprint.zig");
+    _ = @import("fullaz-db/static_database.zig");
+    _ = @import("fullaz-db/static_database_wal.zig");
     _ = @import("core/wordt.zig");
     _ = @import("core/bitset.zig");
     _ = @import("core/static_vector.zig");
@@ -9,6 +14,7 @@ test {
 
     _ = @import("bpt/memory_model.zig");
     _ = @import("bpt/paged_model.zig");
+    _ = @import("bpt/paged_view.zig");
     _ = @import("bpt/wbpt_memory_model.zig");
     _ = @import("bpt/wbpt_paged_model.zig");
     _ = @import("spatial/geometry.zig");
@@ -19,6 +25,7 @@ test {
     _ = @import("rtree/linear.zig");
     _ = @import("rtree/delete.zig");
     _ = @import("rtree/paged.zig");
+    _ = @import("rtree/paged_view.zig");
 
     _ = @import("aabb_tree/tree.zig");
 
@@ -49,6 +56,7 @@ test {
     _ = @import("fsm/location_accessor.zig");
     _ = @import("fsm/header_location_accessor.zig");
     _ = @import("fsm/paged_slab.zig");
+    _ = @import("fsm/size_classes.zig");
     _ = @import("fsm/skip_list_integration.zig");
 
     _ = @import("device/memory_block.zig");
@@ -69,6 +77,14 @@ test {
     _ = @import("page/slot_heap.zig");
     _ = @import("page_cache.zig");
     _ = @import("pages.zig");
+    _ = @import("fullaz-db/component.zig");
+    _ = @import("fullaz-db/bpt.zig");
+    _ = @import("fullaz-db/rtree.zig");
+    _ = @import("page_cache/memory_reclaiming_cache.zig");
+    _ = @import("fullaz-db/slot_heap_manager.zig");
+    _ = @import("fullaz-db/chain_store.zig");
+    _ = @import("fullaz-db/memory_database.zig");
+    _ = @import("fullaz-db/schema.zig");
     _ = @import("long_store.zig");
     _ = @import("free_list.zig");
     _ = @import("wal.zig");

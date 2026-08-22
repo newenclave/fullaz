@@ -776,6 +776,10 @@ pub fn Memory(
             return std.math.add(usize, content, 4) catch Error.ValueTooLarge;
         }
 
+        pub fn maxLevel(self: *const Self) usize {
+            return self.accessor_state.ctx.settings.max_levels - 1;
+        }
+
         pub fn incrementEntriesCount(self: *Self) Error!void {
             self.accessor_state.entries_count = std.math.add(
                 Count,

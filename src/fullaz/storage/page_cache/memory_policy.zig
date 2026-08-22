@@ -14,22 +14,28 @@ pub fn DefaultMemoryPolicy(comptime FrameT: type) type {
         lru_tail: ?*FrameT,
 
         pub fn init(allocator: std.mem.Allocator, block_size: usize, maximum_pages: usize) std.mem.Allocator.Error!Self {
+            const byte_count = std.math.mul(usize, block_size, maximum_pages) catch return error.OutOfMemory;
+            var bytes = try std.ArrayList(u8).initCapacity(allocator, byte_count);
+            errdefer bytes.deinit(allocator);
+            var frames = try std.ArrayList(FrameT).initCapacity(allocator, maximum_pages);
+            errdefer frames.deinit(allocator);
+
+            bytes.items.len = byte_count;
             var self = Self{
                 .allocator = allocator,
                 .block_size = block_size,
                 .maximum_pages = maximum_pages,
-                .bytes = try std.ArrayList(u8).initCapacity(allocator, block_size * maximum_pages),
-                .frames = try std.ArrayList(FrameT).initCapacity(allocator, maximum_pages),
+                .bytes = bytes,
+                .frames = frames,
                 .free_frames = null,
                 .lru_head = null,
                 .lru_tail = null,
             };
-            try self.bytes.resize(allocator, block_size * maximum_pages);
             for (0..maximum_pages) |i| {
                 var frame = FrameT.init();
                 frame.frame_id = i;
                 frame.data = self.bytes.items[i * block_size .. (i + 1) * block_size];
-                try self.frames.append(allocator, frame);
+                self.frames.appendAssumeCapacity(frame);
                 self.pushFree(&self.frames.items[i]);
             }
             return self;

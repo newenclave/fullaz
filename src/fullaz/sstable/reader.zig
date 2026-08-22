@@ -28,6 +28,7 @@ pub fn Reader(
     const PackedOffset = core.packed_int.PackedInt(Format.Offset, Format.Endian);
     const BlockView = codec.bounded_buffer.MemoryBlockView(u8);
     const EntryMetadata = sstable.EntryMetadata(Format);
+
     const CodedBlock = codec.front_coded_block.FrontCodedBlockWithMetadata(
         Format.DataIndex,
         Format.DataIndex,
@@ -40,44 +41,51 @@ pub fn Reader(
         CtxT,
         EntryMetadata.byte_len,
     );
+
     const FooterType = Footer(Format);
     const DataPageType = DataPage(Format);
     const DataPageConst = DataPage(Format).View(true);
     const BloomBits = core.bitset.BitSet(u64, Format.Endian);
     const Location = extern struct { offset: PackedOffset, length: PackedOffset };
+
     const IndexStorage = struct {
+        const Self = @This();
         pub const PageId = Format.PageId;
         pub const Error = errors.IndexStorage;
         root: ?PageId,
-        pub fn getRoot(self: *const @This()) ?PageId {
+        pub fn getRoot(self: *const Self) ?PageId {
             return self.root;
         }
-        pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
+        pub fn setRoot(self: *Self, root: ?PageId) Error!void {
             self.root = root;
         }
-        pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
+        pub fn destroyPage(_: *Self, _: PageId) Error!void {}
     };
+
     const LogBlock = struct {
+        const Self = @This();
         pub const BlockId = Format.PageId;
         pub const Error = LogT.Error || errors.IndexLogBlock;
+
         log: *LogT,
         start: Format.Offset,
         block_size: usize,
         block_count: usize,
-        pub fn isValidId(self: *const @This(), id: BlockId) bool {
+
+        pub fn isValidId(self: *const Self, id: BlockId) bool {
             return @as(usize, @intCast(id)) < self.block_count;
         }
-        pub fn isOpen(_: *const @This()) bool {
+        pub fn isOpen(_: *const Self) bool {
             return true;
         }
-        pub fn blockSize(self: *const @This()) usize {
+        pub fn blockSize(self: *const Self) usize {
             return self.block_size;
         }
-        pub fn blocksCount(self: *const @This()) usize {
+        pub fn blocksCount(self: *const Self) usize {
             return self.block_count;
         }
         pub fn readBlock(
-            self: *const @This(),
+            self: *const Self,
             id: BlockId,
             output: []u8,
         ) Error!void {
@@ -96,102 +104,126 @@ pub fn Reader(
             ) catch return Error.BadData;
             try self.log.readAt(offset, output[0..self.block_size]);
         }
-        pub fn writeBlock(_: *@This(), _: BlockId, _: []u8) Error!void {
+        pub fn writeBlock(_: *Self, _: BlockId, _: []u8) Error!void {
             return Error.ReadOnly;
         }
-        pub fn appendBlock(_: *@This()) Error!BlockId {
+        pub fn appendBlock(_: *Self) Error!BlockId {
             return Error.ReadOnly;
         }
-        pub fn truncateBlocks(_: *@This(), _: usize) Error!void {
+        pub fn truncateBlocks(_: *Self, _: usize) Error!void {
             return Error.ReadOnly;
         }
-        pub fn sync(_: *@This()) Error!void {}
+        pub fn sync(_: *Self) Error!void {}
     };
+
     const MemoryIndexDevice = device.MemoryBlock(Format.PageId);
+
     const IndexDevice = union(IndexBackend) {
+        const Self = @This();
+
         pub const BlockId = Format.PageId;
         pub const Error = MemoryIndexDevice.Error || LogBlock.Error;
+
         file: LogBlock,
         memory: MemoryIndexDevice,
-        pub fn isValidId(self: *const @This(), id: BlockId) bool {
+
+        pub fn isValidId(self: *const Self, id: BlockId) bool {
             return switch (self.*) {
                 .memory => |*b| b.isValidId(id),
                 .file => |*b| b.isValidId(id),
             };
         }
-        pub fn isOpen(self: *const @This()) bool {
+
+        pub fn isOpen(self: *const Self) bool {
             return switch (self.*) {
                 .memory => |*b| b.isOpen(),
                 .file => |*b| b.isOpen(),
             };
         }
-        pub fn blockSize(self: *const @This()) usize {
+
+        pub fn blockSize(self: *const Self) usize {
             return switch (self.*) {
                 .memory => |*b| b.blockSize(),
                 .file => |*b| b.blockSize(),
             };
         }
-        pub fn blocksCount(self: *const @This()) usize {
+
+        pub fn blocksCount(self: *const Self) usize {
             return switch (self.*) {
                 .memory => |*b| b.blocksCount(),
                 .file => |*b| b.blocksCount(),
             };
         }
-        pub fn readBlock(self: *const @This(), id: BlockId, output: []u8) Error!void {
+
+        pub fn readBlock(self: *const Self, id: BlockId, output: []u8) Error!void {
             return switch (self.*) {
                 .memory => |*b| try b.readBlock(id, output),
                 .file => |*b| try b.readBlock(id, output),
             };
         }
-        pub fn writeBlock(self: *@This(), id: BlockId, output: []u8) Error!void {
+
+        pub fn writeBlock(self: *Self, id: BlockId, output: []u8) Error!void {
             return switch (self.*) {
                 .memory => |*b| try b.writeBlock(id, output),
                 .file => |*b| try b.writeBlock(id, output),
             };
         }
-        pub fn appendBlock(self: *@This()) Error!BlockId {
+
+        pub fn appendBlock(self: *Self) Error!BlockId {
             return switch (self.*) {
                 .memory => |*b| try b.appendBlock(),
                 .file => |*b| try b.appendBlock(),
             };
         }
-        pub fn truncateBlocks(self: *@This(), count: usize) Error!void {
+
+        pub fn truncateBlocks(self: *Self, count: usize) Error!void {
             return switch (self.*) {
                 .memory => |*b| try b.truncateBlocks(count),
                 .file => |*b| try b.truncateBlocks(count),
             };
         }
-        pub fn sync(self: *@This()) Error!void {
+        pub fn sync(self: *Self) Error!void {
             return switch (self.*) {
                 .memory => |*b| try b.sync(),
                 .file => |*b| try b.sync(),
             };
         }
     };
+
     const IndexCache = storage.page_cache.PageCache(IndexDevice);
     const IndexModel = bpt.models.PagedModel(IndexCache, IndexStorage, cmp, CtxT);
     const IndexTree = bpt.Bpt(IndexModel);
+
     const IndexState = struct {
         const Self = @This();
+
         device: IndexDevice,
         cache: IndexCache,
         storage: IndexStorage,
         model: IndexModel,
         tree: IndexTree,
+
+        const Error = std.mem.Allocator.Error ||
+            IndexCache.Error ||
+            IndexModel.Error;
+
         fn init(
             allocator: std.mem.Allocator,
             index_device: IndexDevice,
             root: Format.PageId,
             settings: Settings,
             ctx: CtxT,
-        ) (std.mem.Allocator.Error || IndexCache.Error)!*Self {
+        ) Error!*Self {
             const state = try allocator.create(@This());
             errdefer allocator.destroy(state);
+
             state.device = index_device;
             state.storage = .{ .root = root };
+
             state.cache = try IndexCache.init(&state.device, allocator, 8);
             errdefer state.cache.deinit();
-            state.model = IndexModel.init(
+
+            state.model = try IndexModel.init(
                 &state.cache,
                 &state.storage,
                 .{
@@ -203,10 +235,12 @@ pub fn Reader(
             state.tree = IndexTree.init(&state.model, .force_split);
             return state;
         }
-        fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             self.tree.deinit();
-            IndexModel.deinit();
+            self.model.deinit();
             self.cache.deinit();
+
             switch (self.device) {
                 .memory => |*memory| {
                     memory.deinit();
@@ -216,21 +250,25 @@ pub fn Reader(
             allocator.destroy(self);
         }
     };
+
     return struct {
         const Self = @This();
         pub const Entry = struct {
             value: []const u8,
             metadata: EntryMetadata,
         };
+
         pub const ScanEntry = struct {
             key: []const u8,
             value: []const u8,
             metadata: EntryMetadata,
         };
+
         pub const ReadScratchType = struct {
             data_page: []u8,
             key: []u8,
         };
+
         pub const Error = std.mem.Allocator.Error ||
             LogT.Error ||
             FooterType.Error ||
@@ -352,28 +390,36 @@ pub fn Reader(
             ctx: CtxT,
         ) Error!Self {
             const total_size = log.size();
+
             if (total_size < @sizeOf(FooterType.Trailer)) {
                 return Error.BadFileSize;
             }
+
             var trailer_bytes: [@sizeOf(FooterType.Trailer)]u8 = undefined;
+
             const trailer_offset = std.math.sub(
                 Format.Offset,
                 total_size,
                 @sizeOf(FooterType.Trailer),
             ) catch return Error.BadFileSize;
+
             try log.readAt(trailer_offset, &trailer_bytes);
+
             const footer_size = try FooterType.validateTrailer(&trailer_bytes);
             const footer_size_offset = std.math.cast(
                 Format.Offset,
                 footer_size,
             ) orelse return Error.BadFileSize;
+
             const footer_offset = std.math.sub(
                 Format.Offset,
                 trailer_offset,
                 footer_size_offset,
             ) catch return Error.BadFileSize;
+
             const footer_bytes = try allocator.alloc(u8, footer_size);
             defer allocator.free(footer_bytes);
+
             try log.readAt(footer_offset, footer_bytes);
             const footer = try FooterType.View(true).init(footer_bytes);
             const info = try footer.validate(footer_offset);
@@ -384,12 +430,18 @@ pub fn Reader(
                 usize,
                 info.bloom_length,
             ) orelse return Error.BadFileSize;
+
             const bloom_bytes = try allocator.alloc(u8, bloom_len);
             errdefer allocator.free(bloom_bytes);
+
             try log.readAt(info.bloom_offset, bloom_bytes);
             var index_device: IndexDevice = undefined;
             if (options.index_backend == .memory) {
-                var memory: ?MemoryIndexDevice = try MemoryIndexDevice.init(allocator, info.settings.index_page_bytes);
+                var memory: ?MemoryIndexDevice = try MemoryIndexDevice.init(
+                    allocator,
+                    info.settings.index_page_bytes,
+                );
+
                 errdefer if (memory) |*owned_memory| {
                     owned_memory.deinit();
                 };
@@ -434,10 +486,12 @@ pub fn Reader(
                 .index_state = index_state,
             };
         }
+
         pub fn deinit(self: *Self) void {
             self.index_state.deinit(self.allocator);
             self.allocator.free(self.bloom_bytes);
         }
+
         pub fn iterator(self: *Self, scratch: *ReadScratchType) Error!Iterator {
             try self.validateScratch(scratch);
             const data_end = std.math.add(
@@ -452,6 +506,7 @@ pub fn Reader(
                 .data_end = data_end,
             };
         }
+
         pub fn find(
             self: *Self,
             key: []const u8,

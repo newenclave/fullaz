@@ -1,6 +1,7 @@
 const std = @import("std");
 const contract_interfaces = @import("../../contracts/interfaces.zig");
 const interfaces = @import("models/interfaces.zig");
+const limits = @import("limits.zig");
 const strategy_mod = @import("strategy.zig");
 
 pub fn Tree(comptime ModelT: type, comptime StrategyFn: fn (type) type) type {
@@ -83,7 +84,7 @@ fn TreeWithConfig(
         pub const Error = ModelT.Error;
         pub const min_fill: usize = @max(2, Max * 2 / 5); // 40% is minimum.
 
-        const max_depth = 64;
+        const max_depth = limits.max_depth;
         const orphan_cap = max_depth * min_fill;
 
         const Frame = struct {
@@ -142,8 +143,53 @@ fn TreeWithConfig(
             return .{ .model = model };
         }
 
+        fn callbackInfo(comptime CallbackT: type) std.builtin.Type.Fn {
+            return switch (@typeInfo(CallbackT)) {
+                .@"fn" => |info| info,
+                .pointer => |pointer| switch (@typeInfo(pointer.child)) {
+                    .@"fn" => |info| info,
+                    else => @compileError("R-tree callback must be a function or function pointer"),
+                },
+                else => @compileError("R-tree callback must be a function or function pointer"),
+            };
+        }
+
+        fn CallbackError(comptime CallbackT: type) type {
+            const ReturnT = callbackInfo(CallbackT).return_type orelse
+                @compileError("R-tree callback must have a return type");
+            return switch (@typeInfo(ReturnT)) {
+                .void => error{},
+                .error_union => |error_union| blk: {
+                    if (error_union.payload != void) {
+                        @compileError("R-tree callback must return void or an error union with void payload");
+                    }
+                    break :blk error_union.error_set;
+                },
+                else => @compileError("R-tree callback must return void or an error union with void payload"),
+            };
+        }
+
+        fn callCallback(
+            callback: anytype,
+            context: anytype,
+            mbr: Key,
+            value: ValueIn,
+        ) CallbackError(@TypeOf(callback))!void {
+            const ReturnT = callbackInfo(@TypeOf(callback)).return_type.?;
+            switch (@typeInfo(ReturnT)) {
+                .void => callback(context, mbr, value),
+                .error_union => try callback(context, mbr, value),
+                else => unreachable,
+            }
+        }
+
         // ---- search: report values whose box has positive overlap with the query window ---- //
-        pub fn search(self: *Self, query: Key, ctx: anytype, cb: anytype) !void {
+        pub fn search(
+            self: *const Self,
+            query: Key,
+            ctx: anytype,
+            cb: anytype,
+        ) (Error || CallbackError(@TypeOf(cb)))!void {
             const acc = self.model.accessor();
             const root = acc.getRoot() orelse {
                 return;
@@ -152,7 +198,12 @@ fn TreeWithConfig(
         }
 
         // ---- searchIntersecting: report values sharing any point with the query window ---- //
-        pub fn searchIntersecting(self: *Self, query: Key, ctx: anytype, cb: anytype) !void {
+        pub fn searchIntersecting(
+            self: *const Self,
+            query: Key,
+            ctx: anytype,
+            cb: anytype,
+        ) (Error || CallbackError(@TypeOf(cb)))!void {
             const acc = self.model.accessor();
             const root = acc.getRoot() orelse {
                 return;
@@ -165,15 +216,14 @@ fn TreeWithConfig(
             intersection,
         };
 
-        // cb here is: fn(ctx: anytype, mbr: Key, value: ValueIn) anyerror!void //
         fn searchNode(
-            self: *Self,
+            self: *const Self,
             id: Pid,
             query: Key,
             ctx: anytype,
             cb: anytype,
             comptime search_mode: SearchMode,
-        ) !void {
+        ) (Error || CallbackError(@TypeOf(cb)))!void {
             const acc = self.model.accessor();
             if (try acc.isLeafId(id)) {
                 var leaf = (try acc.loadLeaf(id)).?;
@@ -187,29 +237,32 @@ fn TreeWithConfig(
                         .overlap => mbr.overlaps(&query),
                     };
                     if (matches) {
-                        try cb(ctx, mbr, try leaf.getValue(i));
+                        try callCallback(cb, ctx, mbr, try leaf.getValue(i));
                     }
                 }
             } else {
-                var inode = (try acc.loadInode(id)).?;
-                defer acc.deinitInode(inode);
-                const n = try inode.size();
-                var i: usize = 0;
-                while (i < n) : (i += 1) {
-                    const mbr = try inode.getMbr(i);
-                    const matches = switch (search_mode) {
-                        .intersection => mbr.intersects(&query),
-                        .overlap => mbr.overlaps(&query),
-                    };
-                    if (matches) {
-                        try self.searchNode(
-                            try inode.getChild(i),
-                            query,
-                            ctx,
-                            cb,
-                            search_mode,
-                        );
+                var child_ids: [Max]Pid = undefined;
+                const child_count = blk: {
+                    var inode = (try acc.loadInode(id)).?;
+                    defer acc.deinitInode(inode);
+                    const n = try inode.size();
+                    var count: usize = 0;
+                    var i: usize = 0;
+                    while (i < n) : (i += 1) {
+                        const mbr = try inode.getMbr(i);
+                        const matches = switch (search_mode) {
+                            .intersection => mbr.intersects(&query),
+                            .overlap => mbr.overlaps(&query),
+                        };
+                        if (matches) {
+                            child_ids[count] = try inode.getChild(i);
+                            count += 1;
+                        }
                     }
+                    break :blk count;
+                };
+                for (child_ids[0..child_count]) |child_id| {
+                    try self.searchNode(child_id, query, ctx, cb, search_mode);
                 }
             }
         }
@@ -226,6 +279,7 @@ fn TreeWithConfig(
 
             const root = acc.getRoot() orelse {
                 var leaf = try acc.createLeaf();
+                errdefer acc.destroy(leaf.id()) catch {};
                 defer acc.deinitLeaf(leaf);
                 try leaf.insertEntry(mbr, value);
                 try acc.setRoot(leaf.id());
@@ -405,6 +459,7 @@ fn TreeWithConfig(
             Strategy.splitEntries(mbrs[0..total], min_fill, assign[0..total]);
 
             var sibling = try acc.createLeaf();
+            errdefer acc.destroy(sibling.id()) catch {};
             defer acc.deinitLeaf(sibling);
 
             i = 0;
@@ -452,6 +507,7 @@ fn TreeWithConfig(
 
             const level = try inode.getLevel();
             var sibling = try acc.createInode();
+            errdefer acc.destroy(sibling.id()) catch {};
             defer acc.deinitInode(sibling);
             try sibling.setLevel(level);
 
@@ -512,6 +568,7 @@ fn TreeWithConfig(
 
             if (split) |sib_id| {
                 var new_root = try acc.createInode();
+                errdefer acc.destroy(new_root.id()) catch {};
                 defer acc.deinitInode(new_root);
                 try new_root.setLevel((try self.levelOf(child_id)) + 1);
                 try new_root.insertChild(
@@ -534,7 +591,7 @@ fn TreeWithConfig(
             }
         }
 
-        fn nodeMbrOf(self: *Self, id: Pid) Error!Key {
+        fn nodeMbrOf(self: *const Self, id: Pid) Error!Key {
             const acc = self.model.accessor();
             if (try acc.isLeafId(id)) {
                 var l = (try acc.loadLeaf(id)).?;
@@ -546,7 +603,7 @@ fn TreeWithConfig(
             return try n.nodeMbr();
         }
 
-        fn levelOf(self: *Self, id: Pid) Error!usize {
+        fn levelOf(self: *const Self, id: Pid) Error!usize {
             const acc = self.model.accessor();
             if (try acc.isLeafId(id)) {
                 return 0;
@@ -556,7 +613,7 @@ fn TreeWithConfig(
             return try n.getLevel();
         }
 
-        pub fn height(self: *Self) Error!usize {
+        pub fn height(self: *const Self) Error!usize {
             const acc = self.model.accessor();
             const root = acc.getRoot() orelse {
                 return 0;
@@ -582,10 +639,17 @@ fn TreeWithConfig(
                 return false;
             };
 
-            {
+            const leaf_is_empty = blk: {
                 var leaf = (try acc.loadLeaf(hit.leaf_id)).?;
                 defer acc.deinitLeaf(leaf);
                 try leaf.erase(hit.entry_idx);
+                break :blk (try leaf.size()) == 0;
+            };
+
+            if (root == hit.leaf_id and leaf_is_empty) {
+                try acc.setRoot(null);
+                try acc.destroy(hit.leaf_id);
+                return true;
             }
 
             try self.condenseTree(&path, hit.leaf_id);
@@ -602,7 +666,7 @@ fn TreeWithConfig(
                 var i: usize = 0;
                 while (i < n) : (i += 1) {
                     const mbr = try leaf.getMbr(i);
-                    if (mbr.overlaps(&query) and matches(ctx, mbr, try leaf.getValue(i))) {
+                    if (mbr.intersects(&query) and matches(ctx, mbr, try leaf.getValue(i))) {
                         return .{
                             .leaf_id = id,
                             .entry_idx = i,
@@ -611,18 +675,29 @@ fn TreeWithConfig(
                 }
                 return null;
             }
-            var inode = (try acc.loadInode(id)).?;
-            defer acc.deinitInode(inode);
-            const n = try inode.size();
-            var i: usize = 0;
-            while (i < n) : (i += 1) {
-                if ((try inode.getMbr(i)).overlaps(&query)) {
-                    path.push(.{ .id = id, .idx = i });
-                    if (try self.findLeaf(try inode.getChild(i), query, ctx, matches, path)) |hit| {
-                        return hit;
+            var child_ids: [Max]Pid = undefined;
+            var child_indices: [Max]usize = undefined;
+            const child_count = blk: {
+                var inode = (try acc.loadInode(id)).?;
+                defer acc.deinitInode(inode);
+                const n = try inode.size();
+                var count: usize = 0;
+                var i: usize = 0;
+                while (i < n) : (i += 1) {
+                    if ((try inode.getMbr(i)).intersects(&query)) {
+                        child_ids[count] = try inode.getChild(i);
+                        child_indices[count] = i;
+                        count += 1;
                     }
-                    _ = path.pop();
                 }
+                break :blk count;
+            };
+            for (child_ids[0..child_count], child_indices[0..child_count]) |child_id, child_idx| {
+                path.push(.{ .id = id, .idx = child_idx });
+                if (try self.findLeaf(child_id, query, ctx, matches, path)) |hit| {
+                    return hit;
+                }
+                _ = path.pop();
             }
             return null;
         }
@@ -685,15 +760,17 @@ fn TreeWithConfig(
                 child_id = frame.id;
             }
 
-            if (!(try acc.isLeafId(child_id))) {
-                if (try acc.loadInode(child_id)) |*rv| {
-                    const rs = try rv.size();
-                    acc.deinitInode(rv.*);
-                    if (rs == 0) {
-                        try acc.destroy(child_id);
-                        try acc.setRoot(null);
-                    }
+            const empty_root_inode = blk: {
+                if (try acc.isLeafId(child_id)) {
+                    break :blk false;
                 }
+                var root = (try acc.loadInode(child_id)).?;
+                defer acc.deinitInode(root);
+                break :blk (try root.size()) == 0;
+            };
+            if (empty_root_inode) {
+                try acc.setRoot(null);
+                try acc.destroy(child_id);
             }
 
             var order: [orphan_cap]usize = undefined;
@@ -720,14 +797,33 @@ fn TreeWithConfig(
                 }
             }
             if (orphan_leaf) |olid| {
-                var leaf = (try acc.loadLeaf(olid)).?; // must be alive here
-                const n = try leaf.size();
-                var i: usize = 0;
-                while (i < n) : (i += 1) {
-                    try self.insertValue(try leaf.getMbr(i), self.model.valueOutAsIn(try leaf.getValue(i)), &ins_ctx);
+                const OrphanEntry = struct {
+                    mbr: Key,
+                    value: ValueBuf,
+                };
+                var orphan_entries: [min_fill]OrphanEntry = undefined;
+                var orphan_count: usize = 0;
+                {
+                    var leaf = (try acc.loadLeaf(olid)).?; // must be alive here
+                    defer acc.deinitLeaf(leaf);
+                    const n = try leaf.size();
+                    var i: usize = 0;
+                    while (i < n) : (i += 1) {
+                        orphan_entries[i] = .{
+                            .mbr = try leaf.getMbr(i),
+                            .value = self.model.copyValueOut(try leaf.getValue(i)),
+                        };
+                        orphan_count += 1;
+                    }
                 }
-                acc.deinitLeaf(leaf);
                 try acc.destroy(olid);
+                for (orphan_entries[0..orphan_count]) |entry| {
+                    try self.insertValue(
+                        entry.mbr,
+                        self.model.valueBufAsIn(&entry.value),
+                        &ins_ctx,
+                    );
+                }
             }
 
             try self.drainReinserts(&ins_ctx);
@@ -737,13 +833,15 @@ fn TreeWithConfig(
                     break;
                 };
                 if (try acc.isLeafId(root)) break;
-                var r = (try acc.loadInode(root)).?;
-                const rs = try r.size();
-                const only: ?Pid = if (rs == 1) try r.getChild(0) else null;
-                acc.deinitInode(r);
+                const only: ?Pid = blk: {
+                    var inode = (try acc.loadInode(root)).?;
+                    defer acc.deinitInode(inode);
+                    const size = try inode.size();
+                    break :blk if (size == 1) try inode.getChild(0) else null;
+                };
                 if (only) |child| {
-                    try acc.destroy(root);
                     try acc.setRoot(child);
+                    try acc.destroy(root);
                 } else {
                     break;
                 }
@@ -760,6 +858,7 @@ fn TreeWithConfig(
 
             if ((try self.levelOf(root)) <= target_level) {
                 var nr = try acc.createInode();
+                errdefer acc.destroy(nr.id()) catch {};
                 defer acc.deinitInode(nr);
                 try nr.setLevel(target_level + 1);
                 try nr.insertChild(ConfigT.makeInodeMbr(try self.nodeMbrOf(root)), root);

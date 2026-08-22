@@ -163,7 +163,7 @@ const FsmStorageManager = struct {
 const FsmSizePolicy = struct {
     pub const SizeClass = u16;
 
-    pub fn getSizeClass(_: *const @This(), size: SizeClass) !SizeClass {
+    pub fn getSizeClass(_: *const @This(), size: SizeClass) SizeClass {
         return size >> 8;
     }
 

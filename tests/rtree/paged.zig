@@ -23,9 +23,32 @@ const NoneStorageManager = struct {
     pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
 };
 
+const TrackingStorageManager = struct {
+    pub const PageId = u32;
+    pub const Error = error{};
+
+    root: ?PageId = null,
+    destroyed: [16]PageId = undefined,
+    destroyed_count: usize = 0,
+
+    pub fn getRoot(self: *const @This()) ?PageId {
+        return self.root;
+    }
+
+    pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
+        self.root = root;
+    }
+
+    pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
+        self.destroyed[self.destroyed_count] = page_id;
+        self.destroyed_count += 1;
+    }
+};
+
 // CoordT = i64, dims = 2, max_entries = 4, max_value = 32 bytes, little-endian.
 const Model = rtree.models.Paged(PageCache, NoneStorageManager, i64, 2, 4, 32, .little);
 const Key = Model.KeyType;
+const TrackingModel = rtree.models.Paged(PageCache, TrackingStorageManager, i64, 2, 4, 32, .little);
 
 comptime {
     rtree.models.interfaces.assertModel(Model);
@@ -65,7 +88,7 @@ test "RTree paged: empty tree search yields nothing" {
     var cache = try PageCache.init(&device, allocator, 16);
     defer cache.deinit();
     var store_mgr = NoneStorageManager{};
-    var model = Model.init(&cache, &store_mgr, .{});
+    var model = try Model.init(&cache, &store_mgr, .{});
 
     var t = rtree.RTree(Model).init(&model);
 
@@ -75,6 +98,154 @@ test "RTree paged: empty tree search yields nothing" {
     try testing.expectEqual(@as(usize, 0), try t.height());
 }
 
+test "RTree paged: model rejects invalid physical settings" {
+    const allocator = testing.allocator;
+
+    {
+        var device = try Device.init(allocator, 256);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 2);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+
+        try testing.expectError(
+            error.InvalidSettings,
+            Model.init(&cache, &store_mgr, .{
+                .leaf_page_kind = 7,
+                .inode_page_kind = 7,
+            }),
+        );
+        try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    }
+
+    {
+        var device = try Device.init(allocator, 64);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 2);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+
+        try testing.expectError(error.InvalidSettings, Model.init(&cache, &store_mgr, .{}));
+        try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    }
+
+    {
+        const OversizedValueModel = rtree.models.Paged(
+            PageCache,
+            NoneStorageManager,
+            i64,
+            2,
+            4,
+            65_536,
+            .little,
+        );
+        var device = try Device.init(allocator, 4096);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 2);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+
+        try testing.expectError(
+            error.InvalidSettings,
+            OversizedValueModel.init(&cache, &store_mgr, .{}),
+        );
+        try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    }
+
+    {
+        const OvercommittedEntryModel = rtree.models.Paged(
+            PageCache,
+            NoneStorageManager,
+            i64,
+            2,
+            128,
+            32,
+            .little,
+        );
+        var device = try Device.init(allocator, 4096);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 2);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+
+        try testing.expectError(
+            error.InvalidSettings,
+            OvercommittedEntryModel.init(&cache, &store_mgr, .{}),
+        );
+        try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    }
+
+    {
+        var device = try Device.init(allocator, 65_536);
+        defer device.deinit();
+        var cache = try PageCache.init(&device, allocator, 2);
+        defer cache.deinit();
+        var store_mgr = NoneStorageManager{};
+
+        try testing.expectError(error.InvalidSettings, Model.init(&cache, &store_mgr, .{}));
+        try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    }
+}
+
+test "RTree paged: accessor validates persisted page structure" {
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try Model.init(&cache, &store_mgr, .{});
+    const accessor = model.accessor();
+    const available_before = cache.availableFrames();
+
+    var leaf = try accessor.createLeaf();
+    const leaf_id = leaf.id();
+    accessor.deinitLeaf(leaf);
+    try testing.expect(try accessor.isLeafId(leaf_id));
+    try testing.expectEqual(@as(?Model.InodeType, null), try accessor.loadInode(leaf_id));
+
+    var inode = try accessor.createInode();
+    const inode_id = inode.id();
+    try testing.expectEqual(@as(usize, 1), try inode.getLevel());
+    accessor.deinitInode(inode);
+    try testing.expect(!try accessor.isLeafId(inode_id));
+    try testing.expectEqual(@as(?Model.LeafType, null), try accessor.loadLeaf(inode_id));
+
+    var foreign_handle = try cache.create();
+    const foreign_id = try foreign_handle.pid();
+    var foreign_view = fullaz.page.header.View(u32, u16, .little, false).init(
+        try foreign_handle.dataMut(),
+    );
+    foreign_view.formatPage(99, foreign_id, 0, 0);
+    foreign_handle.deinit();
+    try testing.expectError(error.BadType, accessor.loadLeaf(foreign_id));
+    try testing.expectError(error.BadType, accessor.isLeafId(foreign_id));
+
+    var malformed_handle = try cache.fetch(leaf_id);
+    var malformed_view = fullaz.page.header.View(u32, u16, .little, false).init(
+        try malformed_handle.dataMut(),
+    );
+    malformed_view.headerMut().subheader_size.set(0);
+    malformed_handle.deinit();
+    try testing.expectError(error.BadData, accessor.loadLeaf(leaf_id));
+    try testing.expectError(error.BadData, accessor.loadInode(leaf_id));
+    try testing.expectError(error.BadData, accessor.isLeafId(leaf_id));
+
+    var invalid_end_leaf = try accessor.createLeaf();
+    const invalid_end_id = invalid_end_leaf.id();
+    accessor.deinitLeaf(invalid_end_leaf);
+    var invalid_end_handle = try cache.fetch(invalid_end_id);
+    var invalid_end_view = fullaz.page.header.View(u32, u16, .little, false).init(
+        try invalid_end_handle.dataMut(),
+    );
+    invalid_end_view.headerMut().page_end.set(0);
+    invalid_end_handle.deinit();
+    try testing.expectError(error.InvalidPageEnd, accessor.loadLeaf(invalid_end_id));
+
+    try testing.expectError(error.BadData, accessor.isLeafId(std.math.maxInt(u32)));
+    try testing.expectEqual(available_before, cache.availableFrames());
+}
+
 test "RTree paged: single insert is findable" {
     const allocator = testing.allocator;
     var device = try Device.init(allocator, 4096);
@@ -82,7 +253,7 @@ test "RTree paged: single insert is findable" {
     var cache = try PageCache.init(&device, allocator, 16);
     defer cache.deinit();
     var store_mgr = NoneStorageManager{};
-    var model = Model.init(&cache, &store_mgr, .{});
+    var model = try Model.init(&cache, &store_mgr, .{});
 
     var t = rtree.RTree(Model).init(&model);
     try insertIdx(&t, box(2, 2, 4, 4), 7);
@@ -103,7 +274,7 @@ fn windowQueryMatchesBruteForce(comptime TreeT: type) !void {
     var cache = try PageCache.init(&device, allocator, 32);
     defer cache.deinit();
     var store_mgr = NoneStorageManager{};
-    var model = Model.init(&cache, &store_mgr, .{});
+    var model = try Model.init(&cache, &store_mgr, .{});
 
     const available_before = cache.availableFrames();
 
@@ -162,7 +333,7 @@ test "RTree paged: delete keeps the exact remaining set" {
     var cache = try PageCache.init(&device, allocator, 32);
     defer cache.deinit();
     var store_mgr = NoneStorageManager{};
-    var model = Model.init(&cache, &store_mgr, .{});
+    var model = try Model.init(&cache, &store_mgr, .{});
 
     var t = rtree.RTree(Model).init(&model);
 
@@ -195,6 +366,44 @@ test "RTree paged: delete keeps the exact remaining set" {
     }
 }
 
+test "RTree paged: remove finds a point MBR through closed intersection" {
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try Model.init(&cache, &store_mgr, .{});
+    var tree = rtree.RTree(Model).init(&model);
+
+    try insertIdx(&tree, box(7, 9, 7, 9), 42);
+    const matches = MatchIdx{ .want = 42 };
+    try testing.expect(try tree.remove(box(7, 9, 7, 9), &matches, MatchIdx.call));
+    try testing.expectEqual(null, store_mgr.getRoot());
+}
+
+test "RTree paged: deleting the root leaf reclaims it" {
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+    var store_mgr = TrackingStorageManager{};
+    var model = try TrackingModel.init(&cache, &store_mgr, .{});
+    var tree = rtree.RTree(TrackingModel).init(&model);
+
+    var value: [4]u8 = undefined;
+    std.mem.writeInt(u32, &value, 7, .little);
+    try tree.insert(box(2, 2, 4, 4), &value);
+    const root = store_mgr.getRoot().?;
+    const matches = MatchIdx{ .want = 7 };
+    try testing.expect(try tree.remove(box(2, 2, 4, 4), &matches, MatchIdx.call));
+
+    try testing.expectEqual(null, store_mgr.getRoot());
+    try testing.expectEqual(@as(usize, 1), store_mgr.destroyed_count);
+    try testing.expectEqual(root, store_mgr.destroyed[0]);
+}
+
 test "RTree paged: state persists across a cache reopen (device round-trip)" {
     const allocator = testing.allocator;
     var device = try Device.init(allocator, 4096);
@@ -208,7 +417,7 @@ test "RTree paged: state persists across a cache reopen (device round-trip)" {
     {
         var cache = try PageCache.init(&device, allocator, 32);
         defer cache.deinit();
-        var model = Model.init(&cache, &store_mgr, .{});
+        var model = try Model.init(&cache, &store_mgr, .{});
         var t = rtree.RTree(Model).init(&model);
 
         var i: usize = 0;
@@ -225,7 +434,7 @@ test "RTree paged: state persists across a cache reopen (device round-trip)" {
     {
         var cache = try PageCache.init(&device, allocator, 32);
         defer cache.deinit();
-        var model = Model.init(&cache, &store_mgr, .{});
+        var model = try Model.init(&cache, &store_mgr, .{});
         var t = rtree.RTree(Model).init(&model);
 
         const queries = [_]Key{
@@ -241,6 +450,37 @@ test "RTree paged: state persists across a cache reopen (device round-trip)" {
                 try testing.expectEqual(boxes[i].overlaps(&q), got.seen[i]);
             }
         }
+    }
+}
+
+test "RTree paged: wide search uses one frame after reopen" {
+    const allocator = testing.allocator;
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var store_mgr = NoneStorageManager{};
+
+    {
+        var cache = try PageCache.init(&device, allocator, 32);
+        defer cache.deinit();
+        var model = try Model.init(&cache, &store_mgr, .{});
+        var tree = rtree.RTree(Model).init(&model);
+
+        for (0..50) |index| {
+            const coordinate: i64 = @intCast(index * 10);
+            try insertIdx(&tree, box(coordinate, 0, coordinate + 1, 1), @intCast(index));
+        }
+        try cache.flushAll();
+    }
+
+    {
+        var cache = try PageCache.init(&device, allocator, 1);
+        defer cache.deinit();
+        var model = try Model.init(&cache, &store_mgr, .{});
+        const tree = rtree.RTree(Model).init(&model);
+        var found = Collector{};
+
+        try tree.search(box(-1, -1, 1_000, 10), &found, Collector.cb);
+        try testing.expectEqual(@as(usize, 50), found.count);
     }
 }
 
@@ -271,7 +511,7 @@ test "RTree paged: float coordinates round-trip through the page layout" {
     var cache = try PageCache.init(&device, allocator, 32);
     defer cache.deinit();
     var store_mgr = NoneStorageManager{};
-    var model = FloatModel.init(&cache, &store_mgr, .{});
+    var model = try FloatModel.init(&cache, &store_mgr, .{});
 
     var t = rtree.RStarTree(FloatModel).init(&model);
 
@@ -380,7 +620,7 @@ test "RTree paged: stress; random insert of huge N, remove half, stays valid" {
     var cache = try PageCache.init(&device, allocator, 256);
     defer cache.deinit();
     var store_mgr = NoneStorageManager{};
-    var model = Model.init(&cache, &store_mgr, .{});
+    var model = try Model.init(&cache, &store_mgr, .{});
 
     const available_before = cache.availableFrames();
 

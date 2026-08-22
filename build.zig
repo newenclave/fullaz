@@ -17,6 +17,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
     mod.addOptions("build_options", fullaz_options);
+    const fullaz_db = b.addModule("fullaz-db", .{
+        .root_source_file = b.path("src/fullaz-db/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "fullaz", .module = mod },
+        },
+    });
 
     const unit_tests = b.addModule("fullaz_tests", .{
         .root_source_file = b.path("tests/tests.zig"),
@@ -41,6 +48,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "fullaz", .module = mod },
+                .{ .name = "fullaz-db", .module = fullaz_db },
             },
         }),
     });
@@ -68,6 +76,7 @@ pub fn build(b: *std.Build) void {
     }
 
     mod_tests.root_module.addImport("fullaz", mod);
+    mod_tests.root_module.addImport("fullaz-db", fullaz_db);
     mod_tests.root_module.addImport("test_printer", test_printer);
 
     const test_filter = b.option([]const u8, "test-filter", "Filter tests by name");
@@ -88,6 +97,189 @@ pub fn build(b: *std.Build) void {
     //const run_exe_tests = b.addRunArtifact(exe_tests);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
+    const fullaz_db_compile_errors_step = b.step(
+        "test-fullaz-db-compile-errors",
+        "Check fullaz-db compile-time diagnostics",
+    );
+    for ([_]CompileErrorFixture{
+        .{
+            .source = "tests/compile_errors/pages/duplicate_component.zig",
+            .expected = "Duplicate pages Schema component: index",
+        },
+        .{
+            .source = "tests/compile_errors/pages/unknown_component.zig",
+            .expected = "Unknown pages Schema component: missing",
+        },
+        .{
+            .source = "tests/compile_errors/pages/missing_page_id.zig",
+            .expected = "fullaz-db Schema options must declare page_id as a type",
+        },
+        .{
+            .source = "tests/compile_errors/pages/reserved_name.zig",
+            .expected = "fullaz-db Schema component name uses a reserved $ path segment",
+        },
+        .{
+            .source = "tests/compile_errors/pages/missing_kind_name.zig",
+            .expected = "fullaz-db component trait must declare kind_name: []const u8",
+        },
+        .{
+            .source = "tests/compile_errors/pages/duplicate_page_role.zig",
+            .expected = "Duplicate pages component page role: data",
+        },
+        .{
+            .source = "tests/compile_errors/pages/page_kind_exhaustion.zig",
+            .expected = "fullaz-db component page_kind_count exceeds available page-kind space",
+        },
+        .{
+            .source = "tests/compile_errors/pages/bpt_missing_compare.zig",
+            .expected = "Missing fullaz-db.bpt option: compare",
+        },
+        .{
+            .source = "tests/compile_errors/pages/bpt_fallible_compare.zig",
+            .expected = "fullaz-db.bpt compare has an invalid signature",
+        },
+        .{
+            .source = "tests/compile_errors/pages/bpt_zero_comparator_id.zig",
+            .expected = "fullaz-db.bpt comparator_id cannot be zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/bpt_zero_format_version.zig",
+            .expected = "fullaz-db.bpt format_version cannot be zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/bpt_unknown_option.zig",
+            .expected = "Unknown fullaz-db.bpt option: leaf_page_kind",
+        },
+        .{
+            .source = "tests/compile_errors/pages/slot_heap_missing_compare.zig",
+            .expected = "Missing fullaz-db.slotHeap option: compare",
+        },
+        .{
+            .source = "tests/compile_errors/pages/slot_heap_zero_maximum_level.zig",
+            .expected = "fullaz-db.slotHeap comparator_id, maximum_key_size, and maximum_level must be non-zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/slot_heap_unknown_option.zig",
+            .expected = "Unknown fullaz-db.slotHeap option: leaf_page_kind",
+        },
+        .{
+            .source = "tests/compile_errors/pages/chain_store_unknown_option.zig",
+            .expected = "fullaz-db.chainStore options must be an empty struct",
+        },
+        .{
+            .source = "tests/compile_errors/pages/weighted_sequence_zero_chunk.zig",
+            .expected = "fullaz-db.weightedSequence maximum_chunk_size must be non-zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/weighted_sequence_unknown_option.zig",
+            .expected = "Unknown fullaz-db.weightedSequence option: page_kind",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_missing_coord.zig",
+            .expected = "Missing fullaz-db.rtree option: Coord",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_missing_dimensions.zig",
+            .expected = "Missing fullaz-db.rtree option: dimensions",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_missing_maximum_entries.zig",
+            .expected = "Missing fullaz-db.rtree option: maximum_entries",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_missing_maximum_value_size.zig",
+            .expected = "Missing fullaz-db.rtree option: maximum_value_size",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_unknown_option.zig",
+            .expected = "Unknown fullaz-db.rtree option: endian",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_unsigned_coord.zig",
+            .expected = "fullaz-db.rtree Coord must be a signed integer or float",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_zero_dimensions.zig",
+            .expected = "fullaz-db.rtree dimensions must be greater than zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_small_maximum_entries.zig",
+            .expected = "fullaz-db.rtree maximum_entries must be at least 4",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_large_value.zig",
+            .expected = "fullaz-db.rtree maximum_value_size must fit u16",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_large_leaf_slot.zig",
+            .expected = "fullaz-db.rtree maximum leaf slot must fit u16",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_zero_format_version.zig",
+            .expected = "fullaz-db.rtree format_version cannot be zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/rtree_anyerror_callback.zig",
+            .expected = "fullaz-db.rtree callback error set cannot be anyerror",
+        },
+        .{
+            .source = "tests/compile_errors/pages/binding_anyerror.zig",
+            .expected = "fullaz-db component binding Error cannot be anyerror",
+        },
+        .{
+            .source = "tests/compile_errors/pages/static_bpt_compare_context.zig",
+            .expected = "StaticDatabase BPT components require CompareContext = void",
+        },
+    }) |fixture| {
+        addCompileErrorFixture(
+            b,
+            fullaz_db_compile_errors_step,
+            mod,
+            fullaz_db,
+            target,
+            optimize,
+            fixture,
+        );
+    }
+    test_step.dependOn(fullaz_db_compile_errors_step);
+
+    const dispatch = b.addModule("dispatch", .{
+        .root_source_file = b.path("demos/dispatch/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "fullaz", .module = mod },
+            .{ .name = "fullaz-db", .module = fullaz_db },
+        },
+    });
+    const dispatch_tests_module = b.createModule(.{
+        .root_source_file = b.path("demos/dispatch/tests/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "dispatch", .module = dispatch },
+        },
+    });
+    const dispatch_tests = b.addTest(.{ .root_module = dispatch_tests_module });
+    const run_dispatch_tests = b.addRunArtifact(dispatch_tests);
+    b.step("test-dispatch", "Run the fullaz-db dispatch demo tests").dependOn(&run_dispatch_tests.step);
+    const dispatch_exe = b.addExecutable(.{
+        .name = "dispatch",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("demos/dispatch/src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "fullaz", .module = mod },
+                .{ .name = "fullaz-db", .module = fullaz_db },
+                .{ .name = "dispatch", .module = dispatch },
+            },
+        }),
+    });
+    b.installArtifact(dispatch_exe);
+    const run_dispatch = b.addRunArtifact(dispatch_exe);
+    run_dispatch.step.dependOn(b.getInstallStep());
+    b.step("run-dispatch", "Run the WAL-backed dispatch demo").dependOn(&run_dispatch.step);
     //test_step.dependOn(&run_exe_tests.step);
 
     // Add install-tests step for debugging
@@ -111,6 +303,45 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSmall,
     });
     fullaz_wasm.addOptions("build_options", fullaz_options);
+    const fullaz_db_wasm = b.createModule(.{
+        .root_source_file = b.path("src/fullaz-db/root.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+        .imports = &.{
+            .{ .name = "fullaz", .module = fullaz_wasm },
+        },
+    });
+
+    const dispatch_wasm = b.createModule(.{
+        .root_source_file = b.path("demos/dispatch/src/root.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+        .imports = &.{
+            .{ .name = "fullaz", .module = fullaz_wasm },
+            .{ .name = "fullaz-db", .module = fullaz_db_wasm },
+        },
+    });
+    const dispatch_wasm_exe = b.addExecutable(.{
+        .name = "dispatch",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("demos/dispatch/src/wasm.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{
+                .{ .name = "dispatch", .module = dispatch_wasm },
+            },
+        }),
+    });
+    dispatch_wasm_exe.entry = .disabled;
+    dispatch_wasm_exe.rdynamic = true;
+    const wasm_dispatch_step = b.step("wasm-dispatch", "Build the browser dispatch demo");
+    wasm_dispatch_step.dependOn(&b.addInstallArtifact(dispatch_wasm_exe, .{
+        .dest_dir = .{ .override = .{ .custom = "web-dispatch" } },
+    }).step);
+    wasm_dispatch_step.dependOn(&b.addInstallFile(
+        b.path("demos/dispatch/web/index.html"),
+        "web-dispatch/index.html",
+    ).step);
 
     // Shared terminal plumbing for the full-screen demos. Not a demo itself,
     // so it gets a module and a test step rather than an addDemo call.
@@ -267,6 +498,34 @@ const Demo = struct {
     web_dir: []const u8,
     web_index: []const u8,
 };
+
+const CompileErrorFixture = struct {
+    source: []const u8,
+    expected: []const u8,
+};
+
+fn addCompileErrorFixture(
+    b: *std.Build,
+    step: *std.Build.Step,
+    fullaz: *std.Build.Module,
+    fullaz_db: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    fixture: CompileErrorFixture,
+) void {
+    const fixture_module = b.createModule(.{
+        .root_source_file = b.path(fixture.source),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "fullaz", .module = fullaz },
+            .{ .name = "fullaz-db", .module = fullaz_db },
+        },
+    });
+    const compile = b.addTest(.{ .root_module = fixture_module });
+    compile.expect_errors = .{ .contains = fixture.expected };
+    step.dependOn(&compile.step);
+}
 
 fn applyTestFilter(b: *std.Build, compile: *std.Build.Step.Compile, filter: ?[]const u8) void {
     const wanted = filter orelse return;

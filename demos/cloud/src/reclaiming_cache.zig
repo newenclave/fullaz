@@ -80,6 +80,10 @@ pub fn ReclaimingCache(comptime InnerCacheT: type) type {
             return self.inner.pageSize();
         }
 
+        pub fn pageCount(self: *const Self) usize {
+            return self.inner.pageCount();
+        }
+
         fn persistState(self: *Self) Error!void {
             var handle = try self.inner.fetch(constants.superblock_pid);
             defer handle.deinit();

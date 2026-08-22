@@ -54,6 +54,10 @@ pub fn ReclaimingCache(comptime InnerCache: type) type {
             return self.inner.flushAll();
         }
 
+        pub fn pageCount(self: *const Self) usize {
+            return self.inner.pageCount();
+        }
+
         pub fn create(self: *Self) Error!Handle {
             var fl = FreeList(InnerCache, Self, constants.endian).init(self.inner, self);
             if (try fl.pop()) |pid| {

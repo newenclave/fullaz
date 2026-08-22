@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const PackedInt = @import("../../../core/packed_int.zig").PackedInt;
 const header = @import("../../../page/header.zig");
 const slots = @import("../../../slots/variadic.zig");
@@ -17,13 +18,37 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
 
     const AvailableStatus = ConstSlotsDirType.AvailableStatus;
 
-    const ErrorSet = errors.BptError ||
+    const ErrorSet = HeaderPageView.Error ||
+        errors.BptError ||
         errors.OrderError ||
         errors.PageError ||
         errors.SlotsError;
 
     const LeafSubheaderType = BptPage.LeafSubheader;
     const LeafSlotHeaderType = BptPage.LeafSlotHeader;
+
+    const validatePageHeader = struct {
+        fn call(
+            page_view: *const HeaderPageView,
+            page_id: PageIdT,
+            kind: u16,
+            subheader_size: usize,
+        ) ErrorSet!void {
+            try page_view.validateTyped();
+            const page_header = page_view.header();
+            if (page_id == std.math.maxInt(PageIdT) or page_header.self_pid.get() != page_id) {
+                return ErrorSet.BadData;
+            }
+            if (page_header.kind.get() != kind) {
+                return ErrorSet.BadType;
+            }
+            if (@as(usize, @intCast(page_header.subheader_size.get())) != subheader_size or
+                page_header.metadata_size.get() != 0)
+            {
+                return ErrorSet.BadData;
+            }
+        }
+    }.call;
 
     const LeafSubheaderViewType = struct {
         const Self = @This();
@@ -61,10 +86,16 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return (try self.slotsDir()).size();
         }
 
-        fn keyValueFromBuffer(buffer: []const u8) KeyValue {
+        fn keyValueFromBuffer(buffer: []const u8) ErrorSet!KeyValue {
+            if (buffer.len < @sizeOf(SlotHeaderType)) {
+                return ErrorSet.BadData;
+            }
             const slot: *const SlotHeaderType = @ptrCast(&buffer[0]);
             const key_size = @as(usize, slot.key_size.get());
             const key_offset = @sizeOf(SlotHeaderType);
+            if (key_size > buffer.len - key_offset) {
+                return ErrorSet.BadData;
+            }
             const value_offset = key_offset + key_size;
 
             return .{
@@ -103,6 +134,31 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub fn slotsDir(self: *const Self) ErrorSet!ConstSlotsDirType {
             const data = self.page_view.data();
             return try ConstSlotsDirType.init(data);
+        }
+
+        pub fn validatePage(
+            self: *const Self,
+            page_id: PageIdT,
+            kind: u16,
+            maximum_key_size: usize,
+            maximum_value_size: usize,
+        ) ErrorSet!void {
+            try validatePageHeader(&self.page_view, page_id, kind, @sizeOf(SubheaderType));
+
+            const slot_dir = try self.slotsDir();
+            try slot_dir.validateStructural();
+            const count = slot_dir.size();
+            var index: usize = 0;
+            while (index < count) : (index += 1) {
+                const entry = try keyValueFromBuffer(try slot_dir.get(index));
+                if (entry.key.len > maximum_key_size or entry.value.len > maximum_value_size) {
+                    return ErrorSet.BadData;
+                }
+            }
+
+            if (build_options.full_validation) {
+                try slot_dir.validate();
+            }
         }
 
         pub fn insert(self: *Self, index: usize, key: []const u8, value: []const u8) ErrorSet!void {
@@ -144,7 +200,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
 
                 fn less(wrapper: *const @This(), a: ConstSlotsDirType.Entry, key_b: []const u8) !algorithm.Order {
                     const slot_key = try wrapper.slot_dir.getByEntry(&a);
-                    const slot_values = keyValueFromBuffer(slot_key);
+                    const slot_values = try keyValueFromBuffer(slot_key);
                     return cmp(wrapper.user_ctx, slot_values.key, key_b);
                 }
             };
@@ -206,7 +262,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub fn get(self: *const Self, pos: usize) ErrorSet!KeyValue {
             const slot_dir = try self.slotsDir();
             const slot_buffer = try slot_dir.get(pos);
-            return keyValueFromBuffer(slot_buffer);
+            return try keyValueFromBuffer(slot_buffer);
         }
     };
 
@@ -243,8 +299,14 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return key_len + @sizeOf(SlotHeaderType);
         }
 
-        fn keyChildFromBuffer(buffer: []const u8) KeyChild {
+        fn keyChildFromBuffer(buffer: []const u8) ErrorSet!KeyChild {
+            if (buffer.len < @sizeOf(SlotHeaderType)) {
+                return ErrorSet.BadData;
+            }
             const slot: *const SlotHeaderType = @ptrCast(&buffer[0]);
+            if (slot.child.isMax()) {
+                return ErrorSet.BadData;
+            }
             const key_offset = @sizeOf(SlotHeaderType);
             const key_size = @as(usize, buffer.len - key_offset);
             return .{
@@ -288,7 +350,37 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             return try ConstSlotsDirType.init(data);
         }
 
+        pub fn validatePage(
+            self: *const Self,
+            page_id: PageIdT,
+            kind: u16,
+            maximum_key_size: usize,
+        ) ErrorSet!void {
+            try validatePageHeader(&self.page_view, page_id, kind, @sizeOf(SubheaderType));
+
+            const slot_dir = try self.slotsDir();
+            try slot_dir.validateStructural();
+            const count = slot_dir.size();
+            if (count > 0 and self.subheader().rightmost_child.isMax()) {
+                return ErrorSet.BadData;
+            }
+            var index: usize = 0;
+            while (index < count) : (index += 1) {
+                const entry = try keyChildFromBuffer(try slot_dir.get(index));
+                if (entry.key.len > maximum_key_size) {
+                    return ErrorSet.BadData;
+                }
+            }
+
+            if (build_options.full_validation) {
+                try slot_dir.validate();
+            }
+        }
+
         pub fn insert(self: *Self, index: usize, key: []const u8, child: PageIdT) ErrorSet!void {
+            if (child == std.math.maxInt(PageIdT)) {
+                return ErrorSet.BadData;
+            }
             const total_size: usize = @sizeOf(SlotHeaderType) + key.len;
             var slot_dir = try self.slotsDirMut();
             var buffer = try slot_dir.reserveGetAt(index, total_size);
@@ -316,8 +408,14 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         }
 
         pub fn updateChild(self: *Self, pos: usize, child: PageIdT) ErrorSet!void {
+            if (child == std.math.maxInt(PageIdT)) {
+                return ErrorSet.BadData;
+            }
             var slot_dir = try self.slotsDirMut();
             const buffer = try slot_dir.getMut(pos);
+            if (buffer.len < @sizeOf(SlotHeaderType)) {
+                return ErrorSet.BadData;
+            }
             var slot: *SlotHeaderType = @ptrCast(&buffer[0]);
             slot.child.set(child);
         }
@@ -366,7 +464,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
 
                 fn less(wrapper: *const @This(), a: ConstSlotsDirType.Entry, key_b: []const u8) !algorithm.Order {
                     const slot_key = try wrapper.slot_dir.getByEntry(&a);
-                    const slot_values = keyChildFromBuffer(slot_key);
+                    const slot_values = try keyChildFromBuffer(slot_key);
                     return cmp(wrapper.user_ctx, slot_values.key, key_b);
                 }
             };
@@ -379,7 +477,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub fn get(self: *const Self, pos: usize) ErrorSet!KeyChild {
             const slot_dir = try self.slotsDir();
             const slot_buffer = try slot_dir.get(pos);
-            return keyChildFromBuffer(slot_buffer);
+            return try keyChildFromBuffer(slot_buffer);
         }
     };
 
@@ -400,5 +498,6 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub const LeafSlotHeader = LeafSlotHeaderType;
 
         pub const SlotsAvailableStatus = ConstSlotsDirType.AvailableStatus;
+        pub const full_validation_enabled = build_options.full_validation;
     };
 }

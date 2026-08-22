@@ -6,6 +6,39 @@ const isBlockDevice = @import("fullaz").device.interfaces.isBlockDevice;
 
 const testing = std.testing;
 
+const MemoryPolicyTestFrame = struct {
+    const Self = @This();
+
+    frame_id: usize,
+    data: []u8,
+    next: ?*Self,
+    prev: ?*Self,
+
+    pub fn init() Self {
+        return .{
+            .frame_id = 0,
+            .data = &[_]u8{},
+            .next = null,
+            .prev = null,
+        };
+    }
+};
+
+fn exerciseMemoryPolicyInit(allocator: std.mem.Allocator) !void {
+    const Policy = @import("fullaz").storage.memory_policy.DefaultMemoryPolicy(MemoryPolicyTestFrame);
+    var policy = try Policy.init(allocator, 256, 4);
+    defer policy.deinit();
+}
+
+test "Pages: memory policy init releases partial allocations" {
+    try testing.checkAllAllocationFailures(testing.allocator, exerciseMemoryPolicyInit, .{});
+}
+
+test "Pages: memory policy init rejects byte-count overflow" {
+    const Policy = @import("fullaz").storage.memory_policy.DefaultMemoryPolicy(MemoryPolicyTestFrame);
+    try testing.expectError(error.OutOfMemory, Policy.init(testing.allocator, std.math.maxInt(usize), 2));
+}
+
 test "PageCache: init and deinit" {
     const allocator = testing.allocator;
     var device = try MemoryDevice(u32).init(allocator, 256);
@@ -90,6 +123,41 @@ test "PageCache: create allocates new page" {
     for (data) |byte| {
         try testing.expectEqual(@as(u8, 0), byte);
     }
+}
+
+test "PageCache: create reserves the frame map before appending" {
+    const allocator = testing.allocator;
+    const Device = MemoryDevice(u32);
+    var device = try Device.init(allocator, 256);
+    defer device.deinit();
+
+    var failing = testing.FailingAllocator.init(allocator, .{});
+    var cache = try PageCache(Device).init(&device, failing.allocator(), 4);
+    defer cache.deinit();
+
+    const available_before = cache.availableFrames();
+    failing.fail_index = failing.alloc_index;
+    try testing.expectError(error.OutOfMemory, cache.create());
+    try testing.expectEqual(@as(usize, 0), device.blocksCount());
+    try testing.expectEqual(available_before, cache.availableFrames());
+}
+
+test "PageCache: failed append does not leave a dirty free frame" {
+    const allocator = testing.allocator;
+    const Device = MemoryDevice(u32);
+    var failing = testing.FailingAllocator.init(allocator, .{});
+    var device = try Device.init(failing.allocator(), 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Device).init(&device, allocator, 1);
+    defer cache.deinit();
+    var temporary = try cache.getTemporaryPage();
+    temporary.deinit();
+
+    failing.fail_index = failing.alloc_index;
+    try testing.expectError(error.OutOfMemory, cache.create());
+    try testing.expect(!cache.policy.framesSlice()[0].isDirty());
+    try testing.expectEqual(@as(usize, 0), device.blocksCount());
 }
 
 test "PageCache: markDirty and flush" {
@@ -496,6 +564,105 @@ test "PageCache batch: discard reverts content and file growth" {
     var h = try cache.fetch(0);
     defer h.deinit();
     try testing.expectEqual(@as(u8, 0xAA), (try h.data())[0]);
+}
+
+test "PageCache batch: pinned discard leaves the transaction intact" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 2);
+    defer cache.deinit();
+    {
+        var created = try cache.create();
+        defer created.deinit();
+        (try created.dataMut())[0] = 0xaa;
+    }
+    try cache.flushAll();
+
+    var transaction = try cache.begin();
+    var pinned = try cache.fetch(0);
+    (try pinned.dataMut())[0] = 0xbb;
+    try testing.expectError(error.PageBusy, transaction.discard());
+    try testing.expect(cache.locked);
+    try testing.expectEqual(@as(u8, 0xbb), (try pinned.data())[0]);
+
+    pinned.deinit();
+    try transaction.discard();
+    try testing.expect(!cache.locked);
+    var restored = try cache.fetch(0);
+    defer restored.deinit();
+    try testing.expectEqual(@as(u8, 0xaa), (try restored.data())[0]);
+}
+
+test "PageCache batch: flush cannot bypass rollback" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 3);
+    defer cache.deinit();
+    {
+        var created = try cache.create();
+        defer created.deinit();
+        (try created.dataMut())[0] = 0xaa;
+    }
+    try cache.flushAll();
+
+    var transaction = try cache.begin();
+    var existing = try cache.fetch(0);
+    (try existing.dataMut())[0] = 0xbb;
+    var appended = try cache.create();
+    const appended_id = try appended.pid();
+    try testing.expectError(error.BatchActive, cache.flush(0));
+    try testing.expectError(error.BatchActive, cache.flushAll());
+    existing.deinit();
+    appended.deinit();
+    try transaction.discard();
+
+    try testing.expectEqual(@as(usize, 1), device.blocksCount());
+    var restored = try cache.fetch(0);
+    defer restored.deinit();
+    try testing.expectEqual(@as(u8, 0xaa), (try restored.data())[0]);
+    try testing.expectError(error.InvalidId, cache.fetch(appended_id));
+}
+
+test "PageCache batch: completed and stale handles are rejected" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 2);
+    defer cache.deinit();
+
+    var completed = try cache.begin();
+    var stale = completed;
+    try completed.commit();
+    try testing.expectError(error.TransactionInactive, completed.commit());
+    try testing.expectError(error.TransactionInactive, completed.discard());
+
+    var current = try cache.begin();
+    try testing.expectError(error.TransactionInactive, stale.commit());
+    try testing.expectError(error.TransactionInactive, stale.discard());
+    try current.discard();
+}
+
+test "PageCache batch: failed mutation makes commit rollback-only" {
+    const allocator = testing.allocator;
+    const Dev = MemoryDevice(u32);
+    var device = try Dev.init(allocator, 256);
+    defer device.deinit();
+
+    var cache = try PageCache(Dev).init(&device, allocator, 2);
+    defer cache.deinit();
+    var transaction = try cache.begin();
+    cache.markTransactionFailed();
+
+    try testing.expectError(error.TransactionRollbackOnly, transaction.commit());
+    try transaction.discard();
 }
 
 test "PageCache batch: dirty overflow returns BatchTooLarge" {

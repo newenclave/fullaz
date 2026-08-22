@@ -8,6 +8,9 @@ const memory_policy_iface = @import("interfaces.zig");
 
 const wal_mod = @import("../wal/wal.zig");
 
+pub const MemoryReclaimingCache = @import("memory_reclaiming_cache.zig").MemoryReclaimingCache;
+pub const PersistentReclaimingCache = @import("persistent_reclaiming_cache.zig").PersistentReclaimingCache;
+
 pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (type) type, comptime WalPolicy: type) type {
     // Compile-time check that DeviceT is a valid block device
     comptime assertBlockDevice(DeviceT);
@@ -175,6 +178,14 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
 
         pub const UnderlyingDevice = DeviceT;
         pub const Pid = UnderlyingDevice.BlockId;
+        /// Successful create() calls append 0-based dense IDs and failures consume no ID.
+        pub const append_only_dense_page_ids: bool = if (@hasDecl(
+            UnderlyingDevice,
+            "append_only_dense_block_ids",
+        ) and @TypeOf(UnderlyingDevice.append_only_dense_block_ids) == bool)
+            UnderlyingDevice.append_only_dense_block_ids
+        else
+            false;
 
         const FrameHashMap = std.AutoHashMap(Pid, *Frame);
 
@@ -196,17 +207,29 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         frames_cache: FrameHashMap = undefined,
         locked: bool = false,
         appended_in_batch: usize = 0,
+        batch_generation: u64 = 0,
+        transaction_failed: bool = false,
         wal: WalPolicy = undefined,
 
         pub const WriteBatch = struct {
             cache: *Self,
+            generation: u64,
+            active: bool = true,
 
             pub fn commit(self: *WriteBatch) Error!void {
-                return self.cache.commitBatch();
+                if (!self.active) {
+                    return Error.TransactionInactive;
+                }
+                try self.cache.commitBatch(self.generation);
+                self.active = false;
             }
 
             pub fn discard(self: *WriteBatch) Error!void {
-                return self.cache.discardBatch();
+                if (!self.active) {
+                    return Error.TransactionInactive;
+                }
+                try self.cache.discardBatch(self.generation);
+                self.active = false;
             }
         };
 
@@ -223,7 +246,12 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             };
         }
 
-        pub fn initWal(underlying_device: *UnderlyingDevice, allocator: std.mem.Allocator, init_maximum_pages: usize, wal: WalPolicy) Error!Self {
+        pub fn initWal(
+            underlying_device: *UnderlyingDevice,
+            allocator: std.mem.Allocator,
+            init_maximum_pages: usize,
+            wal: WalPolicy,
+        ) Error!Self {
             if (!WalPolicy.enabled) {
                 @compileError("initWal requires a WAL policy; use init for NoWal");
             }
@@ -237,6 +265,10 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             // trying to recore from the WAL
             try self.recover();
             return self;
+        }
+
+        pub fn pageCount(self: *const Self) usize {
+            return self.device.blocksCount();
         }
 
         fn recover(self: *Self) Error!void {
@@ -256,7 +288,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         pub fn deinit(self: *Self) void {
             if (self.locked) {
                 // roll it back if batch is still active
-                self.discardBatch() catch {};
+                self.discardBatch(self.batch_generation) catch {};
             }
             for (self.policy.framesSlice()) |*frame| {
                 if (frame.ref_count != 0) {
@@ -317,12 +349,11 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
 
         pub fn create(self: *Self) Error!Handle {
             const ff = try self.acquireFrame();
-            ff.frame_type = .dirty;
+            errdefer self.policy.pushFree(ff);
+            try self.frames_cache.ensureUnusedCapacity(1);
 
-            ff.pid = self.device.appendBlock() catch |err| {
-                self.policy.pushFree(ff);
-                return err;
-            };
+            ff.pid = try self.device.appendBlock();
+            ff.frame_type = .dirty;
 
             // New page, zeroed
             @memset(ff.data, 0);
@@ -330,12 +361,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                 self.appended_in_batch += 1;
             }
             self.policy.pushHead(ff);
-            errdefer {
-                self.policy.unlink(ff);
-                self.policy.pushFree(ff);
-                // Note: block is already appended to device, can't easily undo
-            }
-            try self.frames_cache.put(ff.pid, ff);
+            self.frames_cache.putAssumeCapacityNoClobber(ff.pid, ff);
             return PageHandle.init(ff);
         }
 
@@ -349,7 +375,19 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             return count;
         }
 
+        pub fn isPinned(self: *const Self, pid: Pid) bool {
+            const frame = self.frames_cache.get(pid) orelse return false;
+            return frame.isPinned();
+        }
+
         pub fn flush(self: *Self, pid: Pid) Error!void {
+            if (self.locked) {
+                return Error.BatchActive;
+            }
+            return self.flushPage(pid);
+        }
+
+        fn flushPage(self: *Self, pid: Pid) Error!void {
             if (self.frames_cache.get(pid)) |frame| {
                 if (frame.frame_type == .dirty) {
                     try self.device.writeBlock(frame.pid, frame.data);
@@ -359,6 +397,13 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         }
 
         pub fn flushAll(self: *Self) Error!void {
+            if (self.locked) {
+                return Error.BatchActive;
+            }
+            return self.flushAllInternal();
+        }
+
+        fn flushAllInternal(self: *Self) Error!void {
             var it = self.frames_cache.iterator();
             while (it.next()) |entry| {
                 const frame = entry.value_ptr.*;
@@ -378,10 +423,21 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             try self.flushAll();
             self.locked = true;
             self.appended_in_batch = 0;
-            return WriteBatch{ .cache = self };
+            self.transaction_failed = false;
+            self.batch_generation +%= 1;
+            return .{
+                .cache = self,
+                .generation = self.batch_generation,
+            };
         }
 
-        fn commitBatch(self: *Self) Error!void {
+        fn commitBatch(self: *Self, generation: u64) Error!void {
+            if (!self.locked or generation != self.batch_generation) {
+                return Error.TransactionInactive;
+            }
+            if (self.transaction_failed) {
+                return Error.TransactionRollbackOnly;
+            }
             if (WalPolicy.enabled) {
                 // Write-ahead: log every dirty page + a commit record,
                 // fsync the log (the commit point),
@@ -397,19 +453,32 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                     }
                 }
                 try self.wal.sealCommit(count);
-                try self.flushAll();
+                try self.flushAllInternal();
                 try self.device.sync();
                 try self.wal.checkpoint();
             } else {
-                try self.flushAll();
+                try self.flushAllInternal();
             }
             self.appended_in_batch = 0;
+            self.transaction_failed = false;
             self.locked = false;
         }
 
-        fn discardBatch(self: *Self) Error!void {
-            // Drop every dirty frame without writing it.
+        fn discardBatch(self: *Self, generation: u64) Error!void {
+            if (!self.locked or generation != self.batch_generation) {
+                return Error.TransactionInactive;
+            }
             const fslice = self.policy.framesSlice();
+            for (fslice) |*frame| {
+                if (frame.frame_type == .dirty and frame.ref_count != 0) {
+                    return Error.PageBusy;
+                }
+            }
+
+            // Keep the transaction intact if truncation itself fails.
+            try self.device.truncateBlocks(self.appended_in_batch);
+
+            // Drop every dirty frame without writing it.
             for (fslice) |*frame| {
                 if (frame.frame_type == .dirty) {
                     frame.frame_type = .clean;
@@ -418,11 +487,23 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                     self.policy.pushFree(frame);
                 }
             }
-            // Undo the blocks that create() eagerly appended during the batch.
-            //      file device does not extend the file on appendBlock, but the memoryBlock does.
-            try self.device.truncateBlocks(self.appended_in_batch);
             self.appended_in_batch = 0;
+            self.transaction_failed = false;
             self.locked = false;
+        }
+
+        pub fn transactionActive(self: *const Self) bool {
+            return self.locked;
+        }
+
+        pub fn transactionGeneration(self: *const Self) ?u64 {
+            return if (self.locked) self.batch_generation else null;
+        }
+
+        pub fn markTransactionFailed(self: *Self) void {
+            if (self.locked) {
+                self.transaction_failed = true;
+            }
         }
 
         fn acquireFrame(self: *Self) Error!*Frame {

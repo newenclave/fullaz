@@ -66,7 +66,8 @@ pub fn Directory(comptime PageCacheType: type) type {
                 return Error.NameTooLong;
             }
             var sm = DirSM{ .cache = self.cache, .root = self.root };
-            var model = Model.init(self.cache, &sm, settings, {});
+            var model = try Model.init(self.cache, &sm, settings, {});
+            defer model.deinit();
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
@@ -80,7 +81,8 @@ pub fn Directory(comptime PageCacheType: type) type {
         pub fn lookup(self: *Self, name: []const u8) !?Inode {
             var sm = DirSM{ .cache = self.cache, .root = self.root };
 
-            var model = Model.init(self.cache, &sm, settings, {});
+            var model = try Model.init(self.cache, &sm, settings, {});
+            defer model.deinit();
 
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
@@ -93,7 +95,8 @@ pub fn Directory(comptime PageCacheType: type) type {
 
         pub fn update(self: *Self, name: []const u8, node: Inode) !bool {
             var sm = DirSM{ .cache = self.cache, .root = self.root };
-            var model = Model.init(self.cache, &sm, settings, {});
+            var model = try Model.init(self.cache, &sm, settings, {});
+            defer model.deinit();
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
@@ -106,7 +109,8 @@ pub fn Directory(comptime PageCacheType: type) type {
 
         pub fn remove(self: *Self, name: []const u8) !bool {
             var sm = DirSM{ .cache = self.cache, .root = self.root };
-            var model = Model.init(self.cache, &sm, settings, {});
+            var model = try Model.init(self.cache, &sm, settings, {});
+            defer model.deinit();
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 
@@ -121,7 +125,8 @@ pub fn Directory(comptime PageCacheType: type) type {
             comptime cb: fn (@TypeOf(ctx), []const u8, Inode) anyerror!void,
         ) !void {
             var sm = DirSM{ .cache = self.cache, .root = self.root };
-            var model = Model.init(self.cache, &sm, settings, {});
+            var model = try Model.init(self.cache, &sm, settings, {});
+            defer model.deinit();
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
 

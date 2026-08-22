@@ -9,6 +9,7 @@ pub const slots = @import("fullaz/slots/slots.zig");
 pub const device = @import("fullaz/device/device.zig");
 
 pub const page = @import("fullaz/page/page.zig");
+pub const contracts = @import("fullaz/contracts/contracts.zig");
 
 pub const storage = @import("fullaz/storage/storage.zig");
 

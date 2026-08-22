@@ -40,6 +40,7 @@ pub fn PagedModel(
         .little,
         true,
     );
+    const HeaderPageView = BptPageConst.PageViewType;
 
     const KeyType = []const u8;
     const ValueType = []const u8;
@@ -51,12 +52,17 @@ pub fn PagedModel(
         settings: Settings = undefined,
     };
 
-    const ErrorSet = errors.PageError ||
+    const ErrorSet = HeaderPageView.Error ||
+        errors.PageError ||
         errors.SlotsError ||
         PageCacheT.Error ||
+        StorageManagerT.Error ||
         errors.OrderError ||
         errors.BptError ||
-        error{KeyTooLarge} ||
+        error{
+            KeyTooLarge,
+            InvalidSettings,
+        } ||
         error{};
 
     const LeafImpl = struct {
@@ -154,6 +160,11 @@ pub fn PagedModel(
         }
 
         pub fn setNext(self: *Self, next_id: ?BlockIdType) Error!void {
+            if (next_id) |page_id| {
+                if (page_id == std.math.maxInt(BlockIdType)) {
+                    return Error.BadData;
+                }
+            }
             var view = PageViewType.init(try self.handle.dataMut());
             if (next_id) |nid| {
                 view.subheaderMut().next.set(nid);
@@ -163,6 +174,11 @@ pub fn PagedModel(
         }
 
         pub fn setPrev(self: *Self, prev_id: ?BlockIdType) Error!void {
+            if (prev_id) |page_id| {
+                if (page_id == std.math.maxInt(BlockIdType)) {
+                    return Error.BadData;
+                }
+            }
             var view = PageViewType.init(try self.handle.dataMut());
             if (prev_id) |pid| {
                 view.subheaderMut().prev.set(pid);
@@ -172,6 +188,11 @@ pub fn PagedModel(
         }
 
         pub fn setParent(self: *Self, parent_id: ?BlockIdType) Error!void {
+            if (parent_id) |page_id| {
+                if (page_id == std.math.maxInt(BlockIdType)) {
+                    return Error.BadData;
+                }
+            }
             var view = PageViewType.init(try self.handle.dataMut());
             if (parent_id) |pid| {
                 view.subheaderMut().parent.set(pid);
@@ -332,7 +353,11 @@ pub fn PagedModel(
             if (pos < current_size) {
                 return (try view.get(pos)).child;
             } else if (pos == current_size) {
-                return view.subheader().rightmost_child.get();
+                const child = view.subheader().rightmost_child.get();
+                if (child == std.math.maxInt(BlockIdType)) {
+                    return Error.BadData;
+                }
+                return child;
             } else {
                 return Error.OutOfBounds;
             }
@@ -366,15 +391,17 @@ pub fn PagedModel(
             if (key.len > self.ctx.settings.maximum_key_size) {
                 return Error.KeyTooLarge;
             }
-
-            var tmp_page = try self.ctx.cache.getTemporaryPage();
-            defer tmp_page.deinit();
+            if (child_id == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
+            }
 
             var view = PageViewTypeConst.init(try self.handle.data());
             const current_available = try view.canInsert(pos, key, child_id);
             if (current_available == .not_enough) {
                 return Error.NodeFull;
             } else if (current_available == .need_compact) {
+                var tmp_page = try self.ctx.cache.getTemporaryPage();
+                defer tmp_page.deinit();
                 var view_mut = PageViewType.init(try self.handle.dataMut());
                 var slots_dir = try view_mut.slotsDirMut();
                 slots_dir.compactWithBuffer(try tmp_page.dataMut()) catch {
@@ -386,6 +413,9 @@ pub fn PagedModel(
         }
 
         pub fn updateChild(self: *Self, pos: usize, child_id: BlockIdType) Error!void {
+            if (child_id == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
+            }
             var view = PageViewType.init(try self.handle.dataMut());
             const current_size = (try view.slotsDir()).size();
             if (pos < current_size) {
@@ -410,6 +440,11 @@ pub fn PagedModel(
         }
 
         pub fn setParent(self: *Self, parent_id: ?BlockIdType) Error!void {
+            if (parent_id) |page_id| {
+                if (page_id == std.math.maxInt(BlockIdType)) {
+                    return Error.BadData;
+                }
+            }
             if (parent_id) |pid| {
                 var view = PageViewType.init(try self.handle.dataMut());
                 view.subheaderMut().parent.set(pid);
@@ -475,6 +510,11 @@ pub fn PagedModel(
         }
 
         pub fn setRoot(self: *Self, new_root: ?RootType) ErrorSet!void {
+            if (new_root) |page_id| {
+                if (page_id == std.math.maxInt(BlockIdType)) {
+                    return Error.BadData;
+                }
+            }
             return try self.ctx.storage_mgr.setRoot(new_root);
         }
 
@@ -486,6 +526,13 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
+            if (pid == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
+            }
+            errdefer {
+                ph.deinit();
+                self.ctx.storage_mgr.destroyPage(pid) catch {};
+            }
             var page_view = LeafImpl.PageViewType.init(try ph.dataMut());
             try page_view.formatPage(self.ctx.settings.leaf_page_kind, pid, 0);
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
@@ -495,43 +542,101 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
+            if (pid == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
+            }
+            errdefer {
+                ph.deinit();
+                self.ctx.storage_mgr.destroyPage(pid) catch {};
+            }
             var page_view = InodeImpl.PageViewType.init(try ph.dataMut());
             try page_view.formatPage(self.ctx.settings.inode_page_kind, pid, 0);
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
 
         pub fn loadLeaf(self: *Self, id_opt: ?BlockIdType) ErrorSet!?LeafImpl {
-            if (id_opt) |id| {
-                var ph = try self.ctx.cache.fetch(id);
-                errdefer ph.deinit();
-                const view = LeafImpl.PageViewTypeConst.init(try ph.data());
-                if (view.page_view.header().kind.get() != self.ctx.settings.leaf_page_kind) {
-                    ph.deinit();
-                    return null;
-                }
-                return LeafImpl.init(ph, id, &self.ctx);
+            const id = id_opt orelse return null;
+            if (id == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
             }
-            return null;
+            var ph = try self.ctx.cache.fetch(id);
+            errdefer ph.deinit();
+            const kind = try pageKind(&ph);
+            if (kind == self.ctx.settings.inode_page_kind) {
+                const view = InodeImpl.PageViewTypeConst.init(try ph.data());
+                try view.validatePage(id, kind, self.ctx.settings.maximum_key_size);
+                ph.deinit();
+                return null;
+            }
+            if (kind != self.ctx.settings.leaf_page_kind) {
+                return Error.BadType;
+            }
+            const view = LeafImpl.PageViewTypeConst.init(try ph.data());
+            try view.validatePage(
+                id,
+                kind,
+                self.ctx.settings.maximum_key_size,
+                self.ctx.settings.maximum_value_size,
+            );
+            return LeafImpl.init(ph, id, &self.ctx);
         }
 
         pub fn loadInode(self: *Self, id_opt: ?BlockIdType) ErrorSet!?InodeImpl {
-            if (id_opt) |id| {
-                var ph = try self.ctx.cache.fetch(id);
-                const view = InodeImpl.PageViewTypeConst.init(try ph.data());
-                if (view.page_view.header().kind.get() != self.ctx.settings.inode_page_kind) {
-                    ph.deinit();
-                    return null;
-                }
-                return InodeImpl.init(ph, id, &self.ctx);
+            const id = id_opt orelse return null;
+            if (id == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
             }
-            return null;
+            var ph = try self.ctx.cache.fetch(id);
+            errdefer ph.deinit();
+            const kind = try pageKind(&ph);
+            if (kind == self.ctx.settings.leaf_page_kind) {
+                const view = LeafImpl.PageViewTypeConst.init(try ph.data());
+                try view.validatePage(
+                    id,
+                    kind,
+                    self.ctx.settings.maximum_key_size,
+                    self.ctx.settings.maximum_value_size,
+                );
+                ph.deinit();
+                return null;
+            }
+            if (kind != self.ctx.settings.inode_page_kind) {
+                return Error.BadType;
+            }
+            const view = InodeImpl.PageViewTypeConst.init(try ph.data());
+            try view.validatePage(id, kind, self.ctx.settings.maximum_key_size);
+            return InodeImpl.init(ph, id, &self.ctx);
         }
 
         pub fn isLeafId(self: *Self, id: BlockIdType) ErrorSet!bool {
+            if (id == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
+            }
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
-            const view = LeafImpl.PageViewTypeConst.init(try ph.data());
-            return (view.page_view.header().kind.get() == self.ctx.settings.leaf_page_kind);
+            const kind = try pageKind(&ph);
+            if (kind == self.ctx.settings.leaf_page_kind) {
+                const view = LeafImpl.PageViewTypeConst.init(try ph.data());
+                try view.validatePage(
+                    id,
+                    kind,
+                    self.ctx.settings.maximum_key_size,
+                    self.ctx.settings.maximum_value_size,
+                );
+                return true;
+            }
+            if (kind == self.ctx.settings.inode_page_kind) {
+                const view = InodeImpl.PageViewTypeConst.init(try ph.data());
+                try view.validatePage(id, kind, self.ctx.settings.maximum_key_size);
+                return false;
+            }
+            return Error.BadType;
+        }
+
+        fn pageKind(page_handle: *const PageHandle) ErrorSet!u16 {
+            const page_view = HeaderPageView.init(try page_handle.data());
+            try page_view.validateTyped();
+            return page_view.header().kind.get();
         }
 
         pub fn deinitLeaf(_: *Self, leaf: ?LeafImpl) void {
@@ -619,7 +724,55 @@ pub fn PagedModel(
 
         accessor_state: AccessorType,
 
-        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings, ctx: CtxT) Self {
+        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings, ctx: CtxT) Error!Self {
+            if (settings.leaf_page_kind == settings.inode_page_kind) {
+                return Error.InvalidSettings;
+            }
+            const maximum_leaf_content = std.math.add(
+                usize,
+                settings.maximum_key_size,
+                settings.maximum_value_size,
+            ) catch return Error.InvalidSettings;
+            const maximum_leaf_slot = std.math.add(
+                usize,
+                maximum_leaf_content,
+                @sizeOf(BptPage.LeafSlotHeader),
+            ) catch return Error.InvalidSettings;
+            const maximum_inode_slot = std.math.add(
+                usize,
+                settings.maximum_key_size,
+                @sizeOf(BptPage.InodeSlotHeader),
+            ) catch return Error.InvalidSettings;
+            if (std.math.cast(u16, settings.maximum_key_size) == null or
+                std.math.cast(u16, maximum_leaf_slot) == null or
+                std.math.cast(u16, maximum_inode_slot) == null)
+            {
+                return Error.InvalidSettings;
+            }
+
+            var scratch = try device.getTemporaryPage();
+            defer scratch.deinit();
+            const scratch_data = try scratch.dataMut();
+            const minimum_page_bytes = BptPage.PageViewType.header_size + @max(
+                @sizeOf(BptPage.LeafSubheader),
+                @sizeOf(BptPage.InodeSubheader),
+            );
+            if (scratch_data.len < minimum_page_bytes or scratch_data.len > std.math.maxInt(u16)) {
+                return Error.InvalidSettings;
+            }
+
+            var leaf = BptPage.LeafSubheaderView.init(scratch_data);
+            leaf.formatPage(settings.leaf_page_kind, 0, 0) catch return Error.InvalidSettings;
+            if ((leaf.capacityFor(maximum_leaf_content) catch return Error.InvalidSettings) < 3) {
+                return Error.InvalidSettings;
+            }
+
+            var inode = BptPage.InodeSubheaderView.init(scratch_data);
+            inode.formatPage(settings.inode_page_kind, 0, 0) catch return Error.InvalidSettings;
+            if ((inode.capacityFor(settings.maximum_key_size) catch return Error.InvalidSettings) < 3) {
+                return Error.InvalidSettings;
+            }
+
             const context = Context{
                 .cache = device,
                 .storage_mgr = storage_mgr,
@@ -631,7 +784,7 @@ pub fn PagedModel(
             };
         }
 
-        pub fn deinit() void {
+        pub fn deinit(_: *Self) void {
             // nothing to yet
         }
 

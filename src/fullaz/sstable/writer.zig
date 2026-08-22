@@ -26,14 +26,17 @@ pub fn Writer(
     }
 
     const PackedOffset = core.packed_int.PackedInt(Format.Offset, Format.Endian);
+
     const ByteCmp = struct {
         fn compare(_: void, a: u8, b: u8) core.algorithm.Order {
             return core.algorithm.cmpNum({}, a, b);
         }
     };
+
     const BlockWriter = codec.bounded_buffer.MemoryBlockWriter(u8);
     const BlockView = codec.bounded_buffer.MemoryBlockView(u8);
     const EntryMetadata = sstable.EntryMetadata(Format);
+
     const CodedBlock = codec.front_coded_block.FrontCodedBlockWithMetadata(
         Format.DataIndex,
         Format.DataIndex,
@@ -46,37 +49,53 @@ pub fn Writer(
         void,
         EntryMetadata.byte_len,
     );
+
     const MutableDataPage = DataPage(Format).View(false);
     const FooterType = Footer(Format);
     const BloomBits = core.bitset.BitSet(u64, Format.Endian);
     const IndexDevice = device.MemoryBlock(Format.PageId);
     const IndexCache = storage.page_cache.PageCache(IndexDevice);
+
     const IndexStorage = struct {
+        const Self = @This();
+
         pub const PageId = Format.PageId;
         pub const Error = errors.IndexStorage;
+
         root: ?PageId = null,
-        pub fn getRoot(self: *const @This()) ?PageId {
+
+        pub fn getRoot(self: *const Self) ?PageId {
             return self.root;
         }
-        pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
+        pub fn setRoot(self: *Self, root: ?PageId) Error!void {
             self.root = root;
         }
-        pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
+        pub fn destroyPage(_: *Self, _: PageId) Error!void {}
     };
+
     const IndexModel = bpt.models.PagedModel(IndexCache, IndexStorage, cmp, CtxT);
     const IndexTree = bpt.Bpt(IndexModel);
     const Location = extern struct { offset: PackedOffset, length: PackedOffset };
+
     const IndexState = struct {
+        const Self = @This();
+
+        const Error = std.mem.Allocator.Error ||
+            IndexDevice.Error ||
+            IndexCache.Error ||
+            IndexModel.Error;
+
         device: IndexDevice,
         cache: IndexCache,
         storage: IndexStorage,
         model: IndexModel,
         tree: IndexTree,
+
         fn init(
             allocator: std.mem.Allocator,
             settings: Settings,
             ctx: CtxT,
-        ) (std.mem.Allocator.Error || IndexDevice.Error || IndexCache.Error)!*@This() {
+        ) Error!*Self {
             const state = try allocator.create(@This());
             errdefer allocator.destroy(state);
             state.device = try IndexDevice.init(allocator, settings.index_page_bytes);
@@ -84,7 +103,7 @@ pub fn Writer(
             state.cache = try IndexCache.init(&state.device, allocator, 8);
             errdefer state.cache.deinit();
             state.storage = .{};
-            state.model = IndexModel.init(
+            state.model = try IndexModel.init(
                 &state.cache,
                 &state.storage,
                 .{
@@ -96,9 +115,9 @@ pub fn Writer(
             state.tree = IndexTree.init(&state.model, .force_split);
             return state;
         }
-        fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             self.tree.deinit();
-            IndexModel.deinit();
+            self.model.deinit();
             self.cache.deinit();
             self.device.deinit();
             allocator.destroy(self);
@@ -106,6 +125,7 @@ pub fn Writer(
     };
     return struct {
         const Self = @This();
+
         pub const Error = std.mem.Allocator.Error ||
             LogT.Error ||
             CodedBlock.Builder.Error ||
@@ -149,10 +169,12 @@ pub fn Writer(
             ctx: CtxT,
         ) Error!Self {
             try validateOptions(options);
+
             const bloom_params = core.bloom.Bloom.calculateBloomParams(
                 options.entry_count,
                 options.settings.bloom_false_positive_rate,
             );
+
             const bloom_bytes_len = std.math.mul(
                 usize,
                 bloom_params.bitset_words,
@@ -185,6 +207,7 @@ pub fn Writer(
                 BlockWriter.init(block_bytes),
                 block_scratch,
             );
+
             return .{
                 .allocator = allocator,
                 .log = log,
@@ -205,12 +228,14 @@ pub fn Writer(
                 .data_offset = log.size(),
             };
         }
+
         pub fn add(self: *Self, key: []const u8, value: []const u8) Error!void {
             return self.addWithMetadata(key, value, .{
                 .flags = .value,
                 .lsn = 0,
             });
         }
+
         pub fn addWithMetadata(
             self: *Self,
             key: []const u8,
@@ -264,12 +289,14 @@ pub fn Writer(
             core.bloom.add(&bloom, key, self.bloom_hash_count);
             self.entry_count += 1;
         }
+
         pub fn addTombstone(self: *Self, key: []const u8, lsn: Format.Lsn) Error!void {
             return self.addWithMetadata(key, "", .{
                 .flags = .tombstone,
                 .lsn = lsn,
             });
         }
+
         pub fn finish(self: *Self) Error!void {
             if (self.finished) {
                 return Error.Finished;
@@ -315,6 +342,7 @@ pub fn Writer(
             try self.log.sync();
             self.finished = true;
         }
+
         pub fn deinit(self: *Self) void {
             self.index_state.deinit(self.allocator);
             self.last_key.deinit(self.allocator);
@@ -326,6 +354,7 @@ pub fn Writer(
             self.allocator.free(self.compact_page_bytes);
             self.allocator.free(self.bloom_bytes);
         }
+
         fn sealBlock(self: *Self) Error!void {
             if (self.block_entry_count == 0) {
                 return;
@@ -348,6 +377,7 @@ pub fn Writer(
             );
             self.block_entry_count = 0;
         }
+
         fn flushDataPage(self: *Self) Error!void {
             if (self.data_page.blockCount() == 0) {
                 return;
@@ -378,6 +408,7 @@ pub fn Writer(
                 1,
             ) catch return Error.CountOverflow;
         }
+
         fn writeIndex(self: *Self) Error!struct {
             root_page_id: Format.PageId,
             page_count: Format.PageId,

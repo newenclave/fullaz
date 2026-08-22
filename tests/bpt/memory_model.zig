@@ -71,6 +71,26 @@ fn strCmp(a: []const u8, b: []const u8) algos.Order {
     return .eq;
 }
 
+fn exerciseMemoryNodeCreation(allocator: std.mem.Allocator) !void {
+    const Model = MemoryModel(u32, 5, algos.CmpNum(u32).asc);
+    var model = try Model.init(allocator);
+    defer model.deinit();
+    const accessor = model.accessor();
+
+    const leaf = try accessor.createLeaf();
+    accessor.deinitLeaf(leaf);
+    const inode = try accessor.createInode();
+    accessor.deinitInode(inode);
+}
+
+test "Bpt memory model releases partial node creation" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        exerciseMemoryNodeCreation,
+        .{},
+    );
+}
+
 fn format(allocator: std.mem.Allocator, comptime fmt: []const u8, options: anytype) ![:0]u8 {
     return std.fmt.allocPrintSentinel(allocator, fmt, options, 0) catch @panic("Something went wrong");
 }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const geometry = @import("../../geometry.zig");
+const limits = @import("../limits.zig");
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -20,7 +21,12 @@ pub fn Model(
     const Pid = usize;
     const Key = geometry.BoundingBox(CoordT, dims);
 
-    const ModelError = error{ OutOfBounds, NodeFull, InvalidId } || std.mem.Allocator.Error;
+    const ModelError = error{
+        OutOfBounds,
+        NodeFull,
+        InvalidId,
+        BadData,
+    } || std.mem.Allocator.Error;
 
     const LeafEntry = struct { mbr: Key, value: ValueT };
     const InodeEntry = struct { mbr: Key, child: Pid };
@@ -237,6 +243,9 @@ pub fn Model(
         }
 
         pub fn setLevel(self: *Self, level: usize) Error!void {
+            if (level == 0 or level >= limits.max_depth) {
+                return Error.BadData;
+            }
             self.container.level = level;
         }
 

@@ -64,6 +64,10 @@ pub fn View(
             return self.page_view.subheaderMut();
         }
 
+        pub fn page(self: *const Self) SubheaderView.PageView {
+            return self.page_view.page();
+        }
+
         // returns the PAGE data; Doesn't include header, subheader, or metadata
         pub fn data(self: *const Self) []const u8 {
             return self.page_view.page().data();
@@ -71,8 +75,8 @@ pub fn View(
 
         // returns the PAGE mutable data; Doesn't include header, subheader, or metadata
         pub fn dataMut(self: *Self) []u8 {
-            var page = self.page_view.pageMut();
-            return page.dataMut();
+            var page_view = self.page_view.pageMut();
+            return page_view.dataMut();
         }
 
         pub fn link(self: *const Self) LinkTypeConst {
@@ -88,7 +92,7 @@ pub fn View(
 
         pub fn getNext(self: *const Self) ?PageId {
             const sh = self.subheader();
-            return if (sh.fwd.isMax()) null else sh.fwd.get();
+            return if (sh.link.fwd.isMax()) null else sh.link.fwd.get();
         }
 
         pub fn setNext(self: *Self, next: ?PageId) void {
@@ -97,15 +101,15 @@ pub fn View(
             }
             const sh = self.subheaderMut();
             if (next) |nid| {
-                sh.fwd.set(nid);
+                sh.link.fwd.set(nid);
             } else {
-                sh.fwd.setMax();
+                sh.link.fwd.setMax();
             }
         }
 
         pub fn getPrev(self: *const Self) ?PageId {
             const sh = self.subheader();
-            return if (sh.back.isMax()) null else sh.back.get();
+            return if (sh.link.back.isMax()) null else sh.link.back.get();
         }
 
         pub fn setPrev(self: *Self, prev: ?PageId) void {
@@ -114,9 +118,9 @@ pub fn View(
             }
             const sh = self.subheaderMut();
             if (prev) |pid| {
-                sh.back.set(pid);
+                sh.link.back.set(pid);
             } else {
-                sh.back.setMax();
+                sh.link.back.setMax();
             }
         }
 

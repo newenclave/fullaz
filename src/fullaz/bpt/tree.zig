@@ -18,7 +18,7 @@ pub fn Bpt(comptime ModelT: type) type {
         model: *ModelT,
         rebalance_policy: RebalancePolicy = .neighbor_share,
 
-        const Error = ModelT.Error || errors.BptError;
+        pub const Error = ModelT.Error || errors.BptError;
 
         const Self = @This();
         // model types
@@ -386,6 +386,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 }
             } else {
                 var leaf = try accessor.createLeaf();
+                errdefer accessor.destroy(leaf.id()) catch {};
                 defer accessor.deinitLeaf(leaf);
                 try leaf.insertValue(0, key, value);
                 //std.debug.print("Created leaf node with id: {}\n", .{leafId.id()});
@@ -430,10 +431,17 @@ pub fn Bpt(comptime ModelT: type) type {
             if (accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
                 if (search.leaf) |leaf_const| {
-                    var leaf = leaf_const;
-                    defer accessor.deinitLeaf(leaf);
-                    if (search.found) {
+                    const removed = blk: {
+                        var leaf = leaf_const;
+                        defer accessor.deinitLeaf(leaf);
+                        if (!search.found) {
+                            break :blk false;
+                        }
                         try self.removeImpl(&leaf, search.position);
+                        break :blk true;
+                    };
+                    if (removed) {
+                        try self.fixEmptyRoot();
                         return true;
                     }
                 }
@@ -453,7 +461,6 @@ pub fn Bpt(comptime ModelT: type) type {
                 try self.fixParentIndex(leaf);
             }
             try self.leafHandleUnderflow(leaf, self.model.keyBorrowAsLike(&key));
-            try self.fixEmptyRoot();
         }
 
         fn inodeHandleUnderflow(self: *Self, inode: *InodeType, key: KeyLikeType) Error!void {
@@ -486,7 +493,6 @@ pub fn Bpt(comptime ModelT: type) type {
                 var parent = parent_const;
                 defer accessor.deinitInode(parent);
                 try self.inodeHandleUnderflow(&parent, key);
-                try self.fixEmptyRoot();
             }
         }
 
@@ -509,16 +515,25 @@ pub fn Bpt(comptime ModelT: type) type {
             const accessor = self.model.accessor();
             if (accessor.getRoot()) |root_id| {
                 if (try accessor.loadLeaf(root_id)) |root_leaf| {
-                    defer accessor.deinitLeaf(root_leaf);
-                    if (try root_leaf.size() == 0) {
+                    const empty = blk: {
+                        defer accessor.deinitLeaf(root_leaf);
+                        break :blk try root_leaf.size() == 0;
+                    };
+                    if (empty) {
                         try accessor.setRoot(null);
                         try accessor.destroy(root_id);
                     }
                 } else if (try accessor.loadInode(root_id)) |root_inode| {
-                    defer accessor.deinitInode(root_inode);
-                    if (try root_inode.size() == 0) {
-                        const child_id = try root_inode.getChild(0);
-                        try accessor.setRoot(child_id);
+                    const child_id = blk: {
+                        defer accessor.deinitInode(root_inode);
+                        if (try root_inode.size() != 0) {
+                            break :blk null;
+                        }
+                        break :blk try root_inode.getChild(0);
+                    };
+                    if (child_id) |id| {
+                        try self.setChildParent(id, null);
+                        try accessor.setRoot(id);
                         try accessor.destroy(root_id);
                     }
                 }
@@ -927,10 +942,13 @@ pub fn Bpt(comptime ModelT: type) type {
 
                 if (try self.findRightSibling(parent_const.id(), leaf.id())) |right_id| {
                     if (try accessor.loadLeaf(right_id)) |right_sibling_const| {
-                        defer accessor.deinitLeaf(right_sibling_const);
-
-                        var right_sibling = right_sibling_const;
-                        if (try accessor.canMergeLeafs(leaf, &right_sibling)) {
+                        // we need to deinit leaf defore destroy
+                        const right_pos = blk: {
+                            defer accessor.deinitLeaf(right_sibling_const);
+                            var right_sibling = right_sibling_const;
+                            if (!try accessor.canMergeLeafs(leaf, &right_sibling)) {
+                                break :blk null;
+                            }
                             for (0..try right_sibling.size()) |i| {
                                 const out_key = try right_sibling.getKey(i);
                                 const out_value = try right_sibling.getValue(i);
@@ -948,11 +966,13 @@ pub fn Bpt(comptime ModelT: type) type {
                                     try next_leaf.setPrev(leaf.id());
                                 }
                             }
-                            const right_pos = try self.findChidIndexInParentId(parent_const.id(), right_id);
+                            break :blk try self.findChidIndexInParentId(parent_const.id(), right_id);
+                        };
+                        if (right_pos) |pos| {
                             var parent = parent_const;
-                            try self.swapChildren(&parent, right_pos - 1, right_pos);
+                            try self.swapChildren(&parent, pos - 1, pos);
                             try accessor.destroy(right_id);
-                            try parent.erase(right_pos - 1);
+                            try parent.erase(pos - 1);
                             return true;
                         }
                     }
@@ -991,10 +1011,13 @@ pub fn Bpt(comptime ModelT: type) type {
 
                 if (try self.findLeftSibling(parent_const.id(), leaf.id())) |left_id| {
                     if (try accessor.loadLeaf(left_id)) |left_sibling_const| {
-                        defer accessor.deinitLeaf(left_sibling_const);
-
-                        var left_sibling = left_sibling_const;
-                        if (try accessor.canMergeLeafs(leaf, &left_sibling)) {
+                        // we need to deinit leaf defore destroy
+                        const left_pos = blk: {
+                            defer accessor.deinitLeaf(left_sibling_const);
+                            var left_sibling = left_sibling_const;
+                            if (!try accessor.canMergeLeafs(leaf, &left_sibling)) {
+                                break :blk null;
+                            }
                             for (0..try left_sibling.size()) |i| {
                                 const out_key = try left_sibling.getKey(i);
                                 const out_value = try left_sibling.getValue(i);
@@ -1012,10 +1035,12 @@ pub fn Bpt(comptime ModelT: type) type {
                                     try prev_leaf.setNext(leaf.id());
                                 }
                             }
-                            const left_pos = try self.findChidIndexInParentId(parent_const.id(), left_id);
+                            break :blk try self.findChidIndexInParentId(parent_const.id(), left_id);
+                        };
+                        if (left_pos) |pos| {
                             var parent = parent_const;
                             try accessor.destroy(left_id);
-                            try parent.erase(left_pos);
+                            try parent.erase(pos);
                             return true;
                         }
                     }
@@ -1041,41 +1066,56 @@ pub fn Bpt(comptime ModelT: type) type {
             return false;
         }
 
+        fn mergeInodes(
+            self: *Self,
+            left: *InodeType,
+            right: *InodeType,
+            parent: *InodeType,
+            right_pos: usize,
+        ) Error!void {
+            const separator_key_out = try parent.getKey(right_pos - 1);
+            const separator_key = self.model.keyOutAsLike(separator_key_out);
+            const last_left_child = try left.getChild(try left.size());
+
+            try left.insertChild(try left.size(), separator_key, last_left_child);
+            for (0..try right.size()) |index| {
+                const out_key = try right.getKey(index);
+                const child_id = try right.getChild(index);
+                const key = self.model.keyOutAsLike(out_key);
+
+                try left.insertChild(try left.size(), key, child_id);
+                try self.setChildParent(child_id, left.id());
+            }
+
+            const right_most_child = try right.getChild(try right.size());
+            try left.updateChild(try left.size(), right_most_child);
+            try self.setChildParent(right_most_child, left.id());
+            try self.swapChildren(parent, right_pos - 1, right_pos);
+            try parent.erase(right_pos - 1);
+        }
+
         fn inodeMergeWithRight(self: *Self, inode: *InodeType) Error!bool {
             const accessor = self.model.accessor();
             if (try self.findRightSibling(inode.getParent(), inode.id())) |right_id| {
                 if (try accessor.loadInode(right_id)) |right_sibling_const| {
-                    defer accessor.deinitInode(right_sibling_const);
-                    var right_sibling = right_sibling_const;
-                    if (try accessor.canMergeInodes(inode, &right_sibling)) {
+                    const merged = blk: {
+                        defer accessor.deinitInode(right_sibling_const);
+                        var right_sibling = right_sibling_const;
+                        if (!try accessor.canMergeInodes(inode, &right_sibling)) {
+                            break :blk false;
+                        }
                         if (try accessor.loadInode(inode.getParent())) |parent_const| {
                             defer accessor.deinitInode(parent_const);
                             var parent = parent_const;
-
                             const right_pos = try self.findChidIndexInParentId(parent.id(), right_id);
-                            const borrow_separator_key = try parent.getKey(right_pos - 1);
-                            const separator_key = self.model.keyOutAsLike(borrow_separator_key);
-                            const last_node_child = try inode.getChild(try inode.size());
-
-                            try inode.insertChild(try inode.size(), separator_key, last_node_child);
-                            for (0..try right_sibling.size()) |i| {
-                                const out_key = try right_sibling.getKey(i);
-                                const child_id = try right_sibling.getChild(i);
-                                const key = self.model.keyOutAsLike(out_key);
-
-                                try inode.insertChild(try inode.size(), key, child_id);
-                                try self.setChildParent(child_id, inode.id());
-                            }
-
-                            const right_most_child = try right_sibling.getChild(try right_sibling.size());
-                            try inode.updateChild(try inode.size(), right_most_child);
-                            try self.setChildParent(right_most_child, inode.id());
-                            try self.swapChildren(&parent, right_pos - 1, right_pos);
-
-                            try accessor.destroy(right_id);
-                            try parent.erase(right_pos - 1);
-                            return true;
+                            try self.mergeInodes(inode, &right_sibling, &parent, right_pos);
+                            break :blk true;
                         }
+                        break :blk false;
+                    };
+                    if (merged) {
+                        try accessor.destroy(right_id);
+                        return true;
                     }
                 }
             }
@@ -1088,9 +1128,26 @@ pub fn Bpt(comptime ModelT: type) type {
                 if (try accessor.loadInode(left_id)) |left_sibling_const| {
                     var left_sibling = left_sibling_const;
                     defer accessor.deinitInode(left_sibling);
-                    if (try self.inodeMergeWithRight(&left_sibling)) {
-                        accessor.deinitInode(inode.*);
-                        inode.* = try left_sibling.take();
+                    if (!try accessor.canMergeInodes(&left_sibling, inode)) {
+                        return false;
+                    }
+                    const destroyed_id = blk: {
+                        if (try accessor.loadInode(inode.getParent())) |parent_const| {
+                            defer accessor.deinitInode(parent_const);
+                            var parent = parent_const;
+                            const target_id = inode.id();
+                            const right_pos = try self.findChidIndexInParentId(parent.id(), target_id);
+                            try self.mergeInodes(&left_sibling, inode, &parent, right_pos);
+
+                            const survivor = try left_sibling.take();
+                            accessor.deinitInode(inode.*);
+                            inode.* = survivor;
+                            break :blk target_id;
+                        }
+                        break :blk null;
+                    };
+                    if (destroyed_id) |target_id| {
+                        try accessor.destroy(target_id);
                         return true;
                     }
                 }
@@ -1454,6 +1511,7 @@ pub fn Bpt(comptime ModelT: type) type {
             defer accessor.deinitInode(right);
 
             const middle_key = try accessor.borrowKeyfromInode(inode, mid);
+            errdefer accessor.deinitBorrowKey(middle_key);
 
             try right.setParent(inode.getParent());
             for (mid + 1..maximum) |i| {
@@ -1485,7 +1543,7 @@ pub fn Bpt(comptime ModelT: type) type {
             try inode.updateChild(b, child_a);
         }
 
-        fn setChildParent(self: *Self, child_id: NodeIdType, parent_id: NodeIdType) Error!void {
+        fn setChildParent(self: *Self, child_id: NodeIdType, parent_id: ?NodeIdType) Error!void {
             const accessor = self.model.accessor();
             if (try accessor.loadInode(child_id)) |child_inode_const| {
                 defer accessor.deinitInode(child_inode_const);

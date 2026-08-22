@@ -2,6 +2,7 @@ const std = @import("std");
 const rtree_view = @import("view.zig");
 const interfaces = @import("../interfaces.zig");
 const geometry = @import("../../../geometry.zig");
+const page_rtree = @import("../../../../page/rtree.zig");
 const errors = @import("../../../../core/errors.zig");
 
 pub const Settings = struct {
@@ -29,9 +30,11 @@ pub fn PagedModel(
     const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
+    const RtreePage = page_rtree.Rtree(BlockIdType, u16, CoordT, dims, Endian);
 
     const RtreeView = rtree_view.View(BlockIdType, u16, CoordT, dims, Endian, false);
     const RtreeViewConst = rtree_view.View(BlockIdType, u16, CoordT, dims, Endian, true);
+    const HeaderPageView = RtreeViewConst.PageViewType;
 
     const Key = geometry.BoundingBox(CoordT, dims);
     const ValueType = []const u8;
@@ -47,10 +50,16 @@ pub fn PagedModel(
         settings: Settings,
     };
 
-    const ErrorSet = errors.PageError ||
+    const ErrorSet = HeaderPageView.Error ||
+        errors.PageError ||
         errors.SlotsError ||
         PageCacheT.Error ||
-        error{ ValueTooLarge, NodeFull };
+        StorageManagerT.Error ||
+        error{
+            ValueTooLarge,
+            NodeFull,
+            InvalidSettings,
+        };
 
     const idOrNull = struct {
         fn call(id: BlockIdType) ?BlockIdType {
@@ -143,6 +152,11 @@ pub fn PagedModel(
         }
 
         pub fn setParent(self: *Self, parent: ?BlockIdType) Error!void {
+            if (parent) |page_id| {
+                if (page_id == std.math.maxInt(BlockIdType)) {
+                    return Error.BadData;
+                }
+            }
             var view = MutView.init(try self.handle.dataMut());
             if (parent) |pid| {
                 view.subheaderMut().parent.set(pid);
@@ -166,14 +180,14 @@ pub fn PagedModel(
             }
             const status = blk: {
                 const view = ConstView.init(try self.handle.data());
+                if ((try view.entries()) >= max_entries_v) {
+                    return Error.NodeFull;
+                }
                 break :blk try view.canAppend(value.len);
             };
             if (status == .not_enough) return Error.NodeFull;
             if (status == .need_compact) {
-                var tmp = try self.ctx.cache.getTemporaryPage();
-                defer tmp.deinit();
-                var view = MutView.init(try self.handle.dataMut());
-                try view.compact(try tmp.dataMut());
+                try self.compact();
             }
             var view = MutView.init(try self.handle.dataMut());
             try view.append(mbr, value);
@@ -260,6 +274,11 @@ pub fn PagedModel(
         }
 
         pub fn setParent(self: *Self, parent: ?BlockIdType) Error!void {
+            if (parent) |page_id| {
+                if (page_id == std.math.maxInt(BlockIdType)) {
+                    return Error.BadData;
+                }
+            }
             var view = MutView.init(try self.handle.dataMut());
             if (parent) |pid| {
                 view.subheaderMut().parent.set(pid);
@@ -275,7 +294,7 @@ pub fn PagedModel(
 
         pub fn setLevel(self: *Self, level: usize) Error!void {
             var view = MutView.init(try self.handle.dataMut());
-            view.setLevel(level);
+            try view.setLevel(level);
         }
 
         pub fn getChild(self: *const Self, pos: usize) Error!BlockIdType {
@@ -292,14 +311,14 @@ pub fn PagedModel(
         pub fn insertChild(self: *Self, mbr: Key, child: BlockIdType) Error!void {
             const status = blk: {
                 const view = ConstView.init(try self.handle.data());
+                if ((try view.entries()) >= max_entries_v) {
+                    return Error.NodeFull;
+                }
                 break :blk try view.canAppend();
             };
             if (status == .not_enough) return Error.NodeFull;
             if (status == .need_compact) {
-                var tmp = try self.ctx.cache.getTemporaryPage();
-                defer tmp.deinit();
-                var view = MutView.init(try self.handle.dataMut());
-                try view.compact(try tmp.dataMut());
+                try self.compact();
             }
             var view = MutView.init(try self.handle.dataMut());
             try view.append(mbr, child);
@@ -329,6 +348,11 @@ pub fn PagedModel(
         }
 
         pub fn setRoot(self: *Self, new_root: ?BlockIdType) Error!void {
+            if (new_root) |page_id| {
+                if (page_id == std.math.maxInt(BlockIdType)) {
+                    return Error.BadData;
+                }
+            }
             return self.ctx.storage_mgr.setRoot(new_root);
         }
 
@@ -340,6 +364,13 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
+            if (pid == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
+            }
+            errdefer {
+                ph.deinit();
+                self.ctx.storage_mgr.destroyPage(pid) catch {};
+            }
             var view = LeafImpl.MutView.init(try ph.dataMut());
             try view.formatPage(self.ctx.settings.leaf_page_kind, pid, 0);
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
@@ -349,40 +380,87 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
+            if (pid == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
+            }
+            errdefer {
+                ph.deinit();
+                self.ctx.storage_mgr.destroyPage(pid) catch {};
+            }
             var view = InodeImpl.MutView.init(try ph.dataMut());
             try view.formatPage(self.ctx.settings.inode_page_kind, pid, 0);
+            try view.setLevel(1);
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
 
         pub fn loadLeaf(self: *Self, id_opt: ?BlockIdType) Error!?LeafImpl {
             const id = id_opt orelse return null;
+            if (id == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
+            }
             var ph = try self.ctx.cache.fetch(id);
             errdefer ph.deinit();
-            const view = LeafImpl.ConstView.init(try ph.data());
-            if (view.page_view.header().kind.get() != self.ctx.settings.leaf_page_kind) {
+            const kind = try pageKind(&ph);
+            if (kind == self.ctx.settings.inode_page_kind) {
+                const view = InodeImpl.ConstView.init(try ph.data());
+                try view.validatePage(id, kind, max_entries_v);
                 ph.deinit();
                 return null;
             }
+            if (kind != self.ctx.settings.leaf_page_kind) {
+                return Error.BadType;
+            }
+            const view = LeafImpl.ConstView.init(try ph.data());
+            try view.validatePage(id, kind, max_entries_v, max_value_size);
             return LeafImpl.init(ph, id, &self.ctx);
         }
 
         pub fn loadInode(self: *Self, id_opt: ?BlockIdType) Error!?InodeImpl {
             const id = id_opt orelse return null;
+            if (id == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
+            }
             var ph = try self.ctx.cache.fetch(id);
             errdefer ph.deinit();
-            const view = InodeImpl.ConstView.init(try ph.data());
-            if (view.page_view.header().kind.get() != self.ctx.settings.inode_page_kind) {
+            const kind = try pageKind(&ph);
+            if (kind == self.ctx.settings.leaf_page_kind) {
+                const view = LeafImpl.ConstView.init(try ph.data());
+                try view.validatePage(id, kind, max_entries_v, max_value_size);
                 ph.deinit();
                 return null;
             }
+            if (kind != self.ctx.settings.inode_page_kind) {
+                return Error.BadType;
+            }
+            const view = InodeImpl.ConstView.init(try ph.data());
+            try view.validatePage(id, kind, max_entries_v);
             return InodeImpl.init(ph, id, &self.ctx);
         }
 
         pub fn isLeafId(self: *Self, id: BlockIdType) Error!bool {
+            if (id == std.math.maxInt(BlockIdType)) {
+                return Error.BadData;
+            }
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
-            const view = LeafImpl.ConstView.init(try ph.data());
-            return view.page_view.header().kind.get() == self.ctx.settings.leaf_page_kind;
+            const kind = try pageKind(&ph);
+            if (kind == self.ctx.settings.leaf_page_kind) {
+                const view = LeafImpl.ConstView.init(try ph.data());
+                try view.validatePage(id, kind, max_entries_v, max_value_size);
+                return true;
+            }
+            if (kind == self.ctx.settings.inode_page_kind) {
+                const view = InodeImpl.ConstView.init(try ph.data());
+                try view.validatePage(id, kind, max_entries_v);
+                return false;
+            }
+            return Error.BadType;
+        }
+
+        fn pageKind(page_handle: *const PageHandle) Error!u16 {
+            const page_view = HeaderPageView.init(try page_handle.data());
+            try page_view.validateTyped();
+            return page_view.header().kind.get();
         }
 
         pub fn deinitLeaf(_: *Self, leaf: ?LeafImpl) void {
@@ -417,7 +495,49 @@ pub fn PagedModel(
 
         accessor_state: AccessorType,
 
-        pub fn init(cache: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Self {
+        pub fn init(
+            cache: *PageCacheT,
+            storage_mgr: *StorageManagerT,
+            settings: Settings,
+        ) Error!Self {
+            if (settings.leaf_page_kind == settings.inode_page_kind) {
+                return Error.InvalidSettings;
+            }
+            const maximum_leaf_slot = std.math.add(
+                usize,
+                @sizeOf(RtreePage.LeafSlotHeader),
+                max_value_size,
+            ) catch return Error.InvalidSettings;
+            const maximum_inode_slot = @sizeOf(RtreePage.InodeSlotHeader);
+            if (std.math.cast(u16, maximum_leaf_slot) == null or
+                std.math.cast(u16, maximum_inode_slot) == null)
+            {
+                return Error.InvalidSettings;
+            }
+
+            var scratch = try cache.getTemporaryPage();
+            defer scratch.deinit();
+            const scratch_data = try scratch.dataMut();
+            const minimum_page_bytes = RtreeView.PageViewType.header_size + @max(
+                @sizeOf(RtreePage.LeafSubheader),
+                @sizeOf(RtreePage.InodeSubheader),
+            );
+            if (scratch_data.len < minimum_page_bytes or scratch_data.len > std.math.maxInt(u16)) {
+                return Error.InvalidSettings;
+            }
+
+            var leaf = RtreeView.LeafSubheaderView.init(scratch_data);
+            leaf.formatPage(settings.leaf_page_kind, 0, 0) catch return Error.InvalidSettings;
+            if ((leaf.capacityFor(max_value_size) catch return Error.InvalidSettings) < max_entries_v) {
+                return Error.InvalidSettings;
+            }
+
+            var inode = RtreeView.InodeSubheaderView.init(scratch_data);
+            inode.formatPage(settings.inode_page_kind, 0, 0) catch return Error.InvalidSettings;
+            if ((inode.capacityFor() catch return Error.InvalidSettings) < max_entries_v) {
+                return Error.InvalidSettings;
+            }
+
             return .{
                 .accessor_state = AccessorImpl.init(.{
                     .cache = cache,

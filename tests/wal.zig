@@ -23,6 +23,49 @@ fn page(byte: u8) [PAGE]u8 {
     return .{byte} ** PAGE;
 }
 
+const identity = Wal.Identity{
+    .image_id = [_]u8{1} ** 16,
+    .schema_digest = [_]u8{2} ** 32,
+};
+
+test "WAL: identity-bound logs reject another image" {
+    const a = testing.allocator;
+    var log = try wal.MemoryLog.init(a);
+    defer log.deinit();
+    {
+        var w = try Wal.initWithIdentity(a, &log, PAGE, identity);
+        defer w.deinit();
+        try w.appendPage(5, &page(0xAA));
+        try w.sealCommit(1);
+    }
+
+    var wrong_identity = identity;
+    wrong_identity.image_id[0] ^= 1;
+    try testing.expectError(error.WalIdentityMismatch, Wal.initWithIdentity(a, &log, PAGE, wrong_identity));
+}
+
+test "WAL: commit count and PID are integrity protected" {
+    const a = testing.allocator;
+    var log = try wal.MemoryLog.init(a);
+    defer log.deinit();
+    var w = try Wal.init(a, &log, PAGE);
+    defer w.deinit();
+
+    try w.appendPage(5, &page(0xAA));
+    try w.sealCommit(2);
+    var col = Collector{};
+    try w.replay(&col, Collector.cb);
+    try testing.expectEqual(@as(usize, 0), col.n);
+
+    try w.checkpoint();
+    try w.appendPage(5, &page(0xAA));
+    try w.sealCommit(1);
+    log.buf.items[2] ^= 1;
+    col = .{};
+    try w.replay(&col, Collector.cb);
+    try testing.expectEqual(@as(usize, 0), col.n);
+}
+
 test "WAL: replay yields committed pages in order" {
     const a = testing.allocator;
     var log = try wal.MemoryLog.init(a);
