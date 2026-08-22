@@ -17,6 +17,92 @@ fn prep(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
 
+test "Pages: static database reopens chainStore metadata" {
+    const Schema = fullaz.pages.Schema(.{ .page_id = u32 }).add(
+        "blob",
+        fullaz.pages.chainStore(.{}),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz.pages.StaticDatabase(Schema, Device);
+    const io = std.testing.io;
+    const path = ".zig-cache/static_chain_store.img";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{11} ** 16,
+        .components = .{ .blob = .{} },
+    };
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 512),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        try transaction.get("blob").append("persistent bytes");
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, path, 512),
+            options,
+        );
+        defer database.deinit();
+        var output: [32]u8 = undefined;
+        const blob = database.getConst("blob");
+        try std.testing.expectEqual(@as(u64, 16), try blob.size());
+        try std.testing.expectEqual(@as(usize, 16), try blob.readAt(0, &output));
+        try std.testing.expectEqualStrings("persistent bytes", output[0..16]);
+    }
+}
+
+test "Pages: static database reopens weightedSequence metadata" {
+    const Schema = fullaz.pages.Schema(.{ .page_id = u32 }).add(
+        "sequence",
+        fullaz.pages.weightedSequence(.{ .maximum_chunk_size = 3 }),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz.pages.StaticDatabase(Schema, Device);
+    const io = std.testing.io;
+    const path = ".zig-cache/static_weighted_sequence.img";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{13} ** 16,
+        .components = .{ .sequence = .{} },
+    };
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 512),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        const sequence = transaction.get("sequence");
+        try sequence.append("abcdef");
+        try sequence.replace(2, 3, "XYZ");
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, path, 512),
+            options,
+        );
+        defer database.deinit();
+        var output: [16]u8 = undefined;
+        const sequence = database.getConst("sequence");
+        try std.testing.expectEqual(@as(u64, 6), try sequence.size());
+        try std.testing.expectEqual(@as(usize, 6), try sequence.readAt(0, &output));
+        try std.testing.expectEqualStrings("abXYZf", output[0..6]);
+    }
+}
+
 const Collector = struct {
     count: usize = 0,
     sum: u32 = 0,

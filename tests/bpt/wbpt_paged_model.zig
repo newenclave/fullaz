@@ -1,8 +1,9 @@
 const std = @import("std");
-const wbpt = @import("fullaz").weighted_bpt;
-const algos = @import("fullaz").core.algorithm;
-const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
-const dev = @import("fullaz").device;
+const fullaz = @import("fullaz");
+const wbpt = fullaz.weighted_bpt;
+const algos = fullaz.core.algorithm;
+const PageCacheT = fullaz.storage.page_cache.PageCache;
+const dev = fullaz.device;
 const printer = @import("test_printer");
 
 const PagedModel = wbpt.models.paged.PagedModel;
@@ -59,6 +60,50 @@ fn insertAlphabet(tree: anytype, count: usize) !void {
         const one = [_]u8{'A' + @as(u8, @intCast(i % 26))};
         _ = try tree.insert(i, one[0..]);
     }
+}
+
+test "WBpt paged: root leaf is released before reclamation" {
+    const Device = dev.MemoryBlock(u32);
+    const RawCache = PageCacheT(Device);
+    const Cache = fullaz.pages.MemoryReclaimingCache(RawCache);
+    const Manager = struct {
+        pub const PageId = u32;
+        pub const Error = Cache.Error;
+
+        cache: *Cache,
+        root: ?PageId = null,
+
+        pub fn getRoot(self: *const @This()) ?PageId {
+            return self.root;
+        }
+
+        pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
+            self.root = root;
+        }
+
+        pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
+            return self.cache.free(page_id);
+        }
+    };
+    const Model = PagedModel(Cache, Manager, u32, void);
+    const Tree = wbpt.WeightedBpt(Model);
+
+    var device = try Device.init(std.testing.allocator, 512);
+    defer device.deinit();
+    var raw_cache = try RawCache.init(&device, std.testing.allocator, 4);
+    defer raw_cache.deinit();
+    var cache = Cache.init(std.testing.allocator, &raw_cache);
+    defer cache.deinit();
+    var manager = Manager{ .cache = &cache };
+    var model = Model.init(&cache, &manager, .{});
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+
+    _ = try tree.insert(0, "entry");
+    const root = manager.root.?;
+    try tree.removeEntry(0);
+    try std.testing.expect(manager.root == null);
+    try std.testing.expectError(error.PageNotAllocated, cache.fetch(root));
 }
 
 test "WBpt paged: Create with Paged model" {

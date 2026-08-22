@@ -74,6 +74,137 @@ test "ChainStore handle: init deinit" {
     defer hdl.deinit();
 }
 
+test "ChainStore handle: get positions report cursor offsets" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 1024);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    try hdl.create();
+    _ = try hdl.write("abcdef");
+    try std.testing.expectEqual(@as(usize, 6), hdl.getp());
+
+    try hdl.setg(2);
+    try std.testing.expectEqual(@as(usize, 2), hdl.getg());
+}
+
+test "ChainStore Blob: explicit offsets and zero-page clear" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Blob = chain_store.Blob(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{};
+    var dev = try Device.init(std.testing.allocator, 128);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+    var blob = Blob.init(&cache, &mgr, .{});
+    defer blob.deinit();
+
+    try blob.create();
+    _ = try blob.append("abcdef");
+    try std.testing.expectError(error.OutOfBounds, blob.writeAt(7, "x"));
+
+    var out: [8]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 2), try blob.readAt(4, &out));
+    try std.testing.expectEqualStrings("ef", out[0..2]);
+
+    try blob.truncate(3);
+    try std.testing.expectEqual(@as(u32, 3), try blob.size());
+    try std.testing.expectError(error.OutOfBounds, blob.truncate(4));
+
+    try blob.clear();
+    try std.testing.expectEqual(@as(u32, 0), try blob.size());
+    try std.testing.expect(mgr.first_block_id == null);
+    try std.testing.expect(mgr.last_block_id == null);
+}
+
+test "ChainStore handle: open rejects inconsistent empty metadata" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
+
+    var mgr = NoneStorageManager{ .total_sze = 1 };
+    var dev = try Device.init(std.testing.allocator, 128);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    try std.testing.expectError(error.BadData, hdl.open());
+}
+
+test "ChainStore Blob: clear releases pages before reclamation" {
+    const Device = devices.MemoryBlock(u32);
+    const RawCache = page_cache.PageCache(Device);
+    const Cache = @import("fullaz").pages.MemoryReclaimingCache(RawCache);
+    const Manager = struct {
+        pub const PageId = u32;
+        pub const Size = u32;
+        pub const Error = Cache.Error;
+
+        cache: *Cache,
+        first: ?PageId = null,
+        last: ?PageId = null,
+        total: Size = 0,
+
+        pub fn getTotalSize(self: *const @This()) Error!Size {
+            return self.total;
+        }
+
+        pub fn setTotalSize(self: *@This(), size: Size) Error!void {
+            self.total = size;
+        }
+
+        pub fn getFirst(self: *const @This()) Error!?PageId {
+            return self.first;
+        }
+
+        pub fn setFirst(self: *@This(), page_id: ?PageId) Error!void {
+            self.first = page_id;
+        }
+
+        pub fn getLast(self: *const @This()) Error!?PageId {
+            return self.last;
+        }
+
+        pub fn setLast(self: *@This(), page_id: ?PageId) Error!void {
+            self.last = page_id;
+        }
+
+        pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
+            return self.cache.free(page_id);
+        }
+    };
+    const Blob = chain_store.Blob(Cache, Manager, .little);
+
+    var device = try Device.init(std.testing.allocator, 128);
+    defer device.deinit();
+    var raw_cache = try RawCache.init(&device, std.testing.allocator, 8);
+    defer raw_cache.deinit();
+    var cache = Cache.init(std.testing.allocator, &raw_cache);
+    defer cache.deinit();
+    var manager = Manager{ .cache = &cache };
+    var blob = Blob.init(&cache, &manager, .{});
+    defer blob.deinit();
+    const bytes = [_]u8{'a'} ** 300;
+
+    try blob.create();
+    _ = try blob.append(&bytes);
+    const first = manager.first.?;
+    try blob.clear();
+
+    try std.testing.expectError(error.PageNotAllocated, cache.fetch(first));
+}
+
 test "ChainStore handle: write page" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);

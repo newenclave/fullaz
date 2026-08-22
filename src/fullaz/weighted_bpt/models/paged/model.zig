@@ -12,7 +12,12 @@ pub const Settings = struct {
     inode_page_kind: u16 = 1,
 };
 
-pub fn PagedModel(comptime PageCacheT: type, comptime StorageManagerT: type, comptime WeightT: type, comptime ValuePolicyT: type) type {
+pub fn PagedModel(
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
+    comptime WeightT: type,
+    comptime ValuePolicyT: type,
+) type {
     comptime {
         contracts.storage_manager.requiresStorageManager(StorageManagerT);
         contracts.page_cache.requiresPageCache(PageCacheT);
@@ -89,7 +94,7 @@ pub fn PagedModel(comptime PageCacheT: type, comptime StorageManagerT: type, com
         }
 
         pub fn splitOfLeft(self: *Self, pos: Weight) Error!Self {
-            if (pos > self.weight()) {
+            if (pos > try self.weight()) {
                 return Error.OutOfBounds;
             }
             var tmp_page = try self.ctx.cache.getTemporaryPage();

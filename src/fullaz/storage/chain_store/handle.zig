@@ -337,19 +337,11 @@ pub fn Indexed(
                 .settings = settings,
             };
 
-            var start_pos: Position = .{
+            const start_pos: Position = .{
                 .page_id = null,
                 .pos = 0,
                 .total_pos = 0,
             };
-
-            if (try ctx.mgr.getFirst()) |first_page| {
-                start_pos = .{
-                    .page_id = first_page,
-                    .pos = 0,
-                    .total_pos = 0,
-                };
-            }
 
             const result = Self{
                 .g_pos = start_pos,
@@ -364,7 +356,73 @@ pub fn Indexed(
             self.index.deinit();
         }
 
-        pub fn open(_: *Self) Error!void {}
+        pub fn open(self: *Self) Error!void {
+            const first = try self.ctx.mgr.getFirst();
+            const last = try self.ctx.mgr.getLast();
+            const total = try self.ctx.mgr.getTotalSize();
+            if (first == null or last == null) {
+                if (first != null or last != null or total != 0) {
+                    return Error.BadData;
+                }
+                self.g_pos = .{ .page_id = null };
+                self.p_pos = self.g_pos;
+                return;
+            }
+
+            var current = first;
+            var expected_prev: ?Pid = null;
+            var calculated_total: StorageManagerT.Size = 0;
+            var steps: usize = 0;
+            const page_count = self.ctx.cache.pageCount();
+            while (current) |page_id| {
+                if (steps >= page_count) {
+                    return Error.BadData;
+                }
+                steps += 1;
+
+                var page = try self.ctx.cache.fetch(page_id);
+                defer page.deinit();
+                const chunk_view = ViewTypesConst.Chunk.init(try page.data());
+                const typed_view = chunk_view.page();
+                typed_view.validateTyped() catch {
+                    return Error.BadData;
+                };
+                const header = typed_view.header();
+                if (header.kind.get() != self.ctx.settings.chunk_page_kind or
+                    header.self_pid.get() != page_id or
+                    header.subheader_size.get() != @as(
+                        Index,
+                        @intCast(@sizeOf(ViewTypesConst.Chunk.SubheaderType)),
+                    ) or
+                    header.metadata_size.get() != 0)
+                {
+                    return Error.BadData;
+                }
+                if (chunk_view.getPrev() != expected_prev) {
+                    return Error.BadData;
+                }
+                const chunk_size = chunk_view.getSize();
+                if (@as(usize, @intCast(chunk_size)) > chunk_view.data().len) {
+                    return Error.BadData;
+                }
+                calculated_total = std.math.add(
+                    StorageManagerT.Size,
+                    calculated_total,
+                    @intCast(chunk_size),
+                ) catch return Error.BadData;
+                expected_prev = page_id;
+                current = chunk_view.getNext();
+            }
+            if (expected_prev != last or calculated_total != total) {
+                return Error.BadData;
+            }
+            self.g_pos = .{ .page_id = first };
+            self.p_pos = self.g_pos;
+        }
+
+        pub fn isCreated(self: *const Self) Error!bool {
+            return (try self.ctx.mgr.getFirst()) != null;
+        }
 
         pub fn create(self: *Self) Error!void {
             if (try self.ctx.mgr.getFirst() != null) {
@@ -387,11 +445,11 @@ pub fn Indexed(
         }
 
         pub fn getp(self: *const Self) usize {
-            return self.put_total_pos;
+            return self.p_pos.total_pos;
         }
 
         pub fn getg(self: *const Self) usize {
-            return self.get_total_pos;
+            return self.g_pos.total_pos;
         }
 
         pub fn setp(self: *Self, pos: usize) Error!void {
@@ -469,6 +527,21 @@ pub fn Indexed(
                     return .{
                         .page_id = try cursor.pid(),
                         .pos = @as(Index, @intCast(left_pos)),
+                        .total_pos = pos,
+                    };
+                }
+                if (left_pos == current_len) {
+                    if (try cursor.hasNext()) {
+                        try cursor.moveNext();
+                        return .{
+                            .page_id = try cursor.pid(),
+                            .pos = 0,
+                            .total_pos = pos,
+                        };
+                    }
+                    return .{
+                        .page_id = try cursor.pid(),
+                        .pos = current_len,
                         .total_pos = pos,
                     };
                 }
@@ -562,6 +635,28 @@ pub fn Indexed(
         pub fn totalSize(self: *const Self) Error!StorageManagerT.Size {
             const total_size = try self.ctx.mgr.getTotalSize();
             return total_size;
+        }
+
+        /// Releases every chunk and clears the external chain metadata.
+        pub fn destroy(self: *Self) Error!void {
+            try self.index.clear();
+            var current = try self.ctx.mgr.getFirst();
+
+            while (current) |page_id| {
+                var page = try self.loadPage(page_id, self.ctx.settings.chunk_page_kind);
+                const chunk_view = ViewTypesConst.Chunk.init(try page.data());
+                const next = chunk_view.getNext();
+                page.deinit();
+                try self.ctx.mgr.destroyPage(page_id);
+                current = next;
+            }
+
+            try self.ctx.mgr.setFirst(null);
+            try self.ctx.mgr.setLast(null);
+            try self.ctx.mgr.setTotalSize(0);
+
+            self.g_pos = .{ .page_id = null };
+            self.p_pos = self.g_pos;
         }
 
         pub fn createPage(self: *Self) Error!PageHandle {
@@ -799,7 +894,7 @@ pub fn Indexed(
         }
 
         pub fn readPage(_: *const Self, ph: *PageHandle, pos: Index, data: []u8) Error!usize {
-            const page_data = try ph.dataMut();
+            const page_data = try ph.data();
             var pv = ViewTypesConst.Chunk.init(page_data);
             const chunk_data = pv.chunkData();
             const max_size = chunk_data.len;
@@ -827,7 +922,6 @@ pub fn Indexed(
             }
 
             var last_chunk_ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
-            defer last_chunk_ph.deinit();
 
             var last_chunk = ChunkImpl.init(last_chunk_ph);
             var last_chunk_v = try last_chunk.viewMut();
@@ -837,6 +931,7 @@ pub fn Indexed(
             try self.ctx.mgr.setLast(prev);
             try self.popImpl(prev);
             try self.index.onUnseal();
+            last_chunk_ph.deinit();
             try self.ctx.mgr.destroyPage(last);
         }
 

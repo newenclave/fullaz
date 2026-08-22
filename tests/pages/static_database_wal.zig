@@ -17,6 +17,104 @@ fn prep(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
 
+test "Pages: WAL static database reopens chainStore metadata" {
+    const Schema = fullaz.pages.Schema(.{ .page_id = u32 }).add(
+        "blob",
+        fullaz.pages.chainStore(.{}),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz.pages.StaticDatabaseWithWal(Schema, Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/static_chain_store_wal.img";
+    const log_path = ".zig-cache/static_chain_store_wal.log";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{12} ** 16,
+        .components = .{ .blob = .{} },
+    };
+    prep(io, image_path);
+    prep(io, log_path);
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 512),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        try transaction.get("blob").append("wal bytes");
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 512),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var output: [16]u8 = undefined;
+        const blob = database.getConst("blob");
+        try std.testing.expectEqual(@as(u64, 9), try blob.size());
+        try std.testing.expectEqual(@as(usize, 9), try blob.readAt(0, &output));
+        try std.testing.expectEqualStrings("wal bytes", output[0..9]);
+    }
+}
+
+test "Pages: WAL static database reopens weightedSequence metadata" {
+    const Schema = fullaz.pages.Schema(.{ .page_id = u32 }).add(
+        "sequence",
+        fullaz.pages.weightedSequence(.{ .maximum_chunk_size = 3 }),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz.pages.StaticDatabaseWithWal(Schema, Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/static_weighted_sequence_wal.img";
+    const log_path = ".zig-cache/static_weighted_sequence_wal.log";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{14} ** 16,
+        .components = .{ .sequence = .{} },
+    };
+    prep(io, image_path);
+    prep(io, log_path);
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 512),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        const sequence = transaction.get("sequence");
+        try sequence.append("abcdef");
+        try sequence.erase(1, 4);
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 512),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var output: [16]u8 = undefined;
+        const sequence = database.getConst("sequence");
+        try std.testing.expectEqual(@as(u64, 2), try sequence.size());
+        try std.testing.expectEqual(@as(usize, 2), try sequence.readAt(0, &output));
+        try std.testing.expectEqualStrings("af", output[0..2]);
+    }
+}
+
 test "Pages: WAL static database reopens SlotHeap metadata" {
     const Schema = fullaz.pages.Schema(.{ .page_id = u32 }).add(
         "heap",

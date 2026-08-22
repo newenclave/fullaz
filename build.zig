@@ -154,6 +154,18 @@ pub fn build(b: *std.Build) void {
             .expected = "Unknown pages.slotHeap option: leaf_page_kind",
         },
         .{
+            .source = "tests/compile_errors/pages/chain_store_unknown_option.zig",
+            .expected = "pages.chainStore options must be an empty struct",
+        },
+        .{
+            .source = "tests/compile_errors/pages/weighted_sequence_zero_chunk.zig",
+            .expected = "pages.weightedSequence maximum_chunk_size must be non-zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/weighted_sequence_unknown_option.zig",
+            .expected = "Unknown pages.weightedSequence option: page_kind",
+        },
+        .{
             .source = "tests/compile_errors/pages/rtree_missing_coord.zig",
             .expected = "Missing pages.rtree option: Coord",
         },
