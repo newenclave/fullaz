@@ -45,6 +45,7 @@ fn callbackInfo(comptime CallbackT: type) std.builtin.Type.Fn {
 fn finiteCallbackError(comptime CallbackT: type) type {
     const ReturnT = callbackInfo(CallbackT).return_type orelse
         @compileError("fullaz-db.rtree callback must have a return type");
+
     return switch (@typeInfo(ReturnT)) {
         .void => error{},
         .error_union => |error_union| blk: {
@@ -63,16 +64,20 @@ fn finiteCallbackError(comptime CallbackT: type) type {
 
 pub fn rtree(comptime options: anytype) component.Descriptor {
     @setEvalBranchQuota(20_000);
+
     const OptionsT = @TypeOf(options);
     const options_info = @typeInfo(OptionsT);
+
     if (options_info != .@"struct" or options_info.@"struct".is_tuple) {
         @compileError("fullaz-db.rtree options must be a named struct");
     }
+
     inline for (options_info.@"struct".fields) |field| {
         if (comptime !isKnownOption(field.name)) {
             @compileError("Unknown fullaz-db.rtree option: " ++ field.name);
         }
     }
+
     requireOption(OptionsT, "Coord");
     requireOption(OptionsT, "dimensions");
     requireOption(OptionsT, "maximum_entries");
