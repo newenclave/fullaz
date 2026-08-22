@@ -373,12 +373,20 @@ pub fn Bpt(comptime ModelT: type) type {
                         try leaf.insertValue(search.position, key, value);
                         //std.debug.print("Key {any} inserted into leaf id: {}\n", .{ key, leaf.id() });
                     } else {
+                        var position = search.position;
                         if (self.rebalance_policy == .neighbor_share) {
-                            if (try self.tryLeafNeighborShare(&leaf, key, value, search.position)) {
+                            const share = try self.tryLeafNeighborShare(
+                                &leaf,
+                                key,
+                                value,
+                                position,
+                            );
+                            if (share.inserted) {
                                 return true;
                             }
+                            position = share.position;
                         }
-                        try self.handleLeafOverflowDefault(&leaf, key, value, search.position);
+                        try self.handleLeafOverflowDefault(&leaf, key, value, position);
                     }
                     return true;
                 } else {
@@ -570,56 +578,38 @@ pub fn Bpt(comptime ModelT: type) type {
             return res;
         }
 
-        // Borrowing from siblings
-        fn tryLeafNeighborShare(self: *Self, leaf: *LeafType, key: KeyLikeType, value: ValueInType, position: usize) Error!bool {
-            const accessor = self.model.accessor();
-            const is_first = position == 0;
-            const is_last = position == try leaf.size();
-            if (try self.leafGiveToLeft(leaf, if (is_first) 1 else 0)) {
-                if (is_first) {
-                    // do not use getPrev here, as we need onthe the same inode level
-                    if (try self.findLeftSibling(leaf.getParent(), leaf.id())) |left_id| {
-                        if (try accessor.loadLeaf(left_id)) |left_sibling_const| {
-                            var left_sibling = left_sibling_const;
-                            defer accessor.deinitLeaf(left_sibling);
-                            try left_sibling.insertValue(try left_sibling.size(), key, value);
-                            //std.debug.print("Key {} inserted into leaf id: {} after borrowing from left sibling id: {}\n", .{ key, left_sibling.id(), left_id });
-                            return true;
-                        }
-                    }
-                } else {
-                    const new_position = position - 1;
-                    try leaf.insertValue(new_position, key, value);
-                    if (new_position == 0) {
-                        try self.fixParentIndex(leaf);
-                    }
-                    //std.debug.print("Key {} inserted into leaf id: {} after borrowing from left sibling\n", .{ key, leaf.id() });
-                    return true;
-                }
-            } else if (try self.leafGiveToRight(leaf, if (is_last) 1 else 0)) {
-                if (is_last) {
-                    if (try self.findRightSibling(leaf.getParent(), leaf.id())) |right_id| {
-                        if (try accessor.loadLeaf(right_id)) |right_sibling_const| {
-                            defer accessor.deinitLeaf(right_sibling_const);
+        const LeafNeighborShareResult = struct {
+            inserted: bool,
+            position: usize,
+        };
 
-                            var right_sibling = right_sibling_const;
-                            const right_pos = try right_sibling.keyPosition(key);
-                            try right_sibling.insertValue(right_pos, key, value);
-                            //std.debug.print("Key {} inserted into leaf id: {} after borrowing from right sibling id: {}\n", .{ key, right_sibling.id(), right_id });
-                            return true;
-                        }
-                    }
-                } else {
-                    const new_position = position;
-                    try leaf.insertValue(new_position, key, value);
-                    if (new_position == 0) {
-                        try self.fixParentIndex(leaf);
-                    }
-                    //std.debug.print("Key {} inserted into leaf id: {} after borrowing from right sibling\n", .{ key, leaf.id() });
-                    return true;
+        // Borrow enough bytes from siblings for the pending variable-sized entry.
+        fn tryLeafNeighborShare(
+            self: *Self,
+            leaf: *LeafType,
+            key: KeyLikeType,
+            value: ValueInType,
+            position: usize,
+        ) Error!LeafNeighborShareResult {
+            var insert_position = position;
+            while (!try leaf.canInsertValue(insert_position, key, value)) {
+                if (insert_position > 0 and try self.leafGiveToLeft(leaf, 0)) {
+                    insert_position -= 1;
+                    continue;
                 }
+
+                const leaf_size = try leaf.size();
+                if (insert_position < leaf_size and try self.leafGiveToRight(leaf, 0)) {
+                    continue;
+                }
+                return .{ .inserted = false, .position = insert_position };
             }
-            return false;
+
+            try leaf.insertValue(insert_position, key, value);
+            if (insert_position == 0) {
+                try self.fixParentIndex(leaf);
+            }
+            return .{ .inserted = true, .position = insert_position };
         }
 
         fn leafGiveToLeft(self: *Self, leaf: *LeafType, additional_elements: usize) Error!bool {
@@ -727,6 +717,10 @@ pub fn Bpt(comptime ModelT: type) type {
                         const key = self.model.keyOutAsLike(out_key);
                         const value = self.model.valueOutAsIn(out_value);
 
+                        if (!try leaf.canInsertValue(0, key, value)) {
+                            return false;
+                        }
+
                         try leaf.insertValue(0, key, value);
                         try left.erase(try left.size() - 1);
                         try parent.updateKey(pos_in_parent - 1, self.model.keyOutAsLike(try leaf.getKey(0)));
@@ -756,7 +750,12 @@ pub fn Bpt(comptime ModelT: type) type {
                         const key = self.model.keyOutAsLike(out_key);
                         const value = self.model.valueOutAsIn(out_value);
 
-                        try leaf.insertValue(try leaf.size(), key, value);
+                        const insert_position = try leaf.size();
+                        if (!try leaf.canInsertValue(insert_position, key, value)) {
+                            return false;
+                        }
+
+                        try leaf.insertValue(insert_position, key, value);
                         try right.erase(0);
                         try parent.updateKey(pos_in_parent, self.model.keyOutAsLike(try right.getKey(0)));
                         return true;
@@ -1207,14 +1206,22 @@ pub fn Bpt(comptime ModelT: type) type {
             defer self.model.accessor().deinitLeaf(res);
             if (try leaf.size() < pos) {
                 const insert_pos = pos - try leaf.size();
-                try res.insertValue(insert_pos, key, value);
-                if (insert_pos == 0) {
-                    try self.fixParentIndex(&res);
+                if (try res.canInsertValue(insert_pos, key, value)) {
+                    try res.insertValue(insert_pos, key, value);
+                    if (insert_pos == 0) {
+                        try self.fixParentIndex(&res);
+                    }
+                } else {
+                    try self.handleLeafOverflowDefault(&res, key, value, insert_pos);
                 }
             } else {
-                try leaf.insertValue(pos, key, value);
-                if (pos == 0) {
-                    try self.fixParentIndex(leaf);
+                if (try leaf.canInsertValue(pos, key, value)) {
+                    try leaf.insertValue(pos, key, value);
+                    if (pos == 0) {
+                        try self.fixParentIndex(leaf);
+                    }
+                } else {
+                    try self.handleLeafOverflowDefault(leaf, key, value, pos);
                 }
             }
         }

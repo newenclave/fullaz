@@ -391,6 +391,49 @@ test "fullaz-db: memory database returns an exact typed BPT proxy" {
     try std.testing.expect(@TypeOf(tree_const) == *const Binding.ConstProxy);
 }
 
+test "fullaz-db: BPT splits byte-skewed variable values on 512-byte pages" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 })
+        .add("index", fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 8,
+        .maximum_value_size = 64,
+    }));
+    const Db = fullaz_db.MemoryDatabase(Schema);
+
+    var database = try Db.init(std.testing.allocator, .{
+        .page_size = 512,
+        .cache_frames = 256,
+    });
+    defer database.deinit();
+
+    var value: [64]u8 = undefined;
+    @memset(&value, 'x');
+    var prng = std.Random.DefaultPrng.init(0xD15A_7C4);
+    const random = prng.random();
+
+    for (0..7000) |index| {
+        var key_buffer: [8]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buffer, "{d:0>8}", .{index});
+        const value_len = random.intRangeAtMost(usize, 1, value.len);
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        try std.testing.expect(
+            try transaction.get("index").insert(key, value[0..value_len]),
+        );
+        try transaction.commit();
+    }
+
+    var iterator = (try database.getConst("index").iterator()).?;
+    defer iterator.deinit();
+    var count: usize = 0;
+    while (try iterator.next()) |_| {
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 7000), count);
+}
+
 test "fullaz-db: memory database transaction commits or restores pages and roots" {
     const Schema = fullaz_db.Schema(.{ .page_id = u32 })
         .add("index", fullaz_db.bpt(.{

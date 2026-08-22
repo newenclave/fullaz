@@ -289,6 +289,10 @@ test "cli commands drive the dispatch database" {
 
     try cli.execTokens(&.{ "add", "00000001", "60", "24", "0.5", "open|high|north pump" }, &col);
     try cli.execTokens(&.{ "add", "00000002", "61", "25", "0.5", "open|medium|west valve" }, &col);
+    try std.testing.expectError(
+        error.OrderAlreadyExists,
+        cli.execTokens(&.{ "add", "00000001", "60", "24", "0.5", "duplicate" }, &col),
+    );
 
     col.len = 0;
     try cli.execTokens(&.{"top"}, &col);
@@ -314,6 +318,6 @@ test "cli commands drive the dispatch database" {
     try std.testing.expectEqualStrings("no orders\n", col.buf[0..col.len]);
 
     col.len = 0;
-    try cli.execTokens(&.{ "bogus" }, &col);
+    try cli.execTokens(&.{"bogus"}, &col);
     try std.testing.expectEqualStrings("unknown command: bogus\n", col.buf[0..col.len]);
 }

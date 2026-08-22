@@ -109,7 +109,7 @@ pub fn main(init: std.process.Init) !void {
             try out.print("error: {s}\n", .{@errorName(err)});
             continue;
         };
-        try shell.execTokens(tokens, out);
+        try shell.execTokensReporting(tokens, out);
         try out.flush();
     }
 }

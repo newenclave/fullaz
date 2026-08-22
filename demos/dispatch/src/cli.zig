@@ -15,8 +15,13 @@ pub fn Cli(comptime DatabaseT: type) type {
             return .{ .db = db, .allocator = allocator };
         }
 
-        /// Runs one command from pre-split tokens, reporting errors as text.
+        /// Runs one command from pre-split tokens and propagates operation errors.
         pub fn execTokens(self: *Self, tokens: []const []const u8, writer: anytype) !void {
+            try self.dispatch(tokens, writer);
+        }
+
+        /// Runs one command while keeping an interactive shell alive on errors.
+        pub fn execTokensReporting(self: *Self, tokens: []const []const u8, writer: anytype) !void {
             self.dispatch(tokens, writer) catch |err| {
                 try writer.print("error: {s}\n", .{@errorName(err)});
             };
