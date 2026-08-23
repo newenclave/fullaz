@@ -13,6 +13,7 @@ const NoneStorageManager = struct {
     first_block_id: ?u32 = null,
     last_block_id: ?u32 = null,
     total_sze: u32 = 0,
+    get_first_calls: ?*usize = null,
 
     pub fn destroyPage(_: *@This(), id: PageId) Error!void {
         _ = id;
@@ -28,6 +29,9 @@ const NoneStorageManager = struct {
     }
 
     pub fn getFirst(self: *const Self) Error!?PageId {
+        if (self.get_first_calls) |calls| {
+            calls.* += 1;
+        }
         return self.first_block_id;
     }
 
@@ -93,6 +97,63 @@ test "ChainStore handle: get positions report cursor offsets" {
 
     try hdl.setg(2);
     try std.testing.expectEqual(@as(usize, 2), hdl.getg());
+}
+
+test "ChainStore handle: EOF positions use the persisted tail without a head walk" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = chain_store.Handle(Cache, NoneStorageManager, .little);
+
+    var get_first_calls: usize = 0;
+    var mgr = NoneStorageManager{ .get_first_calls = &get_first_calls };
+    var dev = try Device.init(std.testing.allocator, 128);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+    var hdl = Handle.init(&cache, &mgr, .{});
+    defer hdl.deinit();
+
+    var data: [400]u8 = undefined;
+    @memset(&data, 'x');
+    try hdl.create();
+    try std.testing.expectEqual(data.len, try hdl.write(&data));
+    try std.testing.expect((try hdl.totalSize()) > 0);
+
+    get_first_calls = 0;
+    try hdl.setp(data.len);
+    try std.testing.expectEqual(@as(usize, 0), get_first_calls);
+    try std.testing.expectEqual(data.len, hdl.getp());
+
+    try hdl.setg(data.len);
+    try std.testing.expectEqual(@as(usize, 0), get_first_calls);
+    try std.testing.expectEqual(data.len, hdl.getg());
+    var out: [1]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), try hdl.read(&out));
+}
+
+test "ChainStore Blob: append positions at the tail without a second head lookup" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Blob = chain_store.Blob(Cache, NoneStorageManager, .little);
+
+    var get_first_calls: usize = 0;
+    var mgr = NoneStorageManager{ .get_first_calls = &get_first_calls };
+    var dev = try Device.init(std.testing.allocator, 128);
+    defer dev.deinit();
+    var cache = try Cache.init(&dev, std.testing.allocator, 8);
+    defer cache.deinit();
+    var blob = Blob.init(&cache, &mgr, .{});
+    defer blob.deinit();
+
+    var data: [400]u8 = undefined;
+    @memset(&data, 'x');
+    try blob.create();
+    try std.testing.expectEqual(data.len, try blob.append(&data));
+
+    get_first_calls = 0;
+    try std.testing.expectEqual(@as(usize, 1), try blob.append("z"));
+    try std.testing.expectEqual(@as(usize, 1), get_first_calls);
+    try std.testing.expectEqual(@as(u32, 401), try blob.size());
 }
 
 test "ChainStore Blob: explicit offsets and zero-page clear" {

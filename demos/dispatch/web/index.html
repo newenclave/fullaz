@@ -183,12 +183,17 @@ function showNext() {
 }
 
 function completeNext() {
+  const startedAt = performance.now();
   const ok = ex.completeNext();
   if (!ok) { el.nextPanel.className = "empty"; el.nextPanel.textContent = errorText() === "Empty" ? "No order due." : `error: ${errorText()}`; return; }
   const id = readStr(ex.completePtr(), 8);
+  const storageMs = performance.now() - startedAt;
   el.nextPanel.className = ""; el.nextPanel.replaceChildren("completed: ", Object.assign(document.createElement("b"), { textContent: id }));
-  refresh();
+  removeRenderedOrder(id);
+  refreshMetrics();
   queryVisibleArea();
+  refreshInspector();
+  console.debug("dispatch completion", { id, storageMs, totalMs: performance.now() - startedAt });
   persist().catch(showError);
 }
 
@@ -243,6 +248,16 @@ function renderOrders() {
     orderLayers.set(id, layer);
   }
   el.orders.textContent = count;
+}
+
+function removeRenderedOrder(id) {
+  const layer = orderLayers.get(id);
+  if (layer) {
+    ordersLayer.removeLayer(layer);
+    orderLayers.delete(id);
+  }
+  selectionLayer.clearLayers();
+  el.orders.textContent = orderLayers.size;
 }
 
 function renderPages() {
@@ -310,7 +325,18 @@ function renderPageDetail(pid) {
   el.pageDetail.replaceChildren(title, first, second, pre);
 }
 
-function refresh() { renderOrders(); renderPages(); el.queue.textContent = ex.queueCount(); el.audit.textContent = ex.auditLen(); }
+function refreshMetrics() {
+  el.queue.textContent = ex.queueCount();
+  el.audit.textContent = ex.auditLen();
+}
+
+function refreshInspector() {
+  if (!document.getElementById("inspector").classList.contains("hidden")) {
+    renderPages();
+  }
+}
+
+function refresh() { renderOrders(); refreshInspector(); refreshMetrics(); }
 
 function setSelectMode(on) {
   selectMode = on;
@@ -423,6 +449,7 @@ el.complete.onclick = () => run(completeNext);
 el.selectArea.onclick = () => setSelectMode(!selectMode);
 document.getElementById("show-inspector").onchange = e => {
   document.getElementById("inspector").classList.toggle("hidden", !e.target.checked);
+  if (e.target.checked) renderPages();
   setTimeout(() => map.invalidateSize(), 0);
 };
 el.reset.onclick = () => run(() => { ensure(ex.format()); selectedPage = null; document.getElementById("f-id").value = "00000001"; refresh(); queryVisibleArea(); persist().catch(showError); setStatus("reset to an empty database"); });

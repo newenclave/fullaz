@@ -510,6 +510,19 @@ pub fn Indexed(
         }
 
         pub fn getPosition(self: *const Self, pos: usize) Error!Position {
+            const total_size = try self.ctx.mgr.getTotalSize();
+            if (std.math.cast(usize, total_size)) |total_pos| {
+                if (pos == total_pos) {
+                    var cursor = try self.end();
+                    defer cursor.deinit();
+                    return .{
+                        .page_id = try cursor.pid(),
+                        .pos = cursor.pos,
+                        .total_pos = pos,
+                    };
+                }
+            }
+
             if (try self.index.locate(@intCast(pos))) |loc| {
                 return .{
                     .page_id = @as(Pid, @intCast(loc.page_id)),

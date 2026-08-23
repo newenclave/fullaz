@@ -63,6 +63,15 @@ test "fullaz-db: WAL static database reopens chainStore metadata" {
         try std.testing.expectEqual(@as(u64, 9), try blob.size());
         try std.testing.expectEqual(@as(usize, 9), try blob.readAt(0, &output));
         try std.testing.expectEqualStrings("wal bytes", output[0..9]);
+
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        try transaction.get("blob").append(" again");
+        try transaction.commit();
+
+        try std.testing.expectEqual(@as(u64, 15), try blob.size());
+        try std.testing.expectEqual(@as(usize, 15), try blob.readAt(0, &output));
+        try std.testing.expectEqualStrings("wal bytes again", output[0..15]);
     }
 }
 
