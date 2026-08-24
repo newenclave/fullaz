@@ -1,6 +1,25 @@
 const std = @import("std");
 const fullaz_db = @import("fullaz-db");
 
+test "fullaz-db: DynamicMetadata contract accepts tagged metadata bindings" {
+    const Binding = TestBinding(TestBackend);
+    const Metadata = struct {
+        pub const format_version: u32 = 1;
+        pub const known_tags: []const u16 = &.{0x0100};
+        pub const repeated_tags: []const u16 = &.{};
+        pub const Error = fullaz_db.file.dynamic_metadata.Error;
+
+        pub fn restore(_: *Binding.Runtime, _: []const u8, _: usize) Error!void {}
+
+        pub fn encodeKnown(
+            _: *const Binding.Runtime,
+            _: *fullaz_db.file.tagged_fields.Writer,
+        ) Error!void {}
+    };
+
+    comptime fullaz_db.assertDynamicMetadata(Binding, Metadata);
+}
+
 const TestBackend = struct {
     initialized: usize = 0,
 };

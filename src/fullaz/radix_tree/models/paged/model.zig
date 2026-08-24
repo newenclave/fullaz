@@ -5,6 +5,7 @@ const radix_page = @import("view.zig");
 const contracts = @import("../../../contracts/contracts.zig");
 const core = @import("../../../core/core.zig");
 const errors = core.errors;
+const header = @import("../../../page/header.zig");
 const KeySplitter = @import("../../splitter.zig").Splitter;
 
 const SettingsImpl = struct {
@@ -29,9 +30,12 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
         PageCacheT.Error ||
+        StorageManagerT.Error ||
         errors.BufferError ||
         errors.SpaceError ||
-        errors.OrderError;
+        errors.OrderError ||
+        header.ValidationError ||
+        error{InvalidSettings};
 
     const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
@@ -320,9 +324,24 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             if (root_id) |id| {
                 var ph = try self.ctx.cache.fetch(id);
                 defer ph.deinit();
-                var view = ConstViewType.InodeSubheaderView.init(try ph.data());
-                try view.check();
-                return try view.getLevel();
+                const pid = try ph.pid();
+                const page_data = try ph.data();
+                const page_view = ConstViewType.PageViewType.init(page_data);
+                try page_view.validateTyped();
+                if (page_view.header().self_pid.get() != pid) {
+                    return Error.BadData;
+                }
+                if (page_view.header().kind.get() == self.ctx.settings.leaf_page_kind) {
+                    const view = ConstViewType.LeafSubheaderView.init(page_data);
+                    try view.check();
+                    return 0;
+                }
+                if (page_view.header().kind.get() == self.ctx.settings.inode_page_kind) {
+                    const view = ConstViewType.InodeSubheaderView.init(page_data);
+                    try view.check();
+                    return try view.getLevel();
+                }
+                return Error.BadType;
             }
             return null;
         }
@@ -345,6 +364,9 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
                 return Error.BadType;
             }
             try view.check();
+            if (view.page_view.header().self_pid.get() != pid) {
+                return Error.BadData;
+            }
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
         }
 
@@ -356,7 +378,12 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         pub fn isLeaf(self: *const Self, id: BlockIdType) ErrorSet!bool {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
+            const pid = try ph.pid();
             var view = LeafImpl.ConstPageViewType.init(try ph.data());
+            try view.page_view.validateTyped();
+            if (view.page_view.header().self_pid.get() != pid) {
+                return Error.BadData;
+            }
             return view.page_view.header().kind.get() == self.ctx.settings.leaf_page_kind;
         }
 
@@ -378,6 +405,9 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
                 return Error.BadType;
             }
             try view.check();
+            if (view.page_view.header().self_pid.get() != pid) {
+                return Error.BadData;
+            }
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
 
@@ -431,9 +461,22 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
 
         accessor_state: AccessorType = undefined,
 
-        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Self {
+        pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings) Error!Self {
+            const page_size = device.pageSize();
+            const minimum_leaf_page_size = ViewType.PageViewType.header_size +
+                @sizeOf(ViewType.LeafSubheader);
+            const minimum_inode_page_size = ViewType.PageViewType.header_size +
+                @sizeOf(ViewType.InodeSubheader);
+            if (page_size <= minimum_leaf_page_size or page_size <= minimum_inode_page_size) {
+                return error.InvalidSettings;
+            }
             const inode_base = InodeType.ConstPageViewType.calculateSlotCapacity(device.pageSize(), 0);
             const leaf_base = LeafType.ConstPageViewType.calculateSlotCapacity(device.pageSize(), 0);
+            if (inode_base < 2 or leaf_base < 2 or
+                inode_base > std.math.maxInt(u16) or leaf_base > std.math.maxInt(u16))
+            {
+                return error.InvalidSettings;
+            }
 
             const context = Context{
                 .cache = device,

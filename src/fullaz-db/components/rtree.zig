@@ -1,9 +1,11 @@
 const std = @import("std");
-const component = @import("../component.zig");
-const single_root_manager = @import("single_root_manager.zig");
+const component = @import("../component/component.zig");
+const managers = @import("../component/managers/managers.zig");
 const low_level_rtree = @import("fullaz").spatial.rtree;
 const PackedInt = @import("fullaz").core.packed_int.PackedInt;
-const FingerprintWriter = @import("../schema_fingerprint.zig").Writer;
+const FingerprintWriter = @import("../component/fingerprint.zig").Writer;
+const dynamic_metadata = @import("../file/metadata/dynamic.zig");
+const tagged = @import("../file/tagged_fields.zig");
 
 fn requireOption(comptime OptionsT: type, comptime name: []const u8) void {
     if (!@hasField(OptionsT, name)) {
@@ -172,7 +174,7 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
         }
 
         pub fn Binding(comptime BackendT: type) type {
-            const ManagerT = single_root_manager.SingleRootManager(BackendT);
+            const ManagerT = managers.SingleRootManager(BackendT);
             comptime low_level_rtree.models.interfaces.requiresStorageManager(ManagerT);
             const CacheT = BackendT.CacheType;
             const ModelT = low_level_rtree.models.Paged(
@@ -393,6 +395,35 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
                         }
                     }
                 };
+                pub const DynamicMetadata = struct {
+                    pub const format_version: u32 = 1;
+                    pub const known_tags: []const u16 = &.{0x0100};
+                    pub const repeated_tags: []const u16 = &.{};
+                    pub const Error = dynamic_metadata.Error;
+
+                    pub fn restore(runtime: *Runtime, payload: []const u8, page_count: usize) @This().Error!void {
+                        try tagged.validateKnownFields(payload, known_tags);
+                        var root: ?CacheT.Pid = null;
+                        var found_root = false;
+                        var reader = tagged.Reader.init(payload);
+                        while (try reader.next()) |field| {
+                            if (field.tag == known_tags[0]) {
+                                root = try dynamic_metadata.decodeOptionalPageId(
+                                    CacheT.Pid,
+                                    try dynamic_metadata.readU64(field),
+                                    page_count,
+                                );
+                                found_root = true;
+                            }
+                        }
+                        if (!found_root) return error.BadMetadata;
+                        runtime.manager.restoreRoot(root);
+                    }
+
+                    pub fn encodeKnown(runtime: *const Runtime, writer: *tagged.Writer) @This().Error!void {
+                        try dynamic_metadata.appendU64(writer, known_tags[0], runtime.manager.getRoot() orelse 0);
+                    }
+                };
 
                 pub fn initRuntime(
                     runtime: *Runtime,
@@ -442,6 +473,7 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
                     return &runtime.const_proxy;
                 }
             };
+            comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);
             comptime component.assertBinding(BindingT, BackendT);
             return BindingT;
         }

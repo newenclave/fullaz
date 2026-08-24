@@ -1,9 +1,11 @@
 const std = @import("std");
 const PackedInt = @import("fullaz").core.packed_int.PackedInt;
-const component = @import("../component.zig");
-const FingerprintWriter = @import("../schema_fingerprint.zig").Writer;
-const ChainStoreManager = @import("chain_store_manager.zig").ChainStoreManager;
+const component = @import("../component/component.zig");
+const FingerprintWriter = @import("../component/fingerprint.zig").Writer;
+const ChainStoreManager = @import("../component/managers/managers.zig").ChainStoreManager;
 const low_level_chain_store = @import("fullaz").storage.chain_store;
+const dynamic_metadata = @import("../file/metadata/dynamic.zig");
+const tagged = @import("../file/tagged_fields.zig");
 
 pub fn chainStore(comptime options: anytype) component.Descriptor {
     const OptionsT = @TypeOf(options);
@@ -30,7 +32,7 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
             );
             const BindingError = BlobT.Error || error{InvalidPageKinds};
 
-            return struct {
+            const BindingT = struct {
                 const MutableProxy = struct {
                     const Self = @This();
                     const Offset = u64;
@@ -177,6 +179,55 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                     }
                 };
 
+                pub const DynamicMetadata = struct {
+                    pub const format_version: u32 = 1;
+                    pub const known_tags: []const u16 = &.{ 0x0100, 0x0101, 0x0102 };
+                    pub const repeated_tags: []const u16 = &.{};
+                    pub const Error = dynamic_metadata.Error;
+
+                    pub fn restore(runtime: *Runtime, payload: []const u8, page_count: usize) @This().Error!void {
+                        try tagged.validateKnownFields(payload, known_tags);
+                        var first: ?CacheT.Pid = null;
+                        var last: ?CacheT.Pid = null;
+                        var total_size: ?u64 = null;
+                        var reader = tagged.Reader.init(payload);
+                        while (try reader.next()) |field| {
+                            switch (field.tag) {
+                                known_tags[0] => first = try dynamic_metadata.decodeOptionalPageId(
+                                    CacheT.Pid,
+                                    try dynamic_metadata.readU64(field),
+                                    page_count,
+                                ),
+                                known_tags[1] => last = try dynamic_metadata.decodeOptionalPageId(
+                                    CacheT.Pid,
+                                    try dynamic_metadata.readU64(field),
+                                    page_count,
+                                ),
+                                known_tags[2] => total_size = try dynamic_metadata.readU64(field),
+                                else => {},
+                            }
+                        }
+                        const decoded_total_size = total_size orelse return error.BadMetadata;
+                        if ((first == null) != (last == null) or
+                            (first == null and decoded_total_size != 0))
+                        {
+                            return error.BadMetadata;
+                        }
+                        runtime.manager.restoreState(.{
+                            .first = first,
+                            .last = last,
+                            .total_size = decoded_total_size,
+                        });
+                    }
+
+                    pub fn encodeKnown(runtime: *const Runtime, writer: *tagged.Writer) @This().Error!void {
+                        const state = runtime.manager.getState();
+                        try dynamic_metadata.appendU64(writer, known_tags[0], state.first orelse 0);
+                        try dynamic_metadata.appendU64(writer, known_tags[1], state.last orelse 0);
+                        try dynamic_metadata.appendU64(writer, known_tags[2], state.total_size);
+                    }
+                };
+
                 pub fn initRuntime(
                     runtime: *Runtime,
                     backend: *BackendT,
@@ -224,6 +275,9 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                     return &runtime.const_proxy;
                 }
             };
+            comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);
+            comptime component.assertBinding(BindingT, BackendT);
+            return BindingT;
         }
     };
     return component.descriptor(Trait);

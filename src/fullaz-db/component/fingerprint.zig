@@ -7,8 +7,10 @@ const std = @import("std");
 pub fn digest(comptime SchemaT: type) [32]u8 {
     var hasher = std.crypto.hash.Blake3.init(.{});
     var writer = Writer{ .hasher = &hasher };
+
     hasher.update("fullaz.pages.static-schema.v1");
     writer.writeInt(u16, @bitSizeOf(SchemaT.PageId));
+
     inline for (SchemaT.fields) |field| {
         const Trait = field.descriptor.Trait;
         writer.writeBytes(field.name);
@@ -27,6 +29,20 @@ pub fn digest(comptime SchemaT: type) [32]u8 {
         }
         Trait.fingerprint(&writer);
     }
+
+    var result: [32]u8 = undefined;
+    hasher.final(&result);
+    return result;
+}
+
+/// Returns a durable digest of one component's persistent settings.
+pub fn componentDigest(comptime TraitT: type) [32]u8 {
+    var hasher = std.crypto.hash.Blake3.init(.{});
+    var writer = Writer{ .hasher = &hasher };
+    hasher.update("fullaz.file.component-settings.v1");
+    writer.writeBytes(TraitT.kind_name);
+    writer.writeInt(u32, TraitT.format_version);
+    TraitT.fingerprint(&writer);
     var result: [32]u8 = undefined;
     hasher.final(&result);
     return result;

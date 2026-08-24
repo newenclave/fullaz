@@ -10,9 +10,11 @@ pub fn SlotHeapManager(
 ) type {
     interfaces.requiresTypeDeclaration(BackendT, "PageId");
     interfaces.requiresTypeDeclaration(BackendT, "CacheType");
+
     const PageIdT = BackendT.PageId;
     const CacheT = BackendT.CacheType;
     comptime page_cache_contract.requiresTransactionalPageCache(CacheT);
+
     if (PageIdT != CacheT.Pid) {
         @compileError("SlotHeap manager backend PageId must match CacheType.Pid");
     }
@@ -22,6 +24,7 @@ pub fn SlotHeapManager(
     if (size_class_count == 0) {
         @compileError("SlotHeap manager size_class_count must be greater than zero");
     }
+
     interfaces.requiresFnSignature(BackendT, "cache", fn (*BackendT) *CacheT);
     interfaces.requiresFnSignature(CacheT, "free", fn (*CacheT, PageIdT) CacheT.Error!void);
 

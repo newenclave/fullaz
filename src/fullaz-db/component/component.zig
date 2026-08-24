@@ -1,5 +1,7 @@
 const std = @import("std");
 const interfaces = @import("fullaz").contracts.interfaces;
+const dynamic_metadata = @import("../file/metadata/dynamic.zig");
+const tagged = @import("../file/tagged_fields.zig");
 
 pub const PageKind = u16;
 
@@ -198,6 +200,82 @@ pub fn assertStaticMetadata(comptime BindingT: type, comptime MetadataT: type) v
     interfaces.requiresFnSignature(MetadataT, "capture", fn (*const BindingT.Runtime) Storage);
     interfaces.requiresFnSignature(MetadataT, "restore", fn (*BindingT.Runtime, *const Storage) void);
     interfaces.requiresFnSignature(MetadataT, "validate", fn (*const Storage, usize) Error!void);
+}
+
+/// Verifies tagged metadata supplied by a dynamic catalog component binding.
+///
+/// ```zig
+/// const DynamicMetadata = struct {
+///     pub const format_version: u32 = 1;
+///     pub const known_tags: []const u16 = &.{0x0100};
+///     pub const repeated_tags: []const u16 = &.{};
+///     pub const Error = fullaz_db.file.dynamic_metadata.Error;
+///     pub fn restore(_: *Runtime, _: []const u8, _: usize) Error!void {}
+///     pub fn encodeKnown(_: *const Runtime, _: *tagged_fields.Writer) Error!void {}
+///     // Optional: emit target fields for an older payload. Call
+///     // dynamic_metadata.copyForwardUnknownFields to retain forward fields.
+///     pub fn migrate(_: u32, _: []const u8, _: *tagged_fields.Writer) Error!void {}
+/// };
+/// comptime assertDynamicMetadata(Binding, DynamicMetadata);
+/// ```
+pub fn assertDynamicMetadata(comptime BindingT: type, comptime MetadataT: type) void {
+    if (!@hasDecl(MetadataT, "format_version") or @TypeOf(MetadataT.format_version) != u32) {
+        @compileError("fullaz-db DynamicMetadata must declare format_version: u32");
+    }
+    if (MetadataT.format_version == 0) {
+        @compileError("fullaz-db DynamicMetadata format_version cannot be zero");
+    }
+    if (!@hasDecl(MetadataT, "known_tags") or @TypeOf(MetadataT.known_tags) != []const u16) {
+        @compileError("fullaz-db DynamicMetadata must declare known_tags: []const u16");
+    }
+    inline for (MetadataT.known_tags, 0..) |tag, index| {
+        if (tag < 0x0100) {
+            @compileError("fullaz-db DynamicMetadata tags must be component tags >= 0x0100");
+        }
+        inline for (MetadataT.known_tags[0..index]) |previous| {
+            if (tag == previous) {
+                @compileError("fullaz-db DynamicMetadata known_tags must be unique");
+            }
+        }
+    }
+    if (!@hasDecl(MetadataT, "repeated_tags") or @TypeOf(MetadataT.repeated_tags) != []const u16) {
+        @compileError("fullaz-db DynamicMetadata must declare repeated_tags: []const u16");
+    }
+    inline for (MetadataT.repeated_tags, 0..) |tag, index| {
+        var known = false;
+        inline for (MetadataT.known_tags) |known_tag| {
+            known = known or tag == known_tag;
+        }
+        if (!known) {
+            @compileError("fullaz-db DynamicMetadata repeated_tags must be declared in known_tags");
+        }
+        inline for (MetadataT.repeated_tags[0..index]) |previous| {
+            if (tag == previous) {
+                @compileError("fullaz-db DynamicMetadata repeated_tags must be unique");
+            }
+        }
+    }
+    interfaces.requiresErrorDeclaration(MetadataT, "Error");
+    if (MetadataT.Error != dynamic_metadata.Error) {
+        @compileError("fullaz-db DynamicMetadata Error must be file.dynamic_metadata.Error");
+    }
+    interfaces.requiresFnSignature(
+        MetadataT,
+        "restore",
+        fn (*BindingT.Runtime, []const u8, usize) dynamic_metadata.Error!void,
+    );
+    interfaces.requiresFnSignature(
+        MetadataT,
+        "encodeKnown",
+        fn (*const BindingT.Runtime, *tagged.Writer) dynamic_metadata.Error!void,
+    );
+    if (@hasDecl(MetadataT, "migrate")) {
+        interfaces.requiresFnSignature(
+            MetadataT,
+            "migrate",
+            fn (u32, []const u8, *tagged.Writer) dynamic_metadata.Error!void,
+        );
+    }
 }
 
 pub fn bindingFor(comptime value: Descriptor, comptime BackendT: type) type {

@@ -77,7 +77,7 @@ fn TestSuite(comptime BlockIdT: type, comptime StorageManager: type, comptime Ke
             self.store_mgr = StorageManager{};
             self.device = try Device.init(self.allocator, 4096);
             self.page_cache = try PageCache.init(&self.device, self.allocator, 16);
-            self.model = Model.init(
+            self.model = try Model.init(
                 &self.page_cache,
                 &self.store_mgr,
                 .{
@@ -189,7 +189,7 @@ test "RadixTree paged: model create tree" {
     });
 
     try suite.tree.set(0x11223344, "Hello!");
-    printer.print("get from tree: {s}\n", .{(try suite.tree.get(0x11223344)).?});
+    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(0x11223344)).?, "Hello!"));
 
     try suite.tree.set(0x12, "12345678");
     try suite.tree.set(0x0, "0");
@@ -203,5 +203,21 @@ test "RadixTree paged: model create tree" {
     try suite.tree.set(0x12345680, "88888"); // Also nearby
     try suite.tree.set(0x12340000, "77777"); // Same digit[3] and digit[2]
 
+    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(0)).?, "0"));
+    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(0x3456)).?, "6666"));
+    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(0xFFFFFFFF)).?, "FFFFFFFF"));
+    try std.testing.expect((try suite.tree.get(0x9999)) == null);
+
     try suite.tree.dumpTree(StdOut{});
+}
+
+test "RadixTree paged: a leaf root reports level zero" {
+    const TestSuiteType = TestSuite(u32, NoneStorageManager, u64, [8]u8);
+    var suite = TestSuiteType{};
+    try suite.initInPlace();
+    defer suite.deinit();
+
+    try suite.tree.set(7, "value");
+    try std.testing.expectEqual(@as(?usize, 0), try suite.model.accessor().getRootLevel());
+    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(7)).?, "value"));
 }

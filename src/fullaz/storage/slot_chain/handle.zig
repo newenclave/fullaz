@@ -634,8 +634,39 @@ fn HandleDirectionalImpl(
             ViewType.Error ||
             StorageManagerT.Error ||
             FsmError;
+        pub const ReferenceError = Error || error{InvalidReference};
         pub const ValueIn = []const u8;
         pub const ValueOut = []const u8;
+        pub const SlotRef = struct {
+            page_id: PageId,
+            slot_id: Index,
+        };
+
+        pub const Record = struct {
+            const RecordSelf = @This();
+
+            page: ?ChunkHandle,
+            slot_id: Index,
+
+            pub fn deinit(self: *RecordSelf) void {
+                if (self.page) |*page| {
+                    page.deinit();
+                }
+                self.* = undefined;
+            }
+
+            pub fn value(self: *const RecordSelf) ReferenceError![]const u8 {
+                const page_handle = if (self.page) |*handle| handle else return error.InvalidReference;
+                const slots_dir = try page_handle.slotsDir();
+                const slot_index: usize = self.slot_id;
+                if (slot_index >= slots_dir.size() or
+                    try page_handle.isTombstone(self.slot_id))
+                {
+                    return error.InvalidReference;
+                }
+                return try slots_dir.get(slot_index);
+            }
+        };
 
         ctx: Context = .{},
         last_chunk: ?ChunkHandle = null,
@@ -782,6 +813,12 @@ fn HandleDirectionalImpl(
         }
 
         pub fn append(self: *Self, val: ValueIn) Error!PageId {
+            return (try self.appendRef(val)).page_id;
+        }
+
+        /// Appends an entry and returns its stable directory position. Callers
+        /// that retain this reference must not use physical slot removal APIs.
+        pub fn appendRef(self: *Self, val: ValueIn) Error!SlotRef {
             try self.hydrateLastChunk();
             if (self.last_chunk) |*last_c| {
                 const total = try self.ctx.page_chain.manager().getTotalSize();
@@ -796,7 +833,7 @@ fn HandleDirectionalImpl(
 
                         const next_id = try next.id();
                         var next_sd = try next.slotsDirMut();
-                        _ = try next_sd.insert(val);
+                        const slot_id: Index = @intCast(try next_sd.insert(val));
 
                         try self.ctx.page_chain.insertLast(&next.ph);
                         try self.ctx.page_chain.managerMut().setTotalSize(total + 1);
@@ -804,29 +841,48 @@ fn HandleDirectionalImpl(
                         last_c.deinit();
                         self.last_chunk = next;
 
-                        return next_id;
+                        return .{ .page_id = next_id, .slot_id = slot_id };
                     },
                     .enough => {},
                 }
 
-                _ = try sd.insert(val);
+                const slot_id: Index = @intCast(try sd.insert(val));
                 try self.ctx.page_chain.managerMut().setTotalSize(total + 1);
                 try self.updatePageInFsm(try last_c.id(), sd.availableSpace());
-                return try self.last_chunk.?.id();
+                return .{
+                    .page_id = try self.last_chunk.?.id(),
+                    .slot_id = slot_id,
+                };
             } else {
                 var page = try self.createPage();
                 errdefer page.deinit();
 
                 const page_id = try page.id();
                 var sd = try page.slotsDirMut();
-                _ = try sd.insert(val);
+                const slot_id: Index = @intCast(try sd.insert(val));
 
                 try self.ctx.page_chain.insertFirst(&page.ph);
                 try self.ctx.page_chain.managerMut().setTotalSize(1);
                 try self.updatePageInFsm(page_id, sd.availableSpace());
                 self.last_chunk = page;
-                return page_id;
+                return .{ .page_id = page_id, .slot_id = slot_id };
             }
+        }
+
+        /// Loads one live entry by a SlotRef and keeps its page pinned until
+        /// Record.deinit(). The reference does not survive physical removal.
+        pub fn loadRef(self: *const Self, ref: SlotRef) ReferenceError!Record {
+            var page = try self.loadPage(ref.page_id);
+            errdefer page.deinit();
+            const slots_dir = try page.slotsDir();
+            const slot_index: usize = ref.slot_id;
+            if (slot_index >= slots_dir.size() or try page.isTombstone(ref.slot_id)) {
+                return error.InvalidReference;
+            }
+            return .{
+                .page = page,
+                .slot_id = ref.slot_id,
+            };
         }
 
         fn hydrateLastChunk(self: *Self) Error!void {

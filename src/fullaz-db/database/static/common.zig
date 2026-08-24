@@ -1,7 +1,7 @@
 const std = @import("std");
 const PersistentReclaimingCache = @import("fullaz").storage.page_cache.PersistentReclaimingCache;
-const StaticSuperblock = @import("static_superblock.zig").StaticSuperblock;
-const shape = @import("database_shape.zig");
+const StaticSuperblock = @import("superblock.zig").StaticSuperblock;
+const shape = @import("../../component/shape.zig");
 
 /// Shared type construction for static database variants.
 pub fn StaticDatabaseCommon(comptime SchemaT: type, comptime DeviceT: type, comptime RawCacheT: type) type {

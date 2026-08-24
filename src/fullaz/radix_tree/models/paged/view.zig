@@ -15,7 +15,8 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
     const ErrorSet = errors.BufferError ||
         errors.OrderError ||
         errors.PageError ||
-        errors.SlotsError;
+        errors.SlotsError ||
+        header.ValidationError;
 
     const LeafSubheaderType = RadixTreePage.LeafSubheader;
     const InodeSubheaderType = RadixTreePage.InodeSubheader;
@@ -43,6 +44,10 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
         }
 
         pub fn check(self: *const Self) ErrorSet!void {
+            try self.page_view.validateTyped();
+            if (self.page_view.header().subheader_size.get() != @sizeOf(SubheaderType)) {
+                return ErrorSet.BadData;
+            }
             const slols = try self.slotsDir();
             if (try slols.slotSize() != ValueSize) {
                 return ErrorSet.BadData;
@@ -189,6 +194,10 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
         }
 
         pub fn check(self: *const Self) ErrorSet!void {
+            try self.page_view.validateTyped();
+            if (self.page_view.header().subheader_size.get() != @sizeOf(SubheaderType)) {
+                return ErrorSet.BadData;
+            }
             const slols = try self.slotsDir();
             if (try slols.slotSize() != @sizeOf(SlotType)) {
                 return ErrorSet.BadData;
@@ -254,8 +263,9 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
 
         pub fn set(self: *Self, key: KeyT, value: PageIdT) ErrorSet!void {
             var slot_dir = try self.slotsDirMut();
-            const value_as_bytes = std.mem.asBytes(&value);
-            try slot_dir.set(key, value_as_bytes);
+            var slot = SlotType{ .child = undefined };
+            slot.child.set(value);
+            try slot_dir.set(key, std.mem.asBytes(&slot));
         }
 
         pub fn get(self: *const Self, key: KeyT) ErrorSet!PageIdT {
@@ -264,9 +274,9 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
             if (value_as_bytes.len != @sizeOf(PageIdT)) {
                 return ErrorSet.BadData;
             }
-            var value: PageIdT = undefined;
-            @memcpy(std.mem.asBytes(&value), value_as_bytes);
-            return value;
+            var slot: SlotType = undefined;
+            @memcpy(std.mem.asBytes(&slot), value_as_bytes);
+            return slot.child.get();
         }
 
         pub fn isSet(self: *const Self, key: KeyT) ErrorSet!bool {

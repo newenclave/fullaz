@@ -1,0 +1,623 @@
+const std = @import("std");
+const fullaz = @import("fullaz");
+const fullaz_db = @import("fullaz-db");
+
+const MetadataBinding = struct {
+    pub const Runtime = struct { root: u64 = 0 };
+    pub const DynamicMetadata = struct {
+        pub const format_version: u32 = 1;
+        pub const known_tags: []const u16 = &.{0x0100};
+        pub const repeated_tags: []const u16 = &.{};
+        pub const Error = fullaz_db.file.dynamic_metadata.Error;
+
+        pub fn restore(runtime: *Runtime, payload: []const u8, _: usize) Error!void {
+            var reader = fullaz_db.file.tagged_fields.Reader.init(payload);
+            while (try reader.next()) |field| {
+                if (field.tag == known_tags[0]) {
+                    runtime.root = try fullaz_db.file.dynamic_metadata.readU64(field);
+                    return;
+                }
+            }
+            return error.BadMetadata;
+        }
+
+        pub fn encodeKnown(
+            runtime: *const Runtime,
+            writer: *fullaz_db.file.tagged_fields.Writer,
+        ) Error!void {
+            try fullaz_db.file.dynamic_metadata.appendU64(writer, known_tags[0], runtime.root);
+        }
+    };
+};
+
+const MigratingMetadataBinding = struct {
+    pub const Runtime = struct { root: u64 = 0 };
+    pub const DynamicMetadata = struct {
+        pub const format_version: u32 = 2;
+        pub const known_tags: []const u16 = &.{0x0100};
+        pub const repeated_tags: []const u16 = &.{};
+        pub const Error = fullaz_db.file.dynamic_metadata.Error;
+
+        pub fn restore(runtime: *Runtime, payload: []const u8, _: usize) Error!void {
+            var reader = fullaz_db.file.tagged_fields.Reader.init(payload);
+            while (try reader.next()) |field| {
+                if (field.tag == known_tags[0]) {
+                    runtime.root = try fullaz_db.file.dynamic_metadata.readU64(field);
+                    return;
+                }
+            }
+            return error.BadMetadata;
+        }
+
+        pub fn encodeKnown(runtime: *const Runtime, writer: *fullaz_db.file.tagged_fields.Writer) Error!void {
+            try fullaz_db.file.dynamic_metadata.appendU64(writer, known_tags[0], runtime.root);
+        }
+
+        pub fn migrate(
+            source_format_version: u32,
+            source_payload: []const u8,
+            writer: *fullaz_db.file.tagged_fields.Writer,
+        ) Error!void {
+            if (source_format_version != 1) {
+                return error.UnsupportedMigration;
+            }
+            var reader = fullaz_db.file.tagged_fields.Reader.init(source_payload);
+            while (try reader.next()) |field| {
+                if (field.tag == known_tags[0]) {
+                    try fullaz_db.file.dynamic_metadata.appendU64(
+                        writer,
+                        known_tags[0],
+                        (try fullaz_db.file.dynamic_metadata.readU64(field)) + 1,
+                    );
+                    break;
+                }
+            }
+            try fullaz_db.file.dynamic_metadata.copyForwardUnknownFields(
+                writer,
+                source_payload,
+                known_tags,
+            );
+        }
+    };
+};
+const PreflightSchema = fullaz_db.Schema(.{ .page_id = u32 }).add("blob", fullaz_db.chainStore(.{}));
+
+fn encodeRecord(bytes: []u8, scratch: []u8) ![]const u8 {
+    try fullaz_db.file.catalog_record.format(bytes, scratch, .{
+        .component_id = 1,
+        .revision = 1,
+        .name = "index",
+        .kind_name = "test.component",
+        .component_format_version = 1,
+        .metadata_format_version = 1,
+        .page_kind_base = 0x0100,
+        .page_kind_count = 1,
+        .metadata_root_pid = 1,
+        .settings_fingerprint = [_]u8{0} ** 32,
+        .dependency_ids = &.{},
+    }, &.{});
+    return bytes[0..try fullaz_db.file.catalog_record.encodedByteSize(bytes)];
+}
+
+fn encodePreflightRecord(bytes: []u8, scratch: []u8, revision: u32) ![]const u8 {
+    const Trait = PreflightSchema.trait("blob");
+    try fullaz_db.file.catalog_record.format(bytes, scratch, .{
+        .component_id = 1,
+        .revision = revision,
+        .name = "blob",
+        .kind_name = Trait.kind_name,
+        .component_format_version = Trait.format_version,
+        .metadata_format_version = 1,
+        .page_kind_base = 0x0100,
+        .page_kind_count = Trait.page_kind_count,
+        .metadata_root_pid = 1,
+        .settings_fingerprint = fullaz_db.componentFingerprint(Trait),
+        .dependency_ids = &.{},
+    }, &.{});
+    return bytes[0..try fullaz_db.file.catalog_record.encodedByteSize(bytes)];
+}
+
+test "fullaz-db: dynamic database formats and opens a memory block" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xA5} ** 16,
+        .cache_frames = 32,
+    };
+
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    const formatted_diagnostics = database.diagnostics();
+    try std.testing.expectEqual(@as(usize, 1024), formatted_diagnostics.page_size);
+    try std.testing.expectEqual(@as(usize, 1), formatted_diagnostics.page_count);
+
+    var moved = database;
+    database = undefined;
+    try std.testing.expectEqual(formatted_diagnostics.core_address, moved.diagnostics().core_address);
+
+    var reopened = try Database.open(
+        std.testing.allocator,
+        try moved.takeDevice(),
+        options,
+    );
+    defer reopened.deinit();
+    const diagnostics = reopened.diagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.page_count);
+}
+
+test "fullaz-db: dynamic database commits catalog control-plane changes" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x3C} ** 16,
+        .cache_frames = 32,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    var record_bytes: [256]u8 = undefined;
+    var record_scratch: [256]u8 = undefined;
+    var transaction = try database.begin();
+    const ref = try transaction.appendCatalogRevision(try encodeRecord(&record_bytes, &record_scratch));
+    try transaction.setIdRef(1, ref);
+    try transaction.setName("index", 1);
+    try transaction.commit();
+
+    var reopened = try Database.open(std.testing.allocator, try database.takeDevice(), options);
+    defer reopened.deinit();
+    var loaded = (try reopened.getByName("index")).?;
+    defer loaded.deinit();
+    try std.testing.expectEqualStrings("index", (try loaded.view()).name);
+}
+
+test "fullaz-db: dynamic database rolls back catalog control-plane changes" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x4D} ** 16,
+        .cache_frames = 32,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+
+    var record_bytes: [256]u8 = undefined;
+    var record_scratch: [256]u8 = undefined;
+    var transaction = try database.begin();
+    const ref = try transaction.appendCatalogRevision(try encodeRecord(&record_bytes, &record_scratch));
+    try transaction.setIdRef(1, ref);
+    try transaction.setName("index", 1);
+    try transaction.rollback();
+
+    var reopened = try Database.open(std.testing.allocator, try database.takeDevice(), options);
+    defer reopened.deinit();
+    try std.testing.expect((try reopened.getByName("index")) == null);
+}
+
+test "fullaz-db: dynamic database persists typed component metadata pages" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x6E} ** 16,
+        .cache_frames = 16,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    var transaction = try database.begin();
+    const metadata_page_id = try transaction.initializeMetadata(
+        MetadataBinding,
+        1,
+        &MetadataBinding.Runtime{ .root = 42 },
+    );
+    try transaction.commit();
+
+    var reopened = try Database.open(std.testing.allocator, try database.takeDevice(), options);
+    defer reopened.deinit();
+    var restored = MetadataBinding.Runtime{};
+    try reopened.restoreMetadata(MetadataBinding, metadata_page_id, 1, &restored);
+    try std.testing.expectEqual(@as(u64, 42), restored.root);
+}
+
+test "fullaz-db: dynamic database migrates metadata into an immutable catalog successor" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x6F} ** 16,
+        .cache_frames = 16,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    defer database.deinit();
+
+    var source_payload_bytes: [128]u8 = undefined;
+    var source_payload = fullaz_db.file.tagged_fields.Writer.init(&source_payload_bytes);
+    try fullaz_db.file.dynamic_metadata.appendU64(&source_payload, 0x0100, 41);
+    try source_payload.append(0x0200, 0x8000, "future");
+    var source_record_bytes: [256]u8 = undefined;
+    var source_record_scratch: [256]u8 = undefined;
+    var successor_record_bytes: [256]u8 = undefined;
+    var successor_record_scratch: [256]u8 = undefined;
+    var transaction = try database.begin();
+    const source_page_id = blk: {
+        var source_page = try database.rawCache().create();
+        defer source_page.deinit();
+        const page_id = try source_page.pid();
+        try fullaz_db.file.component_metadata_page.format(
+            try source_page.dataMut(),
+            .{ .component_id = 1, .metadata_format_version = 1 },
+            source_payload.used(),
+        );
+        break :blk page_id;
+    };
+    try fullaz_db.file.catalog_record.format(&source_record_bytes, &source_record_scratch, .{
+        .component_id = 1,
+        .revision = 1,
+        .name = "migrating",
+        .kind_name = "test.component",
+        .component_format_version = 1,
+        .metadata_format_version = 1,
+        .page_kind_base = 0x0100,
+        .page_kind_count = 1,
+        .metadata_root_pid = source_page_id,
+        .settings_fingerprint = [_]u8{0} ** 32,
+        .dependency_ids = &.{},
+    }, &.{});
+    _ = try transaction.registerCatalogComponent(
+        source_record_bytes[0..try fullaz_db.file.catalog_record.encodedByteSize(&source_record_bytes)],
+    );
+    const successor_page_id = try transaction.migrateMetadata(MigratingMetadataBinding, source_page_id, 1);
+    try fullaz_db.file.catalog_record.format(&successor_record_bytes, &successor_record_scratch, .{
+        .component_id = 1,
+        .revision = 2,
+        .name = "migrating",
+        .kind_name = "test.component",
+        .component_format_version = 1,
+        .metadata_format_version = 2,
+        .page_kind_base = 0x0100,
+        .page_kind_count = 1,
+        .metadata_root_pid = successor_page_id,
+        .settings_fingerprint = [_]u8{0} ** 32,
+        .dependency_ids = &.{},
+    }, &.{});
+    _ = try transaction.replaceCatalogRevision(
+        successor_record_bytes[0..try fullaz_db.file.catalog_record.encodedByteSize(&successor_record_bytes)],
+    );
+    try transaction.commit();
+
+    var old_page = try database.rawCache().fetch(source_page_id);
+    defer old_page.deinit();
+    const old_view = try fullaz_db.file.component_metadata_page.read(try old_page.data(), .{
+        .component_id = 1,
+        .metadata_format_version = 1,
+    });
+    try std.testing.expectEqual(source_payload.used().len, old_view.payload.len);
+    try std.testing.expectEqualSlices(u8, source_payload.used(), old_view.payload);
+    var new_page = try database.rawCache().fetch(@intCast(successor_page_id));
+    defer new_page.deinit();
+    const new_view = try fullaz_db.file.component_metadata_page.read(try new_page.data(), .{
+        .component_id = 1,
+        .metadata_format_version = 2,
+    });
+    var restored = MigratingMetadataBinding.Runtime{};
+    try fullaz_db.file.component_metadata.restore(MigratingMetadataBinding, &restored, new_view.payload, 3);
+    try std.testing.expectEqual(@as(u64, 42), restored.root);
+    var source_reader = fullaz_db.file.tagged_fields.Reader.init(source_payload.used());
+    _ = (try source_reader.next()).?;
+    const source_unknown = (try source_reader.next()).?;
+    var successor_reader = fullaz_db.file.tagged_fields.Reader.init(new_view.payload);
+    _ = (try successor_reader.next()).?;
+    const successor_unknown = (try successor_reader.next()).?;
+    try std.testing.expectEqualSlices(u8, source_unknown.encoded, successor_unknown.encoded);
+    var current = (try database.getById(1)).?;
+    defer current.deinit();
+    const current_view = try current.view();
+    try std.testing.expectEqual(@as(u32, 2), current_view.revision);
+    try std.testing.expectEqual(successor_page_id, current_view.metadata_root_pid);
+}
+
+test "fullaz-db: dynamic database preflights the complete compiled schema" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x71} ** 16,
+        .cache_frames = 32,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    var record_bytes: [256]u8 = undefined;
+    var record_scratch: [256]u8 = undefined;
+    var transaction = try database.begin();
+    const ref = try transaction.appendCatalogRevision(try encodePreflightRecord(&record_bytes, &record_scratch, 1));
+    try transaction.setIdRef(1, ref);
+    try transaction.setName("blob", 1);
+    try transaction.commit();
+
+    var reopened = try Database.open(std.testing.allocator, try database.takeDevice(), options);
+    defer reopened.deinit();
+    try reopened.preflightSchema(PreflightSchema);
+}
+
+test "fullaz-db: dynamic database allocates durable component identities" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x8B} ** 16,
+        .cache_frames = 8,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    defer database.deinit();
+
+    var transaction = try database.begin();
+    const first = try transaction.allocateComponent(2);
+    const second = try transaction.allocateComponent(3);
+    try std.testing.expectEqual(@as(u64, 1), first.component_id);
+    try std.testing.expectEqual(@as(u16, 0x0100), first.page_kinds.base);
+    try std.testing.expectEqual(@as(u16, 2), first.page_kinds.count);
+    try std.testing.expectEqual(@as(u64, 2), second.component_id);
+    try std.testing.expectEqual(@as(u16, 0x0102), second.page_kinds.base);
+    try transaction.rollback();
+
+    var retried = try database.begin();
+    const after_rollback = try retried.allocateComponent(1);
+    try std.testing.expectEqual(@as(u64, 1), after_rollback.component_id);
+    try std.testing.expectEqual(@as(u16, 0x0100), after_rollback.page_kinds.base);
+    try retried.commit();
+}
+
+test "fullaz-db: dynamic database preflight ignores historical catalog revisions" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x9A} ** 16,
+        .cache_frames = 32,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    defer database.deinit();
+    var first_bytes: [256]u8 = undefined;
+    var first_scratch: [256]u8 = undefined;
+    var second_bytes: [256]u8 = undefined;
+    var second_scratch: [256]u8 = undefined;
+    var transaction = try database.begin();
+    const first = try transaction.appendCatalogRevision(try encodePreflightRecord(&first_bytes, &first_scratch, 1));
+    try transaction.setIdRef(1, first);
+    try transaction.setName("blob", 1);
+    const second = try transaction.appendCatalogRevision(try encodePreflightRecord(&second_bytes, &second_scratch, 2));
+    try transaction.setIdRef(1, second);
+    try transaction.setName("blob", 1);
+    try transaction.commit();
+    try database.preflightSchema(PreflightSchema);
+}
+
+test "fullaz-db: dynamic database preserves current unknown catalog components" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const EmptySchema = fullaz_db.Schema(.{ .page_id = u32 });
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x9B} ** 16,
+        .cache_frames = 32,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    defer database.deinit();
+    var record_bytes: [256]u8 = undefined;
+    var record_scratch: [256]u8 = undefined;
+    var transaction = try database.begin();
+    const ref = try transaction.appendCatalogRevision(try encodeRecord(&record_bytes, &record_scratch));
+    try transaction.setIdRef(1, ref);
+    try transaction.setName("index", 1);
+    try transaction.commit();
+    try database.preflightKnownSchema(EmptySchema);
+    try std.testing.expectError(error.UnknownComponent, database.preflightSchema(EmptySchema));
+}
+
+test "fullaz-db: dynamic database replaces a catalog revision atomically" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x9C} ** 16,
+        .cache_frames = 32,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    defer database.deinit();
+    var first_bytes: [256]u8 = undefined;
+    var first_scratch: [256]u8 = undefined;
+    var first_transaction = try database.begin();
+    _ = try first_transaction.registerCatalogComponent(
+        try encodePreflightRecord(&first_bytes, &first_scratch, 1),
+    );
+    try first_transaction.commit();
+
+    var second_bytes: [256]u8 = undefined;
+    var second_scratch: [256]u8 = undefined;
+    var second_transaction = try database.begin();
+    const updated_ref = try second_transaction.replaceCatalogRevision(
+        try encodePreflightRecord(&second_bytes, &second_scratch, 2),
+    );
+    try std.testing.expectEqual(@as(u32, 2), updated_ref.getRecordRevision());
+    try std.testing.expectError(
+        error.RevisionMismatch,
+        second_transaction.replaceCatalogRevision(
+            try encodePreflightRecord(&second_bytes, &second_scratch, 2),
+        ),
+    );
+    try second_transaction.commit();
+
+    var current = (try database.getByName("blob")).?;
+    defer current.deinit();
+    try std.testing.expectEqual(@as(u32, 2), (try current.view()).revision);
+    try database.preflightSchema(PreflightSchema);
+}
+
+test "fullaz-db: dynamic schema database restores a chainStore const proxy" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
+        "blob",
+        fullaz_db.chainStore(.{}),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    const io = std.testing.io;
+    const path = ".zig-cache/dynamic_schema_chain_store.img";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xC1} ** 16,
+        .components = .{ .blob = .{} },
+    };
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        try transaction.get("blob").append("hello world");
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        var output: [16]u8 = undefined;
+        const blob = database.getConst("blob");
+        try std.testing.expectEqual(@as(u64, 11), try blob.size());
+        try std.testing.expectEqual(@as(usize, 11), try blob.readAt(0, &output));
+        try std.testing.expectEqualStrings("hello world", output[0..11]);
+    }
+}
+
+test "fullaz-db: WAL dynamic database commits and reopens" {
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz_db.DynamicDatabaseWithWal(Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/dynamic_database_wal.img";
+    const log_path = ".zig-cache/dynamic_database_wal.log";
+    const options: Database.InitOptions = .{ .image_id = [_]u8{0xD1} ** 16 };
+    std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 1024),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var record_bytes: [256]u8 = undefined;
+        var record_scratch: [256]u8 = undefined;
+        var transaction = try database.begin();
+        const ref = try transaction.appendCatalogRevision(try encodeRecord(&record_bytes, &record_scratch));
+        try transaction.setIdRef(1, ref);
+        try transaction.setName("index", 1);
+        try transaction.commit();
+    }
+    {
+        var log = try Log.open(io, log_path);
+        defer log.deinit();
+        var wal = try Database.WalType.init(std.testing.allocator, &log, 1024);
+        defer wal.deinit();
+        var device = try Device.open(io, image_path, 1024);
+        defer device.deinit();
+        var boot_page: [1024]u8 = undefined;
+        try device.readBlock(0, &boot_page);
+        try wal.appendPage(0, &boot_page);
+        try wal.sealCommit(1);
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 1024),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var loaded = (try database.getByName("index")).?;
+        defer loaded.deinit();
+        try std.testing.expectEqualStrings("index", (try loaded.view()).name);
+    }
+    var log = try Log.open(io, log_path);
+    defer log.deinit();
+    try std.testing.expectEqual(@as(u32, 0), log.size());
+}
+
+test "fullaz-db: WAL dynamic schema database commits and reopens" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("blob", fullaz_db.chainStore(.{}));
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz_db.DynamicSchemaDatabaseWithWal(Schema, Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/dynamic_schema_database_wal.img";
+    const log_path = ".zig-cache/dynamic_schema_database_wal.log";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xD2} ** 16,
+        .components = .{ .blob = .{} },
+    };
+    std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 1024),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        try transaction.get("blob").append("wal");
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 1024),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        try std.testing.expectEqual(@as(u64, 3), try database.getConst("blob").size());
+    }
+}

@@ -20,7 +20,7 @@ pub fn Tree(comptime ModelT: type) type {
         const Self = @This();
 
         const Splitter = KeySplitter(KeyInType);
-        const Error = Splitter.Error ||
+        pub const Error = Splitter.Error ||
             Model.Error || errors.LayoutError;
 
         model: *Model,
@@ -134,7 +134,7 @@ pub fn Tree(comptime ModelT: type) type {
             }
         }
 
-        pub fn get(self: *Self, key: KeyInType) !?ValueOutType {
+        pub fn get(self: *Self, key: KeyInType) Error!?ValueOutType {
             const acc = self.accessor();
             var split_key = try acc.splitKey(key);
             defer acc.deinitSplitKey(&split_key);

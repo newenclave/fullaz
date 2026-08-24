@@ -1,11 +1,13 @@
 const std = @import("std");
-const component = @import("../component.zig");
-const single_root_manager = @import("single_root_manager.zig");
+const component = @import("../component/component.zig");
+const managers = @import("../component/managers/managers.zig");
 const algorithm = @import("fullaz").core.algorithm;
 const interfaces = @import("fullaz").contracts.interfaces;
 const PackedInt = @import("fullaz").core.packed_int.PackedInt;
+const dynamic_metadata = @import("../file/metadata/dynamic.zig");
+const tagged = @import("../file/tagged_fields.zig");
 const low_level_bpt = @import("fullaz").bpt;
-const FingerprintWriter = @import("../schema_fingerprint.zig").Writer;
+const FingerprintWriter = @import("../component/fingerprint.zig").Writer;
 
 fn requireOption(comptime OptionsT: type, comptime name: []const u8) void {
     if (!@hasField(OptionsT, name)) {
@@ -36,12 +38,15 @@ fn isKnownOption(comptime name: []const u8) bool {
 }
 
 pub fn bpt(comptime options: anytype) component.Descriptor {
-    @setEvalBranchQuota(20_000);
+    @setEvalBranchQuota(20_000); // extend the branch quota for this function
+
     const OptionsT = @TypeOf(options);
     const options_info = @typeInfo(OptionsT);
+
     if (options_info != .@"struct" or options_info.@"struct".is_tuple) {
         @compileError("fullaz-db.bpt options must be a named struct");
     }
+
     inline for (options_info.@"struct".fields) |field| {
         if (comptime !isKnownOption(field.name)) {
             @compileError("Unknown fullaz-db.bpt option: " ++ field.name);
@@ -80,6 +85,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
         usize,
         "fullaz-db.bpt maximum_value_size must fit usize",
     );
+
     const configured_format_version = if (@hasField(OptionsT, "format_version"))
         unsignedOption(
             options.format_version,
@@ -88,6 +94,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
         )
     else
         1;
+
     if (configured_format_version == 0) {
         @compileError("fullaz-db.bpt format_version cannot be zero");
     }
@@ -128,7 +135,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 "allocator",
                 fn (*const BackendT) std.mem.Allocator,
             );
-            const ManagerT = single_root_manager.SingleRootManager(BackendT);
+            const ManagerT = managers.SingleRootManager(BackendT);
             comptime low_level_bpt.models.interfaces.requiresStorageManager(ManagerT);
             const CacheT = BackendT.CacheType;
             const ModelT = low_level_bpt.models.PagedModel(
@@ -341,6 +348,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     );
                 }
             };
+
             const BindingT = struct {
                 pub const Manager = ManagerT;
                 pub const Model = ModelT;
@@ -387,6 +395,47 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                         if (root_index >= page_count) {
                             return error.BadMetadata;
                         }
+                    }
+                };
+
+                pub const DynamicMetadata = struct {
+                    pub const format_version: u32 = 1;
+                    pub const known_tags: []const u16 = &.{0x0100};
+                    pub const repeated_tags: []const u16 = &.{};
+                    pub const Error = dynamic_metadata.Error;
+
+                    pub fn restore(
+                        runtime: *Runtime,
+                        payload: []const u8,
+                        page_count: usize,
+                    ) @This().Error!void {
+                        try tagged.validateKnownFields(payload, known_tags);
+                        var root: ?CacheT.Pid = null;
+                        var found_root = false;
+                        var reader = tagged.Reader.init(payload);
+                        while (try reader.next()) |field| {
+                            if (field.tag != known_tags[0]) {
+                                continue;
+                            }
+                            root = try dynamic_metadata.decodeOptionalPageId(
+                                CacheT.Pid,
+                                try dynamic_metadata.readU64(field),
+                                page_count,
+                            );
+                            found_root = true;
+                        }
+                        if (!found_root) {
+                            return error.BadMetadata;
+                        }
+                        runtime.manager.restoreRoot(root);
+                    }
+
+                    pub fn encodeKnown(
+                        runtime: *const Runtime,
+                        writer: *tagged.Writer,
+                    ) @This().Error!void {
+                        const root = runtime.manager.getRoot() orelse 0;
+                        try dynamic_metadata.appendU64(writer, known_tags[0], root);
                     }
                 };
 
@@ -450,6 +499,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     return &runtime.const_proxy;
                 }
             };
+            comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);
             comptime component.assertBinding(BindingT, BackendT);
             return BindingT;
         }

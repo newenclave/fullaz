@@ -744,6 +744,36 @@ test "SlotChain: pending removal rejects iterator boundary states" {
     try std.testing.expectError(error.InvalidIterator, itr.markForRemoval());
 }
 
+test "SlotChain: appendRef survives later appends and payload compaction" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+
+    var manager = NoneStorageManager{};
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var handle = try Handle.init(&cache, &manager, .{});
+    defer handle.deinit();
+
+    const first = try handle.appendRef("first");
+    const second = try handle.appendRef("second");
+    _ = try handle.append("third");
+
+    var first_page = try handle.loadPage(first.page_id);
+    defer first_page.deinit();
+    try first_page.setTombstone(second.slot_id);
+    var scratch = [_]u8{undefined} ** 4096;
+    try first_page.compact(&scratch);
+
+    var record = try handle.loadRef(first);
+    defer record.deinit();
+    try std.testing.expectEqualStrings("first", try record.value());
+
+    try std.testing.expectError(error.InvalidReference, handle.loadRef(second));
+}
+
 test "SlotChain: paged FSM stores its location in the effective header" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);

@@ -3,9 +3,9 @@ const device_interfaces = @import("fullaz").device.interfaces;
 const page_cache = @import("fullaz").storage.page_cache;
 const memory_policy = @import("fullaz").storage.memory_policy;
 const wal = @import("fullaz").storage.wal;
-const StaticDatabaseCommon = @import("static_database_common.zig").StaticDatabaseCommon;
-const schema_fingerprint = @import("schema_fingerprint.zig");
-const shape = @import("database_shape.zig");
+const StaticDatabaseCommon = @import("common.zig").StaticDatabaseCommon;
+const schema_fingerprint = @import("../../component/fingerprint.zig");
+const shape = @import("../../component/shape.zig");
 
 /// A page-zero-superblock database that owns the supplied block device and WAL log.
 pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, comptime LogDeviceT: type) type {

@@ -2,7 +2,7 @@ const std = @import("std");
 const device = @import("fullaz").device;
 const page_cache = @import("fullaz").storage.page_cache;
 const MemoryReclaimingCache = page_cache.MemoryReclaimingCache;
-const shape = @import("database_shape.zig");
+const shape = @import("../component/shape.zig");
 
 fn DatabaseInitOptions(comptime ComponentOptionsT: type) type {
     const default_cache_frames: usize = 64;

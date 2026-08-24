@@ -1,12 +1,14 @@
 const std = @import("std");
 const PackedInt = @import("fullaz").core.packed_int.PackedInt;
-const component = @import("../component.zig");
-const FingerprintWriter = @import("../schema_fingerprint.zig").Writer;
-const SlotHeapManager = @import("slot_heap_manager.zig").SlotHeapManager;
+const component = @import("../component/component.zig");
+const FingerprintWriter = @import("../component/fingerprint.zig").Writer;
+const SlotHeapManager = @import("../component/managers/managers.zig").SlotHeapManager;
 const slot_heap_page = @import("fullaz").page.slot_heap;
 const slots = @import("fullaz").slots;
 const fsm = @import("fullaz").storage.fsm;
 const low_level_slot_heap = @import("fullaz").storage.slot_heap;
+const dynamic_metadata = @import("../file/metadata/dynamic.zig");
+const tagged = @import("../file/tagged_fields.zig");
 
 pub const SizeClasses = union(enum) {
     one,
@@ -151,7 +153,7 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
             );
             const HeapT = low_level_slot_heap.Heap(ModelT);
 
-            return struct {
+            const BindingT = struct {
                 const MutableProxy = struct {
                     const Self = @This();
 
@@ -309,6 +311,105 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                         }
                     }
                 };
+                pub const DynamicMetadata = struct {
+                    const root_tag = 0x0100;
+                    const cached_top_page_tag = 0x0101;
+                    const cached_top_slot_tag = 0x0102;
+                    const entries_count_tag = 0x0103;
+                    const inode_head_tag = 0x0104;
+                    const fsm_root_tag = 0x0105;
+
+                    pub const format_version: u32 = 1;
+                    pub const known_tags: []const u16 = &.{
+                        root_tag,
+                        cached_top_page_tag,
+                        cached_top_slot_tag,
+                        entries_count_tag,
+                        inode_head_tag,
+                        fsm_root_tag,
+                    };
+                    pub const repeated_tags: []const u16 = &.{ inode_head_tag, fsm_root_tag };
+                    pub const Error = dynamic_metadata.Error;
+
+                    pub fn restore(runtime: *Runtime, payload: []const u8, page_count: usize) @This().Error!void {
+                        try tagged.validateFields(
+                            payload,
+                            &.{ root_tag, cached_top_page_tag, cached_top_slot_tag, entries_count_tag },
+                            repeated_tags,
+                        );
+                        var root: ?CacheT.Pid = null;
+                        var cached_top_page: ?CacheT.Pid = null;
+                        var cached_top_slot: ?u16 = null;
+                        var entries_count: ?u64 = null;
+                        var found_root = false;
+                        var found_cached_top_page = false;
+                        var found_cached_top_slot = false;
+                        var state: ManagerT.State = .{};
+                        var inode_index: usize = 0;
+                        var fsm_index: usize = 0;
+                        var reader = tagged.Reader.init(payload);
+                        while (try reader.next()) |field| {
+                            switch (field.tag) {
+                                root_tag => {
+                                    root = try dynamic_metadata.decodeOptionalPageId(CacheT.Pid, try dynamic_metadata.readU64(field), page_count);
+                                    found_root = true;
+                                },
+                                cached_top_page_tag => {
+                                    cached_top_page = try dynamic_metadata.decodeOptionalPageId(CacheT.Pid, try dynamic_metadata.readU64(field), page_count);
+                                    found_cached_top_page = true;
+                                },
+                                cached_top_slot_tag => {
+                                    cached_top_slot = std.math.cast(u16, try dynamic_metadata.readU64(field)) orelse return error.BadMetadata;
+                                    found_cached_top_slot = true;
+                                },
+                                entries_count_tag => entries_count = try dynamic_metadata.readU64(field),
+                                inode_head_tag => {
+                                    if (inode_index >= state.available_inode_heads.len) return error.BadMetadata;
+                                    state.available_inode_heads[inode_index] = try dynamic_metadata.decodeOptionalPageId(CacheT.Pid, try dynamic_metadata.readU64(field), page_count);
+                                    inode_index += 1;
+                                },
+                                fsm_root_tag => {
+                                    if (fsm_index >= state.fsm_class_roots.len) return error.BadMetadata;
+                                    state.fsm_class_roots[fsm_index] = try dynamic_metadata.decodeOptionalPageId(CacheT.Pid, try dynamic_metadata.readU64(field), page_count);
+                                    fsm_index += 1;
+                                },
+                                else => {},
+                            }
+                        }
+                        if (!found_root or !found_cached_top_page or !found_cached_top_slot or
+                            inode_index != state.available_inode_heads.len or
+                            fsm_index != state.fsm_class_roots.len)
+                        {
+                            return error.BadMetadata;
+                        }
+                        state.root = root;
+                        state.entries_count = entries_count orelse return error.BadMetadata;
+                        state.cached_top = if (cached_top_page) |page_id| .{
+                            .page_id = page_id,
+                            .slot_id = cached_top_slot.?,
+                        } else null;
+                        runtime.manager.restoreState(state);
+                    }
+
+                    pub fn encodeKnown(runtime: *const Runtime, writer: *tagged.Writer) @This().Error!void {
+                        const state = runtime.manager.getState();
+                        try dynamic_metadata.appendU64(writer, root_tag, state.root orelse 0);
+                        if (state.cached_top) |top| {
+                            try dynamic_metadata.appendU64(writer, cached_top_page_tag, top.page_id);
+                            try dynamic_metadata.appendU64(writer, cached_top_slot_tag, top.slot_id);
+                        } else {
+                            try dynamic_metadata.appendU64(writer, cached_top_page_tag, 0);
+                            try dynamic_metadata.appendU64(writer, cached_top_slot_tag, 0);
+                        }
+                        try dynamic_metadata.appendU64(writer, entries_count_tag, state.entries_count);
+                        inline for (state.available_inode_heads) |head| {
+                            try dynamic_metadata.appendU64(writer, inode_head_tag, head orelse 0);
+                        }
+                        inline for (state.fsm_class_roots) |root| {
+                            try dynamic_metadata.appendU64(writer, fsm_root_tag, root orelse 0);
+                        }
+                    }
+                };
 
                 pub fn initRuntime(
                     runtime: *Runtime,
@@ -353,6 +454,9 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                     return &runtime.const_proxy;
                 }
             };
+            comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);
+            comptime component.assertBinding(BindingT, BackendT);
+            return BindingT;
         }
     };
     return component.descriptor(Trait);
