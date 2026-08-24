@@ -28,14 +28,48 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
     const LogError = if (LogDeviceT) |LogT| LogT.Error else error{};
     const WalError = if (LogDeviceT != null) WalT.Error else error{};
 
+    const ReclaimStore = struct {
+        const StoreSelf = @This();
+
+        pub const PageId = DevicePageId;
+        pub const Error = error{PageIdTooLarge};
+
+        device: *DeviceT,
+        state: *file.boot.State,
+
+        pub fn getRoot(self: *const StoreSelf) ?PageId {
+            const raw = self.state.free_root orelse return null;
+            return std.math.cast(PageId, raw) orelse unreachable;
+        }
+
+        pub fn setRoot(self: *StoreSelf, root: ?PageId) Error!void {
+            self.state.free_root = if (root) |page_id|
+                std.math.cast(u64, page_id) orelse return error.PageIdTooLarge
+            else
+                null;
+        }
+
+        pub fn pageCount(self: *const StoreSelf) usize {
+            return self.device.blocksCount();
+        }
+
+        pub fn isReserved(_: *const StoreSelf, page_id: PageId) bool {
+            return page_id == 0;
+        }
+    };
+    const Cache = page_cache.PersistentReclaimingCache(RawCache, ReclaimStore);
+
     const CatalogManager = struct {
         pub const PageId = DeviceT.BlockId;
         pub const Size = u64;
-        pub const Error = error{};
+        pub const Error = Cache.Error;
 
         state: *file.boot.State,
+        cache: *Cache,
 
-        pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
+        pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
+            return self.cache.free(page_id);
+        }
 
         pub fn getTotalSize(self: *const @This()) Error!Size {
             return self.state.catalog_record_count;
@@ -65,9 +99,10 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
     };
     const IndexManager = struct {
         pub const PageId = DeviceT.BlockId;
-        pub const Error = error{};
+        pub const Error = Cache.Error;
 
         root: *?u64,
+        cache: *Cache,
 
         pub fn getRoot(self: *const @This()) ?PageId {
             const raw = self.root.* orelse return null;
@@ -78,17 +113,21 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             self.root.* = if (value) |page_id| @intCast(page_id) else null;
         }
 
-        pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
+        pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
+            return self.cache.free(page_id);
+        }
     };
-    const Catalog = file.CatalogStore(RawCache, CatalogManager);
-    const CatalogIds = file.CatalogIdIndex(RawCache, IndexManager);
-    const CatalogNames = file.CatalogNameIndex(RawCache, IndexManager);
+    const Catalog = file.CatalogStore(Cache, CatalogManager);
+    const CatalogIds = file.CatalogIdIndex(Cache, IndexManager);
+    const CatalogNames = file.CatalogNameIndex(Cache, IndexManager);
     const Core = struct {
         allocator: std.mem.Allocator,
         device: DeviceT,
         log: Log,
         raw_cache: RawCache,
         state: file.boot.State,
+        reclaim_store: ReclaimStore,
+        cache: Cache,
         catalog_manager: CatalogManager,
         catalog_id_manager: IndexManager,
         catalog_name_manager: IndexManager,
@@ -96,7 +135,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         catalog_ids: CatalogIds,
         catalog_names: CatalogNames,
         transaction_active: bool = false,
-        transaction_batch: RawCache.WriteBatch = undefined,
+        transaction_batch: Cache.WriteBatch = undefined,
         state_snapshot: file.boot.State = undefined,
     };
 
@@ -107,6 +146,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         pub const LogDeviceType = LogDeviceT;
         pub const WalType = WalT;
         pub const RawCacheType = RawCache;
+        pub const CacheType = Cache;
         pub const State = file.boot.State;
         pub const CatalogStoreType = Catalog;
         pub const CatalogIdIndexType = CatalogIds;
@@ -120,6 +160,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             LogError ||
             WalError ||
             RawCache.Error ||
+            Cache.Error ||
             file.boot.Error ||
             Catalog.Error ||
             CatalogIds.Error ||
@@ -144,7 +185,11 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 ComponentIdExhausted,
                 PageKindExhausted,
                 RevisionMismatch,
+                RevisionExhausted,
                 NameMismatch,
+                NameConflict,
+                ComponentInUse,
+                MissingDependency,
             };
 
         core_: *align(@alignOf(Core)) anyopaque,
@@ -220,14 +265,17 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             }
             errdefer core.raw_cache.deinit();
             core.state = state;
-            core.catalog_manager = .{ .state = &core.state };
-            core.catalog_id_manager = .{ .root = &core.state.id_radix_root };
-            core.catalog_name_manager = .{ .root = &core.state.name_bpt_root };
-            core.catalog = try Catalog.init(&core.raw_cache, &core.catalog_manager);
+            core.reclaim_store = .{ .device = &core.device, .state = &core.state };
+            core.cache = Cache.init(&core.raw_cache, &core.reclaim_store);
+            errdefer core.cache.deinit();
+            core.catalog_manager = .{ .state = &core.state, .cache = &core.cache };
+            core.catalog_id_manager = .{ .root = &core.state.id_radix_root, .cache = &core.cache };
+            core.catalog_name_manager = .{ .root = &core.state.name_bpt_root, .cache = &core.cache };
+            core.catalog = try Catalog.init(&core.cache, &core.catalog_manager);
             errdefer core.catalog.deinit();
-            core.catalog_ids = try CatalogIds.init(&core.raw_cache, &core.catalog_id_manager);
+            core.catalog_ids = try CatalogIds.init(&core.cache, &core.catalog_id_manager);
             errdefer core.catalog_ids.deinit();
-            core.catalog_names = try CatalogNames.init(&core.raw_cache, &core.catalog_name_manager);
+            core.catalog_names = try CatalogNames.init(&core.cache, &core.catalog_name_manager);
             errdefer core.catalog_names.deinit();
             core.transaction_active = false;
             return core;
@@ -238,6 +286,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             core.catalog_names.deinit();
             core.catalog_ids.deinit();
             core.catalog.deinit();
+            core.cache.deinit();
             core.raw_cache.deinit();
             if (comptime LogDeviceT != null) {
                 core.log.deinit();
@@ -254,6 +303,17 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             const scratch = try core.allocator.alloc(u8, core.device.blockSize());
             defer core.allocator.free(scratch);
             try file.boot.format(try page.dataMut(), scratch, core.state, &.{});
+        }
+
+        fn sameRef(left: file.CatalogRef, right: file.CatalogRef) bool {
+            return left.getPageId() == right.getPageId() and
+                left.getSlotId() == right.getSlotId() and
+                left.getRecordRevision() == right.getRecordRevision();
+        }
+
+        fn loadCurrentById(core: *Core, component_id: u64) Error!?Catalog.LoadedRecord {
+            const ref = (try core.catalog_ids.get(component_id)) orelse return null;
+            return try core.catalog.load(ref);
         }
 
         fn formatImpl(
@@ -277,7 +337,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             }
             const state = try initialState(&device, options);
             const core = try initCore(allocator, device, log_value, state, options);
-            errdefer deinitCore(core, true);
+            errdefer deinitCore(core, false);
             try writeBoot(core);
             try core.raw_cache.flushAll();
             try core.device.sync();
@@ -299,8 +359,14 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
 
             var device = device_value;
             errdefer device.deinit();
-            const core = try initCore(allocator, device, log_value, undefined, options);
-            errdefer deinitCore(core, true);
+            const core = try initCore(
+                allocator,
+                device,
+                log_value,
+                try initialState(&device, options),
+                options,
+            );
+            errdefer deinitCore(core, false);
             const view = blk: {
                 var page = try core.raw_cache.fetch(0);
                 defer page.deinit();
@@ -316,6 +382,10 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             core.catalog_manager.state = &core.state;
             core.catalog_id_manager.root = &core.state.id_radix_root;
             core.catalog_name_manager.root = &core.state.name_bpt_root;
+            if (core.state.free_root) |free_root| {
+                _ = std.math.cast(DevicePageId, free_root) orelse return error.BadFreeList;
+            }
+            try core.cache.validateFreeList();
             return .{ .core_ = core };
         }
 
@@ -375,6 +445,64 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 }
             }
 
+            fn appendLifecycleSuccessor(
+                self: *Transaction,
+                previous: file.catalog_record.View,
+                name: []const u8,
+                state: file.catalog_record.LifecycleState,
+            ) Error!file.CatalogRef {
+                const core = self.corePtr();
+                const revision = std.math.add(u32, previous.revision, 1) catch {
+                    return error.RevisionExhausted;
+                };
+                const dependencies = try core.allocator.alloc(u64, previous.dependency_count);
+                defer core.allocator.free(dependencies);
+                for (dependencies, 0..) |*dependency, index| {
+                    dependency.* = (try previous.getDependency(index)).?;
+                }
+                const record_bytes = try core.allocator.alloc(u8, core.device.blockSize());
+                defer core.allocator.free(record_bytes);
+                const record_scratch = try core.allocator.alloc(u8, core.device.blockSize());
+                defer core.allocator.free(record_scratch);
+                try file.catalog_record.format(record_bytes, record_scratch, .{
+                    .component_id = previous.component_id,
+                    .revision = revision,
+                    .name = name,
+                    .kind_name = previous.kind_name,
+                    .component_format_version = previous.component_format_version,
+                    .metadata_format_version = previous.metadata_format_version,
+                    .page_kind_base = previous.page_kind_base,
+                    .page_kind_count = previous.page_kind_count,
+                    .metadata_root_pid = previous.metadata_root_pid,
+                    .settings_fingerprint = previous.settings_fingerprint,
+                    .dependency_ids = dependencies,
+                    .state = state,
+                }, previous.payload);
+                return try core.catalog.append(
+                    record_bytes[0..try file.catalog_record.encodedByteSize(record_bytes)],
+                );
+            }
+
+            fn hasActiveDependent(self: *Transaction, component_id: u64) Error!bool {
+                const core = self.corePtr();
+                var iterator = try core.catalog.iterator(core.state.catalog_record_count);
+                defer iterator.deinit();
+                while (try iterator.next()) |entry| {
+                    const current_ref = (try core.catalog_ids.get(entry.record.component_id)) orelse {
+                        return error.CatalogIndexMismatch;
+                    };
+                    if (!sameRef(entry.ref, current_ref) or entry.record.state == .dropped) {
+                        continue;
+                    }
+                    for (0..entry.record.dependency_count) |index| {
+                        if ((try entry.record.getDependency(index)).? == component_id) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+
             pub const ComponentAllocation = struct {
                 component_id: u64,
                 page_kinds: PageKindRange,
@@ -419,6 +547,9 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 try self.requireActive();
                 const core = self.corePtr();
                 const record = try file.catalog_record.read(encoded_record);
+                if (record.revision != 1 or record.state != .active) {
+                    return error.RevisionMismatch;
+                }
                 if (try core.catalog_ids.get(record.component_id) != null or
                     try core.catalog_names.get(record.name) != null)
                 {
@@ -431,8 +562,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 return ref;
             }
 
-            /// Appends one immutable successor revision and atomically retargets
-            /// the ID and name indexes to it. Rename/drop remain out of scope.
+            /// Appends one active immutable successor with the same component name.
             pub fn replaceCatalogRevision(self: *Transaction, encoded_record: []const u8) Error!file.CatalogRef {
                 try self.requireActive();
                 const core = self.corePtr();
@@ -442,7 +572,12 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 var current = try core.catalog.load(current_ref);
                 defer current.deinit();
                 const previous = try current.view();
-                if (replacement.revision != previous.revision + 1) {
+                const next_revision = std.math.add(u32, previous.revision, 1) catch {
+                    return error.RevisionExhausted;
+                };
+                if (previous.state != .active or replacement.state != .active or
+                    replacement.revision != next_revision)
+                {
                     return error.RevisionMismatch;
                 }
                 if (!std.mem.eql(u8, replacement.name, previous.name)) {
@@ -457,6 +592,94 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 try core.catalog_ids.set(replacement.component_id, ref);
                 try core.catalog_names.set(replacement.name, replacement.component_id);
                 return ref;
+            }
+
+            pub fn renameComponent(
+                self: *Transaction,
+                name: []const u8,
+                new_name: []const u8,
+            ) Error!bool {
+                try self.requireActive();
+                const core = self.corePtr();
+                const component_id = (try core.catalog_names.get(name)) orelse return false;
+                return self.renameComponentById(component_id, new_name);
+            }
+
+            pub fn renameComponentById(
+                self: *Transaction,
+                component_id: u64,
+                new_name: []const u8,
+            ) Error!bool {
+                try self.requireActive();
+                const core = self.corePtr();
+                var current = (try loadCurrentById(core, component_id)) orelse return false;
+                defer current.deinit();
+                const previous = try current.view();
+                if (previous.state == .dropped or std.mem.eql(u8, previous.name, new_name)) {
+                    return false;
+                }
+                const name_id = (try core.catalog_names.get(previous.name)) orelse
+                    return error.CatalogIndexMismatch;
+                if (name_id != component_id) {
+                    return error.CatalogIndexMismatch;
+                }
+                if (try core.catalog_names.get(new_name) != null) {
+                    return error.NameConflict;
+                }
+
+                var mutated = false;
+                errdefer if (mutated) {
+                    core.cache.markTransactionFailed();
+                };
+                const successor = try self.appendLifecycleSuccessor(previous, new_name, .active);
+                mutated = true;
+                try core.catalog_ids.set(component_id, successor);
+                try core.catalog_names.set(new_name, component_id);
+                if (!try core.catalog_names.remove(previous.name)) {
+                    return error.CatalogIndexMismatch;
+                }
+                return true;
+            }
+
+            pub fn dropComponent(self: *Transaction, name: []const u8) Error!bool {
+                try self.requireActive();
+                const component_id = (try self.corePtr().catalog_names.get(name)) orelse return false;
+                return self.dropComponentById(component_id);
+            }
+
+            pub fn dropComponentById(self: *Transaction, component_id: u64) Error!bool {
+                try self.requireActive();
+                const core = self.corePtr();
+                var current = (try loadCurrentById(core, component_id)) orelse return false;
+                defer current.deinit();
+                const previous = try current.view();
+                if (previous.state == .dropped) {
+                    return false;
+                }
+                const name_id = (try core.catalog_names.get(previous.name)) orelse
+                    return error.CatalogIndexMismatch;
+                if (name_id != component_id) {
+                    return error.CatalogIndexMismatch;
+                }
+                if (try self.hasActiveDependent(component_id)) {
+                    return error.ComponentInUse;
+                }
+                if (core.state.live_component_count == 0) {
+                    return error.CatalogIndexMismatch;
+                }
+
+                var mutated = false;
+                errdefer if (mutated) {
+                    core.cache.markTransactionFailed();
+                };
+                const successor = try self.appendLifecycleSuccessor(previous, previous.name, .dropped);
+                mutated = true;
+                try core.catalog_ids.set(component_id, successor);
+                if (!try core.catalog_names.remove(previous.name)) {
+                    return error.CatalogIndexMismatch;
+                }
+                core.state.live_component_count -= 1;
+                return true;
             }
 
             pub fn setIdRef(self: *Transaction, component_id: u64, ref: file.CatalogRef) Error!void {
@@ -479,7 +702,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             ) Error!u64 {
                 try self.requireActive();
                 const core = self.corePtr();
-                var page = try core.raw_cache.create();
+                var page = try core.cache.create();
                 defer page.deinit();
                 const page_id = try page.pid();
                 const payload_buffer = try core.allocator.alloc(u8, core.device.blockSize());
@@ -516,7 +739,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 const core = self.corePtr();
                 const source_page_id = std.math.cast(DevicePageId, source_metadata_page_id) orelse
                     return error.PageIdTooLarge;
-                var source_page = try core.raw_cache.fetch(source_page_id);
+                var source_page = try core.cache.fetch(source_page_id);
                 defer source_page.deinit();
                 const source = try file.component_metadata_page.readAny(try source_page.data());
                 if (source.state.component_id != component_id) {
@@ -533,7 +756,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     payload_buffer,
                     rewrite_scratch,
                 );
-                var target_page = try core.raw_cache.create();
+                var target_page = try core.cache.create();
                 defer target_page.deinit();
                 const target_page_id = try target_page.pid();
                 try file.component_metadata_page.format(
@@ -564,8 +787,8 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 defer core.allocator.free(payload_buffer);
                 const rewrite_scratch = try core.allocator.alloc(u8, core.device.blockSize());
                 defer core.allocator.free(rewrite_scratch);
-                try file.ComponentMetadataIo(BindingT, RawCache).store(
-                    &core.raw_cache,
+                try file.ComponentMetadataIo(BindingT, Cache).store(
+                    &core.cache,
                     page_id,
                     .{
                         .component_id = component_id,
@@ -598,7 +821,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 try core.transaction_batch.discard();
                 core.state = core.state_snapshot;
                 core.state.clean = true;
-                core.catalog = try Catalog.init(&core.raw_cache, &core.catalog_manager);
+                core.catalog = try Catalog.init(&core.cache, &core.catalog_manager);
                 try writeBoot(core);
                 try core.raw_cache.flushAll();
                 try core.device.sync();
@@ -621,7 +844,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 return error.BatchActive;
             }
             core.state_snapshot = core.state;
-            core.transaction_batch = try core.raw_cache.begin();
+            core.transaction_batch = try core.cache.begin();
             core.transaction_active = true;
             core.state.clean = false;
             writeBoot(core) catch |err| {
@@ -639,16 +862,22 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
 
         /// Loads the catalog revision currently indexed by a component ID.
         pub fn getById(self: *Self, component_id: u64) Error!?Catalog.LoadedRecord {
-            const core = self.corePtr();
-            const ref = (try core.catalog_ids.get(component_id)) orelse return null;
-            return try core.catalog.load(ref);
+            return loadCurrentById(self.corePtr(), component_id);
         }
 
         /// Loads the catalog revision currently indexed by an exact component name.
         pub fn getByName(self: *Self, name: []const u8) Error!?Catalog.LoadedRecord {
             const core = self.corePtr();
             const component_id = (try core.catalog_names.get(name)) orelse return null;
-            return try self.getById(component_id);
+            var loaded = (try loadCurrentById(core, component_id)) orelse return error.CatalogIndexMismatch;
+            errdefer loaded.deinit();
+            const record = try loaded.view();
+            if (record.state != .active or record.component_id != component_id or
+                !std.mem.eql(u8, record.name, name))
+            {
+                return error.CatalogIndexMismatch;
+            }
+            return loaded;
         }
 
         fn preflightSchemaImpl(
@@ -658,17 +887,41 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         ) Error!void {
             const core = self.corePtr();
             var found = [_]bool{false} ** SchemaT.fields.len;
+            var active_count: u64 = 0;
             var iterator = try core.catalog.iterator(core.state.catalog_record_count);
             defer iterator.deinit();
             while (try iterator.next()) |entry| {
                 const id_ref = (try core.catalog_ids.get(entry.record.component_id)) orelse
                     return error.CatalogIndexMismatch;
-                if (id_ref.getPageId() != entry.ref.getPageId() or
-                    id_ref.getSlotId() != entry.ref.getSlotId() or
-                    id_ref.getRecordRevision() != entry.ref.getRecordRevision())
-                {
+                if (!sameRef(id_ref, entry.ref)) {
                     // Immutable historical revisions remain in the catalog chain.
                     continue;
+                }
+                if (entry.record.state == .dropped) {
+                    if (try core.catalog_names.get(entry.record.name)) |name_id| {
+                        if (name_id == entry.record.component_id) {
+                            return error.CatalogIndexMismatch;
+                        }
+                    }
+                    continue;
+                }
+                active_count += 1;
+                const name_id = (try core.catalog_names.get(entry.record.name)) orelse
+                    return error.CatalogIndexMismatch;
+                if (name_id != entry.record.component_id) {
+                    return error.CatalogIndexMismatch;
+                }
+                for (0..entry.record.dependency_count) |dependency_index| {
+                    const dependency_id = (try entry.record.getDependency(dependency_index)).?;
+                    const dependency_state = blk: {
+                        var dependency = (try loadCurrentById(core, dependency_id)) orelse
+                            return error.MissingDependency;
+                        defer dependency.deinit();
+                        break :blk (try dependency.view()).state;
+                    };
+                    if (dependency_state != .active) {
+                        return error.MissingDependency;
+                    }
                 }
                 const index = file.schema_preflight.validateRecord(SchemaT, entry.record) catch |err| {
                     if (err == error.UnknownComponent and !reject_unknown_components) {
@@ -684,12 +937,9 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     }
                     found[index] = true;
                 }
-
-                const name_id = (try core.catalog_names.get(entry.record.name)) orelse
-                    return error.CatalogIndexMismatch;
-                if (name_id != entry.record.component_id) {
-                    return error.CatalogIndexMismatch;
-                }
+            }
+            if (active_count != core.state.live_component_count) {
+                return error.CatalogIndexMismatch;
             }
             for (found) |present| {
                 if (!present) {
@@ -720,7 +970,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         ) Error!void {
             const core = self.corePtr();
             const page_id = std.math.cast(DevicePageId, metadata_page_id) orelse return error.PageIdTooLarge;
-            var page = try core.raw_cache.fetch(page_id);
+            var page = try core.cache.fetch(page_id);
             defer page.deinit();
             const view = try file.component_metadata_page.read(try page.data(), .{
                 .component_id = component_id,
@@ -733,6 +983,11 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         /// for the lifetime of this database because the control-plane core is heap-owned.
         pub fn rawCache(self: *Self) *RawCache {
             return &self.corePtr().raw_cache;
+        }
+
+        /// Returns the database-owned transactional cache with durable page reclamation.
+        pub fn cache(self: *Self) *Cache {
+            return &self.corePtr().cache;
         }
 
         pub fn diagnostics(self: *const Self) Diagnostics {

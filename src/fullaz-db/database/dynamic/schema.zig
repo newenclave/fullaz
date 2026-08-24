@@ -38,84 +38,7 @@ fn DynamicSchemaDatabaseImpl(
     const Database = DatabaseT;
     const Log = LogDeviceT orelse void;
     const RawCache = Database.RawCacheType;
-    const Cache = struct {
-        const Self = @This();
-
-        pub const Handle = RawCache.Handle;
-        pub const Pid = RawCache.Pid;
-        pub const UnderlyingDevice = RawCache.UnderlyingDevice;
-        pub const Error = RawCache.Error || error{UnsupportedFree};
-
-        pub const WriteBatch = struct {
-            raw: RawCache.WriteBatch,
-
-            pub fn commit(self: *@This()) Error!void {
-                return self.raw.commit();
-            }
-
-            pub fn discard(self: *@This()) Error!void {
-                return self.raw.discard();
-            }
-        };
-
-        raw: *RawCache,
-
-        pub fn init(raw: *RawCache) Self {
-            return .{ .raw = raw };
-        }
-
-        pub fn getTemporaryPage(self: *Self) Error!Handle {
-            return self.raw.getTemporaryPage();
-        }
-
-        pub fn fetch(self: *Self, page_id: Pid) Error!Handle {
-            return self.raw.fetch(page_id);
-        }
-
-        pub fn create(self: *Self) Error!Handle {
-            return self.raw.create();
-        }
-
-        pub fn free(_: *Self, _: Pid) Error!void {
-            return error.UnsupportedFree;
-        }
-
-        pub fn begin(self: *Self) Error!WriteBatch {
-            return .{ .raw = try self.raw.begin() };
-        }
-
-        pub fn flush(self: *Self, page_id: Pid) Error!void {
-            return self.raw.flush(page_id);
-        }
-
-        pub fn flushAll(self: *Self) Error!void {
-            return self.raw.flushAll();
-        }
-
-        pub fn pageSize(self: *const Self) usize {
-            return self.raw.pageSize();
-        }
-
-        pub fn pageCount(self: *const Self) usize {
-            return self.raw.pageCount();
-        }
-
-        pub fn isPinned(self: *const Self, page_id: Pid) bool {
-            return self.raw.isPinned(page_id);
-        }
-
-        pub fn transactionActive(self: *const Self) bool {
-            return self.raw.transactionActive();
-        }
-
-        pub fn transactionGeneration(self: *const Self) ?u64 {
-            return self.raw.transactionGeneration();
-        }
-
-        pub fn markTransactionFailed(self: *Self) void {
-            self.raw.markTransactionFailed();
-        }
-    };
+    const Cache = Database.CacheType;
     const Backend = struct {
         const Self = @This();
 
@@ -164,7 +87,6 @@ fn DynamicSchemaDatabaseImpl(
     const Core = struct {
         allocator: std.mem.Allocator,
         database: Database,
-        cache: Cache,
         backend: Backend,
         components: Components,
         initialized_count: usize = 0,
@@ -307,8 +229,7 @@ fn DynamicSchemaDatabaseImpl(
             errdefer allocator.destroy(core);
             core.allocator = allocator;
             core.database = database;
-            core.cache = Cache.init(core.database.rawCache());
-            core.backend = Backend.init(allocator, &core.cache);
+            core.backend = Backend.init(allocator, core.database.cache());
             core.initialized_count = 0;
             return core;
         }
@@ -335,7 +256,7 @@ fn DynamicSchemaDatabaseImpl(
                     allocation.component_id,
                     &@field(core.components, field.name),
                 );
-                const page_size = core.cache.pageSize();
+                const page_size = core.database.cache().pageSize();
                 const record_bytes = try core.allocator.alloc(u8, page_size);
                 defer core.allocator.free(record_bytes);
                 const record_scratch = try core.allocator.alloc(u8, page_size);
@@ -456,6 +377,8 @@ fn DynamicSchemaDatabaseImpl(
         }
 
         /// Starts the only mutable access scope. Active transactions roll back on deinit.
+        /// Catalog rename and drop operations belong to the raw control plane:
+        /// this facade's runtimes are bound to compile-time schema field names.
         pub fn begin(self: *Self) Error!Transaction {
             const core = self.corePtr();
             var raw = try core.database.begin();

@@ -36,6 +36,36 @@ test "fullaz-db catalog record: round-trips core and repeated fields" {
     try std.testing.expectEqual(@as(?u64, null), try decoded.getDependency(2));
 }
 
+test "fullaz-db catalog record: round-trips lifecycle state and reads v1 as active" {
+    var current = record();
+    current.state = .dropped;
+    var current_bytes = [_]u8{undefined} ** 512;
+    var current_scratch = [_]u8{undefined} ** 512;
+    try catalog.format(&current_bytes, &current_scratch, current, &.{});
+    const current_len = try catalog.encodedByteSize(&current_bytes);
+    try std.testing.expectEqual(
+        catalog.LifecycleState.dropped,
+        (try catalog.read(current_bytes[0..current_len])).state,
+    );
+
+    var legacy_payload_bytes = [_]u8{undefined} ** 512;
+    var legacy_payload = tagged.Writer.init(&legacy_payload_bytes);
+    var reader = tagged.Reader.init(current_bytes[catalog.envelope_byte_size..current_len]);
+    while (try reader.next()) |field| {
+        if (field.tag != catalog.Tag.lifecycle_state) {
+            try legacy_payload.appendEncoded(field.encoded);
+        }
+    }
+    var legacy_bytes = [_]u8{0} ** 512;
+    std.mem.writeInt(u16, legacy_bytes[0..2], catalog.legacy_format_version, .little);
+    std.mem.writeInt(u16, legacy_bytes[2..4], 0, .little);
+    std.mem.writeInt(u32, legacy_bytes[4..8], @intCast(legacy_payload.used().len), .little);
+    @memcpy(legacy_bytes[catalog.envelope_byte_size..][0..legacy_payload.used().len], legacy_payload.used());
+    const legacy_len = catalog.envelope_byte_size + legacy_payload.used().len;
+    const legacy = try catalog.read(legacy_bytes[0..legacy_len]);
+    try std.testing.expectEqual(catalog.LifecycleState.active, legacy.state);
+}
+
 test "fullaz-db catalog record: preserves unknown fields and rejects malformed core" {
     const original = record();
     var first = [_]u8{undefined} ** 512;

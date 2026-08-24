@@ -42,4 +42,10 @@ test "fullaz-db catalog name index: maps exact names to component IDs" {
     try std.testing.expectEqual(@as(?u64, null), try index.get("missing"));
     try std.testing.expectError(error.InvalidComponentName, index.get(""));
     try std.testing.expectError(error.InvalidComponentId, index.set("bad", 0));
+
+    try std.testing.expect(try index.remove("index"));
+    try std.testing.expectEqual(@as(?u64, null), try index.get("index"));
+    try std.testing.expect(!try index.remove("index"));
+    try index.set("index", 4);
+    try std.testing.expectEqual(@as(?u64, 4), try index.get("index"));
 }

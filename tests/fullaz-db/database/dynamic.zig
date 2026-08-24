@@ -2,6 +2,14 @@ const std = @import("std");
 const fullaz = @import("fullaz");
 const fullaz_db = @import("fullaz-db");
 
+fn compare(_: void, left: []const u8, right: []const u8) fullaz.core.algorithm.Order {
+    return switch (std.mem.order(u8, left, right)) {
+        .lt => .lt,
+        .eq => .eq,
+        .gt => .gt,
+    };
+}
+
 const MetadataBinding = struct {
     pub const Runtime = struct { root: u64 = 0 };
     pub const DynamicMetadata = struct {
@@ -99,6 +107,29 @@ fn encodeRecord(bytes: []u8, scratch: []u8) ![]const u8 {
     return bytes[0..try fullaz_db.file.catalog_record.encodedByteSize(bytes)];
 }
 
+fn encodeLifecycleRecord(
+    bytes: []u8,
+    scratch: []u8,
+    component_id: u64,
+    name: []const u8,
+    dependency_ids: []const u64,
+) ![]const u8 {
+    try fullaz_db.file.catalog_record.format(bytes, scratch, .{
+        .component_id = component_id,
+        .revision = 1,
+        .name = name,
+        .kind_name = "test.component",
+        .component_format_version = 1,
+        .metadata_format_version = 1,
+        .page_kind_base = @intCast(0x0100 + component_id),
+        .page_kind_count = 1,
+        .metadata_root_pid = 1,
+        .settings_fingerprint = [_]u8{0} ** 32,
+        .dependency_ids = dependency_ids,
+    }, &.{});
+    return bytes[0..try fullaz_db.file.catalog_record.encodedByteSize(bytes)];
+}
+
 fn encodePreflightRecord(bytes: []u8, scratch: []u8, revision: u32) ![]const u8 {
     const Trait = PreflightSchema.trait("blob");
     try fullaz_db.file.catalog_record.format(bytes, scratch, .{
@@ -148,6 +179,208 @@ test "fullaz-db: dynamic database formats and opens a memory block" {
     try std.testing.expectEqual(@as(usize, 1), diagnostics.page_count);
 }
 
+test "fullaz-db: dynamic database persists and reuses reclaimed pages" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xA6} ** 16,
+        .cache_frames = 16,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+
+    var transaction = try database.begin();
+    var page = try database.cache().create();
+    const page_id = try page.pid();
+    page.deinit();
+    try database.cache().free(page_id);
+    try transaction.commit();
+
+    var reopened = try Database.open(
+        std.testing.allocator,
+        try database.takeDevice(),
+        options,
+    );
+    defer reopened.deinit();
+    var reuse_transaction = try reopened.begin();
+    var reused = try reopened.cache().create();
+    defer reused.deinit();
+    try std.testing.expectEqual(page_id, try reused.pid());
+    try reuse_transaction.commit();
+}
+
+test "fullaz-db: dynamic database rejects a cyclic persistent free list" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xA7} ** 16,
+        .cache_frames = 16,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+
+    var transaction = try database.begin();
+    var page = try database.cache().create();
+    const page_id = try page.pid();
+    page.deinit();
+    try database.cache().free(page_id);
+    var freed_page = try database.rawCache().fetch(page_id);
+    const FreedView = fullaz.page.freed.View(u32, .little, false);
+    var freed_view = FreedView.init(try freed_page.dataMut());
+    freed_view.formatPage(page_id);
+    freed_page.deinit();
+    try transaction.commit();
+
+    try std.testing.expectError(
+        error.BadFreeList,
+        Database.open(std.testing.allocator, try database.takeDevice(), options),
+    );
+}
+
+test "fullaz-db: dynamic database rollback restores the free-list root" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xA8} ** 16,
+        .cache_frames = 16,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    defer database.deinit();
+
+    var create_transaction = try database.begin();
+    var page = try database.cache().create();
+    const page_id = try page.pid();
+    page.deinit();
+    try create_transaction.commit();
+
+    var rollback_transaction = try database.begin();
+    try database.cache().free(page_id);
+    try rollback_transaction.rollback();
+
+    var next_transaction = try database.begin();
+    var next_page = try database.cache().create();
+    defer next_page.deinit();
+    try std.testing.expectEqual(page_id + 1, try next_page.pid());
+    try next_transaction.commit();
+}
+
+test "fullaz-db: WAL dynamic database reuses reclaimed pages after reopen" {
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz_db.DynamicDatabaseWithWal(Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/dynamic_database_reclaiming_wal.img";
+    const log_path = ".zig-cache/dynamic_database_reclaiming_wal.log";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xA9} ** 16,
+        .cache_frames = 16,
+    };
+    std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+
+    var page_id: u32 = undefined;
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 1024),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        var page = try database.cache().create();
+        page_id = try page.pid();
+        page.deinit();
+        try database.cache().free(page_id);
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 1024),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        var reused = try database.cache().create();
+        defer reused.deinit();
+        try std.testing.expectEqual(page_id, try reused.pid());
+        try transaction.commit();
+    }
+    var log = try Log.open(io, log_path);
+    defer log.deinit();
+    try std.testing.expectEqual(@as(u32, 0), log.size());
+}
+
+test "fullaz-db: WAL dynamic database persists catalog lifecycle changes" {
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz_db.DynamicDatabaseWithWal(Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/dynamic_database_lifecycle_wal.img";
+    const log_path = ".zig-cache/dynamic_database_lifecycle_wal.log";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xAA} ** 16,
+        .cache_frames = 16,
+    };
+    std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+    var record_bytes: [256]u8 = undefined;
+    var record_scratch: [256]u8 = undefined;
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 1024),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var register = try database.begin();
+        _ = try register.registerCatalogComponent(
+            try encodeLifecycleRecord(&record_bytes, &record_scratch, 1, "index", &.{}),
+        );
+        try register.commit();
+        var rename = try database.begin();
+        try std.testing.expect(try rename.renameComponent("index", "primary"));
+        try rename.commit();
+        var drop = try database.begin();
+        try std.testing.expect(try drop.dropComponent("primary"));
+        try drop.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 1024),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        try std.testing.expect((try database.getByName("primary")) == null);
+        var dropped = (try database.getById(1)).?;
+        defer dropped.deinit();
+        try std.testing.expectEqual(
+            fullaz_db.file.catalog_record.LifecycleState.dropped,
+            (try dropped.view()).state,
+        );
+    }
+}
+
 test "fullaz-db: dynamic database commits catalog control-plane changes" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
@@ -173,6 +406,111 @@ test "fullaz-db: dynamic database commits catalog control-plane changes" {
     var loaded = (try reopened.getByName("index")).?;
     defer loaded.deinit();
     try std.testing.expectEqualStrings("index", (try loaded.view()).name);
+}
+
+test "fullaz-db: dynamic database renames and drops catalog components" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x3D} ** 16,
+        .cache_frames = 32,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    var record_bytes: [256]u8 = undefined;
+    var record_scratch: [256]u8 = undefined;
+    {
+        var transaction = try database.begin();
+        _ = try transaction.registerCatalogComponent(
+            try encodeLifecycleRecord(&record_bytes, &record_scratch, 1, "index", &.{}),
+        );
+        try transaction.commit();
+    }
+    {
+        var transaction = try database.begin();
+        try std.testing.expect(try transaction.renameComponent("index", "primary"));
+        try std.testing.expect(!try transaction.renameComponent("primary", "primary"));
+        try transaction.commit();
+    }
+    try std.testing.expect((try database.getByName("index")) == null);
+    var renamed = (try database.getByName("primary")).?;
+    try std.testing.expectEqual(@as(u64, 1), (try renamed.view()).component_id);
+    renamed.deinit();
+
+    {
+        var transaction = try database.begin();
+        try std.testing.expect(try transaction.dropComponent("primary"));
+        try std.testing.expect(!try transaction.dropComponentById(1));
+        try transaction.commit();
+    }
+    try std.testing.expect((try database.getByName("primary")) == null);
+    var dropped = (try database.getById(1)).?;
+    try std.testing.expectEqual(
+        fullaz_db.file.catalog_record.LifecycleState.dropped,
+        (try dropped.view()).state,
+    );
+    dropped.deinit();
+
+    {
+        var transaction = try database.begin();
+        _ = try transaction.registerCatalogComponent(
+            try encodeLifecycleRecord(&record_bytes, &record_scratch, 2, "primary", &.{}),
+        );
+        try transaction.commit();
+    }
+    var reused_name = (try database.getByName("primary")).?;
+    try std.testing.expectEqual(@as(u64, 2), (try reused_name.view()).component_id);
+    reused_name.deinit();
+
+    var reopened = try Database.open(std.testing.allocator, try database.takeDevice(), options);
+    defer reopened.deinit();
+    try std.testing.expect((try reopened.getByName("index")) == null);
+    var persisted = (try reopened.getByName("primary")).?;
+    defer persisted.deinit();
+    try std.testing.expectEqual(@as(u64, 2), (try persisted.view()).component_id);
+}
+
+test "fullaz-db: dynamic database blocks drop while an active component depends on it" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x3E} ** 16,
+        .cache_frames = 32,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    defer database.deinit();
+    var first_bytes: [256]u8 = undefined;
+    var first_scratch: [256]u8 = undefined;
+    var second_bytes: [256]u8 = undefined;
+    var second_scratch: [256]u8 = undefined;
+    {
+        var transaction = try database.begin();
+        _ = try transaction.registerCatalogComponent(
+            try encodeLifecycleRecord(&first_bytes, &first_scratch, 1, "base", &.{}),
+        );
+        _ = try transaction.registerCatalogComponent(
+            try encodeLifecycleRecord(&second_bytes, &second_scratch, 2, "dependent", &.{1}),
+        );
+        try transaction.commit();
+    }
+    {
+        var transaction = try database.begin();
+        try std.testing.expectError(error.ComponentInUse, transaction.dropComponent("base"));
+        try transaction.rollback();
+    }
+    {
+        var transaction = try database.begin();
+        try std.testing.expect(try transaction.dropComponent("dependent"));
+        try std.testing.expect(try transaction.dropComponent("base"));
+        try transaction.commit();
+    }
 }
 
 test "fullaz-db: dynamic database rolls back catalog control-plane changes" {
@@ -343,9 +681,9 @@ test "fullaz-db: dynamic database preflights the complete compiled schema" {
     var record_bytes: [256]u8 = undefined;
     var record_scratch: [256]u8 = undefined;
     var transaction = try database.begin();
-    const ref = try transaction.appendCatalogRevision(try encodePreflightRecord(&record_bytes, &record_scratch, 1));
-    try transaction.setIdRef(1, ref);
-    try transaction.setName("blob", 1);
+    _ = try transaction.registerCatalogComponent(
+        try encodePreflightRecord(&record_bytes, &record_scratch, 1),
+    );
     try transaction.commit();
 
     var reopened = try Database.open(std.testing.allocator, try database.takeDevice(), options);
@@ -402,12 +740,12 @@ test "fullaz-db: dynamic database preflight ignores historical catalog revisions
     var second_bytes: [256]u8 = undefined;
     var second_scratch: [256]u8 = undefined;
     var transaction = try database.begin();
-    const first = try transaction.appendCatalogRevision(try encodePreflightRecord(&first_bytes, &first_scratch, 1));
-    try transaction.setIdRef(1, first);
-    try transaction.setName("blob", 1);
-    const second = try transaction.appendCatalogRevision(try encodePreflightRecord(&second_bytes, &second_scratch, 2));
-    try transaction.setIdRef(1, second);
-    try transaction.setName("blob", 1);
+    _ = try transaction.registerCatalogComponent(
+        try encodePreflightRecord(&first_bytes, &first_scratch, 1),
+    );
+    _ = try transaction.replaceCatalogRevision(
+        try encodePreflightRecord(&second_bytes, &second_scratch, 2),
+    );
     try transaction.commit();
     try database.preflightSchema(PreflightSchema);
 }
@@ -429,9 +767,9 @@ test "fullaz-db: dynamic database preserves current unknown catalog components" 
     var record_bytes: [256]u8 = undefined;
     var record_scratch: [256]u8 = undefined;
     var transaction = try database.begin();
-    const ref = try transaction.appendCatalogRevision(try encodeRecord(&record_bytes, &record_scratch));
-    try transaction.setIdRef(1, ref);
-    try transaction.setName("index", 1);
+    _ = try transaction.registerCatalogComponent(
+        try encodeRecord(&record_bytes, &record_scratch),
+    );
     try transaction.commit();
     try database.preflightKnownSchema(EmptySchema);
     try std.testing.expectError(error.UnknownComponent, database.preflightSchema(EmptySchema));
@@ -519,6 +857,75 @@ test "fullaz-db: dynamic schema database restores a chainStore const proxy" {
         try std.testing.expectEqual(@as(u64, 11), try blob.size());
         try std.testing.expectEqual(@as(usize, 11), try blob.readAt(0, &output));
         try std.testing.expectEqualStrings("hello world", output[0..11]);
+    }
+}
+
+test "fullaz-db: dynamic schema database reuses reclaimed BPT pages after reopen" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
+        "index",
+        fullaz_db.bpt(.{
+            .compare = compare,
+            .CompareContext = void,
+            .comparator_id = 1,
+            .maximum_key_size = 32,
+            .maximum_value_size = 32,
+        }),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    const io = std.testing.io;
+    const path = ".zig-cache/dynamic_schema_reclaiming_bpt.img";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xC2} ** 16,
+        .components = .{ .index = .{} },
+    };
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    var page_count: usize = undefined;
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        try std.testing.expect(try transaction.get("index").insert("key", "value"));
+        try transaction.commit();
+    }
+    {
+        var device = try Device.open(io, path, 1024);
+        defer device.deinit();
+        page_count = device.blocksCount();
+        try std.testing.expect(page_count > 1);
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        try std.testing.expect(try transaction.get("index").remove("key"));
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        try std.testing.expect(try transaction.get("index").insert("next", "value"));
+        try transaction.commit();
+    }
+    {
+        var device = try Device.open(io, path, 1024);
+        defer device.deinit();
+        try std.testing.expectEqual(page_count, device.blocksCount());
     }
 }
 

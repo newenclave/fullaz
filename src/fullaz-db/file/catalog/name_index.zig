@@ -72,6 +72,13 @@ pub fn CatalogNameIndex(comptime CacheT: type, comptime ManagerT: type) type {
             }
         }
 
+        pub fn remove(self: *Self, name: []const u8) Error!bool {
+            try validateName(name);
+            var tree = TreeT.init(&self.model, .neighbor_share);
+            defer tree.deinit();
+            return tree.remove(name);
+        }
+
         fn validateName(name: []const u8) Error!void {
             if (name.len == 0 or name.len > 255 or
                 !std.unicode.utf8ValidateSlice(name) or

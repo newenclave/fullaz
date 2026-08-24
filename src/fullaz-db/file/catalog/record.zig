@@ -8,7 +8,8 @@ pub const Error = tagged.Error || error{
     UnsupportedVersion,
 };
 
-pub const format_version: u16 = 1;
+pub const legacy_format_version: u16 = 1;
+pub const format_version: u16 = 2;
 const U16 = PackedInt(u16, .little);
 const U32 = PackedInt(u32, .little);
 
@@ -41,6 +42,7 @@ pub const Tag = struct {
     pub const metadata_root_pid: u16 = 9;
     pub const settings_fingerprint: u16 = 10;
     pub const dependency_id: u16 = 11;
+    pub const lifecycle_state: u16 = 12;
 };
 
 const singular_tags = [_]u16{
@@ -54,8 +56,14 @@ const singular_tags = [_]u16{
     Tag.page_kind_count,
     Tag.metadata_root_pid,
     Tag.settings_fingerprint,
+    Tag.lifecycle_state,
 };
 const all_known_tags = singular_tags ++ [_]u16{Tag.dependency_id};
+
+pub const LifecycleState = enum(u8) {
+    active = 1,
+    dropped = 2,
+};
 
 pub const Record = struct {
     component_id: u64,
@@ -69,6 +77,7 @@ pub const Record = struct {
     metadata_root_pid: u64,
     settings_fingerprint: [32]u8,
     dependency_ids: []const u64,
+    state: LifecycleState = .active,
 };
 
 pub const View = struct {
@@ -84,6 +93,7 @@ pub const View = struct {
     settings_fingerprint: [32]u8,
     payload: []const u8,
     dependency_count: usize,
+    state: LifecycleState,
 
     pub fn getDependency(self: *const View, index: usize) Error!?u64 {
         if (index >= self.dependency_count) {
@@ -132,7 +142,8 @@ pub fn format(
 
 pub fn read(bytes: []const u8) Error!View {
     const envelope = envelopeConst(bytes) orelse return error.BadCatalogRecord;
-    if (envelope.version.get() != format_version) {
+    const version = envelope.version.get();
+    if (version != legacy_format_version and version != format_version) {
         return error.UnsupportedVersion;
     }
     if (envelope.flags.get() != 0) {
@@ -145,7 +156,7 @@ pub fn read(bytes: []const u8) Error!View {
 
     const payload = bytes[envelope_byte_size..payload_end];
     try tagged.validateKnownFields(payload, &singular_tags);
-    return try decode(payload);
+    return try decode(payload, version);
 }
 
 pub fn encodedByteSize(bytes: []const u8) Error!usize {
@@ -165,6 +176,7 @@ fn appendRecord(writer: *tagged.Writer, record: Record) Error!void {
     try appendInt(writer, Tag.page_kind_count, u16, record.page_kind_count);
     try appendInt(writer, Tag.metadata_root_pid, u64, record.metadata_root_pid);
     try writer.append(Tag.settings_fingerprint, 0, &record.settings_fingerprint);
+    try appendInt(writer, Tag.lifecycle_state, u8, @intFromEnum(record.state));
     for (record.dependency_ids) |dependency_id| {
         try appendInt(writer, Tag.dependency_id, u64, dependency_id);
     }
@@ -176,10 +188,11 @@ fn appendInt(writer: *tagged.Writer, tag: u16, comptime T: type, value: T) Error
     try writer.append(tag, 0, &bytes);
 }
 
-fn decode(payload: []const u8) Error!View {
+fn decode(payload: []const u8, version: u16) Error!View {
     var result: View = undefined;
     var dependency_count: usize = 0;
     var found = [_]bool{false} ** singular_tags.len;
+    result.state = .active;
 
     var reader = tagged.Reader.init(payload);
     while (try reader.next()) |field| {
@@ -230,11 +243,28 @@ fn decode(payload: []const u8) Error!View {
                 }
                 @memcpy(&result.settings_fingerprint, field.value);
             },
+            Tag.lifecycle_state => {
+                found[10] = true;
+                if (version != format_version) {
+                    return error.BadCatalogRecord;
+                }
+                result.state = switch (try readInt(field.value, u8)) {
+                    @intFromEnum(LifecycleState.active) => .active,
+                    @intFromEnum(LifecycleState.dropped) => .dropped,
+                    else => return error.BadCatalogRecord,
+                };
+            },
             Tag.dependency_id => dependency_count += 1,
             else => {},
         }
     }
-    for (found) |value| {
+    for (found, 0..) |value, index| {
+        if (index == 10 and version == legacy_format_version) {
+            if (value) {
+                return error.BadCatalogRecord;
+            }
+            continue;
+        }
         if (!value) {
             return error.BadCatalogRecord;
         }
@@ -270,6 +300,7 @@ fn validate(record: Record) Error!void {
             return error.BadCatalogRecord;
         }
     }
+    _ = record.state;
 }
 
 fn validateView(view: View) Error!void {
@@ -290,6 +321,7 @@ fn validateView(view: View) Error!void {
             return error.BadCatalogRecord;
         }
     }
+    _ = view.state;
 }
 
 fn validateCore(
