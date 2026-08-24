@@ -1,35 +1,39 @@
-const std = @import("std");
-
-pub fn ObserverImpl(comptime SyncPolicyT: type, comptime EventT: type, comptime IdT: type) type {
+pub fn ObserverImpl(
+    comptime SyncPolicyT: type,
+    comptime StoragePolicyT: type,
+    comptime EventT: type,
+    comptime IdT: type,
+) type {
     return struct {
         const Self = @This();
         pub const SyncPolicy = SyncPolicyT;
+        pub const StoragePolicy = StoragePolicyT;
         pub const Event = EventT;
         pub const Id = IdT;
         pub const Fn = *const fn (ctx: ?*anyopaque, event: *const Event) void;
-        pub const Error = std.mem.Allocator.Error ||
-            error{};
-
         const Record = struct {
             id: Id,
             ctx: ?*anyopaque,
             call: Fn,
         };
 
-        slots: std.ArrayList(Record) = .empty,
-        allocator: std.mem.Allocator,
+        const Slots = StoragePolicy.Storage(Record);
+
+        slots: Slots,
         sync: SyncPolicyT,
         next_id: Id = 0,
 
-        pub fn init(sync: SyncPolicy, allocator: std.mem.Allocator) @This() {
+        pub const Error = Slots.Error;
+
+        pub fn init(sync: SyncPolicy, storage_policy: StoragePolicy) @This() {
             return .{
-                .allocator = allocator,
+                .slots = Slots.init(storage_policy),
                 .sync = sync,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.slots.deinit(self.allocator);
+            self.slots.deinit();
             self.* = undefined;
         }
 
@@ -43,7 +47,7 @@ pub fn ObserverImpl(comptime SyncPolicyT: type, comptime EventT: type, comptime 
                 .call = call,
             };
             self.next_id += 1;
-            try self.slots.append(self.allocator, record);
+            try self.slots.append(record);
             return record.id;
         }
 
@@ -55,7 +59,7 @@ pub fn ObserverImpl(comptime SyncPolicyT: type, comptime EventT: type, comptime 
             self.sync.lock();
             defer self.sync.unlock();
 
-            for (self.slots.items, 0..) |record, index| {
+            for (self.slots.slice(), 0..) |record, index| {
                 if (record.id == id) {
                     const removed = self.slots.orderedRemove(index);
                     return .{ .ctx = removed.ctx };
@@ -69,11 +73,11 @@ pub fn ObserverImpl(comptime SyncPolicyT: type, comptime EventT: type, comptime 
             var tmp = tmp: {
                 self.sync.lock();
                 defer self.sync.unlock();
-                break :tmp try self.slots.clone(self.allocator);
+                break :tmp try self.slots.clone();
             };
-            defer tmp.deinit(self.allocator);
+            defer tmp.deinit();
 
-            for (tmp.items) |record| {
+            for (tmp.slice()) |record| {
                 record.call(record.ctx, event);
             }
         }

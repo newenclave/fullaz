@@ -20,3 +20,5 @@ pub const spatial = @import("fullaz/spatial/spatial.zig");
 pub const codec = @import("fullaz/codec/codec.zig");
 
 pub const sstable = @import("fullaz/sstable/sstable.zig");
+
+pub const zync = @import("fullaz/zync/zync.zig");
