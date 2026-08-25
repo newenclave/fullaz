@@ -166,17 +166,29 @@ pub fn Tree(comptime ModelT: type) type {
             defer acc.deinitSplitKey(&split_key);
             var leaf_value = try self.findLeaf(&split_key);
             if (leaf_value) |*leaf| {
-                defer acc.deinitLeaf(leaf);
+                var leaf_active = true;
+                defer if (leaf_active) {
+                    acc.deinitLeaf(leaf);
+                };
                 const digit = split_key.get(0).digit;
                 if (try leaf.isSet(digit)) {
                     try leaf.free(digit);
                     if (try leaf.size() == 0) {
                         const parent = try leaf.getParent();
                         const parent_id = try leaf.getParentId();
-                        try acc.destroy(leaf.id());
-                        try self.freeChild(parent, parent_id);
+                        const leaf_id = leaf.id();
+                        acc.deinitLeaf(leaf);
+                        leaf_active = false;
+                        try acc.destroy(leaf_id);
+                        if (parent == null) {
+                            try acc.setRoot(null);
+                        } else {
+                            try self.freeChild(parent, parent_id);
+                        }
+                        return;
                     }
                 }
+                // The deferred cleanup owns the nonempty leaf.
             }
         }
 
@@ -184,16 +196,27 @@ pub fn Tree(comptime ModelT: type) type {
             const acc = self.accessor();
             if (inode_id) |pid| {
                 var inode = try acc.loadInode(pid);
-                defer acc.deinitInode(&inode);
+                var inode_active = true;
+                defer if (inode_active) {
+                    acc.deinitInode(&inode);
+                };
                 if (try inode.isSet(id)) {
                     try inode.free(id);
                     if (try inode.size() == 0) {
                         const parent = try inode.getParent();
                         const parent_id = try inode.getParentId();
+                        acc.deinitInode(&inode);
+                        inode_active = false;
                         try acc.destroy(pid);
-                        try self.freeChild(parent, parent_id);
+                        if (parent == null) {
+                            try acc.setRoot(null);
+                        } else {
+                            try self.freeChild(parent, parent_id);
+                        }
+                        return;
                     }
                 }
+                // The deferred cleanup owns the nonempty inode.
             }
         }
 

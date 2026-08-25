@@ -148,6 +148,12 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         pub const RawCacheType = RawCache;
         pub const CacheType = Cache;
         pub const State = file.boot.State;
+        pub const CatalogCompactionResult = struct {
+            records_before: u64,
+            records_retained: u64,
+            historical_records_removed: u64,
+            metadata_pages_reclaimed: u64,
+        };
         pub const CatalogStoreType = Catalog;
         pub const CatalogIdIndexType = CatalogIds;
         pub const CatalogNameIndexType = CatalogNames;
@@ -680,6 +686,200 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 }
                 core.state.live_component_count -= 1;
                 return true;
+            }
+
+            /// Rebuilds current catalog state and reclaims unreachable historical metadata.
+            /// The result becomes durable only when the surrounding transaction commits.
+            pub fn compactCatalog(self: *Transaction) Error!CatalogCompactionResult {
+                try self.requireActive();
+                const core = self.corePtr();
+                const Retained = struct {
+                    component_id: u64,
+                    state: file.catalog_record.LifecycleState,
+                    encoded_record: []u8,
+                };
+                const MetadataReference = struct {
+                    component_id: u64,
+                    metadata_format_version: u32,
+                    retained: bool,
+                };
+
+                var retained: std.ArrayList(Retained) = .empty;
+                defer {
+                    for (retained.items) |entry| {
+                        core.allocator.free(entry.encoded_record);
+                    }
+                    retained.deinit(core.allocator);
+                }
+                var retained_ids = std.AutoHashMap(u64, void).init(core.allocator);
+                defer retained_ids.deinit();
+                var metadata = std.AutoHashMap(DevicePageId, MetadataReference).init(core.allocator);
+                defer metadata.deinit();
+
+                var active_count: u64 = 0;
+                {
+                    var iterator = try core.catalog.iterator(core.state.catalog_record_count);
+                    defer iterator.deinit();
+                    while (try iterator.next()) |entry| {
+                        const metadata_page_id = std.math.cast(
+                            DevicePageId,
+                            entry.record.metadata_root_pid,
+                        ) orelse return error.PageIdTooLarge;
+                        const current_ref = (try core.catalog_ids.get(entry.record.component_id)) orelse
+                            return error.CatalogIndexMismatch;
+                        const is_retained = sameRef(entry.ref, current_ref);
+                        const metadata_result = try metadata.getOrPut(metadata_page_id);
+                        if (metadata_result.found_existing) {
+                            const existing = metadata_result.value_ptr.*;
+                            if (existing.component_id != entry.record.component_id or
+                                existing.metadata_format_version != entry.record.metadata_format_version)
+                            {
+                                return error.CatalogIndexMismatch;
+                            }
+                            metadata_result.value_ptr.retained = metadata_result.value_ptr.retained or is_retained;
+                        } else {
+                            metadata_result.value_ptr.* = .{
+                                .component_id = entry.record.component_id,
+                                .metadata_format_version = entry.record.metadata_format_version,
+                                .retained = is_retained,
+                            };
+                        }
+                        if (!is_retained) {
+                            continue;
+                        }
+                        if (retained_ids.contains(entry.record.component_id)) {
+                            return error.CatalogIndexMismatch;
+                        }
+                        try retained_ids.put(entry.record.component_id, {});
+                        if (entry.record.state == .active) {
+                            const name_id = (try core.catalog_names.get(entry.record.name)) orelse
+                                return error.CatalogIndexMismatch;
+                            if (name_id != entry.record.component_id) {
+                                return error.CatalogIndexMismatch;
+                            }
+                            active_count += 1;
+                        } else if (try core.catalog_names.get(entry.record.name)) |name_id| {
+                            if (name_id == entry.record.component_id) {
+                                return error.CatalogIndexMismatch;
+                            }
+                        }
+                        const encoded_record = try core.allocator.dupe(u8, entry.encoded_record);
+                        errdefer core.allocator.free(encoded_record);
+                        try retained.append(core.allocator, .{
+                            .component_id = entry.record.component_id,
+                            .state = entry.record.state,
+                            .encoded_record = encoded_record,
+                        });
+                    }
+                }
+                if (active_count != core.state.live_component_count) {
+                    return error.CatalogIndexMismatch;
+                }
+                if (retained.items.len == core.state.catalog_record_count) {
+                    return .{
+                        .records_before = core.state.catalog_record_count,
+                        .records_retained = core.state.catalog_record_count,
+                        .historical_records_removed = 0,
+                        .metadata_pages_reclaimed = 0,
+                    };
+                }
+                const old_catalog_pages = try core.catalog.collectPageIds(
+                    core.allocator,
+                    core.state.catalog_record_count,
+                );
+                defer core.allocator.free(old_catalog_pages);
+
+                var candidate_state = core.state;
+                candidate_state.catalog_first = null;
+                candidate_state.catalog_last = null;
+                candidate_state.catalog_record_count = 0;
+                candidate_state.id_radix_root = null;
+                candidate_state.name_bpt_root = null;
+                var candidate_catalog_manager = CatalogManager{
+                    .state = &candidate_state,
+                    .cache = &core.cache,
+                };
+                var candidate_id_manager = IndexManager{
+                    .root = &candidate_state.id_radix_root,
+                    .cache = &core.cache,
+                };
+                var candidate_name_manager = IndexManager{
+                    .root = &candidate_state.name_bpt_root,
+                    .cache = &core.cache,
+                };
+                var candidate_catalog = try Catalog.init(&core.cache, &candidate_catalog_manager);
+                defer candidate_catalog.deinit();
+                var candidate_ids = try CatalogIds.init(&core.cache, &candidate_id_manager);
+                defer candidate_ids.deinit();
+                var candidate_names = try CatalogNames.init(&core.cache, &candidate_name_manager);
+                defer candidate_names.deinit();
+
+                var mutation_started = false;
+                errdefer {
+                    if (mutation_started) {
+                        core.cache.markTransactionFailed();
+                    }
+                }
+                for (retained.items) |entry| {
+                    mutation_started = true;
+                    const ref = try candidate_catalog.append(entry.encoded_record);
+                    try candidate_ids.set(entry.component_id, ref);
+                    if (entry.state == .active) {
+                        const record = try file.catalog_record.read(entry.encoded_record);
+                        try candidate_names.set(record.name, entry.component_id);
+                    }
+                }
+
+                core.catalog.releaseCachedTail();
+                for (retained.items) |entry| {
+                    if (entry.state == .active) {
+                        const record = try file.catalog_record.read(entry.encoded_record);
+                        if (!try core.catalog_names.remove(record.name)) {
+                            return error.CatalogIndexMismatch;
+                        }
+                    }
+                    if (!try core.catalog_ids.remove(entry.component_id)) {
+                        return error.CatalogIndexMismatch;
+                    }
+                }
+                core.state.catalog_first = candidate_state.catalog_first;
+                core.state.catalog_last = candidate_state.catalog_last;
+                core.state.catalog_record_count = candidate_state.catalog_record_count;
+                core.state.id_radix_root = candidate_state.id_radix_root;
+                core.state.name_bpt_root = candidate_state.name_bpt_root;
+
+                for (old_catalog_pages) |page_id| {
+                    try core.cache.free(page_id);
+                }
+
+                var metadata_pages_reclaimed: u64 = 0;
+                var metadata_iterator = metadata.iterator();
+                while (metadata_iterator.next()) |entry| {
+                    if (entry.value_ptr.retained) {
+                        continue;
+                    }
+                    const page_id = blk: {
+                        var page = try core.cache.fetch(entry.key_ptr.*);
+                        defer page.deinit();
+                        const view = try file.component_metadata_page.readAny(try page.data());
+                        if (view.state.component_id != entry.value_ptr.component_id or
+                            view.state.metadata_format_version != entry.value_ptr.metadata_format_version)
+                        {
+                            return error.CatalogIndexMismatch;
+                        }
+                        break :blk try page.pid();
+                    };
+                    try core.cache.free(page_id);
+                    metadata_pages_reclaimed += 1;
+                }
+
+                return .{
+                    .records_before = core.state_snapshot.catalog_record_count,
+                    .records_retained = candidate_state.catalog_record_count,
+                    .historical_records_removed = core.state_snapshot.catalog_record_count -
+                        candidate_state.catalog_record_count,
+                    .metadata_pages_reclaimed = metadata_pages_reclaimed,
+                };
             }
 
             pub fn setIdRef(self: *Transaction, component_id: u64, ref: file.CatalogRef) Error!void {

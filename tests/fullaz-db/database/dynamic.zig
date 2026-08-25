@@ -381,6 +381,59 @@ test "fullaz-db: WAL dynamic database persists catalog lifecycle changes" {
     }
 }
 
+test "fullaz-db: WAL dynamic database compacts catalog history" {
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz_db.DynamicDatabaseWithWal(Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/dynamic_database_compaction_wal.img";
+    const log_path = ".zig-cache/dynamic_database_compaction_wal.log";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xAB} ** 16,
+        .cache_frames = 64,
+    };
+    std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+    var record_bytes: [256]u8 = undefined;
+    var record_scratch: [256]u8 = undefined;
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 1024),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var register = try database.begin();
+        _ = try register.registerCatalogComponent(
+            try encodeLifecycleRecord(&record_bytes, &record_scratch, 1, "index", &.{}),
+        );
+        try register.commit();
+        var rename = try database.begin();
+        try std.testing.expect(try rename.renameComponent("index", "final"));
+        try rename.commit();
+        var compact = try database.begin();
+        const result = try compact.compactCatalog();
+        try std.testing.expectEqual(@as(u64, 1), result.records_retained);
+        try compact.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 1024),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var current = (try database.getByName("final")).?;
+        defer current.deinit();
+        try std.testing.expectEqual(@as(u32, 2), (try current.view()).revision);
+    }
+}
+
 test "fullaz-db: dynamic database commits catalog control-plane changes" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
@@ -511,6 +564,57 @@ test "fullaz-db: dynamic database blocks drop while an active component depends 
         try std.testing.expect(try transaction.dropComponent("base"));
         try transaction.commit();
     }
+}
+
+test "fullaz-db: dynamic database compacts catalog history" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x3F} ** 16,
+        .cache_frames = 64,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    var record_bytes: [256]u8 = undefined;
+    var record_scratch: [256]u8 = undefined;
+    {
+        var transaction = try database.begin();
+        _ = try transaction.registerCatalogComponent(
+            try encodeLifecycleRecord(&record_bytes, &record_scratch, 1, "index", &.{}),
+        );
+        try transaction.commit();
+    }
+    {
+        var transaction = try database.begin();
+        try std.testing.expect(try transaction.renameComponent("index", "primary"));
+        try std.testing.expect(try transaction.renameComponent("primary", "final"));
+        try transaction.commit();
+    }
+    {
+        var transaction = try database.begin();
+        _ = try transaction.compactCatalog();
+        try transaction.rollback();
+    }
+    {
+        var transaction = try database.begin();
+        const result = try transaction.compactCatalog();
+        try std.testing.expectEqual(@as(u64, 3), result.records_before);
+        try std.testing.expectEqual(@as(u64, 1), result.records_retained);
+        try std.testing.expectEqual(@as(u64, 2), result.historical_records_removed);
+        try transaction.commit();
+    }
+    var loaded = (try database.getByName("final")).?;
+    try std.testing.expectEqual(@as(u32, 3), (try loaded.view()).revision);
+    loaded.deinit();
+
+    var reopened = try Database.open(std.testing.allocator, try database.takeDevice(), options);
+    defer reopened.deinit();
+    var persisted = (try reopened.getByName("final")).?;
+    defer persisted.deinit();
+    try std.testing.expectEqual(@as(u32, 3), (try persisted.view()).revision);
 }
 
 test "fullaz-db: dynamic database rolls back catalog control-plane changes" {

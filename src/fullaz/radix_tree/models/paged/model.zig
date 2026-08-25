@@ -431,9 +431,8 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             sk.deinit();
         }
 
-        pub fn destroy(_: *Self, _: PageId) ErrorSet!void {
-            //try self.ctx.storage_mgr.destroy(pid);
-            // TODO: implement destroy and use it in freeChild
+        pub fn destroy(self: *Self, page_id: PageId) ErrorSet!void {
+            try self.ctx.storage_mgr.destroyPage(page_id);
         }
 
         fn sliceAligned(buf: []u8, n: usize) Error![]KeyDigit {

@@ -54,5 +54,18 @@ pub fn CatalogIdIndex(comptime CacheT: type, comptime ManagerT: type) type {
             defer tree.deinit();
             try tree.set(component_id, &bytes);
         }
+
+        pub fn remove(self: *Self, component_id: u64) Error!bool {
+            if (component_id == 0) {
+                return false;
+            }
+            if (try self.get(component_id) == null) {
+                return false;
+            }
+            var tree = TreeT.init(&self.model);
+            defer tree.deinit();
+            try tree.free(component_id);
+            return true;
+        }
     };
 }

@@ -18,6 +18,8 @@ pub fn CatalogStore(comptime CacheT: type, comptime ManagerT: type) type {
             error{BadCatalogChain};
         pub const Entry = struct {
             ref: CatalogRef,
+            /// Borrows the exact record bytes until the iterator advances.
+            encoded_record: []const u8,
             record: catalog_record.View,
         };
 
@@ -83,6 +85,7 @@ pub fn CatalogStore(comptime CacheT: type, comptime ManagerT: type) type {
                 const slot_id = std.math.cast(u16, result.pos) orelse return error.BadCatalogChain;
                 return .{
                     .ref = try CatalogRef.init(page_id, slot_id, record.revision),
+                    .encoded_record = result.value,
                     .record = record,
                 };
             }
@@ -125,6 +128,43 @@ pub fn CatalogStore(comptime CacheT: type, comptime ManagerT: type) type {
                 .chain_iterator = try self.chain.iterator(),
                 .remaining = record_count,
             };
+        }
+
+        /// Removes every catalog record and releases empty chain pages.
+        pub fn removeAll(self: *Self) Error!usize {
+            const Remove = struct {
+                fn call(_: void, _: anytype, _: usize, _: []const u8) error{}!bool {
+                    return true;
+                }
+            };
+            return self.chain.removeIf({}, Remove.call);
+        }
+
+        pub fn releaseCachedTail(self: *Self) void {
+            self.chain.releaseCachedTail();
+        }
+
+        /// Collects unique physical pages containing the current catalog chain.
+        pub fn collectPageIds(self: *Self, allocator: std.mem.Allocator, record_count: u64) Error![]CacheT.Pid {
+            var page_ids: std.ArrayList(CacheT.Pid) = .empty;
+            errdefer page_ids.deinit(allocator);
+            var catalog_iterator = try self.iterator(record_count);
+            defer catalog_iterator.deinit();
+            while (try catalog_iterator.next()) |entry| {
+                const page_id = std.math.cast(CacheT.Pid, entry.ref.getPageId()) orelse
+                    return error.BadCatalogChain;
+                var found = false;
+                for (page_ids.items) |existing| {
+                    if (existing == page_id) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    try page_ids.append(allocator, page_id);
+                }
+            }
+            return try page_ids.toOwnedSlice(allocator);
         }
     };
 }

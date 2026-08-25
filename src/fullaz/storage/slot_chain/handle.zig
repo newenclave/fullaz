@@ -914,6 +914,14 @@ fn HandleDirectionalImpl(
             return @intCast(try self.ctx.page_chain.manager().getTotalSize());
         }
 
+        /// Releases the optional append cache before external page reclamation.
+        pub fn releaseCachedTail(self: *Self) void {
+            if (self.last_chunk) |*chunk| {
+                chunk.deinit();
+            }
+            self.last_chunk = null;
+        }
+
         pub fn iterator(self: *Self) Error!?Iterator {
             if (try self.ctx.page_chain.manager().getFirst() == null) return null;
             return Iterator.init(
