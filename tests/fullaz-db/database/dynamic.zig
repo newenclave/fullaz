@@ -10,6 +10,217 @@ fn compare(_: void, left: []const u8, right: []const u8) fullaz.core.algorithm.O
     };
 }
 
+fn slotCompare(_: void, left: []const u8, right: []const u8) std.math.Order {
+    return std.mem.order(u8, left, right);
+}
+
+const ReclaimPageSnapshot = struct {
+    page_id: u32,
+    bytes: []u8,
+};
+
+fn collectPersistentFreePages(
+    database: anytype,
+    image_id: [16]u8,
+) !std.ArrayList(u32) {
+    var pages: std.ArrayList(u32) = .empty;
+    errdefer pages.deinit(std.testing.allocator);
+
+    var boot_page = try database.rawCache().fetch(0);
+    defer boot_page.deinit();
+    const boot = try fullaz_db.file.boot.read(try boot_page.data(), .{
+        .image_id = image_id,
+        .page_size = @intCast(database.diagnostics().page_size),
+        .page_id_bits = @bitSizeOf(u32),
+    });
+    const FreedView = fullaz.page.freed.View(u32, .little, true);
+    const nil = std.math.maxInt(u32);
+    var current = boot.state.free_root;
+    while (current) |raw_page_id| {
+        const page_id = std.math.cast(u32, raw_page_id) orelse return error.BadFreeList;
+        try std.testing.expect(page_id != 0);
+        try std.testing.expect(@as(usize, page_id) < database.diagnostics().page_count);
+        try std.testing.expect(std.mem.indexOfScalar(u32, pages.items, page_id) == null);
+        try pages.append(std.testing.allocator, page_id);
+
+        var page = try database.rawCache().fetch(page_id);
+        defer page.deinit();
+        const freed = FreedView.init(try page.data());
+        try std.testing.expectEqual(std.math.maxInt(u16), freed.header().kind.get());
+        const next = freed.header().next.get();
+        current = if (next == nil) null else next;
+    }
+    return pages;
+}
+
+fn collectComponentPages(
+    database: anytype,
+    page_kinds: fullaz_db.PageKindRange,
+) !std.ArrayList(u32) {
+    var pages: std.ArrayList(u32) = .empty;
+    errdefer pages.deinit(std.testing.allocator);
+    const HeaderView = fullaz.page.header.View(u32, u16, .little, true);
+    const end = page_kinds.endExclusive();
+
+    for (1..database.diagnostics().page_count) |index| {
+        const page_id: u32 = @intCast(index);
+        var page = try database.rawCache().fetch(page_id);
+        defer page.deinit();
+        const header = HeaderView.init(try page.data());
+        header.validateCommon() catch continue;
+        if (header.header().self_pid.get() != page_id) {
+            continue;
+        }
+        const kind = header.header().kind.get();
+        if (kind >= page_kinds.base and @as(u32, kind) < end) {
+            try pages.append(std.testing.allocator, page_id);
+        }
+    }
+    return pages;
+}
+
+fn snapshotPages(database: anytype, page_ids: []const u32) !std.ArrayList(ReclaimPageSnapshot) {
+    var snapshots: std.ArrayList(ReclaimPageSnapshot) = .empty;
+    errdefer {
+        for (snapshots.items) |snapshot| {
+            std.testing.allocator.free(snapshot.bytes);
+        }
+        snapshots.deinit(std.testing.allocator);
+    }
+    for (page_ids) |page_id| {
+        var page = try database.cache().fetch(page_id);
+        defer page.deinit();
+        try snapshots.append(std.testing.allocator, .{
+            .page_id = page_id,
+            .bytes = try std.testing.allocator.dupe(u8, try page.data()),
+        });
+    }
+    return snapshots;
+}
+
+fn deinitSnapshots(snapshots: *std.ArrayList(ReclaimPageSnapshot)) void {
+    for (snapshots.items) |snapshot| {
+        std.testing.allocator.free(snapshot.bytes);
+    }
+    snapshots.deinit(std.testing.allocator);
+}
+
+fn expectSnapshotPages(database: anytype, snapshots: []const ReclaimPageSnapshot) !void {
+    for (snapshots) |snapshot| {
+        var page = try database.cache().fetch(snapshot.page_id);
+        defer page.deinit();
+        try std.testing.expectEqualSlices(u8, snapshot.bytes, try page.data());
+    }
+}
+
+fn expectCurrentLifecycle(
+    database: anytype,
+    component_id: u64,
+    revision: u32,
+    state: fullaz_db.file.catalog_record.LifecycleState,
+    metadata_page_id: u64,
+) !void {
+    var loaded = (try database.getById(component_id)).?;
+    defer loaded.deinit();
+    const record = try loaded.view();
+    try std.testing.expectEqual(revision, record.revision);
+    try std.testing.expectEqual(state, record.state);
+    try std.testing.expectEqual(metadata_page_id, record.metadata_root_pid);
+}
+
+fn reclaimDroppedComponentLifecycle(
+    comptime descriptor: fullaz_db.Descriptor,
+    component_id: u64,
+    name: []const u8,
+    page_kinds: fullaz_db.PageKindRange,
+    expected_page_count: usize,
+    image_id: [16]u8,
+    path: []const u8,
+) !void {
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = image_id,
+        .cache_frames = 64,
+    };
+    const io = std.testing.io;
+
+    var database = try Database.open(
+        std.testing.allocator,
+        try Device.open(io, path, 1024),
+        options,
+    );
+    defer database.deinit();
+
+    var current = (try database.getById(component_id)).?;
+    const metadata_page_id = (try current.view()).metadata_root_pid;
+    current.deinit();
+    var component_pages = try collectComponentPages(&database, page_kinds);
+    defer component_pages.deinit(std.testing.allocator);
+    try std.testing.expectEqual(expected_page_count, component_pages.items.len);
+
+    var owned_pages: std.ArrayList(u32) = .empty;
+    defer owned_pages.deinit(std.testing.allocator);
+    try owned_pages.appendSlice(std.testing.allocator, component_pages.items);
+    try owned_pages.append(std.testing.allocator, @intCast(metadata_page_id));
+    var snapshots = try snapshotPages(&database, owned_pages.items);
+    defer deinitSnapshots(&snapshots);
+
+    var drop = try database.begin();
+    try std.testing.expect(try drop.dropComponentById(component_id));
+    try drop.commit();
+    try expectCurrentLifecycle(&database, component_id, 2, .dropped, metadata_page_id);
+    try std.testing.expectEqual(null, try database.getByName(name));
+
+    var free_before = try collectPersistentFreePages(&database, image_id);
+    defer free_before.deinit(std.testing.allocator);
+    var rollback = try database.begin();
+    _ = try rollback.reclaimDroppedComponentById(descriptor, component_id, .{});
+    try rollback.rollback();
+    try expectCurrentLifecycle(&database, component_id, 2, .dropped, metadata_page_id);
+    var free_after_rollback = try collectPersistentFreePages(&database, image_id);
+    defer free_after_rollback.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u32, free_before.items, free_after_rollback.items);
+    try expectSnapshotPages(&database, snapshots.items);
+
+    const page_count_before_reclaim = database.diagnostics().page_count;
+    var reclaim = try database.begin();
+    const result = (try reclaim.reclaimDroppedComponentById(descriptor, component_id, .{})).?;
+    try std.testing.expectEqual(component_id, result.component_id);
+    try std.testing.expect(result.metadata_page_reclaimed);
+    try reclaim.commit();
+    try expectCurrentLifecycle(&database, component_id, 3, .reclaimed, 0);
+    try std.testing.expectEqual(null, try database.getByName(name));
+
+    var free_after_reclaim = try collectPersistentFreePages(&database, image_id);
+    defer free_after_reclaim.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(u32, @intCast(metadata_page_id)), free_after_reclaim.items[0]);
+    for (owned_pages.items) |page_id| {
+        try std.testing.expect(std.mem.indexOfScalar(u32, free_after_reclaim.items, page_id) != null);
+        try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(page_id));
+    }
+
+    var reuse = try database.begin();
+    var reused: std.ArrayList(u32) = .empty;
+    defer reused.deinit(std.testing.allocator);
+    for (0..owned_pages.items.len) |_| {
+        var page = try database.cache().create();
+        const page_id = try page.pid();
+        for (try page.data()) |byte| {
+            try std.testing.expectEqual(@as(u8, 0), byte);
+        }
+        page.deinit();
+        try reused.append(std.testing.allocator, page_id);
+    }
+    try std.testing.expectEqual(reused.items[0], @as(u32, @intCast(metadata_page_id)));
+    for (reused.items) |page_id| {
+        try std.testing.expect(std.mem.indexOfScalar(u32, owned_pages.items, page_id) != null);
+        try database.cache().free(page_id);
+    }
+    try reuse.commit();
+    try std.testing.expectEqual(page_count_before_reclaim, database.diagnostics().page_count);
+}
+
 const MetadataBinding = struct {
     pub const Runtime = struct { root: u64 = 0 };
     pub const DynamicMetadata = struct {
@@ -1159,6 +1370,216 @@ test "fullaz-db: dynamic schema database reuses reclaimed BPT pages after reopen
         var device = try Device.open(io, path, 1024);
         defer device.deinit();
         try std.testing.expectEqual(page_count, device.blocksCount());
+    }
+}
+
+test "fullaz-db: dynamic database reclaims every built-in multi-page component" {
+    const BptDescriptor = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 4,
+        .maximum_value_size = 256,
+        .rebalance_policy = .force_split,
+    });
+    const RtreeDescriptor = fullaz_db.rtree(.{
+        .Coord = i64,
+        .dimensions = 2,
+        .maximum_entries = 4,
+        .maximum_value_size = 4,
+    });
+    const SlotHeapDescriptor = fullaz_db.slotHeap(.{
+        .compare = slotCompare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 4,
+        .maximum_value_size = 256,
+        .maximum_level = 1,
+        .size_classes = fullaz_db.SlotHeapSizeClasses{ .one = {} },
+    });
+    const ChainStoreDescriptor = fullaz_db.chainStore(.{});
+    const WeightedSequenceDescriptor = fullaz_db.weightedSequence(.{ .maximum_chunk_size = 256 });
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 })
+        .add("index", BptDescriptor)
+        .add("spatial", RtreeDescriptor)
+        .add("heap", SlotHeapDescriptor)
+        .add("blob", ChainStoreDescriptor)
+        .add("sequence", WeightedSequenceDescriptor);
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    const RtreeBinding = Schema.trait("spatial").Binding(Database.BackendType);
+    const Box = RtreeBinding.Proxy.BoundingBox;
+    const io = std.testing.io;
+    const path = ".zig-cache/dynamic_builtin_reclaim_matrix.img";
+    const image_id = [_]u8{0xC3} ** 16;
+    const options: Database.InitOptions = .{
+        .image_id = image_id,
+        .cache_frames = 64,
+        .components = .{
+            .index = .{},
+            .spatial = .{},
+            .heap = .{},
+            .blob = .{},
+            .sequence = .{},
+        },
+    };
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    var bpt_value: [256]u8 = undefined;
+    @memset(&bpt_value, 0xB1);
+    var heap_value: [256]u8 = undefined;
+    @memset(&heap_value, 0xA1);
+    var bytes: [1024]u8 = undefined;
+    for (&bytes, 0..) |*byte, index| {
+        byte.* = @intCast(index % 251);
+    }
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const index = transaction.get("index");
+        for ([_][]const u8{ "0001", "0002", "0003", "0004" }) |key| {
+            try std.testing.expect(try index.insert(key, &bpt_value));
+        }
+        const spatial = transaction.get("spatial");
+        for (0..5) |entry_index| {
+            var value: [4]u8 = undefined;
+            std.mem.writeInt(u32, &value, @intCast(entry_index), .little);
+            const coordinate: i64 = @intCast(entry_index * 10);
+            try spatial.insert(
+                Box.initWith(.{ coordinate, 0 }, .{ coordinate + 1, 1 }),
+                &value,
+            );
+        }
+        const heap = transaction.get("heap");
+        for ([_][]const u8{ "0004", "0003", "0002", "0001" }) |key| {
+            try heap.push(key, &heap_value);
+        }
+        try transaction.get("blob").append(&bytes);
+        try transaction.get("sequence").append(&bytes);
+        try transaction.commit();
+    }
+
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        for ([_][]const u8{ "0001", "0002", "0003", "0004" }) |key| {
+            var iterator = (try database.getConst("index").find(key)).?;
+            defer iterator.deinit();
+            const entry = (try iterator.get()).?;
+            try std.testing.expectEqualStrings(key, entry.key);
+            try std.testing.expectEqualSlices(u8, &bpt_value, entry.value);
+        }
+        const Collector = struct {
+            seen: [5]bool = [_]bool{false} ** 5,
+
+            fn callback(self: *@This(), _: Box, value: []const u8) void {
+                const value_id = std.mem.readInt(u32, value[0..4], .little);
+                self.seen[value_id] = true;
+            }
+        };
+        var collector = Collector{};
+        try database.getConst("spatial").search(
+            Box.initWith(.{ -1, -1 }, .{ 100, 2 }),
+            &collector,
+            Collector.callback,
+        );
+        for (collector.seen) |seen| {
+            try std.testing.expect(seen);
+        }
+        try std.testing.expectEqual(@as(u64, 4), try database.getConst("heap").count());
+        {
+            var transaction = try database.begin();
+            defer transaction.deinit();
+            const heap = transaction.get("heap");
+            for ([_][]const u8{ "0001", "0002", "0003", "0004" }) |key| {
+                var top = try heap.top();
+                try std.testing.expectEqualSlices(u8, key, try top.key());
+                try std.testing.expectEqualSlices(u8, &heap_value, try top.value());
+                top.deinit();
+                try heap.pop();
+            }
+            try transaction.rollback();
+        }
+        var output: [1024]u8 = undefined;
+        try std.testing.expectEqual(@as(u64, 1024), try database.getConst("blob").size());
+        try std.testing.expectEqual(@as(usize, 1024), try database.getConst("blob").readAt(0, &output));
+        try std.testing.expectEqualSlices(u8, &bytes, &output);
+        try std.testing.expectEqual(@as(u64, 1024), try database.getConst("sequence").size());
+        try std.testing.expectEqual(@as(usize, 1024), try database.getConst("sequence").readAt(0, &output));
+        try std.testing.expectEqualSlices(u8, &bytes, &output);
+    }
+
+    try reclaimDroppedComponentLifecycle(
+        BptDescriptor,
+        1,
+        "index",
+        Schema.pageKinds("index"),
+        3,
+        image_id,
+        path,
+    );
+    try reclaimDroppedComponentLifecycle(
+        RtreeDescriptor,
+        2,
+        "spatial",
+        Schema.pageKinds("spatial"),
+        3,
+        image_id,
+        path,
+    );
+    try reclaimDroppedComponentLifecycle(
+        SlotHeapDescriptor,
+        3,
+        "heap",
+        Schema.pageKinds("heap"),
+        4,
+        image_id,
+        path,
+    );
+    try reclaimDroppedComponentLifecycle(
+        ChainStoreDescriptor,
+        4,
+        "blob",
+        Schema.pageKinds("blob"),
+        2,
+        image_id,
+        path,
+    );
+    try reclaimDroppedComponentLifecycle(
+        WeightedSequenceDescriptor,
+        5,
+        "sequence",
+        Schema.pageKinds("sequence"),
+        3,
+        image_id,
+        path,
+    );
+    {
+        const RawDatabase = fullaz_db.DynamicDatabase(Device);
+        var database = try RawDatabase.open(
+            std.testing.allocator,
+            try Device.open(io, path, 1024),
+            .{ .image_id = image_id, .cache_frames = 64 },
+        );
+        defer database.deinit();
+        for (1..6) |component_id| {
+            try expectCurrentLifecycle(&database, @intCast(component_id), 3, .reclaimed, 0);
+        }
+        var free_pages = try collectPersistentFreePages(&database, image_id);
+        defer free_pages.deinit(std.testing.allocator);
+        try std.testing.expect(free_pages.items.len > 0);
     }
 }
 
