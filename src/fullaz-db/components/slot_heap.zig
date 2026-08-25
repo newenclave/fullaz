@@ -437,6 +437,10 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                 pub fn deinitRuntime(runtime: *Runtime) void {
                     runtime.* = undefined;
                 }
+
+                pub fn reclaimPersistent(runtime: *Runtime) Error!void {
+                    try runtime.heap.clear();
+                }
                 pub fn captureTransactionState(runtime: *const Runtime) TransactionState {
                     return runtime.manager.getState();
                 }
@@ -456,6 +460,7 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
             };
             comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);
             comptime component.assertBinding(BindingT, BackendT);
+            comptime component.assertReclamation(BindingT);
             return BindingT;
         }
     };

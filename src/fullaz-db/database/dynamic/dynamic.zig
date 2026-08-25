@@ -4,6 +4,7 @@ const page_cache = @import("fullaz").storage.page_cache;
 const memory_policy = @import("fullaz").storage.memory_policy;
 const wal = @import("fullaz").storage.wal;
 const component = @import("../../component/component.zig");
+const component_fingerprint = @import("../../component/fingerprint.zig");
 const PageKindRange = component.PageKindRange;
 const file = @import("../../file/file.zig");
 
@@ -120,6 +121,25 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
     const Catalog = file.CatalogStore(Cache, CatalogManager);
     const CatalogIds = file.CatalogIdIndex(Cache, IndexManager);
     const CatalogNames = file.CatalogNameIndex(Cache, IndexManager);
+    const ComponentBackend = struct {
+        pub const PageId = DevicePageId;
+        pub const CacheType = Cache;
+
+        allocator_value: std.mem.Allocator,
+        cache_ptr: *Cache,
+
+        pub fn allocator(self: *const @This()) std.mem.Allocator {
+            return self.allocator_value;
+        }
+
+        pub fn cache(self: *@This()) *Cache {
+            return self.cache_ptr;
+        }
+
+        pub fn cacheConst(self: *const @This()) *const Cache {
+            return self.cache_ptr;
+        }
+    };
     const Core = struct {
         allocator: std.mem.Allocator,
         device: DeviceT,
@@ -153,6 +173,10 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             records_retained: u64,
             historical_records_removed: u64,
             metadata_pages_reclaimed: u64,
+        };
+        pub const ComponentReclamationResult = struct {
+            component_id: u64,
+            metadata_page_reclaimed: bool,
         };
         pub const CatalogStoreType = Catalog;
         pub const CatalogIdIndexType = CatalogIds;
@@ -195,6 +219,8 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 NameMismatch,
                 NameConflict,
                 ComponentInUse,
+                ComponentNotDropped,
+                ComponentDescriptorMismatch,
                 MissingDependency,
             };
 
@@ -456,6 +482,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 previous: file.catalog_record.View,
                 name: []const u8,
                 state: file.catalog_record.LifecycleState,
+                metadata_root_pid: u64,
             ) Error!file.CatalogRef {
                 const core = self.corePtr();
                 const revision = std.math.add(u32, previous.revision, 1) catch {
@@ -479,7 +506,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     .metadata_format_version = previous.metadata_format_version,
                     .page_kind_base = previous.page_kind_base,
                     .page_kind_count = previous.page_kind_count,
-                    .metadata_root_pid = previous.metadata_root_pid,
+                    .metadata_root_pid = metadata_root_pid,
                     .settings_fingerprint = previous.settings_fingerprint,
                     .dependency_ids = dependencies,
                     .state = state,
@@ -497,7 +524,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     const current_ref = (try core.catalog_ids.get(entry.record.component_id)) orelse {
                         return error.CatalogIndexMismatch;
                     };
-                    if (!sameRef(entry.ref, current_ref) or entry.record.state == .dropped) {
+                    if (!sameRef(entry.ref, current_ref) or entry.record.state != .active) {
                         continue;
                     }
                     for (0..entry.record.dependency_count) |index| {
@@ -621,7 +648,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 var current = (try loadCurrentById(core, component_id)) orelse return false;
                 defer current.deinit();
                 const previous = try current.view();
-                if (previous.state == .dropped or std.mem.eql(u8, previous.name, new_name)) {
+                if (previous.state != .active or std.mem.eql(u8, previous.name, new_name)) {
                     return false;
                 }
                 const name_id = (try core.catalog_names.get(previous.name)) orelse
@@ -637,7 +664,12 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 errdefer if (mutated) {
                     core.cache.markTransactionFailed();
                 };
-                const successor = try self.appendLifecycleSuccessor(previous, new_name, .active);
+                const successor = try self.appendLifecycleSuccessor(
+                    previous,
+                    new_name,
+                    .active,
+                    previous.metadata_root_pid,
+                );
                 mutated = true;
                 try core.catalog_ids.set(component_id, successor);
                 try core.catalog_names.set(new_name, component_id);
@@ -659,7 +691,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 var current = (try loadCurrentById(core, component_id)) orelse return false;
                 defer current.deinit();
                 const previous = try current.view();
-                if (previous.state == .dropped) {
+                if (previous.state != .active) {
                     return false;
                 }
                 const name_id = (try core.catalog_names.get(previous.name)) orelse
@@ -678,7 +710,12 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 errdefer if (mutated) {
                     core.cache.markTransactionFailed();
                 };
-                const successor = try self.appendLifecycleSuccessor(previous, previous.name, .dropped);
+                const successor = try self.appendLifecycleSuccessor(
+                    previous,
+                    previous.name,
+                    .dropped,
+                    previous.metadata_root_pid,
+                );
                 mutated = true;
                 try core.catalog_ids.set(component_id, successor);
                 if (!try core.catalog_names.remove(previous.name)) {
@@ -686,6 +723,90 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 }
                 core.state.live_component_count -= 1;
                 return true;
+            }
+
+            /// Reclaims a logically dropped component using a matching compiled
+            /// descriptor. Unknown component kinds remain untouched because the
+            /// raw catalog cannot safely infer their page ownership graph.
+            /// Large graphs can return `BatchTooLarge`; after cleanup begins,
+            /// callers must roll back rather than commit a partial reclaim.
+            pub fn reclaimDroppedComponentById(
+                self: *Transaction,
+                comptime descriptor: component.Descriptor,
+                component_id: u64,
+                init_options: component.bindingFor(descriptor, ComponentBackend).InitOptions,
+            ) (Error || component.bindingFor(descriptor, ComponentBackend).Error)!?ComponentReclamationResult {
+                const BindingT = component.bindingFor(descriptor, ComponentBackend);
+                comptime component.assertReclamation(BindingT);
+                try self.requireActive();
+                const core = self.corePtr();
+                var current = (try loadCurrentById(core, component_id)) orelse return null;
+                defer current.deinit();
+                const previous = try current.view();
+                if (previous.state == .reclaimed) {
+                    return null;
+                }
+                if (previous.state != .dropped) {
+                    return error.ComponentNotDropped;
+                }
+                if (!std.mem.eql(u8, previous.kind_name, descriptor.Trait.kind_name) or
+                    previous.component_format_version != descriptor.Trait.format_version or
+                    previous.metadata_format_version != BindingT.DynamicMetadata.format_version or
+                    previous.page_kind_count != descriptor.Trait.page_kind_count or
+                    !std.mem.eql(
+                        u8,
+                        &previous.settings_fingerprint,
+                        &component_fingerprint.componentDigest(descriptor.Trait),
+                    ))
+                {
+                    return error.ComponentDescriptorMismatch;
+                }
+
+                var backend = ComponentBackend{
+                    .allocator_value = core.allocator,
+                    .cache_ptr = &core.cache,
+                };
+                var runtime: BindingT.Runtime = undefined;
+                try BindingT.initRuntime(&runtime, &backend, .{
+                    .base = previous.page_kind_base,
+                    .count = previous.page_kind_count,
+                }, init_options);
+                defer BindingT.deinitRuntime(&runtime);
+                const metadata_page_id = std.math.cast(DevicePageId, previous.metadata_root_pid) orelse
+                    return error.PageIdTooLarge;
+                {
+                    var metadata_page = try core.cache.fetch(metadata_page_id);
+                    defer metadata_page.deinit();
+                    const metadata = try file.component_metadata_page.read(try metadata_page.data(), .{
+                        .component_id = component_id,
+                        .metadata_format_version = BindingT.DynamicMetadata.format_version,
+                    });
+                    try file.component_metadata.restore(
+                        BindingT,
+                        &runtime,
+                        metadata.payload,
+                        core.raw_cache.pageCount(),
+                    );
+                }
+
+                var mutated = false;
+                errdefer if (mutated) {
+                    core.cache.markTransactionFailed();
+                };
+                const successor = try self.appendLifecycleSuccessor(
+                    previous,
+                    previous.name,
+                    .reclaimed,
+                    0,
+                );
+                mutated = true;
+                try core.catalog_ids.set(component_id, successor);
+                try BindingT.reclaimPersistent(&runtime);
+                try core.cache.free(metadata_page_id);
+                return .{
+                    .component_id = component_id,
+                    .metadata_page_reclaimed = true,
+                };
             }
 
             /// Rebuilds current catalog state and reclaims unreachable historical metadata.
@@ -702,6 +823,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     component_id: u64,
                     metadata_format_version: u32,
                     retained: bool,
+                    latest_revision: u32,
                 };
 
                 var retained: std.ArrayList(Retained) = .empty;
@@ -713,6 +835,8 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 }
                 var retained_ids = std.AutoHashMap(u64, void).init(core.allocator);
                 defer retained_ids.deinit();
+                var reclaimed_revisions = std.AutoHashMap(u64, u32).init(core.allocator);
+                defer reclaimed_revisions.deinit();
                 var metadata = std.AutoHashMap(DevicePageId, MetadataReference).init(core.allocator);
                 defer metadata.deinit();
 
@@ -721,28 +845,35 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     var iterator = try core.catalog.iterator(core.state.catalog_record_count);
                     defer iterator.deinit();
                     while (try iterator.next()) |entry| {
-                        const metadata_page_id = std.math.cast(
-                            DevicePageId,
-                            entry.record.metadata_root_pid,
-                        ) orelse return error.PageIdTooLarge;
                         const current_ref = (try core.catalog_ids.get(entry.record.component_id)) orelse
                             return error.CatalogIndexMismatch;
                         const is_retained = sameRef(entry.ref, current_ref);
-                        const metadata_result = try metadata.getOrPut(metadata_page_id);
-                        if (metadata_result.found_existing) {
-                            const existing = metadata_result.value_ptr.*;
-                            if (existing.component_id != entry.record.component_id or
-                                existing.metadata_format_version != entry.record.metadata_format_version)
-                            {
-                                return error.CatalogIndexMismatch;
+                        if (entry.record.metadata_root_pid != 0) {
+                            const metadata_page_id = std.math.cast(
+                                DevicePageId,
+                                entry.record.metadata_root_pid,
+                            ) orelse return error.PageIdTooLarge;
+                            const metadata_result = try metadata.getOrPut(metadata_page_id);
+                            if (metadata_result.found_existing) {
+                                const existing = metadata_result.value_ptr.*;
+                                if (existing.component_id != entry.record.component_id or
+                                    existing.metadata_format_version != entry.record.metadata_format_version)
+                                {
+                                    return error.CatalogIndexMismatch;
+                                }
+                                metadata_result.value_ptr.retained = metadata_result.value_ptr.retained or is_retained;
+                                metadata_result.value_ptr.latest_revision = @max(
+                                    metadata_result.value_ptr.latest_revision,
+                                    entry.record.revision,
+                                );
+                            } else {
+                                metadata_result.value_ptr.* = .{
+                                    .component_id = entry.record.component_id,
+                                    .metadata_format_version = entry.record.metadata_format_version,
+                                    .retained = is_retained,
+                                    .latest_revision = entry.record.revision,
+                                };
                             }
-                            metadata_result.value_ptr.retained = metadata_result.value_ptr.retained or is_retained;
-                        } else {
-                            metadata_result.value_ptr.* = .{
-                                .component_id = entry.record.component_id,
-                                .metadata_format_version = entry.record.metadata_format_version,
-                                .retained = is_retained,
-                            };
                         }
                         if (!is_retained) {
                             continue;
@@ -758,6 +889,11 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                                 return error.CatalogIndexMismatch;
                             }
                             active_count += 1;
+                        } else if (entry.record.state == .reclaimed) {
+                            try reclaimed_revisions.put(
+                                entry.record.component_id,
+                                entry.record.revision,
+                            );
                         } else if (try core.catalog_names.get(entry.record.name)) |name_id| {
                             if (name_id == entry.record.component_id) {
                                 return error.CatalogIndexMismatch;
@@ -855,7 +991,11 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 var metadata_pages_reclaimed: u64 = 0;
                 var metadata_iterator = metadata.iterator();
                 while (metadata_iterator.next()) |entry| {
-                    if (entry.value_ptr.retained) {
+                    const reclaimed_revision = reclaimed_revisions.get(entry.value_ptr.component_id);
+                    if (entry.value_ptr.retained or
+                        (reclaimed_revision != null and
+                            entry.value_ptr.latest_revision +| 1 == reclaimed_revision.?))
+                    {
                         continue;
                     }
                     const page_id = blk: {
@@ -1097,7 +1237,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     // Immutable historical revisions remain in the catalog chain.
                     continue;
                 }
-                if (entry.record.state == .dropped) {
+                if (entry.record.state != .active) {
                     if (try core.catalog_names.get(entry.record.name)) |name_id| {
                         if (name_id == entry.record.component_id) {
                             return error.CatalogIndexMismatch;

@@ -213,6 +213,37 @@ pub fn Bpt(comptime ModelT: type) type {
             // nothing to do for now :)
         }
 
+        /// Releases every page reachable from the current root.
+        ///
+        /// This bypasses normal rebalancing, so callers must ensure the tree is
+        /// no longer reachable before invoking it.
+        pub fn destroy(self: *Self) Error!void {
+            const accessor = self.model.accessor();
+            const root_id = accessor.getRoot() orelse return;
+            try self.destroyNode(root_id);
+            try accessor.setRoot(null);
+        }
+
+        fn destroyNode(self: *Self, node_id: NodeIdType) Error!void {
+            const accessor = self.model.accessor();
+            if (try accessor.loadLeaf(node_id)) |leaf_value| {
+                const leaf = leaf_value;
+                accessor.deinitLeaf(leaf);
+                return accessor.destroy(node_id);
+            }
+            if (try accessor.loadInode(node_id)) |inode_value| {
+                var inode = inode_value;
+                errdefer accessor.deinitInode(inode);
+                const child_count = try inode.size() + 1;
+                for (0..child_count) |index| {
+                    try self.destroyNode(try inode.getChild(index));
+                }
+                accessor.deinitInode(inode);
+                return accessor.destroy(node_id);
+            }
+            return error.ChildNotFoundInParent;
+        }
+
         pub fn iterator(self: *const Self) Error!?Iterator {
             const accessor = self.model.accessor();
             if (accessor.getRoot()) |root_id| {

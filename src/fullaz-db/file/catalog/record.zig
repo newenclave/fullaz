@@ -9,7 +9,8 @@ pub const Error = tagged.Error || error{
 };
 
 pub const legacy_format_version: u16 = 1;
-pub const format_version: u16 = 2;
+pub const lifecycle_format_version: u16 = 2;
+pub const format_version: u16 = 3;
 const U16 = PackedInt(u16, .little);
 const U32 = PackedInt(u32, .little);
 
@@ -63,6 +64,7 @@ const all_known_tags = singular_tags ++ [_]u16{Tag.dependency_id};
 pub const LifecycleState = enum(u8) {
     active = 1,
     dropped = 2,
+    reclaimed = 3,
 };
 
 pub const Record = struct {
@@ -120,7 +122,7 @@ pub fn format(
     record: Record,
     previous_payload: []const u8,
 ) Error!void {
-    try validate(record);
+    try validate(record, format_version);
     try tagged.validateKnownFields(previous_payload, &singular_tags);
 
     var writer = tagged.Writer.init(payload_scratch);
@@ -143,7 +145,7 @@ pub fn format(
 pub fn read(bytes: []const u8) Error!View {
     const envelope = envelopeConst(bytes) orelse return error.BadCatalogRecord;
     const version = envelope.version.get();
-    if (version != legacy_format_version and version != format_version) {
+    if (version != legacy_format_version and version != lifecycle_format_version and version != format_version) {
         return error.UnsupportedVersion;
     }
     if (envelope.flags.get() != 0) {
@@ -245,12 +247,13 @@ fn decode(payload: []const u8, version: u16) Error!View {
             },
             Tag.lifecycle_state => {
                 found[10] = true;
-                if (version != format_version) {
+                if (version == legacy_format_version) {
                     return error.BadCatalogRecord;
                 }
                 result.state = switch (try readInt(field.value, u8)) {
                     @intFromEnum(LifecycleState.active) => .active,
                     @intFromEnum(LifecycleState.dropped) => .dropped,
+                    @intFromEnum(LifecycleState.reclaimed) => .reclaimed,
                     else => return error.BadCatalogRecord,
                 };
             },
@@ -272,7 +275,7 @@ fn decode(payload: []const u8, version: u16) Error!View {
 
     result.payload = payload;
     result.dependency_count = dependency_count;
-    try validateView(result);
+    try validateView(result, version);
     return result;
 }
 
@@ -283,7 +286,7 @@ fn readInt(bytes: []const u8, comptime T: type) Error!T {
     return std.mem.readInt(T, bytes[0..@sizeOf(T)], .little);
 }
 
-fn validate(record: Record) Error!void {
+fn validate(record: Record, version: u16) Error!void {
     try validateCore(
         record.component_id,
         record.revision,
@@ -294,6 +297,8 @@ fn validate(record: Record) Error!void {
         record.page_kind_base,
         record.page_kind_count,
         record.metadata_root_pid,
+        record.state,
+        version,
     );
     for (record.dependency_ids) |dependency_id| {
         if (dependency_id == 0 or dependency_id == record.component_id) {
@@ -303,7 +308,7 @@ fn validate(record: Record) Error!void {
     _ = record.state;
 }
 
-fn validateView(view: View) Error!void {
+fn validateView(view: View, version: u16) Error!void {
     try validateCore(
         view.component_id,
         view.revision,
@@ -314,6 +319,8 @@ fn validateView(view: View) Error!void {
         view.page_kind_base,
         view.page_kind_count,
         view.metadata_root_pid,
+        view.state,
+        version,
     );
     for (0..view.dependency_count) |index| {
         const dependency_id = (try view.getDependency(index)).?;
@@ -334,13 +341,14 @@ fn validateCore(
     page_kind_base: u16,
     page_kind_count: u16,
     metadata_root_pid: u64,
+    state: LifecycleState,
+    version: u16,
 ) Error!void {
     const range_end = std.math.add(u32, page_kind_base, page_kind_count) catch {
         return error.BadCatalogRecord;
     };
     if (component_id == 0 or revision == 0 or
         component_format_version == 0 or metadata_format_version == 0 or
-        metadata_root_pid == 0 or
         name.len == 0 or name.len > 255 or
         kind_name.len == 0 or
         !std.unicode.utf8ValidateSlice(name) or
@@ -351,6 +359,13 @@ fn validateCore(
         page_kind_base < system_kinds.first_component or
         range_end > system_kinds.invalid_sentinel)
     {
+        return error.BadCatalogRecord;
+    }
+    if (state == .reclaimed) {
+        if (version != format_version or metadata_root_pid != 0) {
+            return error.BadCatalogRecord;
+        }
+    } else if (metadata_root_pid == 0) {
         return error.BadCatalogRecord;
     }
 }

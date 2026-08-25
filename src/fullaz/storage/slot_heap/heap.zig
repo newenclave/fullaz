@@ -75,6 +75,14 @@ pub fn Heap(comptime ModelT: type) type {
             MaxDepth,
         };
 
+        /// Removes every entry through the normal heap path so associated FSM
+        /// slabs are released together with emptied heap pages.
+        pub fn clear(self: *Self) Error!void {
+            while (try self.count() != 0) {
+                try self.pop();
+            }
+        }
+
         pub const Peek = struct {
             const PeekSelf = @This();
 

@@ -255,6 +255,10 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                     runtime.* = undefined;
                 }
 
+                pub fn reclaimPersistent(runtime: *Runtime) BindingError!void {
+                    try runtime.blob.clear();
+                }
+
                 pub fn captureTransactionState(runtime: *const Runtime) TransactionState {
                     return runtime.manager.getState();
                 }
@@ -277,6 +281,7 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
             };
             comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);
             comptime component.assertBinding(BindingT, BackendT);
+            comptime component.assertReclamation(BindingT);
             return BindingT;
         }
     };

@@ -174,6 +174,18 @@ pub fn assertBinding(comptime BindingT: type, comptime BackendT: type) void {
     interfaces.requiresFnSignature(BindingT, "proxyConst", fn (*const Runtime) *const ConstProxy);
 }
 
+/// Verifies the optional persistent cleanup capability of a component binding.
+///
+/// Bindings without this capability remain valid, but raw dynamic reclamation
+/// refuses to reclaim their dropped component pages.
+pub fn assertReclamation(comptime BindingT: type) void {
+    interfaces.requiresFnSignature(
+        BindingT,
+        "reclaimPersistent",
+        fn (*BindingT.Runtime) BindingT.Error!void,
+    );
+}
+
 /// Verifies persistent root metadata supplied by a concrete component binding.
 ///
 /// ```zig

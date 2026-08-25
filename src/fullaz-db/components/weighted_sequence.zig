@@ -228,6 +228,10 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
                     runtime.* = undefined;
                 }
 
+                pub fn reclaimPersistent(runtime: *Runtime) BindingError!void {
+                    try runtime.sequence.clear();
+                }
+
                 pub fn captureTransactionState(runtime: *const Runtime) TransactionState {
                     return runtime.manager.getRoot();
                 }
@@ -250,6 +254,7 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
             };
             comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);
             comptime component.assertBinding(BindingT, BackendT);
+            comptime component.assertReclamation(BindingT);
             return BindingT;
         }
     };

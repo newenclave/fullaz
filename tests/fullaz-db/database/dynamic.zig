@@ -90,6 +90,50 @@ const MigratingMetadataBinding = struct {
 };
 const PreflightSchema = fullaz_db.Schema(.{ .page_id = u32 }).add("blob", fullaz_db.chainStore(.{}));
 
+const ReclaimTrait = struct {
+    pub const kind_name: []const u8 = "test.reclaim";
+    pub const format_version: u32 = 1;
+    pub const page_kind_count: usize = 1;
+    pub const page_roles: [page_kind_count][]const u8 = .{"data"};
+
+    pub fn fingerprint(_: *fullaz_db.FingerprintWriter) void {}
+
+    pub fn Binding(comptime BackendT: type) type {
+        return struct {
+            pub const Runtime = struct {};
+            pub const Proxy = Runtime;
+            pub const ConstProxy = Runtime;
+            pub const InitOptions = struct {};
+            pub const TransactionState = void;
+            pub const Error = fullaz_db.file.dynamic_metadata.Error;
+            pub const DynamicMetadata = struct {
+                pub const format_version: u32 = 1;
+                pub const known_tags: []const u16 = &.{};
+                pub const repeated_tags: []const u16 = &.{};
+                pub const Error = fullaz_db.file.dynamic_metadata.Error;
+
+                pub fn restore(_: *Runtime, payload: []const u8, _: usize) @This().Error!void {
+                    try fullaz_db.file.tagged_fields.validateKnownFields(payload, known_tags);
+                }
+
+                pub fn encodeKnown(_: *const Runtime, _: *fullaz_db.file.tagged_fields.Writer) @This().Error!void {}
+            };
+
+            pub fn initRuntime(_: *Runtime, _: *BackendT, _: fullaz_db.PageKindRange, _: InitOptions) Error!void {}
+            pub fn deinitRuntime(_: *Runtime) void {}
+            pub fn captureTransactionState(_: *const Runtime) TransactionState {}
+            pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
+            pub fn proxy(runtime: *Runtime) Proxy {
+                return runtime.*;
+            }
+            pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
+                return runtime;
+            }
+            pub fn reclaimPersistent(_: *Runtime) Error!void {}
+        };
+    }
+};
+
 fn encodeRecord(bytes: []u8, scratch: []u8) ![]const u8 {
     try fullaz_db.file.catalog_record.format(bytes, scratch, .{
         .component_id = 1,
@@ -177,6 +221,91 @@ test "fullaz-db: dynamic database formats and opens a memory block" {
     defer reopened.deinit();
     const diagnostics = reopened.diagnostics();
     try std.testing.expectEqual(@as(usize, 1), diagnostics.page_count);
+}
+
+test "fullaz-db: dynamic database reclaims a dropped component tombstone" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xA6} ** 16,
+        .cache_frames = 32,
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    defer database.deinit();
+
+    var create = try database.begin();
+    var metadata_page = try database.cache().create();
+    const metadata_page_id = try metadata_page.pid();
+    try fullaz_db.file.component_metadata_page.format(
+        try metadata_page.dataMut(),
+        .{ .component_id = 1, .metadata_format_version = 1 },
+        &.{},
+    );
+    metadata_page.deinit();
+    var record_bytes: [1024]u8 = undefined;
+    var record_scratch: [1024]u8 = undefined;
+    try fullaz_db.file.catalog_record.format(&record_bytes, &record_scratch, .{
+        .component_id = 1,
+        .revision = 1,
+        .name = "reclaimable",
+        .kind_name = ReclaimTrait.kind_name,
+        .component_format_version = ReclaimTrait.format_version,
+        .metadata_format_version = 1,
+        .page_kind_base = 0x0100,
+        .page_kind_count = ReclaimTrait.page_kind_count,
+        .metadata_root_pid = metadata_page_id,
+        .settings_fingerprint = fullaz_db.componentFingerprint(ReclaimTrait),
+        .dependency_ids = &.{},
+    }, &.{});
+    _ = try create.registerCatalogComponent(
+        record_bytes[0..try fullaz_db.file.catalog_record.encodedByteSize(&record_bytes)],
+    );
+    try create.commit();
+
+    var drop = try database.begin();
+    try std.testing.expect(try drop.dropComponentById(1));
+    try drop.commit();
+
+    var rolled_back = try database.begin();
+    _ = try rolled_back.reclaimDroppedComponentById(
+        fullaz_db.Descriptor{ .Trait = ReclaimTrait },
+        1,
+        .{},
+    );
+    try rolled_back.rollback();
+    {
+        var dropped_record = (try database.getById(1)).?;
+        defer dropped_record.deinit();
+        try std.testing.expectEqual(
+            fullaz_db.file.catalog_record.LifecycleState.dropped,
+            (try dropped_record.view()).state,
+        );
+    }
+
+    var reclaim = try database.begin();
+    const result = (try reclaim.reclaimDroppedComponentById(
+        fullaz_db.Descriptor{ .Trait = ReclaimTrait },
+        1,
+        .{},
+    )).?;
+    try std.testing.expectEqual(@as(u64, 1), result.component_id);
+    try std.testing.expect(result.metadata_page_reclaimed);
+    try reclaim.commit();
+
+    var record = (try database.getById(1)).?;
+    const view = try record.view();
+    try std.testing.expectEqual(fullaz_db.file.catalog_record.LifecycleState.reclaimed, view.state);
+    try std.testing.expectEqual(@as(u64, 0), view.metadata_root_pid);
+    record.deinit();
+
+    var compact = try database.begin();
+    const compacted = try compact.compactCatalog();
+    try std.testing.expectEqual(@as(u64, 2), compacted.historical_records_removed);
+    try compact.commit();
 }
 
 test "fullaz-db: dynamic database persists and reuses reclaimed pages" {
