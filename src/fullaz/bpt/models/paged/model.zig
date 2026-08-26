@@ -788,6 +788,55 @@ pub fn PagedModel(
             // nothing to yet
         }
 
+        /// Enumerates canonical child references from one serialized inode page.
+        /// Parent and leaf sibling links are maintenance links, not ownership edges.
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: NodeIdType,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const view = BptPageConst.InodeSubheaderView.init(page);
+            const settings = self.accessor_state.ctx.settings;
+            try view.validatePage(
+                page_id,
+                settings.inode_page_kind,
+                settings.maximum_key_size,
+            );
+            const slots = try view.slotsDir();
+            const child_count = slots.size();
+            for (0..child_count) |index| {
+                try visitor.visit((try view.get(index)).child);
+            }
+            const rightmost_child = view.subheader().rightmost_child;
+            if (!rightmost_child.isMax()) {
+                try visitor.visit(rightmost_child.get());
+            }
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: NodeIdType,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const view = BptPageConst.LeafSubheaderView.init(page);
+            const settings = self.accessor_state.ctx.settings;
+            try view.validatePage(
+                page_id,
+                settings.leaf_page_kind,
+                settings.maximum_key_size,
+                settings.maximum_value_size,
+            );
+            if (visitor.hasValueScanner()) {
+                const slots = try view.slotsDir();
+                const child_count = slots.size();
+                for (0..child_count) |index| {
+                    try visitor.visitValue((try view.get(index)).value);
+                }
+            }
+        }
+
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
         }

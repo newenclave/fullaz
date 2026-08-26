@@ -717,6 +717,42 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
             };
         }
 
+        pub fn scanInodeRefs(
+            self: *Self,
+            page_id: NodeIdType,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            _ = page;
+
+            const acc = self.accessor();
+            const inode = (try acc.loadInode(page_id)) orelse return Error.InvalidId;
+            defer acc.deinitInode(inode);
+            const child_count = try inode.size() + 1;
+            for (0..child_count) |index| {
+                try visitor.visit(try inode.getChild(index));
+            }
+        }
+
+        pub fn scanLeafRefs(
+            self: *Self,
+            page_id: NodeIdType,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            _ = page;
+
+            if (visitor.hasValueScanner()) {
+                const acc = self.accessor();
+                const leaf = (try acc.loadLeaf(page_id)) orelse return Error.InvalidId;
+                defer acc.deinitLeaf(leaf);
+                const count = try leaf.size();
+                for (0..count) |index| {
+                    try visitor.visitValue(try leaf.getValue(index));
+                }
+            }
+        }
+
         pub fn deinit(self: *Self) void {
             self.accessor_state.deinit();
         }

@@ -1,4 +1,5 @@
 pub const core = @import("fullaz/core/core.zig");
+pub const gc = @import("fullaz/gc/gc.zig");
 
 pub const bpt = @import("fullaz/bpt/bpt.zig");
 pub const weighted_bpt = @import("fullaz/weighted_bpt/weighted_bpt.zig");

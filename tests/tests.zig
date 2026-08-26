@@ -29,6 +29,10 @@ test {
     _ = @import("fullaz-db/file/metadata/io.zig");
     _ = @import("core/wordt.zig");
     _ = @import("core/bitset.zig");
+    _ = @import("gc/interfaces.zig");
+    _ = @import("gc/memory.zig");
+    _ = @import("gc/paged.zig");
+    _ = @import("gc/bpt.zig");
     _ = @import("core/static_vector.zig");
     _ = @import("core/algorithm.zig");
     _ = @import("core/bloom.zig");
