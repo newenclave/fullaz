@@ -60,5 +60,6 @@ pub fn PagedEmpty(comptime CoordT: type, comptime dimention: usize, comptime Val
         pub fn onGrow(_: *Storage, _: *const Storage) Error!void {}
         pub fn onAdopt(_: *Storage, _: Box, _: []const u8) Error!void {}
         pub fn onRemove(_: *Storage, _: Box, _: []const u8) Error!void {}
+        pub fn scanRefs(_: *const Storage, _: anytype) !void {}
     };
 }

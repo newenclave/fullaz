@@ -2,6 +2,7 @@ const std = @import("std");
 const view = @import("view.zig");
 const page_chain = @import("../page_chain/page_chain.zig");
 const errors = @import("../../core/errors.zig");
+const scanner = @import("scanner.zig");
 
 pub const Settings = page_chain.Settings;
 
@@ -716,6 +717,24 @@ fn HandleDirectionalImpl(
                 last_c.deinit();
             }
             self.ctx.page_chain.deinit();
+        }
+
+        pub fn scanChunkRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return scanner.scanRefs(
+                PageId,
+                IndexT,
+                forward_only,
+                Endian,
+                page_id,
+                page,
+                self.ctx.settings.chunk_page_kind,
+                visitor,
+            );
         }
 
         fn compactPage(self: *const Self, page: *ChunkHandle) Error!void {

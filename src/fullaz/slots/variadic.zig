@@ -829,6 +829,16 @@ pub fn VariadicImpl(
             return @as(usize, @intCast(header_ptr.entry_count.get()));
         }
 
+        /// Reports whether a directory entry still owns a logical slot.
+        /// Freed entries retain their directory position with an invalid offset.
+        pub fn isAllocated(self: *const Self, entry: usize) Error!bool {
+            const slots = self.entries();
+            if (entry >= slots.len) {
+                return Error.OutOfBounds;
+            }
+            return slotOffset(slots[entry].offset.get()) != SLOT_INVALID;
+        }
+
         pub fn getFlags(self: *const Self, entry: usize) Error!T {
             const slots = self.entries();
             if (entry >= slots.len) {

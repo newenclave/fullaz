@@ -28,6 +28,7 @@ pub fn WeightedSeq(
         const Self = @This();
 
         pub const Offset = WeightT;
+        pub const PageId = TreeT.PageId;
         pub const Error = TreeError || error{
             OutOfBounds,
             BadChunk,
@@ -153,6 +154,37 @@ pub fn WeightedSeq(
             while (try self.tree.totalWeight() > 0) {
                 try self.tree.removeEntry(0);
             }
+        }
+
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.tree.scanInodeRefs(page_id, page, visitor);
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const NoValueScan = struct {
+                sink: @TypeOf(visitor),
+
+                pub fn hasValueScanner(_: @This()) bool {
+                    return false;
+                }
+
+                pub fn visit(wrapper: @This(), child_page_id: PageId) !void {
+                    return wrapper.sink.visit(child_page_id);
+                }
+
+                pub fn visitValue(_: @This(), _: []const u8) !void {}
+            };
+            return self.tree.scanLeafRefs(page_id, page, NoValueScan{ .sink = visitor });
         }
 
         /// Emits adjacent replacement fragments as maximally sized chunks.

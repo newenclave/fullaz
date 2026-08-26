@@ -495,6 +495,7 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
 
         pub const Settings = SettingsImpl;
         pub const NodeIdType = PidType;
+        pub const PageId = PidType;
 
         pub const KeyInType = KeyT;
         pub const ValueInType = ValueT;

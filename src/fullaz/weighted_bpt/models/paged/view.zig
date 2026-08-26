@@ -20,6 +20,29 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime WeightT: typ
         errors.PageError ||
         errors.SlotsError;
 
+    const validatePageHeader = struct {
+        fn call(
+            page_view: *const HeaderPageView,
+            page_id: PageIdT,
+            kind: u16,
+            subheader_size: usize,
+        ) ErrorSet!void {
+            page_view.validateTyped() catch return ErrorSet.BadData;
+            const page_header = page_view.header();
+            if (page_id == std.math.maxInt(PageIdT) or page_header.self_pid.get() != page_id) {
+                return ErrorSet.BadData;
+            }
+            if (page_header.kind.get() != kind) {
+                return ErrorSet.BadType;
+            }
+            if (@as(usize, @intCast(page_header.subheader_size.get())) != subheader_size or
+                page_header.metadata_size.get() != 0)
+            {
+                return ErrorSet.BadData;
+            }
+        }
+    }.call;
+
     const WeightValue = struct {
         weight: WeightT,
         value: []const u8,
@@ -92,6 +115,29 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime WeightT: typ
         pub fn slotsDir(self: *const Self) ErrorSet!ConstSlotsDirType {
             const data = self.page_view.data();
             return try ConstSlotsDirType.init(data);
+        }
+
+        pub fn validatePage(
+            self: *const Self,
+            page_id: PageIdT,
+            kind: u16,
+            maximum_value_size: usize,
+        ) ErrorSet!void {
+            try validatePageHeader(&self.page_view, page_id, kind, @sizeOf(SubheaderType));
+            const slot_dir = try self.slotsDir();
+            try slot_dir.validate();
+            const count = slot_dir.size();
+            for (0..count) |index| {
+                const buffer = try slot_dir.get(index);
+                if (buffer.len == 0) {
+                    continue;
+                }
+                if (buffer.len < @sizeOf(SlotHeaderType) or
+                    buffer.len - @sizeOf(SlotHeaderType) > maximum_value_size)
+                {
+                    return ErrorSet.BadData;
+                }
+            }
         }
 
         // parent, prev, next
@@ -288,6 +334,30 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime WeightT: typ
         pub fn slotsDir(self: *const Self) ErrorSet!ConstSlotsDirType {
             const data = self.page_view.data();
             return try ConstSlotsDirType.init(data);
+        }
+
+        pub fn validatePage(
+            self: *const Self,
+            page_id: PageIdT,
+            kind: u16,
+        ) ErrorSet!void {
+            try validatePageHeader(&self.page_view, page_id, kind, @sizeOf(SubheaderType));
+            const slot_dir = try self.slotsDir();
+            try slot_dir.validate();
+            const count = slot_dir.size();
+            for (0..count) |index| {
+                const buffer = try slot_dir.get(index);
+                if (buffer.len == 0) {
+                    continue;
+                }
+                if (buffer.len != @sizeOf(SlotHeaderType)) {
+                    return ErrorSet.BadData;
+                }
+                const slot: *const SlotHeaderType = @ptrCast(&buffer[0]);
+                if (slot.child.isMax()) {
+                    return ErrorSet.BadData;
+                }
+            }
         }
 
         pub fn getParent(self: *const Self) ErrorSet!?PageIdT {

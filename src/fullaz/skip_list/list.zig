@@ -21,6 +21,7 @@ pub fn List(comptime ModelT: type) type {
         const Node = Model.Node;
 
         pub const Pid = Model.Pid;
+        pub const PageId = Model.PageId;
         const Path = Model.Path;
 
         pub const Error = Model.Error || errors.IteratorError;
@@ -128,6 +129,15 @@ pub fn List(comptime ModelT: type) type {
         }
 
         pub fn deinit(_: *Self) void {}
+
+        pub fn scanPageRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanPageRefs(page_id, page, visitor);
+        }
 
         pub fn begin(self: *const Self) Error!Iterator {
             var acc = self.accessor();

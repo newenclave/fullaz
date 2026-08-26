@@ -5,6 +5,7 @@ pub const location = @import("location.zig");
 pub const location_accessor = @import("location_accessor.zig");
 pub const size_classes = @import("size_classes.zig");
 pub const HeaderLocationAccessor = @import("header_location_accessor.zig").HeaderLocationAccessor;
+pub const scanSlabRefs = models.paged.slab.scanRefs;
 
 pub fn Fsm(comptime ModelT: type) type {
     comptime interfaces.assertModel(ModelT);
@@ -14,6 +15,7 @@ pub fn Fsm(comptime ModelT: type) type {
 
         pub const Model = ModelT;
         pub const Pid = ModelT.Pid;
+        pub const PageId = Pid;
         pub const Size = ModelT.Size;
         pub const Error = ModelT.Error;
 
@@ -25,6 +27,15 @@ pub fn Fsm(comptime ModelT: type) type {
 
         pub fn deinit(self: *Self) void {
             self.* = undefined;
+        }
+
+        pub fn scanSlabRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanSlabRefs(page_id, page, visitor);
         }
 
         pub fn find(self: *Self, size: Size) Error!?Pid {

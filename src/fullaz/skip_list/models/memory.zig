@@ -299,6 +299,7 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
 
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
+        pub const PageId = Pid;
         pub const KeyIn = KeyT;
         pub const ValueIn = ValueT;
 

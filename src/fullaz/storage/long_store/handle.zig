@@ -1,5 +1,6 @@
 const std = @import("std");
 const view = @import("view.zig");
+const scanner = @import("scanner.zig");
 const page_header = @import("../../page/header.zig");
 const interfaces = @import("../../contracts/contracts.zig");
 const errors = @import("../../core/errors.zig");
@@ -387,6 +388,42 @@ pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type) type {
 
         pub fn deinit(self: *Self) void {
             self.reset();
+        }
+
+        pub fn scanHeaderRefs(
+            self: *const Self,
+            page_id: Pid,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return scanner.scanHeaderRefs(
+                Pid,
+                Index,
+                PosType,
+                .little,
+                page_id,
+                page,
+                self.ctx.settings.header_page_kind,
+                visitor,
+            );
+        }
+
+        pub fn scanChunkRefs(
+            self: *const Self,
+            page_id: Pid,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return scanner.scanChunkRefs(
+                Pid,
+                Index,
+                PosType,
+                .little,
+                page_id,
+                page,
+                self.ctx.settings.chunk_page_kind,
+                visitor,
+            );
         }
 
         pub fn create(self: *Self) Error!Pid {

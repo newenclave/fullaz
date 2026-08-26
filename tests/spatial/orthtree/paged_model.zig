@@ -874,3 +874,86 @@ test "OrthTree paged model: repeated root growth keeps the tree usable" {
     try tree.query(F.Box.create(.{ 0, 0 }, .{ 1600, 1600 }), Counter.collect, &counter);
     try std.testing.expectEqual(@as(usize, 2), counter.count);
 }
+
+test "OrthTree paged model: scanners retain canonical pages and live entry values" {
+    const Model = fullaz.spatial.orthtree.models.Paged(Cache, StorageManager, Fsm, i32, 2, .little);
+    const Tree = TreeImpl(Model);
+    const EntryPageView = fullaz.storage.slot_chain.ViewImpl(u32, u16, void, false, .little, false);
+    const ScanSink = struct {
+        page_ids: [4]u32 = undefined,
+        page_count: usize = 0,
+        values: [2][8]u8 = undefined,
+        value_lens: [2]usize = undefined,
+        value_count: usize = 0,
+
+        pub fn visit(self: *@This(), page_id: u32) !void {
+            self.page_ids[self.page_count] = page_id;
+            self.page_count += 1;
+        }
+
+        pub fn hasValueScanner(_: *const @This()) bool {
+            return true;
+        }
+
+        pub fn visitValue(self: *@This(), value: []const u8) !void {
+            self.value_lens[self.value_count] = value.len;
+            @memcpy(self.values[self.value_count][0..value.len], value);
+            self.value_count += 1;
+        }
+    };
+
+    var device = try Device.init(std.testing.allocator, 1024);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var storage_manager = StorageManager{};
+    var fsm_model = try FsmModel.init(std.testing.allocator);
+    defer fsm_model.deinit();
+    var fsm = Fsm.init(&fsm_model);
+    defer fsm.deinit();
+    var model = try Model.init(&cache, &storage_manager, &fsm, .{
+        .max_leaf_entries = 4,
+        .max_value_size = 8,
+        .node_layout_id = 0x1001,
+        .node_page_kind = 0x71,
+        .entry_page_kind = 0x72,
+    });
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    const accessor = model.accessor();
+    const bounds = Model.Box.create(.{ 0, 0 }, .{ 10, 10 });
+
+    var node = try accessor.createNode(bounds);
+    const node_id = node.id();
+    try node.addEntry(bounds, "live");
+    try node.addEntry(bounds, "dead");
+    var child = try accessor.createNode(bounds);
+    defer accessor.deinitNode(&child);
+    try node.beforeSplit();
+    try node.setChild(0, child.id());
+    accessor.deinitNode(&node);
+
+    var node_page = try cache.fetch(node_id.page_id);
+    defer node_page.deinit();
+    var node_sink = ScanSink{};
+    try tree.scanNodeRefs(node_id.page_id, try node_page.data(), &node_sink);
+    try std.testing.expectEqual(@as(usize, 2), node_sink.page_count);
+    const entry_page_id = node_sink.page_ids[0];
+    try std.testing.expectEqual(child.id().page_id, node_sink.page_ids[1]);
+
+    var entry_page = try cache.fetch(entry_page_id);
+    defer entry_page.deinit();
+    var entry_chunk = EntryPageView.Chunk.init(try entry_page.dataMut());
+    var slots = try entry_chunk.slotsDirMut();
+    try slots.setFlags(1, 1);
+
+    var entry_sink = ScanSink{};
+    try tree.scanEntryRefs(entry_page_id, try entry_page.data(), &entry_sink);
+    try std.testing.expectEqual(@as(usize, 0), entry_sink.page_count);
+    try std.testing.expectEqual(@as(usize, 1), entry_sink.value_count);
+    try std.testing.expectEqualSlices(
+        u8,
+        "live",
+        entry_sink.values[0][0..entry_sink.value_lens[0]],
+    );
+}

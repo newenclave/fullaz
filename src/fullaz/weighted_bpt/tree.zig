@@ -176,6 +176,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             value_len: usize,
             intra_weight: Weight,
         };
+        pub const PageId = Pid;
 
         pub const IteratorAtWeight = struct {
             iterator: Iterator,
@@ -193,6 +194,24 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         pub fn deinit(_: *Self) void {}
+
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanInodeRefs(page_id, page, visitor);
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanLeafRefs(page_id, page, visitor);
+        }
 
         pub fn iterator(self: *Self) Error!Iterator {
             var acc = self.accessor();

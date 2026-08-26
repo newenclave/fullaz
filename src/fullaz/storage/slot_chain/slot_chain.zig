@@ -2,6 +2,8 @@ const std = @import("std");
 const view = @import("view.zig");
 const handle = @import("handle.zig");
 
+pub const scanRefs = @import("scanner.zig").scanRefs;
+
 pub const View = @import("view.zig").View;
 pub const ViewImpl = @import("view.zig").ViewImpl;
 pub const Handle = @import("handle.zig").Handle;

@@ -12,6 +12,7 @@ const view_mod = @import("view.zig");
 const requiresErrorDeclaration = contract_interfaces.requiresErrorDeclaration;
 const requiresFnSignature = contract_interfaces.requiresFnSignature;
 const requiresTypeDeclaration = contract_interfaces.requiresTypeDeclaration;
+const tombstone_flag: u16 = 1 << 0;
 
 pub fn Settings(comptime CoordT: type) type {
     return struct {
@@ -71,6 +72,7 @@ pub fn PagedModelImpl(
     const NativeNodeId = OrthtreePage.NodeId;
     const EntrySlotHeader = OrthtreePage.EntrySlotHeader;
     const entry_slot_header_size = @sizeOf(EntrySlotHeader);
+    const EntryPageView = slot_chain.ViewImpl(Pid, u16, void, false, Endian, true);
     const MutablePackedView = view_mod.PackedView(
         Pid,
         u16,
@@ -756,6 +758,7 @@ pub fn PagedModelImpl(
 
         pub const Node = NodeImpl;
         pub const Entry = EntryImpl;
+        pub const PageId = Pid;
         pub const NodeId = NativeNodeId;
         pub const AccessorType = AccessorImpl;
         pub const Box = BoxT;
@@ -806,6 +809,84 @@ pub fn PagedModelImpl(
         }
 
         pub fn deinit(_: *Self) void {}
+
+        /// Enumerates canonical references from every live node slot on one page.
+        /// Parent, last-entry, and FSM links are maintenance links, not ownership edges.
+        pub fn scanNodeRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const node_page = ReadNodePage.init(page);
+            const settings = self.accessor_state.settings;
+            try node_page.validatePage(
+                page_id,
+                settings.node_page_kind,
+                settings.node_layout_id,
+            );
+
+            const slots = try node_page.slots();
+            try slots.validate();
+            for (0..try slots.capacity()) |slot_id| {
+                if (!try slots.isSet(slot_id)) {
+                    continue;
+                }
+
+                const node = try node_page.slot(slot_id);
+                try node.validate();
+                if (!TraitPolicy.validate(node.trait())) {
+                    return error.BadData;
+                }
+                if (node.entryChain().first) |entry_page_id| {
+                    try visitor.visit(entry_page_id);
+                }
+                inline for (0..OrthtreePage.children_per_node) |child_index| {
+                    if (try node.getChild(child_index)) |child_id| {
+                        try visitor.visit(child_id.page_id);
+                    }
+                }
+                if (@hasDecl(TraitPolicy, "scanRefs")) {
+                    try TraitPolicy.scanRefs(node.trait(), visitor);
+                }
+            }
+        }
+
+        /// Enumerates the forward page-chain link and live entry payload references.
+        pub fn scanEntryRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const entry_page = EntryPageView.Chunk.init(page);
+            try entry_page.view.pageView().validateTyped();
+            const page_header = entry_page.view.header();
+            if (page_header.self_pid.get() != page_id or
+                page_header.kind.get() != self.accessor_state.settings.entry_page_kind or
+                page_header.subheader_size.get() != 0 or
+                page_header.metadata_size.get() != 0)
+            {
+                return error.BadData;
+            }
+
+            const slots = try entry_page.slotsDir();
+            try slots.validate();
+            if (entry_page.getNext()) |next_page_id| {
+                try visitor.visit(next_page_id);
+            }
+            if (!visitor.hasValueScanner()) {
+                return;
+            }
+
+            for (0..slots.size()) |slot_id| {
+                if ((try slots.getFlags(slot_id) & @as(u16, tombstone_flag)) != 0) {
+                    continue;
+                }
+                const entry = try decodeEntry(try slots.get(slot_id));
+                try visitor.visitValue(entry.value());
+            }
+        }
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;

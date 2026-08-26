@@ -74,6 +74,25 @@ pub fn Heap(comptime ModelT: type) type {
             EmptySet,
             MaxDepth,
         };
+        pub const PageId = NodeId;
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanLeafRefs(page_id, page, visitor);
+        }
+
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanInodeRefs(page_id, page, visitor);
+        }
 
         /// Removes every entry through the normal heap path so associated FSM
         /// slabs are released together with emptied heap pages.

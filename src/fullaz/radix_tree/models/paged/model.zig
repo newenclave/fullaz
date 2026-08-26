@@ -40,13 +40,13 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
     const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
     const BlockIdType = BlockDevice.BlockId;
-    const PageId = BlockIdType;
+    const RawPageId = BlockIdType;
     const Index = u16;
     const InputValue = []const u8;
     const OutputValue = InputValue;
 
-    const ViewType = radix_page.View(PageId, Index, KeyT, ValueSize, .little, false);
-    const ConstViewType = radix_page.View(PageId, Index, KeyT, ValueSize, .little, true);
+    const ViewType = radix_page.View(RawPageId, Index, KeyT, ValueSize, .little, false);
+    const ConstViewType = radix_page.View(RawPageId, Index, KeyT, ValueSize, .little, true);
 
     const SplitterType = KeySplitter(KeyT);
 
@@ -97,12 +97,12 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         const ConstPageViewType = ConstViewType.LeafSubheaderView;
 
         handle: PageHandle = undefined,
-        self_id: PageId = undefined,
+        self_id: RawPageId = undefined,
         ctx: *Context = undefined,
 
         pub const Error = ErrorSet;
 
-        fn init(ph: PageHandle, self_id: PageId, ctx: *Context) Self {
+        fn init(ph: PageHandle, self_id: RawPageId, ctx: *Context) Self {
             return .{
                 .handle = ph,
                 .self_id = self_id,
@@ -153,12 +153,12 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             try view.free(key);
         }
 
-        pub fn setParent(self: *Self, parent_id: ?PageId) ErrorSet!void {
+        pub fn setParent(self: *Self, parent_id: ?RawPageId) ErrorSet!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.setParent(parent_id);
         }
 
-        pub fn getParent(self: *const Self) ErrorSet!?PageId {
+        pub fn getParent(self: *const Self) ErrorSet!?RawPageId {
             var view = ConstPageViewType.init(try self.handle.data());
             return try view.getParent();
         }
@@ -226,12 +226,12 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             return ConstPageViewType.calculateSlotCapacity(page_size, metadata_len);
         }
 
-        pub fn set(self: *Self, key: KeyT, child_id: PageId) Error!void {
+        pub fn set(self: *Self, key: KeyT, child_id: RawPageId) Error!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.set(key, child_id);
         }
 
-        pub fn get(self: *const Self, key: KeyT) Error!PageId {
+        pub fn get(self: *const Self, key: KeyT) Error!RawPageId {
             var view = ConstPageViewType.init(try self.handle.data());
             return try view.get(key);
         }
@@ -246,12 +246,12 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             try view.free(key);
         }
 
-        pub fn setParent(self: *Self, parent_id: ?PageId) ErrorSet!void {
+        pub fn setParent(self: *Self, parent_id: ?RawPageId) ErrorSet!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.setParent(parent_id);
         }
 
-        pub fn getParent(self: *const Self) ErrorSet!?PageId {
+        pub fn getParent(self: *const Self) ErrorSet!?RawPageId {
             var view = ConstPageViewType.init(try self.handle.data());
             return try view.getParent();
         }
@@ -307,7 +307,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             self.* = undefined;
         }
 
-        pub fn getRoot(self: *const Self) ErrorSet!?PageId {
+        pub fn getRoot(self: *const Self) ErrorSet!?RawPageId {
             const root_id = self.ctx.storage_mgr.getRoot();
             if (root_id) |id| {
                 return id;
@@ -315,7 +315,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             return null;
         }
 
-        pub fn setRoot(self: *Self, pid: ?PageId) ErrorSet!void {
+        pub fn setRoot(self: *Self, pid: ?RawPageId) ErrorSet!void {
             try self.ctx.storage_mgr.setRoot(pid);
         }
 
@@ -431,7 +431,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             sk.deinit();
         }
 
-        pub fn destroy(self: *Self, page_id: PageId) ErrorSet!void {
+        pub fn destroy(self: *Self, page_id: RawPageId) ErrorSet!void {
             try self.ctx.storage_mgr.destroyPage(page_id);
         }
 
@@ -454,7 +454,8 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         pub const KeyOutType = KeyT;
         pub const ValueInType = []const u8;
         pub const ValueOutType = ValueInType;
-        pub const NodeIdType = PageId;
+        pub const NodeIdType = RawPageId;
+        pub const PageId = BlockIdType;
 
         pub const Error = ErrorSet;
 
@@ -497,6 +498,42 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         pub fn deinit(self: *Self) void {
             self.accessor_state.deinit();
             self.* = undefined;
+        }
+
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const view = ConstViewType.InodeSubheaderView.init(page);
+            const settings = self.accessor_state.ctx.settings;
+            try view.validatePage(page_id, settings.inode_page_kind);
+            const slots = try view.slotsDir();
+            for (0..try slots.capacity()) |index| {
+                if (try slots.isSet(index)) {
+                    try visitor.visit(try view.getAt(index));
+                }
+            }
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const view = ConstViewType.LeafSubheaderView.init(page);
+            const settings = self.accessor_state.ctx.settings;
+            try view.validatePage(page_id, settings.leaf_page_kind);
+            if (visitor.hasValueScanner()) {
+                const slots = try view.slotsDir();
+                for (0..try slots.capacity()) |index| {
+                    if (try slots.isSet(index)) {
+                        try visitor.visitValue(try slots.get(index));
+                    }
+                }
+            }
         }
 
         pub fn effectiveSettings(self: *const Self) Settings {

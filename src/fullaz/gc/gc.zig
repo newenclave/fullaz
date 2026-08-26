@@ -2,6 +2,7 @@ const std = @import("std");
 const interfaces = @import("interfaces.zig");
 
 pub const models = @import("models/models.zig");
+pub const scanners = @import("scanners.zig");
 
 pub const Phase = enum(u8) {
     idle,
@@ -36,6 +37,8 @@ pub fn Gc(comptime ModelT: type) type {
                 RegistryFrozen,
                 CycleInactive,
                 InvalidPageId,
+                InvalidPage,
+                InvalidScannerContext,
                 FreePageReference,
                 UnknownPageKind,
                 RegistryMismatch,
@@ -79,8 +82,9 @@ pub fn Gc(comptime ModelT: type) type {
         pub const ScannerEntry = struct {
             page_kind: PageKind,
             version: ScannerVersion,
-            context: ?*const anyopaque,
+            scan_context: ?*const anyopaque,
             scan: Scanner,
+            value_context: ?*const anyopaque,
             value_scan: ?ValueScanner,
         };
 
@@ -107,10 +111,38 @@ pub fn Gc(comptime ModelT: type) type {
             scan: Scanner,
             value_scan: ?ValueScanner,
         ) Error!void {
+            return self.registerWithContexts(
+                page_kind,
+                version,
+                context,
+                scan,
+                context,
+                value_scan,
+            );
+        }
+
+        /// Registers a page scanner and an optional value scanner with separate
+        /// caller-owned contexts.
+        pub fn registerWithContexts(
+            self: *Self,
+            page_kind: PageKind,
+            version: ScannerVersion,
+            scan_context: ?*const anyopaque,
+            scan: Scanner,
+            value_context: ?*const anyopaque,
+            value_scan: ?ValueScanner,
+        ) Error!void {
             if (self.model.isCycleActive()) {
                 return error.RegistryFrozen;
             }
-            return self.addScanner(page_kind, version, context, scan, value_scan);
+            return self.addScanner(
+                page_kind,
+                version,
+                scan_context,
+                scan,
+                value_context,
+                value_scan,
+            );
         }
 
         /// Rebuilds the runtime scanner registry for a cycle restored from a
@@ -123,18 +155,46 @@ pub fn Gc(comptime ModelT: type) type {
             scan: Scanner,
             value_scan: ?ValueScanner,
         ) Error!void {
+            return self.registerResumedWithContexts(
+                page_kind,
+                version,
+                context,
+                scan,
+                context,
+                value_scan,
+            );
+        }
+
+        /// Rebuilds a durable cycle's registry with separate scanner contexts.
+        pub fn registerResumedWithContexts(
+            self: *Self,
+            page_kind: PageKind,
+            version: ScannerVersion,
+            scan_context: ?*const anyopaque,
+            scan: Scanner,
+            value_context: ?*const anyopaque,
+            value_scan: ?ValueScanner,
+        ) Error!void {
             if (!self.model.isCycleActive()) {
                 return error.CycleInactive;
             }
-            return self.addScanner(page_kind, version, context, scan, value_scan);
+            return self.addScanner(
+                page_kind,
+                version,
+                scan_context,
+                scan,
+                value_context,
+                value_scan,
+            );
         }
 
         fn addScanner(
             self: *Self,
             page_kind: PageKind,
             version: ScannerVersion,
-            context: ?*const anyopaque,
+            scan_context: ?*const anyopaque,
             scan: Scanner,
+            value_context: ?*const anyopaque,
             value_scan: ?ValueScanner,
         ) Error!void {
             if (page_kind == 0 or page_kind == std.math.maxInt(PageKind)) {
@@ -151,8 +211,9 @@ pub fn Gc(comptime ModelT: type) type {
             try self.scanners.append(self.model.allocator(), .{
                 .page_kind = page_kind,
                 .version = version,
-                .context = context,
+                .scan_context = scan_context,
                 .scan = scan,
+                .value_context = value_context,
                 .value_scan = value_scan,
             });
             self.registry_digest = null;
@@ -238,13 +299,13 @@ pub fn Gc(comptime ModelT: type) type {
                         const page_kind = try self.model.pageKind(&page, page_id);
                         const scanner = self.findScanner(page_kind) orelse return error.UnknownPageKind;
                         try scanner.scan(
-                            scanner.context,
+                            scanner.scan_context,
                             page_id,
                             try self.model.pageData(&page),
                             .{
                                 .context = @ptrCast(self),
                                 .visit_fn = visitReference,
-                                .value_context = scanner.context,
+                                .value_context = scanner.value_context,
                                 .value_scan = scanner.value_scan,
                             },
                         );

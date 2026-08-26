@@ -340,6 +340,65 @@ test "SkipList paged: node next/prev links round-trip per level" {
     try std.testing.expect((try n1.getPrev(top)) == null);
 }
 
+test "SkipList paged scanner follows level-zero next links and values" {
+    const allocator = std.testing.allocator;
+    const Device = device.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+    const Visitor = struct {
+        expected_page_id: u32,
+        refs: usize = 0,
+        values: usize = 0,
+
+        pub fn hasValueScanner(_: *const @This()) bool {
+            return true;
+        }
+
+        pub fn visit(self: *@This(), page_id: u32) !void {
+            try std.testing.expectEqual(self.expected_page_id, page_id);
+            self.refs += 1;
+        }
+
+        pub fn visitValue(self: *@This(), _: []const u8) !void {
+            self.values += 1;
+        }
+    };
+
+    var dev = try Device.init(allocator, 4096);
+    defer dev.deinit();
+    var cache = try PageCache.init(&dev, allocator, 16);
+    defer cache.deinit();
+    var manager = NoneStorageManager{};
+    var fsm_mem = try FsmMem.init(allocator);
+    defer fsm_mem.deinit();
+    var fsm_inst = Fsm.init(&fsm_mem);
+    defer fsm_inst.deinit();
+    var prng: std.Random.DefaultPrng = .init(1);
+    var model = Model.init(
+        &cache,
+        &manager,
+        &fsm_inst,
+        .{ .max_level = 1, .key_len = 4, .value_len = 4 },
+        {},
+        prng.random(),
+        allocator,
+    );
+    defer model.deinit();
+
+    var first = try model.accessor().createNode("one!", "1111");
+    defer model.accessor().deinitNode(&first);
+    var second = try model.accessor().createNode("two!", "2222");
+    defer model.accessor().deinitNode(&second);
+    try first.setNext(0, second.id());
+
+    var visitor = Visitor{ .expected_page_id = second.id().page_id };
+    var page = try cache.fetch(first.id().page_id);
+    defer page.deinit();
+    try model.scanPageRefs(first.id().page_id, try page.data(), &visitor);
+    try std.testing.expectEqual(@as(usize, 1), visitor.refs);
+    try std.testing.expectEqual(@as(usize, 2), visitor.values);
+}
+
 test "SkipList paged: View.compact reclaims a freed hole and preserves slot ids" {
     var buf: [1024]u8 = .{0} ** 1024;
     const ViewT = View(u32, u16, void, std.builtin.Endian.little, false);

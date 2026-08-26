@@ -704,6 +704,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         pub const ValueViewType = ValueViewImpl;
         pub const WeightType = Weight;
         pub const NodeIdType = Pid;
+        pub const PageId = Pid;
         pub const NodePositionType = NodePosition;
 
         pub const Error = error{} ||

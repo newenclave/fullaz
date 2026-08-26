@@ -413,6 +413,7 @@ pub fn Paged(
         pub const AccessorType = AccessorImpl;
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
+        pub const PageId = BlockIdType;
 
         pub const KeyIn = KeyT;
         pub const ValueIn = ValueT;
@@ -447,6 +448,32 @@ pub fn Paged(
 
         pub fn deinit(self: *Self) void {
             self.accessor_state = undefined; // Clear the accessor to release references to resources.
+        }
+
+        pub fn scanPageRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const view = NodeViewConst.init(page);
+            const settings = self.accessor_state.context.settings;
+            try view.validatePage(page_id, settings.node_page_kind);
+            const slots = try view.slotsDir();
+            for (0..slots.size()) |index| {
+                const slot_bytes = try slots.get(index);
+                if (slot_bytes.len == 0) {
+                    continue;
+                }
+                const node = try view.get(index);
+                const next = node.levels[0].next;
+                if (!next.page_id.isMax()) {
+                    try visitor.visit(next.page_id.get());
+                }
+                if (visitor.hasValueScanner()) {
+                    try visitor.visitValue(node.value);
+                }
+            }
         }
 
         pub fn getMaxLevel(self: *const Self) Error!usize {

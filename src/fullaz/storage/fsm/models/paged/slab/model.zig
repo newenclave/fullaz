@@ -4,6 +4,7 @@ const assertLocationAccessor = @import("../../../location_accessor.zig").assertA
 const fsm_interfaces = @import("../../interfaces.zig");
 const view_mod = @import("view.zig");
 const page_chain = @import("../../../../page_chain/page_chain.zig");
+const scanner = @import("scanner.zig");
 
 pub const Settings = struct {
     page_kind: u16 = 1,
@@ -83,6 +84,27 @@ pub fn Paged(
 
         pub fn deinit(self: *Self) void {
             self.* = undefined;
+        }
+
+        pub fn scanSlabRefs(
+            self: *const Self,
+            page_id: Pid,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const slab = ConstView.init(page);
+            try slab.validateTyped();
+            return scanner.scanRefs(
+                Pid,
+                u16,
+                SizeClassT,
+                .little,
+                page_id,
+                page,
+                self.settings.page_kind,
+                slab.sizeClass(),
+                visitor,
+            );
         }
 
         fn initClassChainManager(self: *Self, class: SizeClassT) ClassChainManager {

@@ -1,6 +1,8 @@
 const view = @import("view.zig");
 const handle = @import("handle.zig");
 
+pub const scanRefs = @import("scanner.zig").scanRefs;
+
 pub const View = view.View;
 pub const ViewImpl = view.ViewImpl;
 pub const ForwardViewImpl = view.ViewForwardImpl;

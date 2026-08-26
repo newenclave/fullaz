@@ -82,6 +82,7 @@ fn TreeWithConfig(
     return struct {
         const Self = @This();
         pub const Error = ModelT.Error;
+        pub const PageId = Pid;
         pub const min_fill: usize = @max(2, Max * 2 / 5); // 40% is minimum.
 
         const max_depth = limits.max_depth;
@@ -141,6 +142,24 @@ fn TreeWithConfig(
 
         pub fn init(model: *ModelT) Self {
             return .{ .model = model };
+        }
+
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanInodeRefs(page_id, page, visitor);
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanLeafRefs(page_id, page, visitor);
         }
 
         /// Releases every page reachable from the current root without applying

@@ -33,6 +33,7 @@ test {
     _ = @import("gc/memory.zig");
     _ = @import("gc/paged.zig");
     _ = @import("gc/bpt.zig");
+    _ = @import("gc/scanners.zig");
     _ = @import("core/static_vector.zig");
     _ = @import("core/algorithm.zig");
     _ = @import("core/bloom.zig");

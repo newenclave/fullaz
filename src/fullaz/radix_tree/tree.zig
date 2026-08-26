@@ -22,6 +22,7 @@ pub fn Tree(comptime ModelT: type) type {
         const Splitter = KeySplitter(KeyInType);
         pub const Error = Splitter.Error ||
             Model.Error || errors.LayoutError;
+        pub const PageId = NodeIdType;
 
         model: *Model,
         splitter: Splitter,
@@ -38,6 +39,24 @@ pub fn Tree(comptime ModelT: type) type {
 
         pub fn deinit(self: *Self) void {
             self.* = undefined;
+        }
+
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanInodeRefs(page_id, page, visitor);
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanLeafRefs(page_id, page, visitor);
         }
 
         fn debugPrintSplitKey(key: KeyInType, skr: *const SplitKeyType) void {

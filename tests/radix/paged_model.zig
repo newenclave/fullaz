@@ -221,3 +221,54 @@ test "RadixTree paged: a leaf root reports level zero" {
     try std.testing.expectEqual(@as(?usize, 0), try suite.model.accessor().getRootLevel());
     try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(7)).?, "value"));
 }
+
+test "RadixTree paged scanners visit occupied slots only" {
+    const TestSuiteType = TestSuite(u32, NoneStorageManager, u64, [8]u8);
+    const Visitor = struct {
+        expected_child: u32,
+        refs: usize = 0,
+        values: usize = 0,
+
+        pub fn hasValueScanner(_: *const @This()) bool {
+            return true;
+        }
+
+        pub fn visit(self: *@This(), page_id: u32) !void {
+            try std.testing.expectEqual(self.expected_child, page_id);
+            self.refs += 1;
+        }
+
+        pub fn visitValue(self: *@This(), _: []const u8) !void {
+            self.values += 1;
+        }
+    };
+
+    var suite = TestSuiteType{};
+    try suite.initInPlace();
+    defer suite.deinit();
+
+    var leaf = try suite.model.accessor().createLeaf();
+    const leaf_id = leaf.id();
+    try leaf.set(1, "value");
+    try leaf.set(2, "unused");
+    try leaf.free(2);
+    suite.model.accessor().deinitLeaf(&leaf);
+
+    var inode = try suite.model.accessor().createInode();
+    const inode_id = inode.id();
+    try inode.set(1, leaf_id);
+    try inode.set(2, leaf_id);
+    try inode.free(2);
+    suite.model.accessor().deinitInode(&inode);
+
+    var visitor = Visitor{ .expected_child = leaf_id };
+    var inode_page = try suite.page_cache.fetch(inode_id);
+    defer inode_page.deinit();
+    try suite.tree.scanInodeRefs(inode_id, try inode_page.data(), &visitor);
+    try std.testing.expectEqual(@as(usize, 1), visitor.refs);
+
+    var leaf_page = try suite.page_cache.fetch(leaf_id);
+    defer leaf_page.deinit();
+    try suite.tree.scanLeafRefs(leaf_id, try leaf_page.data(), &visitor);
+    try std.testing.expectEqual(@as(usize, 1), visitor.values);
+}

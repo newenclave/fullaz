@@ -29,6 +29,7 @@ pub fn Bpt(comptime ModelT: type) type {
         pub const ValueInType = ModelT.ValueInType;
         pub const ValueOutType = ModelT.ValueOutType;
         pub const NodeIdType = ModelT.NodeIdType;
+        pub const PageId = NodeIdType;
 
         pub const InodeType = ModelT.InodeType;
         pub const LeafType = ModelT.LeafType;
@@ -252,6 +253,24 @@ pub fn Bpt(comptime ModelT: type) type {
                 }
             }
             return null;
+        }
+
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanInodeRefs(page_id, page, visitor);
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanLeafRefs(page_id, page, visitor);
         }
 
         pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {

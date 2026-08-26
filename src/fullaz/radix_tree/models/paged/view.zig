@@ -49,7 +49,18 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
                 return ErrorSet.BadData;
             }
             const slols = try self.slotsDir();
+            try slols.validate();
             if (try slols.slotSize() != ValueSize) {
+                return ErrorSet.BadData;
+            }
+        }
+
+        pub fn validatePage(self: *const Self, page_id: PageIdT, kind: u16) ErrorSet!void {
+            try self.check();
+            const page_header = self.page_view.header();
+            if (page_id == std.math.maxInt(PageIdT) or page_header.self_pid.get() != page_id or
+                page_header.kind.get() != kind or page_header.metadata_size.get() != 0)
+            {
                 return ErrorSet.BadData;
             }
         }
@@ -199,9 +210,31 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, 
                 return ErrorSet.BadData;
             }
             const slols = try self.slotsDir();
+            try slols.validate();
             if (try slols.slotSize() != @sizeOf(SlotType)) {
                 return ErrorSet.BadData;
             }
+        }
+
+        pub fn validatePage(self: *const Self, page_id: PageIdT, kind: u16) ErrorSet!void {
+            try self.check();
+            const page_header = self.page_view.header();
+            if (page_id == std.math.maxInt(PageIdT) or page_header.self_pid.get() != page_id or
+                page_header.kind.get() != kind or page_header.metadata_size.get() != 0)
+            {
+                return ErrorSet.BadData;
+            }
+        }
+
+        pub fn getAt(self: *const Self, pos: usize) ErrorSet!PageIdT {
+            const slot_dir = try self.slotsDir();
+            const value_as_bytes = try slot_dir.get(pos);
+            if (value_as_bytes.len != @sizeOf(SlotType)) {
+                return ErrorSet.BadData;
+            }
+            var slot: SlotType = undefined;
+            @memcpy(std.mem.asBytes(&slot), value_as_bytes);
+            return slot.child.get();
         }
 
         pub fn formatPage(self: *Self, kind: u16, page_id: PageIdT, metadata_len: IndexT) ErrorSet!void {

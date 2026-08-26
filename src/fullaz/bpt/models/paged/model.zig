@@ -721,6 +721,7 @@ pub fn PagedModel(
         pub const InodeType = InodeImpl;
 
         pub const NodeIdType = BlockIdType;
+        pub const PageId = BlockIdType;
 
         accessor_state: AccessorType,
 

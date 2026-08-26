@@ -549,6 +549,47 @@ pub fn PagedModel(
 
         pub fn deinit(_: *Self) void {}
 
+        /// Enumerates canonical child references from one serialized inode page.
+        /// Parent links are maintenance links, not ownership edges.
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: BlockIdType,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const view = RtreeViewConst.InodeSubheaderView.init(page);
+            const settings = self.accessor_state.ctx.settings;
+            try view.validatePage(page_id, settings.inode_page_kind, max_entries_v);
+
+            const slots = try view.slotsDir();
+            for (0..slots.size()) |index| {
+                try visitor.visit(try view.getChild(index));
+            }
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: BlockIdType,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const view = RtreeViewConst.LeafSubheaderView.init(page);
+            const settings = self.accessor_state.ctx.settings;
+            try view.validatePage(
+                page_id,
+                settings.leaf_page_kind,
+                max_entries_v,
+                max_value_size,
+            );
+
+            if (visitor.hasValueScanner()) {
+                const slots = try view.slotsDir();
+                for (0..slots.size()) |index| {
+                    try visitor.visitValue(try view.getValue(index));
+                }
+            }
+        }
+
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
         }

@@ -702,3 +702,57 @@ test "RTree paged: stress; random insert of huge N, remove half, stays valid" {
     // No cache frames leaked across the whole run.
     try testing.expectEqual(available_before, cache.availableFrames());
 }
+
+test "RTree paged: scanners forward canonical child and value references" {
+    const ScanSink = struct {
+        child: ?u32 = null,
+        value: [8]u8 = undefined,
+        value_len: usize = 0,
+
+        pub fn visit(self: *@This(), page_id: u32) !void {
+            self.child = page_id;
+        }
+
+        pub fn hasValueScanner(_: *const @This()) bool {
+            return true;
+        }
+
+        pub fn visitValue(self: *@This(), value: []const u8) !void {
+            self.value_len = value.len;
+            @memcpy(self.value[0..value.len], value);
+        }
+    };
+
+    var device = try Device.init(testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, testing.allocator, 8);
+    defer cache.deinit();
+    var storage_manager = NoneStorageManager{};
+    var model = try Model.init(&cache, &storage_manager, .{});
+    defer model.deinit();
+    var tree = rtree.RTree(Model).init(&model);
+    const accessor = model.accessor();
+
+    var leaf = try accessor.createLeaf();
+    const leaf_id = leaf.id();
+    try leaf.insertEntry(box(1, 1, 2, 2), "value");
+    accessor.deinitLeaf(leaf);
+
+    var inode = try accessor.createInode();
+    const inode_id = inode.id();
+    try inode.insertChild(box(1, 1, 2, 2), leaf_id);
+    accessor.deinitInode(inode);
+
+    var leaf_page = try cache.fetch(leaf_id);
+    defer leaf_page.deinit();
+    var leaf_sink = ScanSink{};
+    try tree.scanLeafRefs(leaf_id, try leaf_page.data(), &leaf_sink);
+    try testing.expectEqual(@as(usize, 5), leaf_sink.value_len);
+    try testing.expectEqualSlices(u8, "value", leaf_sink.value[0..leaf_sink.value_len]);
+
+    var inode_page = try cache.fetch(inode_id);
+    defer inode_page.deinit();
+    var inode_sink = ScanSink{};
+    try tree.scanInodeRefs(inode_id, try inode_page.data(), &inode_sink);
+    try testing.expectEqual(leaf_id, inode_sink.child.?);
+}

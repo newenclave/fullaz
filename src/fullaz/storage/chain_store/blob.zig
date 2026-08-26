@@ -1,5 +1,8 @@
 const std = @import("std");
 const handle = @import("handle.zig");
+const scanner = @import("scanner.zig");
+
+pub const scanChunkRefs = scanner.scanChunkRefs;
 
 /// A bounded long byte value backed by a bidirectional chain of chunk pages.
 ///
@@ -16,6 +19,7 @@ pub fn Blob(
         const Self = @This();
 
         pub const Error = HandleT.Error || error{OutOfBounds};
+        pub const PageId = HandleT.Pid;
 
         handle: HandleT,
 
@@ -29,6 +33,15 @@ pub fn Blob(
 
         pub fn deinit(self: *Self) void {
             self.handle.deinit();
+        }
+
+        pub fn scanChunkRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.handle.scanChunkRefs(page_id, page, visitor);
         }
 
         pub fn create(self: *Self) Error!void {

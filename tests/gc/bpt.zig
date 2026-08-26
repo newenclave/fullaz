@@ -56,30 +56,6 @@ fn MemoryStore(comptime BptModel: type) type {
     };
 }
 
-fn bptScanners(comptime BptModel: type, comptime Collector: type) type {
-    return struct {
-        fn inode(
-            context: ?*const anyopaque,
-            page_id: BptModel.NodeIdType,
-            page: []const u8,
-            sink: Collector.ReferenceSink,
-        ) Collector.Error!void {
-            const model: *BptModel = @ptrCast(@alignCast(@constCast(context.?)));
-            model.scanInodeRefs(page_id, page, sink) catch return error.InvalidPageId;
-        }
-
-        fn leaf(
-            context: ?*const anyopaque,
-            page_id: BptModel.NodeIdType,
-            page: []const u8,
-            sink: Collector.ReferenceSink,
-        ) Collector.Error!void {
-            const model: *BptModel = @ptrCast(@alignCast(@constCast(context.?)));
-            model.scanLeafRefs(page_id, page, sink) catch return error.InvalidPageId;
-        }
-    };
-}
-
 fn collectBptGraph(comptime BptModel: type, model: *BptModel, page_id: BptModel.NodeIdType, seen: []bool) !void {
     const index: usize = @intCast(page_id);
     if (seen[index]) {
@@ -134,15 +110,32 @@ test "GC: memory model reclaims one BPT graph and retains another" {
         .page_count = page_count,
         .free = &free,
     };
+
     const GcModel = fullaz.gc.models.Memory(@TypeOf(store));
     const Collector = fullaz.gc.Gc(GcModel);
-    const Scanners = bptScanners(BptModel, Collector);
+    const Scanners = fullaz.gc.scanners;
+
     var gc_model = GcModel.init(std.testing.allocator, &store);
     defer gc_model.deinit();
     var collector = Collector.init(&gc_model);
     defer collector.deinit();
-    try collector.register(1, 1, &bpt_model, Scanners.leaf, null);
-    try collector.register(2, 1, &bpt_model, Scanners.inode, null);
+
+    try collector.register(
+        1,
+        1,
+        &second,
+        Scanners.method(Collector, Tree, Tree.scanLeafRefs),
+        null,
+    );
+
+    try collector.register(
+        2,
+        1,
+        &second,
+        Scanners.method(Collector, Tree, Tree.scanInodeRefs),
+        null,
+    );
+
     try collector.start(&.{retained_root});
     while (try collector.step(1) != .complete) {}
 
@@ -151,11 +144,13 @@ test "GC: memory model reclaims one BPT graph and retains another" {
             try std.testing.expect(free[page_id]);
         }
     }
+
     for (retained_pages, 0..) |was_in_graph, page_id| {
         if (was_in_graph) {
             try std.testing.expect(!free[page_id]);
         }
     }
+
     if (try second.find(105)) |iterator| {
         defer iterator.deinit();
     } else {
@@ -208,48 +203,41 @@ test "GC: memory BPT leaf value scanner retains an embedded root" {
     };
     const GcModel = fullaz.gc.models.Memory(@TypeOf(store));
     const Collector = fullaz.gc.Gc(GcModel);
-    const Context = struct {
-        model: *BptModel,
+    const ValueContext = struct {
         target_root: usize,
     };
     const Scanners = struct {
-        fn leaf(
-            context: ?*const anyopaque,
-            page_id: usize,
-            page: []const u8,
-            sink: Collector.ReferenceSink,
-        ) Collector.Error!void {
-            const ctx: *Context = @ptrCast(@alignCast(@constCast(context.?)));
-            ctx.model.scanLeafRefs(page_id, page, sink) catch return error.InvalidPageId;
-        }
-
-        fn inode(
-            context: ?*const anyopaque,
-            page_id: usize,
-            page: []const u8,
-            sink: Collector.ReferenceSink,
-        ) Collector.Error!void {
-            const ctx: *Context = @ptrCast(@alignCast(@constCast(context.?)));
-            ctx.model.scanInodeRefs(page_id, page, sink) catch return error.InvalidPageId;
-        }
-
         fn scan(
             context: ?*const anyopaque,
             value: []const u8,
             sink: Collector.ReferenceSink,
         ) Collector.Error!void {
             _ = value;
-            const ctx: *const Context = @ptrCast(@alignCast(context.?));
+            const ctx: *const ValueContext = @ptrCast(@alignCast(context.?));
             try sink.visit(ctx.target_root);
         }
     };
-    var context = Context{ .model = &bpt_model, .target_root = target_root };
+    const Adapter = fullaz.gc.scanners;
+    var value_context = ValueContext{ .target_root = target_root };
     var gc_model = GcModel.init(std.testing.allocator, &store);
     defer gc_model.deinit();
     var collector = Collector.init(&gc_model);
     defer collector.deinit();
-    try collector.register(1, 1, &context, Scanners.leaf, Scanners.scan);
-    try collector.register(2, 1, &context, Scanners.inode, null);
+    try collector.registerWithContexts(
+        1,
+        1,
+        &source,
+        Adapter.method(Collector, Tree, Tree.scanLeafRefs),
+        &value_context,
+        Scanners.scan,
+    );
+    try collector.register(
+        2,
+        1,
+        &source,
+        Adapter.method(Collector, Tree, Tree.scanInodeRefs),
+        null,
+    );
     try collector.start(&.{source_root});
     while (gc_model.phase() != .sweeping) {
         _ = try collector.step(1);
@@ -465,13 +453,25 @@ test "GC: paged model resumes while reclaiming one BPT graph" {
     {
         const GcModel = fullaz.gc.models.Paged(PagedCache, PagedManager);
         const Collector = fullaz.gc.Gc(GcModel);
-        const Scanners = bptScanners(BptModel, Collector);
+        const Scanners = fullaz.gc.scanners;
         var gc_model = try GcModel.init(std.testing.allocator, &cache, &gc_manager);
         defer gc_model.deinit();
         var collector = Collector.init(&gc_model);
         defer collector.deinit();
-        try collector.register(settings.leaf_page_kind, 1, &retained_model, Scanners.leaf, null);
-        try collector.register(settings.inode_page_kind, 1, &retained_model, Scanners.inode, null);
+        try collector.register(
+            settings.leaf_page_kind,
+            1,
+            &retained_tree,
+            Scanners.method(Collector, Tree, Tree.scanLeafRefs),
+            null,
+        );
+        try collector.register(
+            settings.inode_page_kind,
+            1,
+            &retained_tree,
+            Scanners.method(Collector, Tree, Tree.scanInodeRefs),
+            null,
+        );
         try collector.start(&.{retained_root});
         while (gc_model.phase() != .marking) {
             _ = try collector.step(1);
@@ -493,13 +493,26 @@ test "GC: paged model resumes while reclaiming one BPT graph" {
     );
     const GcModel = fullaz.gc.models.Paged(PagedCache, PagedManager);
     const Collector = fullaz.gc.Gc(GcModel);
-    const Scanners = bptScanners(BptModel, Collector);
+    const Scanners = fullaz.gc.scanners;
     var reopened_gc_model = try GcModel.init(std.testing.allocator, &reopened_cache, &reopened_gc_manager);
     defer reopened_gc_model.deinit();
     var reopened = Collector.init(&reopened_gc_model);
     defer reopened.deinit();
-    try reopened.registerResumed(settings.leaf_page_kind, 1, &reopened_retained_model, Scanners.leaf, null);
-    try reopened.registerResumed(settings.inode_page_kind, 1, &reopened_retained_model, Scanners.inode, null);
+    var reopened_tree = Tree.init(&reopened_retained_model, .force_split);
+    try reopened.registerResumed(
+        settings.leaf_page_kind,
+        1,
+        &reopened_tree,
+        Scanners.method(Collector, Tree, Tree.scanLeafRefs),
+        null,
+    );
+    try reopened.registerResumed(
+        settings.inode_page_kind,
+        1,
+        &reopened_tree,
+        Scanners.method(Collector, Tree, Tree.scanInodeRefs),
+        null,
+    );
     while (try reopened.step(1) != .complete) {}
 
     for (dropped_pages, 0..) |was_in_graph, page_id| {
@@ -512,7 +525,6 @@ test "GC: paged model resumes while reclaiming one BPT graph" {
             try std.testing.expect(!store.entries[page_id].free);
         }
     }
-    var reopened_tree = Tree.init(&reopened_retained_model, .force_split);
     const found = (try reopened_tree.find("r05")).?;
     defer found.deinit();
     try std.testing.expectEqualStrings("retained", (try found.get()).?.value);

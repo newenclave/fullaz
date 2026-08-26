@@ -1,5 +1,6 @@
 const std = @import("std");
 const chain_view = @import("view.zig");
+const scanner = @import("scanner.zig");
 const page_header = @import("../../page/header.zig");
 const interfaces = @import("../../contracts/contracts.zig");
 const errors = @import("../../core/errors.zig");
@@ -354,6 +355,24 @@ pub fn Indexed(
 
         pub fn deinit(self: *Self) void {
             self.index.deinit();
+        }
+
+        pub fn scanChunkRefs(
+            self: *const Self,
+            page_id: Pid,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return scanner.scanChunkRefs(
+                Pid,
+                Index,
+                PosType,
+                Endian,
+                page_id,
+                page,
+                self.ctx.settings.chunk_page_kind,
+                visitor,
+            );
         }
 
         pub fn open(self: *Self) Error!void {

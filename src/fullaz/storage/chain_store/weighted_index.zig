@@ -1,16 +1,12 @@
 const std = @import("std");
 const errors = @import("../../core/errors.zig");
-const PackedInt = @import("../../core/packed_int.zig").PackedInt;
 const wbpt = @import("../../weighted_bpt/weighted_bpt.zig");
+const index_entry = @import("index_entry.zig");
 
-pub fn IndexEntry(comptime PageIdT: type, comptime SizeT: type, comptime Endian: std.builtin.Endian) type {
-    return extern struct {
-        const PageId = PackedInt(PageIdT, Endian);
-        const Size = PackedInt(SizeT, Endian);
-        page_id: PageId,
-        size: Size,
-    };
-}
+pub const scanLeafRefs = @import("weighted_scanner.zig").scanLeafRefs;
+pub const scanInodeRefs = @import("weighted_scanner.zig").scanInodeRefs;
+
+pub const IndexEntry = index_entry.IndexEntry;
 
 pub fn IndexValuePolicy(comptime PageIdT: type, comptime SizeT: type, comptime Endian: std.builtin.Endian) type {
     return struct {

@@ -238,6 +238,69 @@ test "WBpt paged: tree create, insert" {
     //tree.dump();
 }
 
+test "WBpt paged scanners retain child pages and weighted sequences ignore chunk values" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = PagedModel(PageCache, NoneStorageManager, u32, void);
+    const Tree = wbpt.WeightedBpt(Model);
+    const Sequence = fullaz.storage.weighted_seq.WeightedSeq(Tree, 16);
+
+    const Visitor = struct {
+        expected_child: u32,
+        refs: usize = 0,
+        values: usize = 0,
+
+        pub fn hasValueScanner(_: *const @This()) bool {
+            return true;
+        }
+
+        pub fn visit(self: *@This(), page_id: u32) !void {
+            try std.testing.expectEqual(self.expected_child, page_id);
+            self.refs += 1;
+        }
+
+        pub fn visitValue(self: *@This(), _: []const u8) !void {
+            self.values += 1;
+        }
+    };
+
+    var store_mgr = NoneStorageManager{};
+    var device = try Device.init(allocator, 256);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+    var model = Model.init(&cache, &store_mgr, .{});
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+
+    var leaf = try model.accessor().createLeaf();
+    const leaf_id = leaf.id();
+    try leaf.insertAt(0, "chunk");
+    model.accessor().deinitLeaf(&leaf);
+
+    var inode = try model.accessor().createInode();
+    const inode_id = inode.id();
+    try inode.insertChild(0, leaf_id, 5);
+    model.accessor().deinitInode(&inode);
+
+    var visitor = Visitor{ .expected_child = leaf_id };
+    var inode_page = try cache.fetch(inode_id);
+    defer inode_page.deinit();
+    try tree.scanInodeRefs(inode_id, try inode_page.data(), &visitor);
+    try std.testing.expectEqual(@as(usize, 1), visitor.refs);
+
+    var leaf_page = try cache.fetch(leaf_id);
+    defer leaf_page.deinit();
+    try tree.scanLeafRefs(leaf_id, try leaf_page.data(), &visitor);
+    try std.testing.expectEqual(@as(usize, 1), visitor.values);
+
+    var sequence = Sequence.init(&tree);
+    visitor.values = 0;
+    try sequence.scanLeafRefs(leaf_id, try leaf_page.data(), &visitor);
+    try std.testing.expectEqual(@as(usize, 0), visitor.values);
+}
+
 test "WBpt paged remove: simple smoke" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);

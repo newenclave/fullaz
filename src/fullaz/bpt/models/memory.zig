@@ -706,6 +706,7 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
         pub const InodeType = AccessorType.InodeType;
 
         pub const NodeIdType = usize;
+        pub const PageId = NodeIdType;
 
         pub const Error = ErrorSet;
 

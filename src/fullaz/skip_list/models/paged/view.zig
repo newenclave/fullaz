@@ -194,6 +194,20 @@ pub fn View(
             return try ConstSlotsDirType.init(data);
         }
 
+        pub fn validatePage(self: *const Self, page_id: PageIdT, kind: u16) ErrorSet!void {
+            self.page_view.validateTyped() catch return ErrorSet.InconsistentLayout;
+            const page_header = self.header();
+            if (page_id == std.math.maxInt(PageIdT) or page_header.self_pid.get() != page_id or
+                page_header.kind.get() != kind or
+                @as(usize, @intCast(page_header.subheader_size.get())) != @sizeOf(SubheaderType) or
+                page_header.metadata_size.get() != 0)
+            {
+                return ErrorSet.InconsistentLayout;
+            }
+            const slots_dir = try self.slotsDir();
+            try slots_dir.validate();
+        }
+
         pub fn slotWrapper(_: *const Self, slot: ByteSlice) ErrorSet!SlotWrapper {
             return try SlotWrapper.init(slot);
         }

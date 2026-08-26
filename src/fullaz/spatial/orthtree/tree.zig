@@ -23,6 +23,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
         pub const Error = ErrorSet;
         pub const Model = ModelT;
         pub const AccessorType = Model.AccessorType;
+        pub const PageId = if (@hasDecl(Model, "PageId")) Model.PageId else Model.NodeId;
         pub const NodeId = Model.NodeId;
         pub const Node = Model.Node;
         pub const Box = Model.Box;
@@ -38,6 +39,24 @@ pub fn TreeImpl(comptime ModelT: type) type {
             return Self{
                 .model = model,
             };
+        }
+
+        pub fn scanNodeRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanNodeRefs(page_id, page, visitor);
+        }
+
+        pub fn scanEntryRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanEntryRefs(page_id, page, visitor);
         }
 
         fn accessor(self: *const Self) *AccessorType {

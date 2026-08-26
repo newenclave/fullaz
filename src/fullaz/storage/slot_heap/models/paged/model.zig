@@ -6,6 +6,7 @@ const page_header = @import("../../../../page/header.zig");
 const slots = @import("../../../../slots/slots.zig");
 const interfaces = @import("../interfaces.zig");
 const view_mod = @import("view.zig");
+const scanner = @import("../../scanner.zig");
 
 const requiresErrorDeclaration = contract_interfaces.requiresErrorDeclaration;
 const requiresFnSignature = contract_interfaces.requiresFnSignature;
@@ -794,6 +795,46 @@ pub fn Paged(
         }
 
         pub fn deinit(_: *Self) void {}
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: NodeId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const settings = self.accessor_state.ctx.settings;
+            return scanner.scanLeafRefs(
+                NodeId,
+                SlotId,
+                .little,
+                page_id,
+                page,
+                settings.leaf_page_kind,
+                settings.key_size,
+                settings.comparator_id,
+                visitor,
+            );
+        }
+
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: NodeId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const settings = self.accessor_state.ctx.settings;
+            return scanner.scanInodeRefs(
+                NodeId,
+                SlotId,
+                .little,
+                page_id,
+                page,
+                settings.inode_page_kind,
+                settings.key_size,
+                settings.comparator_id,
+                visitor,
+            );
+        }
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;

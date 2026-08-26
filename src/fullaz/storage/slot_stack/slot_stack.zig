@@ -2,6 +2,8 @@ const std = @import("std");
 const errors = @import("../../core/errors.zig");
 const slot_chain = @import("../slot_chain/slot_chain.zig");
 
+pub const scanRefs = slot_chain.scanRefs;
+
 pub fn SlotStack(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
@@ -14,6 +16,7 @@ pub fn SlotStack(
 
         pub const Error = Chain.Error || errors.SetError;
         pub const ValueIn = Chain.ValueIn;
+        pub const PageId = Chain.PageId;
 
         /// Owns the iterator that keeps the peeked value borrowed from the stack.
         pub const Peek = struct {
@@ -62,6 +65,15 @@ pub fn SlotStack(
 
         pub fn deinit(self: *Self) void {
             self.chain.deinit();
+        }
+
+        pub fn scanChunkRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.chain.scanChunkRefs(page_id, page, visitor);
         }
 
         pub fn size(self: *const Self) Error!usize {

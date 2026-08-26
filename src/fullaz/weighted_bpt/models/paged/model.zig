@@ -668,6 +668,7 @@ pub fn PagedModel(
         pub const InodeType = InodeImpl;
 
         pub const NodeIdType = BlockIdType;
+        pub const PageId = BlockIdType;
 
         accessor_state: AccessorType,
 
@@ -683,6 +684,48 @@ pub fn PagedModel(
         }
         pub fn deinit(self: *Self) void {
             self.accessor_state.deinit();
+        }
+
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const view = WBptPageConst.InodeSubheaderView.init(page);
+            const settings = self.accessor_state.ctx.settings;
+            try view.validatePage(page_id, settings.inode_page_kind);
+            const slots = try view.slotsDir();
+            for (0..slots.size()) |index| {
+                if ((try slots.get(index)).len == 0) {
+                    continue;
+                }
+                try visitor.visit((try view.get(index)).child);
+            }
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: PageId,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            const view = WBptPageConst.LeafSubheaderView.init(page);
+            const settings = self.accessor_state.ctx.settings;
+            try view.validatePage(
+                page_id,
+                settings.leaf_page_kind,
+                settings.maximum_value_size,
+            );
+            if (visitor.hasValueScanner()) {
+                const slots = try view.slotsDir();
+                for (0..slots.size()) |index| {
+                    if ((try slots.get(index)).len == 0) {
+                        continue;
+                    }
+                    try visitor.visitValue((try view.get(index)).value);
+                }
+            }
         }
 
         pub fn accessor(self: *Self) *AccessorType {
