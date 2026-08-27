@@ -333,6 +333,322 @@ fn checkInodeMergeOrdering(descending: bool) !void {
     try std.testing.expect(manager.destroyed_pages > 0);
 }
 
+test "Bpt parent exact-fit retries inode sharing after leaf split" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+    const Tree = bpt.Bpt(BptModel);
+    const createLeaf = struct {
+        fn call(
+            accessor: *BptModel.AccessorType,
+            parent_id: u32,
+            key: []const u8,
+            value: []const u8,
+        ) !u32 {
+            var leaf = try accessor.createLeaf();
+            defer accessor.deinitLeaf(leaf);
+            try leaf.setParent(parent_id);
+            try leaf.insertValue(0, key, value);
+            return leaf.id();
+        }
+    }.call;
+
+    var device = try Device.init(allocator, 1024);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 32);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try BptModel.init(&cache, &store_mgr, .{}, {});
+    defer model.deinit();
+    const accessor = model.accessor();
+
+    var root = try accessor.createInode();
+    defer accessor.deinitInode(root);
+    var left = try accessor.createInode();
+    defer accessor.deinitInode(left);
+    var target_parent = try accessor.createInode();
+    defer accessor.deinitInode(target_parent);
+    try left.setParent(root.id());
+    try target_parent.setParent(root.id());
+
+    const left_child_0 = try createLeaf(accessor, left.id(), "000000000", "");
+    const left_child_1 = try createLeaf(accessor, left.id(), "000000001", "");
+    try left.insertChild(0, "000000001", left_child_0);
+    try left.updateChild(1, left_child_1);
+
+    var child_ids: [10]u32 = undefined;
+    child_ids[0] = try createLeaf(accessor, target_parent.id(), "a00000000", "");
+    child_ids[1] = try createLeaf(accessor, target_parent.id(), "b00000000", "");
+
+    var long_separators: [7][115]u8 = undefined;
+    for (&long_separators, 0..) |*separator, index| {
+        @memset(separator, @as(u8, 'c') + @as(u8, @intCast(index)));
+        child_ids[index + 2] = try createLeaf(accessor, target_parent.id(), separator, "");
+    }
+
+    child_ids[8] = blk: {
+        var leaf = try accessor.createLeaf();
+        defer accessor.deinitLeaf(leaf);
+        try leaf.setParent(target_parent.id());
+        for (0..3) |index| {
+            var key = [_]u8{'i'} ** 115;
+            key[key.len - 1] = @as(u8, '0') + @as(u8, @intCast(index));
+            try leaf.insertValue(index, &key, "");
+        }
+        break :blk leaf.id();
+    };
+
+    child_ids[9] = blk: {
+        var leaf = try accessor.createLeaf();
+        defer accessor.deinitLeaf(leaf);
+        try leaf.setParent(target_parent.id());
+        for (0..8) |index| {
+            var key = [_]u8{'j'} ** 56;
+            key[key.len - 1] = @as(u8, '0') + @as(u8, @intCast(index));
+            var value = [_]u8{'v'} ** 58;
+            value[value.len - 1] = @as(u8, '0') + @as(u8, @intCast(index));
+            try leaf.insertValue(index, &key, &value);
+        }
+        break :blk leaf.id();
+    };
+
+    try target_parent.insertChild(0, "b00000000", child_ids[0]);
+    for (&long_separators, 0..) |*separator, index| {
+        try target_parent.insertChild(index + 1, separator, child_ids[index + 1]);
+    }
+    var target_min = [_]u8{'j'} ** 56;
+    target_min[target_min.len - 1] = '0';
+    try target_parent.insertChild(8, &target_min, child_ids[8]);
+    try target_parent.updateChild(9, child_ids[9]);
+
+    try root.insertChild(0, "a00000000", left.id());
+    try root.updateChild(1, target_parent.id());
+    try accessor.setRoot(root.id());
+
+    var middle_key = [_]u8{'j'} ** 56;
+    middle_key[middle_key.len - 1] = '4';
+    try std.testing.expect(!try target_parent.canInsertChild(9, &middle_key, child_ids[9]));
+
+    var pending_key = [_]u8{'j'} ** 56;
+    pending_key[pending_key.len - 1] = '8';
+    var pending_value = [_]u8{'v'} ** 58;
+    pending_value[pending_value.len - 1] = '8';
+
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+    try std.testing.expect(try tree.insert(&pending_key, &pending_value));
+    const found = (try tree.find(&pending_key)).?;
+    defer found.deinit();
+    try std.testing.expectEqualSlices(u8, &pending_value, (try found.get()).?.value);
+}
+
+test "Bpt parent exact-fit propagates inode splits" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+    const keys = [_][]const u8{
+        "00000001", "00000002", "00000003", "00000004", "00000005",
+        "00000006", "00000007", "00000008", "00000009", "00000010",
+        "00000011", "00000012", "00000013",
+    };
+
+    var device = try Device.init(allocator, 84);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 32);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try BptModel.init(&cache, &store_mgr, .{
+        .maximum_key_size = 8,
+        .maximum_value_size = 0,
+    }, {});
+    defer model.deinit();
+    var tree = bpt.Bpt(BptModel).init(&model, .force_split);
+    defer tree.deinit();
+
+    for (keys) |key| {
+        try std.testing.expect(try tree.insert(key, ""));
+    }
+    for (keys) |key| {
+        const found = (try tree.find(key)).?;
+        defer found.deinit();
+        try std.testing.expectEqualSlices(u8, key, (try found.get()).?.key);
+    }
+
+    const accessor = model.accessor();
+    var current_id = store_mgr.getRoot().?;
+    var inode_depth: usize = 0;
+    while (try accessor.loadInode(current_id)) |inode| {
+        const parent_id = inode.id();
+        const child_id = try inode.getChild(0);
+        accessor.deinitInode(inode);
+        inode_depth += 1;
+
+        if (try accessor.loadInode(child_id)) |child_inode| {
+            defer accessor.deinitInode(child_inode);
+            try std.testing.expectEqual(@as(?u32, parent_id), child_inode.getParent());
+        } else if (try accessor.loadLeaf(child_id)) |child_leaf| {
+            defer accessor.deinitLeaf(child_leaf);
+            try std.testing.expectEqual(@as(?u32, parent_id), child_leaf.getParent());
+        } else {
+            return error.TestUnexpectedResult;
+        }
+        current_id = child_id;
+    }
+    try std.testing.expectEqual(@as(usize, 3), inode_depth);
+}
+
+test "Bpt inode update preserves a promoted separator" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+
+    var device = try Device.init(allocator, 84);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try BptModel.init(&cache, &store_mgr, .{
+        .maximum_key_size = 8,
+        .maximum_value_size = 0,
+    }, {});
+    defer model.deinit();
+    var tree = bpt.Bpt(BptModel).init(&model, .force_split);
+    defer tree.deinit();
+    const accessor = model.accessor();
+
+    var leaf0 = try accessor.createLeaf();
+    defer accessor.deinitLeaf(leaf0);
+    var leaf1 = try accessor.createLeaf();
+    defer accessor.deinitLeaf(leaf1);
+    var leaf2 = try accessor.createLeaf();
+    defer accessor.deinitLeaf(leaf2);
+    var leaf3 = try accessor.createLeaf();
+    defer accessor.deinitLeaf(leaf3);
+    var leaf4 = try accessor.createLeaf();
+    defer accessor.deinitLeaf(leaf4);
+
+    try leaf0.insertValue(0, "00000000", "");
+    try leaf1.insertValue(0, "a000", "");
+    try leaf2.insertValue(0, "b000", "");
+    try leaf3.insertValue(0, "c", "");
+    try leaf3.insertValue(1, "cccccccc", "");
+    try leaf4.insertValue(0, "d000", "");
+
+    try leaf0.setNext(leaf1.id());
+    try leaf1.setPrev(leaf0.id());
+    try leaf1.setNext(leaf2.id());
+    try leaf2.setPrev(leaf1.id());
+    try leaf2.setNext(leaf3.id());
+    try leaf3.setPrev(leaf2.id());
+    try leaf3.setNext(leaf4.id());
+    try leaf4.setPrev(leaf3.id());
+
+    var inode = try accessor.createInode();
+    defer accessor.deinitInode(inode);
+    try inode.insertChild(0, "a000", leaf0.id());
+    try inode.insertChild(1, "b000", leaf1.id());
+    try inode.insertChild(2, "c", leaf2.id());
+    try inode.insertChild(3, "d000", leaf3.id());
+    try inode.updateChild(4, leaf4.id());
+    try store_mgr.setRoot(inode.id());
+
+    inline for (.{ &leaf0, &leaf1, &leaf2, &leaf3, &leaf4 }) |leaf| {
+        try leaf.setParent(inode.id());
+    }
+    try std.testing.expect(!(try inode.canUpdateKey(2, "cccccccc")));
+
+    try leaf3.erase(0);
+    try tree.fixParentIndex(&leaf3);
+
+    var new_root = (try accessor.loadInode(store_mgr.getRoot().?)).?;
+    defer accessor.deinitInode(new_root);
+    try std.testing.expectEqual(@as(usize, 1), try new_root.size());
+    try std.testing.expectEqualStrings("cccccccc", try new_root.getKey(0));
+
+    const expected_keys = [_][]const u8{ "00000000", "a000", "b000", "cccccccc", "d000" };
+    for (expected_keys) |key| {
+        const found = (try tree.find(key)).?;
+        defer found.deinit();
+        try std.testing.expectEqualStrings(key, (try found.get()).?.key);
+    }
+}
+
+test "Bpt update retries leaf splits until the value fits" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+    const keys = [_][]const u8{
+        "00000001",
+        "00000002",
+        "00000003",
+        "00000004",
+        "00000005",
+        "00000006",
+        "00000007",
+    };
+    var large_value: [280]u8 = undefined;
+    @memset(&large_value, 'x');
+    var replacement: [280]u8 = undefined;
+    @memset(&replacement, 'y');
+
+    var device = try Device.init(allocator, 1024);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 16);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try BptModel.init(&cache, &store_mgr, .{
+        .maximum_key_size = 8,
+        .maximum_value_size = replacement.len,
+    }, {});
+    defer model.deinit();
+    var tree = bpt.Bpt(BptModel).init(&model, .force_split);
+    defer tree.deinit();
+
+    for (keys, 0..) |key, i| {
+        const value: []const u8 = if (i < 4) "" else &large_value;
+        try std.testing.expect(try tree.insert(key, value));
+    }
+
+    const accessor = model.accessor();
+    const initial_leaf_id = store_mgr.getRoot().?;
+    {
+        var initial_leaf = (try accessor.loadLeaf(initial_leaf_id)).?;
+        defer accessor.deinitLeaf(initial_leaf);
+        try std.testing.expectEqual(@as(usize, keys.len), try initial_leaf.size());
+        try std.testing.expect(!(try initial_leaf.canUpdateValue(3, &replacement)));
+    }
+
+    try std.testing.expect(try tree.update(keys[3], &replacement));
+
+    for (keys, 0..) |key, i| {
+        const found = (try tree.find(key)).?;
+        defer found.deinit();
+        const entry = (try found.get()).?;
+        const expected: []const u8 = if (i < 3)
+            ""
+        else if (i == 3)
+            &replacement
+        else
+            &large_value;
+        try std.testing.expectEqualSlices(u8, expected, entry.value);
+    }
+
+    var leaf_id = initial_leaf_id;
+    var leaf_count: usize = 0;
+    while (true) {
+        var leaf = (try accessor.loadLeaf(leaf_id)) orelse return error.TestUnexpectedResult;
+        const next = leaf.getNext();
+        accessor.deinitLeaf(leaf);
+        leaf_count += 1;
+        leaf_id = next orelse break;
+    }
+    try std.testing.expectEqual(@as(usize, 3), leaf_count);
+}
+
 test "Bpt paged: Create a tree" {
     const allocator = std.testing.allocator;
     const Device = dev.MemoryBlock(u32);
@@ -2564,7 +2880,9 @@ test "Bpt Update Random values" {
 
 test "Bpt Update Random values Keys as strings" {
     const prn = Printer("Update Random").init();
-    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
+    const seed = try getRandomSeed();
+    errdefer prn.print("FAILED seed=0x{x:0>16}\n", .{seed});
+    var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
     const allocator = std.testing.allocator;

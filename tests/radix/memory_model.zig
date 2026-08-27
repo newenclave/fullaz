@@ -46,3 +46,32 @@ test "RadixTree memory: create model" {
 
     try tree.dumpTree(StdOut{});
 }
+
+test "RadixTree memory: reuses slots from partial leaves" {
+    const M = Model(u32, u32);
+    const Tree = radix_tree.Tree(M);
+
+    var model = try M.init(std.testing.allocator, .{
+        .leaf_base = 4,
+        .inode_base = 4,
+    });
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    defer tree.deinit();
+
+    try tree.set(1, 11);
+    try std.testing.expectEqual(@as(?u32, 0), try tree.takeFree(10));
+    try std.testing.expectEqual(@as(?u32, 2), try tree.takeFree(12));
+    try std.testing.expectEqual(@as(?u32, 3), try tree.takeFree(13));
+    try std.testing.expectEqual(@as(?u32, null), try tree.takeFree(99));
+
+    try tree.free(2);
+    try std.testing.expectEqual(@as(?u32, 2), try tree.takeFree(22));
+    try std.testing.expectEqual(@as(?u32, 22), (try tree.get(2)).?);
+
+    try tree.free(0);
+    try tree.free(1);
+    try tree.free(2);
+    try tree.free(3);
+    try std.testing.expectEqual(@as(?u32, null), try tree.takeFree(1));
+}

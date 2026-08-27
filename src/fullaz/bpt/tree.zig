@@ -462,22 +462,24 @@ pub fn Bpt(comptime ModelT: type) type {
                     var leaf = leaf_const;
                     defer accessor.deinitLeaf(leaf);
                     if (search.found) {
-                        if (try leaf_const.canUpdateValue(search.position, value)) {
-                            try leaf.updateValue(search.position, value);
-                            return true;
-                        } else {
-                            // check if we can borrow from neighbors
-                            // need to rebalance...
+                        var position = search.position;
+                        while (!try leaf.canUpdateValue(position, value)) {
+                            if (try leaf.size() <= 1) {
+                                return Error.NotEnoughSpaceForUpdate;
+                            }
+
                             var right = try self.handleLeafOverflow(&leaf);
                             defer accessor.deinitLeaf(right);
-
-                            if (search.position < try leaf.size()) {
-                                try leaf.updateValue(search.position, value);
-                            } else {
-                                try right.updateValue(search.position - try leaf.size(), value);
+                            const left_size = try leaf.size();
+                            if (position >= left_size) {
+                                position -= left_size;
+                                const next = try right.take();
+                                accessor.deinitLeaf(leaf);
+                                leaf = next;
                             }
-                            return true;
                         }
+                        try leaf.updateValue(position, value);
+                        return true;
                     }
                 }
             }
@@ -1276,6 +1278,49 @@ pub fn Bpt(comptime ModelT: type) type {
             }
         }
 
+        const PreparedParentInsert = struct {
+            parent: InodeType,
+            position: usize,
+            left_child: NodeIdType,
+        };
+
+        fn prepareParentInsertExact(
+            self: *Self,
+            child: anytype,
+            key: KeyLikeType,
+        ) Error!PreparedParentInsert {
+            const accessor = self.model.accessor();
+            while (true) {
+                const parent_id = child.getParent();
+                if (!self.model.isValidId(parent_id)) {
+                    return Error.NoParent;
+                }
+
+                var parent = (try accessor.loadInode(parent_id)) orelse return Error.InvalidId;
+                defer accessor.deinitInode(parent);
+
+                const position = try self.findChidIndexInParentId(parent.id(), child.id());
+                const left_child = try parent.getChild(position);
+                if (left_child != child.id()) {
+                    return Error.ChildNotFoundInParent;
+                }
+                if (try parent.canInsertChild(position, key, left_child)) {
+                    return .{
+                        .parent = try parent.take(),
+                        .position = position,
+                        .left_child = left_child,
+                    };
+                }
+
+                try self.handleInodeOverflowDefault(
+                    &parent,
+                    key,
+                    left_child,
+                    position,
+                );
+            }
+        }
+
         fn handleLeafOverflow(self: *Self, leaf: *LeafType) Error!LeafType {
             const leaf_if = leaf.id();
             const accessor = self.model.accessor();
@@ -1301,41 +1346,20 @@ pub fn Bpt(comptime ModelT: type) type {
                 try nr.updateChild(1, right_leaf.id());
                 try accessor.setRoot(nr.id());
             } else {
-                var parent: InodeType = undefined;
-                defer accessor.deinitInode(parent);
-
-                const parent_id = leaf.getParent();
-                var pos = try self.findChidIndexInParentId(parent_id, leaf.id());
-                if (try accessor.loadInode(parent_id)) |p| {
-                    parent = p;
-                }
-                var pos_child = try parent.getChild(pos);
                 const key_like = split_result.middle_key;
+                var prepared = try self.prepareParentInsertExact(leaf, key_like);
+                defer accessor.deinitInode(prepared.parent);
 
-                try self.handleInodeOverflowDefault(&parent, key_like, pos_child, pos);
-
-                const new_parent_id = leaf.getParent();
-                if (parent_id != new_parent_id) {
-                    if (try accessor.loadInode(new_parent_id)) |p| {
-                        accessor.deinitInode(parent);
-                        parent = p;
-                    }
-                }
-
-                pos = try self.findChidIndexInParentId(new_parent_id, leaf.id());
-
-                try right_leaf.setParent(parent.id());
-                const first_key = try right_leaf.getKey(0);
-                const first_key_like = self.model.keyOutAsLike(first_key);
-                pos_child = try parent.getChild(pos);
-
-                // TODO: investigate why this happens
-                if (!try parent.canInsertChild(pos, first_key_like, pos_child)) {
-                    return Error.NotEnoughSpaceForUpdate;
-                }
-
-                try parent.insertChild(pos, first_key_like, pos_child);
-                try parent.updateChild(pos + 1, right_leaf.id());
+                try right_leaf.setParent(prepared.parent.id());
+                try prepared.parent.insertChild(
+                    prepared.position,
+                    key_like,
+                    prepared.left_child,
+                );
+                try prepared.parent.updateChild(
+                    prepared.position + 1,
+                    right_leaf.id(),
+                );
             }
             return try right_leaf.take();
         }
@@ -1382,28 +1406,20 @@ pub fn Bpt(comptime ModelT: type) type {
                 try right_inode.setParent(nr.id());
                 try accessor.setRoot(nr.id());
             } else {
-                var parent: InodeType = undefined;
-                defer accessor.deinitInode(parent);
-                var parent_id = inode.getParent();
-                var pos = try self.findChidIndexInParentId(parent_id, inode.id());
-                if (try accessor.loadInode(parent_id)) |p| {
-                    parent = p;
-                }
-                var pos_child = try parent.getChild(pos);
                 const key_like = self.model.keyBorrowAsLike(&res.middle_key);
+                var prepared = try self.prepareParentInsertExact(inode, key_like);
+                defer accessor.deinitInode(prepared.parent);
 
-                try self.handleInodeOverflowDefault(&parent, key_like, pos_child, pos);
-
-                parent_id = inode.getParent();
-                pos = try self.findChidIndexInParentId(parent_id, inode.id());
-                if (try accessor.loadInode(parent_id)) |p| {
-                    accessor.deinitInode(parent);
-                    parent = p;
-                }
-                pos_child = try parent.getChild(pos);
-                try right_inode.setParent(parent.id());
-                try parent.insertChild(pos, key_like, pos_child);
-                try parent.updateChild(pos + 1, right_inode.id());
+                try right_inode.setParent(prepared.parent.id());
+                try prepared.parent.insertChild(
+                    prepared.position,
+                    key_like,
+                    prepared.left_child,
+                );
+                try prepared.parent.updateChild(
+                    prepared.position + 1,
+                    right_inode.id(),
+                );
             }
             return try right_inode.take();
         }
@@ -1461,46 +1477,30 @@ pub fn Bpt(comptime ModelT: type) type {
                 return;
             }
             const first_key = try child.getKey(0);
-            const first_key_like = self.model.keyOutAsLike(first_key);
-            if (!try parent.canUpdateKey(pos, first_key_like)) {
-                var right = try self.handleInodeOverflow(parent);
-                defer self.model.accessor().deinitInode(right);
-                const key_like = self.model.keyOutAsLike(first_key);
-                const parent_size = try parent.size();
-                if (pos < parent_size) {
-                    try parent.updateKey(pos, key_like);
-                } else if (pos > parent_size) {
-                    const new_pos = pos - parent_size - 1;
-                    try right.updateKey(new_pos, key_like);
-                }
-            } else {
-                try parent.updateKey(pos, first_key_like);
-            }
+            try self.updateInodeKey(parent, pos, self.model.keyOutAsLike(first_key));
         }
 
         pub fn updateInodeKey(self: *Self, inode: *InodeType, pos: usize, key: KeyLikeType) Error!void {
             const accessor = self.model.accessor();
-            if (!try inode.canUpdateKey(pos, key)) {
-                var right = try self.handleInodeOverflow(inode);
-                // TODO: check if we need to deinit right here
-                defer accessor.deinitInode(right);
-                const inode_size = try inode.size();
-                if (pos < inode_size) {
-                    try inode.updateKey(pos, key);
-                } else if (pos == inode_size) {
-                    if (try accessor.loadInode(inode.getParent())) |parent_const| {
-                        var parent = parent_const;
-                        defer accessor.deinitInode(parent);
-                        const parent_pos = try self.findChidIndexInParentId(parent.id(), inode.id());
-                        try self.updateInodeKey(&parent, parent_pos, key);
-                    }
-                } else if (pos > inode_size) {
-                    const new_pos = pos - inode_size - 1;
-                    try right.updateKey(new_pos, key);
-                }
-            } else {
+            if (try inode.canUpdateKey(pos, key)) {
                 try inode.updateKey(pos, key);
+                return;
             }
+
+            var right = try self.handleInodeOverflow(inode);
+            defer accessor.deinitInode(right);
+            const left_size = try inode.size();
+            if (pos < left_size) {
+                return self.updateInodeKey(inode, pos, key);
+            }
+            if (pos > left_size) {
+                return self.updateInodeKey(&right, pos - left_size - 1, key);
+            }
+
+            var parent = (try accessor.loadInode(inode.getParent())) orelse return Error.InvalidId;
+            defer accessor.deinitInode(parent);
+            const parent_pos = try self.findChidIndexInParentId(parent.id(), inode.id());
+            return self.updateInodeKey(&parent, parent_pos, key);
         }
 
         const SplitLeafResult = struct {

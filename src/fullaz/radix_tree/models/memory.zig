@@ -64,8 +64,8 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
 
         cont: MemoryContainer,
         parent_id: ?PidType = null,
-        parent_quotient: KeyT = undefined,
-        parent_idx: KeyT = undefined,
+        parent_quotient: KeyT = 0,
+        parent_idx: KeyT = 0,
         elements_count: usize = 0,
 
         fn init(allocator: std.mem.Allocator, base: usize) ErrorSet!Self {
@@ -128,12 +128,18 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
         const Container = LeafContainer;
         container: *Container,
         self_id: PidType,
+        free_leaf_ids: *std.AutoHashMap(PidType, void),
         pub const Error = ErrorSet;
 
-        fn init(cont: *Container, pid: PidType) Error!Self {
+        fn init(
+            cont: *Container,
+            pid: PidType,
+            free_leaf_ids: *std.AutoHashMap(PidType, void),
+        ) Error!Self {
             return Self{
                 .container = cont,
                 .self_id = pid,
+                .free_leaf_ids = free_leaf_ids,
             };
         }
 
@@ -223,6 +229,19 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
                 return Error.OutOfBounds;
             }
             return self.container.cont.items[idx] != null;
+        }
+
+        pub fn getFirstFree(self: *const Self) Error!?KeyT {
+            for (self.container.cont.items, 0..) |value, index| {
+                if (value == null) {
+                    return @intCast(index);
+                }
+            }
+            return null;
+        }
+
+        pub fn isInFree(self: *const Self) Error!bool {
+            return self.free_leaf_ids.contains(self.self_id);
         }
     };
 
@@ -342,6 +361,7 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
         cont: Container,
         splitter: Splitter,
         root: ?PidType = null,
+        free_leaf_ids: std.AutoHashMap(PidType, void),
 
         fn init(alloc: std.mem.Allocator, sett: SettingsImpl) Error!Self {
             return Self{
@@ -349,6 +369,7 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
                 .cont = try Container.initCapacity(alloc, 4),
                 .splitter = Splitter.init(sett.inode_base, sett.leaf_base),
                 .sett = sett,
+                .free_leaf_ids = std.AutoHashMap(PidType, void).init(alloc),
             };
         }
 
@@ -367,6 +388,7 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
                 }
             }
             self.cont.deinit(self.alloc);
+            self.free_leaf_ids.deinit();
         }
 
         pub fn createLeaf(self: *Self) Error!LeafImpl {
@@ -374,7 +396,7 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
             const leaf_ptr = try self.alloc.create(LeafContainer);
             leaf_ptr.* = try LeafContainer.init(self.alloc, self.sett.leaf_base);
             try self.cont.append(self.alloc, .{ .leaf = leaf_ptr });
-            return LeafImpl.init(leaf_ptr, old_size);
+            return LeafImpl.init(leaf_ptr, old_size, &self.free_leaf_ids);
         }
 
         pub fn loadLeaf(self: *Self, pid: PidType) Error!LeafImpl {
@@ -385,13 +407,27 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
                 .inode => return Error.InvalidId,
                 .none => return Error.InvalidId,
                 .leaf => |lptr| {
-                    return LeafImpl.init(lptr, pid);
+                    return LeafImpl.init(lptr, pid, &self.free_leaf_ids);
                 },
             }
         }
 
         pub fn deinitLeaf(_: *Self, _: *LeafImpl) void {
             //leaf.deinit(self.alloc);
+        }
+
+        pub fn getFreeLeaf(self: *Self) Error!?LeafImpl {
+            var keys = self.free_leaf_ids.keyIterator();
+            const page_id = keys.next() orelse return null;
+            return try self.loadLeaf(page_id.*);
+        }
+
+        pub fn addFreeLeaf(self: *Self, leaf: *LeafImpl) Error!void {
+            try self.free_leaf_ids.put(leaf.id(), {});
+        }
+
+        pub fn removeFreeLeaf(self: *Self, page_id: PidType) Error!void {
+            _ = self.free_leaf_ids.remove(page_id);
         }
 
         pub fn createInode(self: *Self) Error!InodeImpl {

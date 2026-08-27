@@ -103,6 +103,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         pub const Error = Cache.Error;
 
         root: *?u64,
+        free_leaf_root: *?u64,
         cache: *Cache,
 
         pub fn getRoot(self: *const @This()) ?PageId {
@@ -112,6 +113,15 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
 
         pub fn setRoot(self: *@This(), value: ?PageId) Error!void {
             self.root.* = if (value) |page_id| @intCast(page_id) else null;
+        }
+
+        pub fn getFreeLeafRoot(self: *const @This()) ?PageId {
+            const raw = self.free_leaf_root.* orelse return null;
+            return std.math.cast(PageId, raw);
+        }
+
+        pub fn setFreeLeafRoot(self: *@This(), value: ?PageId) Error!void {
+            self.free_leaf_root.* = if (value) |page_id| @intCast(page_id) else null;
         }
 
         pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
@@ -260,6 +270,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 .catalog_record_count = 0,
                 .live_component_count = 0,
                 .id_radix_root = null,
+                .id_radix_free_leaf_root = null,
                 .name_bpt_root = null,
                 .next_component_id = 1,
                 .next_component_page_kind = file.system_kinds.first_component,
@@ -301,8 +312,16 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             core.cache = Cache.init(&core.raw_cache, &core.reclaim_store);
             errdefer core.cache.deinit();
             core.catalog_manager = .{ .state = &core.state, .cache = &core.cache };
-            core.catalog_id_manager = .{ .root = &core.state.id_radix_root, .cache = &core.cache };
-            core.catalog_name_manager = .{ .root = &core.state.name_bpt_root, .cache = &core.cache };
+            core.catalog_id_manager = .{
+                .root = &core.state.id_radix_root,
+                .free_leaf_root = &core.state.id_radix_free_leaf_root,
+                .cache = &core.cache,
+            };
+            core.catalog_name_manager = .{
+                .root = &core.state.name_bpt_root,
+                .free_leaf_root = &core.state.id_radix_free_leaf_root,
+                .cache = &core.cache,
+            };
             core.catalog = try Catalog.init(&core.cache, &core.catalog_manager);
             errdefer core.catalog.deinit();
             core.catalog_ids = try CatalogIds.init(&core.cache, &core.catalog_id_manager);
@@ -413,7 +432,9 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             core.state = view.state;
             core.catalog_manager.state = &core.state;
             core.catalog_id_manager.root = &core.state.id_radix_root;
+            core.catalog_id_manager.free_leaf_root = &core.state.id_radix_free_leaf_root;
             core.catalog_name_manager.root = &core.state.name_bpt_root;
+            core.catalog_name_manager.free_leaf_root = &core.state.id_radix_free_leaf_root;
             if (core.state.free_root) |free_root| {
                 _ = std.math.cast(DevicePageId, free_root) orelse return error.BadFreeList;
             }
@@ -930,6 +951,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 candidate_state.catalog_last = null;
                 candidate_state.catalog_record_count = 0;
                 candidate_state.id_radix_root = null;
+                candidate_state.id_radix_free_leaf_root = null;
                 candidate_state.name_bpt_root = null;
                 var candidate_catalog_manager = CatalogManager{
                     .state = &candidate_state,
@@ -937,10 +959,12 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 };
                 var candidate_id_manager = IndexManager{
                     .root = &candidate_state.id_radix_root,
+                    .free_leaf_root = &candidate_state.id_radix_free_leaf_root,
                     .cache = &core.cache,
                 };
                 var candidate_name_manager = IndexManager{
                     .root = &candidate_state.name_bpt_root,
+                    .free_leaf_root = &candidate_state.id_radix_free_leaf_root,
                     .cache = &core.cache,
                 };
                 var candidate_catalog = try Catalog.init(&core.cache, &candidate_catalog_manager);
@@ -982,6 +1006,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 core.state.catalog_last = candidate_state.catalog_last;
                 core.state.catalog_record_count = candidate_state.catalog_record_count;
                 core.state.id_radix_root = candidate_state.id_radix_root;
+                core.state.id_radix_free_leaf_root = candidate_state.id_radix_free_leaf_root;
                 core.state.name_bpt_root = candidate_state.name_bpt_root;
 
                 for (old_catalog_pages) |page_id| {

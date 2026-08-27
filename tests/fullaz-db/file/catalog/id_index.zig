@@ -7,6 +7,7 @@ const Manager = struct {
     pub const Error = error{};
 
     root: ?PageId = null,
+    free_leaf_root: ?PageId = null,
 
     pub fn getRoot(self: *const @This()) ?PageId {
         return self.root;
@@ -14,6 +15,14 @@ const Manager = struct {
 
     pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
         self.root = root;
+    }
+
+    pub fn getFreeLeafRoot(self: *const @This()) ?PageId {
+        return self.free_leaf_root;
+    }
+
+    pub fn setFreeLeafRoot(self: *@This(), root: ?PageId) Error!void {
+        self.free_leaf_root = root;
     }
 
     pub fn destroyPage(_: *@This(), _: PageId) Error!void {}

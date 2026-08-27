@@ -31,6 +31,8 @@ pub fn assertLeaf(comptime ModelT: type) void {
     requiresFnSignature(LeafType, "get", fn (*const LeafType, KeyInType) Error!ValueOutType);
     requiresFnSignature(LeafType, "free", fn (*LeafType, KeyInType) Error!void);
     requiresFnSignature(LeafType, "isSet", fn (*const LeafType, KeyInType) Error!bool);
+    requiresFnSignature(LeafType, "getFirstFree", fn (*const LeafType) Error!?KeyInType);
+    requiresFnSignature(LeafType, "isInFree", fn (*const LeafType) Error!bool);
     requiresFnSignature(LeafType, "setParent", fn (*LeafType, ?NodeIdType) Error!void);
     requiresFnSignature(LeafType, "getParent", fn (*const LeafType) Error!?NodeIdType);
     requiresFnSignature(LeafType, "setParentQuotient", fn (*LeafType, KeyInType) Error!void);
@@ -85,11 +87,22 @@ pub fn assertAccessor(comptime ModelT: type) void {
     requiresFnSignature(AccessorType, "createLeaf", fn (*AccessorType) Error!LeafType);
     requiresFnSignature(AccessorType, "loadLeaf", fn (*AccessorType, NodeIdType) Error!LeafType);
     requiresFnSignature(AccessorType, "deinitLeaf", fn (*AccessorType, *LeafType) void);
+    requiresFnSignature(AccessorType, "getFreeLeaf", fn (*AccessorType) Error!?LeafType);
+    requiresFnSignature(AccessorType, "addFreeLeaf", fn (*AccessorType, *LeafType) Error!void);
+    requiresFnSignature(AccessorType, "removeFreeLeaf", fn (*AccessorType, NodeIdType) Error!void);
     requiresFnSignature(AccessorType, "createInode", fn (*AccessorType) Error!InodeType);
     requiresFnSignature(AccessorType, "loadInode", fn (*AccessorType, NodeIdType) Error!InodeType);
     requiresFnSignature(AccessorType, "deinitInode", fn (*AccessorType, *InodeType) void);
     requiresFnSignature(AccessorType, "splitKey", fn (*const AccessorType, KeyInType) Error!SplitKeyType);
     requiresFnSignature(AccessorType, "deinitSplitKey", fn (*AccessorType, *SplitKeyType) void);
+}
+
+/// A paged Radix storage manager additionally owns the free-leaf-list root.
+pub fn assertFreeLeafStorageManager(comptime StorageManagerT: type, comptime PageIdT: type) void {
+    requiresErrorDeclaration(StorageManagerT, "Error");
+    const Error = StorageManagerT.Error;
+    requiresFnSignature(StorageManagerT, "getFreeLeafRoot", fn (*const StorageManagerT) ?PageIdT);
+    requiresFnSignature(StorageManagerT, "setFreeLeafRoot", fn (*StorageManagerT, ?PageIdT) Error!void);
 }
 
 /// A radix model exposes the types and accessor required by 'Tree'.

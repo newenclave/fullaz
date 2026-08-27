@@ -7,6 +7,7 @@ const core = @import("../../../core/core.zig");
 const errors = core.errors;
 const header = @import("../../../page/header.zig");
 const KeySplitter = @import("../../splitter.zig").Splitter;
+const model_interfaces = @import("../interfaces.zig");
 
 const SettingsImpl = struct {
     leaf_page_kind: u16 = 0,
@@ -18,6 +19,7 @@ const SettingsImpl = struct {
 pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime KeyT: type, comptime ValueSize: usize) type {
     comptime {
         contracts.storage_manager.requiresStorageManager(StorageManagerT);
+        model_interfaces.assertFreeLeafStorageManager(StorageManagerT, PageCacheT.Pid);
         contracts.page_cache.requiresPageCache(PageCacheT);
     }
 
@@ -151,6 +153,46 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         pub fn free(self: *Self, key: KeyT) ErrorSet!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.free(key);
+        }
+
+        pub fn getFirstFree(self: *const Self) Error!?KeyT {
+            const view = ConstPageViewType.init(try self.handle.data());
+            return try view.getFirstFree();
+        }
+
+        pub fn isInFree(self: *const Self) Error!bool {
+            const view = ConstPageViewType.init(try self.handle.data());
+            return try view.isInFree();
+        }
+
+        fn getNextFreeLeaf(self: *const Self) Error!?RawPageId {
+            const view = ConstPageViewType.init(try self.handle.data());
+            return try view.getNextFreeLeaf();
+        }
+
+        fn getPrevFreeLeaf(self: *const Self) Error!?RawPageId {
+            const view = ConstPageViewType.init(try self.handle.data());
+            return try view.getPrevFreeLeaf();
+        }
+
+        fn setFreeLeafLinks(self: *Self, prev: ?RawPageId, next: ?RawPageId) Error!void {
+            var view = PageViewType.init(try self.handle.dataMut());
+            try view.setFreeLeafLinks(prev, next);
+        }
+
+        fn setPrevFreeLeaf(self: *Self, page_id: ?RawPageId) Error!void {
+            var view = PageViewType.init(try self.handle.dataMut());
+            try view.setPrevFreeLeaf(page_id);
+        }
+
+        fn setNextFreeLeaf(self: *Self, page_id: ?RawPageId) Error!void {
+            var view = PageViewType.init(try self.handle.dataMut());
+            try view.setNextFreeLeaf(page_id);
+        }
+
+        fn clearFreeLeaf(self: *Self) Error!void {
+            var view = PageViewType.init(try self.handle.dataMut());
+            view.clearFreeLeaf();
         }
 
         pub fn setParent(self: *Self, parent_id: ?RawPageId) ErrorSet!void {
@@ -373,6 +415,92 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         pub fn deinitLeaf(_: *Self, leaf: *LeafImpl) void {
             leaf.deinit();
             leaf.* = undefined;
+        }
+
+        pub fn getFreeLeaf(self: *Self) Error!?LeafImpl {
+            const page_id = self.ctx.storage_mgr.getFreeLeafRoot() orelse return null;
+            var leaf = try self.loadLeaf(page_id);
+            errdefer self.deinitLeaf(&leaf);
+            if (!try leaf.isInFree() or (try leaf.getPrevFreeLeaf()) != null) {
+                return Error.BadData;
+            }
+            return leaf;
+        }
+
+        pub fn addFreeLeaf(self: *Self, leaf: *LeafImpl) Error!void {
+            if (try leaf.isInFree()) {
+                return;
+            }
+            const old_root = self.ctx.storage_mgr.getFreeLeafRoot();
+            var old_head: ?LeafImpl = null;
+            defer if (old_head) |*head| {
+                self.deinitLeaf(head);
+            };
+            if (old_root) |page_id| {
+                old_head = try self.loadLeaf(page_id);
+                if (!try old_head.?.isInFree() or (try old_head.?.getPrevFreeLeaf()) != null) {
+                    return Error.BadData;
+                }
+            }
+
+            try leaf.setFreeLeafLinks(null, old_root);
+            if (old_head) |*head| {
+                try head.setPrevFreeLeaf(leaf.id());
+            }
+            try self.ctx.storage_mgr.setFreeLeafRoot(leaf.id());
+        }
+
+        pub fn removeFreeLeaf(self: *Self, page_id: RawPageId) Error!void {
+            var current = try self.loadLeaf(page_id);
+            defer self.deinitLeaf(&current);
+            if (!try current.isInFree()) {
+                return Error.BadData;
+            }
+
+            const prev_id = try current.getPrevFreeLeaf();
+            const next_id = try current.getNextFreeLeaf();
+            const root = self.ctx.storage_mgr.getFreeLeafRoot();
+            if ((prev_id == null and root != page_id) or
+                (prev_id != null and root == page_id))
+            {
+                return Error.BadData;
+            }
+
+            var previous: ?LeafImpl = null;
+            defer if (previous) |*leaf| {
+                self.deinitLeaf(leaf);
+            };
+            if (prev_id) |id| {
+                previous = try self.loadLeaf(id);
+                if (!try previous.?.isInFree() or
+                    (try previous.?.getNextFreeLeaf()) != page_id)
+                {
+                    return Error.BadData;
+                }
+            }
+
+            var next: ?LeafImpl = null;
+            defer if (next) |*leaf| {
+                self.deinitLeaf(leaf);
+            };
+            if (next_id) |id| {
+                next = try self.loadLeaf(id);
+                if (!try next.?.isInFree() or
+                    (try next.?.getPrevFreeLeaf()) != page_id)
+                {
+                    return Error.BadData;
+                }
+            }
+
+            if (previous) |*leaf| {
+                try leaf.setNextFreeLeaf(next_id);
+            } else {
+                try self.ctx.storage_mgr.setFreeLeafRoot(next_id);
+            }
+            if (next) |*leaf| {
+                try leaf.setPrevFreeLeaf(prev_id);
+            }
+            try current.clearFreeLeaf();
         }
 
         pub fn isLeaf(self: *const Self, id: BlockIdType) ErrorSet!bool {

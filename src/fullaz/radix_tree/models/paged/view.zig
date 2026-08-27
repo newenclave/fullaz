@@ -149,6 +149,101 @@ pub fn View(
             try slot_dir.free(key);
         }
 
+        pub fn getFirstFree(self: *const Self) ErrorSet!?KeyT {
+            const slot_dir = try self.slotsDir();
+            const index = try slot_dir.getFirstFree() orelse return null;
+            return @intCast(index);
+        }
+
+        pub fn isInFree(self: *const Self) ErrorSet!bool {
+            const subheader_view = self.subheader();
+            const value = subheader_view.on_free_list;
+            if (value > 1) {
+                return ErrorSet.BadData;
+            }
+            return value == 1;
+        }
+
+        const FreeLeafLinks = struct {
+            prev: ?PageIdT,
+            next: ?PageIdT,
+        };
+
+        fn getFreeLeafLinks(self: *const Self) ErrorSet!FreeLeafLinks {
+            const subheader_view = self.subheader();
+            const listed = try self.isInFree();
+            const prev = if (subheader_view.free_leaf_links.prev.isMax())
+                null
+            else
+                subheader_view.free_leaf_links.prev.get();
+            const next = if (subheader_view.free_leaf_links.next.isMax())
+                null
+            else
+                subheader_view.free_leaf_links.next.get();
+            const self_id = self.page_view.header().self_pid.get();
+            if ((!listed and (prev != null or next != null)) or
+                (prev != null and prev.? == self_id) or
+                (next != null and next.? == self_id))
+            {
+                return ErrorSet.BadData;
+            }
+            return .{ .prev = prev, .next = next };
+        }
+
+        pub fn getPrevFreeLeaf(self: *const Self) ErrorSet!?PageIdT {
+            return (try self.getFreeLeafLinks()).prev;
+        }
+
+        pub fn getNextFreeLeaf(self: *const Self) ErrorSet!?PageIdT {
+            return (try self.getFreeLeafLinks()).next;
+        }
+
+        pub fn setFreeLeafLinks(self: *Self, prev: ?PageIdT, next: ?PageIdT) ErrorSet!void {
+            var subheader_view = self.subheaderMut();
+            subheader_view.on_free_list = 1;
+            if (prev) |id| {
+                subheader_view.free_leaf_links.prev.set(id);
+            } else {
+                subheader_view.free_leaf_links.prev.setMax();
+            }
+            if (next) |id| {
+                subheader_view.free_leaf_links.next.set(id);
+            } else {
+                subheader_view.free_leaf_links.next.setMax();
+            }
+        }
+
+        pub fn setPrevFreeLeaf(self: *Self, page_id: ?PageIdT) ErrorSet!void {
+            if (!try self.isInFree()) {
+                return ErrorSet.BadData;
+            }
+            var subheader_view = self.subheaderMut();
+            if (page_id) |id| {
+                subheader_view.free_leaf_links.prev.set(id);
+            } else {
+                subheader_view.free_leaf_links.prev.setMax();
+            }
+        }
+
+        pub fn setNextFreeLeaf(self: *Self, page_id: ?PageIdT) ErrorSet!void {
+            if (!try self.isInFree()) {
+                return ErrorSet.BadData;
+            }
+            var subheader_view = self.subheaderMut();
+            if (page_id) |id| {
+                subheader_view.free_leaf_links.next.set(id);
+            } else {
+                subheader_view.free_leaf_links.next.setMax();
+            }
+        }
+
+        pub fn clearFreeLeaf(self: *Self) void {
+            var subheader_view = self.subheaderMut();
+            subheader_view.on_free_list = 0;
+            subheader_view.free_leaf_links.prev.setMax();
+            subheader_view.free_leaf_links.next.setMax();
+        }
+
         pub fn setParent(self: *Self, parent_id: ?PageIdT) ErrorSet!void {
             var sub_hdr = self.subheaderMut();
             if (parent_id) |pid| {

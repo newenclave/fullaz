@@ -177,6 +177,31 @@ pub fn Tree(comptime ModelT: type) type {
             var leaf = try self.createPath(&split_key);
             defer acc.deinitLeaf(&leaf);
             try leaf.set(split_key.get(0).digit, value);
+            try self.syncFreeLeaf(&leaf);
+        }
+
+        /// Stores `value` in an existing free leaf slot and returns its full key.
+        pub fn takeFree(self: *Self, value: ValueInType) Error!?KeyInType {
+            const acc = self.accessor();
+            var leaf = (try acc.getFreeLeaf()) orelse return null;
+            defer acc.deinitLeaf(&leaf);
+
+            if (!try leaf.isInFree()) {
+                return Error.InconsistentLayout;
+            }
+            const digit = (try leaf.getFirstFree()) orelse return Error.InconsistentLayout;
+            const quotient = try leaf.getParentQuotient();
+            const multiplied = @mulWithOverflow(quotient, self.model.getSettings().leaf_base);
+            if (multiplied[1] != 0) {
+                return Error.InvalidId;
+            }
+            const key_result = @addWithOverflow(multiplied[0], digit);
+            if (key_result[1] != 0) {
+                return Error.InvalidId;
+            }
+            try leaf.set(digit, value);
+            try self.syncFreeLeaf(&leaf);
+            return key_result[0];
         }
 
         pub fn free(self: *Self, key: KeyInType) Error!void {
@@ -193,6 +218,9 @@ pub fn Tree(comptime ModelT: type) type {
                 if (try leaf.isSet(digit)) {
                     try leaf.free(digit);
                     if (try leaf.size() == 0) {
+                        if (try leaf.isInFree()) {
+                            try acc.removeFreeLeaf(leaf.id());
+                        }
                         const parent = try leaf.getParent();
                         const parent_id = try leaf.getParentId();
                         const leaf_id = leaf.id();
@@ -206,6 +234,7 @@ pub fn Tree(comptime ModelT: type) type {
                         }
                         return;
                     }
+                    try self.syncFreeLeaf(leaf);
                 }
                 // The deferred cleanup owns the nonempty leaf.
             }
@@ -268,6 +297,22 @@ pub fn Tree(comptime ModelT: type) type {
                 }
             }
             return null;
+        }
+
+        fn syncFreeLeaf(self: *Self, leaf: *LeafType) Error!void {
+            const acc = self.accessor();
+            const size = try leaf.size();
+            const capacity = try leaf.capacity();
+            if (size == 0) {
+                return;
+            }
+            if (size < capacity) {
+                if (!try leaf.isInFree()) {
+                    try acc.addFreeLeaf(leaf);
+                }
+            } else if (try leaf.isInFree()) {
+                try acc.removeFreeLeaf(leaf.id());
+            }
         }
 
         fn createPath(self: *Self, skr: *const SplitKeyType) Error!LeafType {
@@ -365,12 +410,16 @@ pub fn Tree(comptime ModelT: type) type {
                         var leaf = try acc.loadLeaf(current_id);
                         defer acc.deinitLeaf(&leaf);
                         try leaf.setParent(new_inode.id());
+                        try leaf.setParentId(0);
+                        try leaf.setParentQuotient(0);
                         try new_inode.setLevel(1);
                         try new_inode.set(0, leaf.id());
                     } else {
                         var inode = try acc.loadInode(current_id);
                         defer acc.deinitInode(&inode);
                         try inode.setParent(new_inode.id());
+                        try inode.setParentId(0);
+                        try inode.setParentQuotient(0);
                         const next_level = try inode.getLevel() + 1;
                         try new_inode.setLevel(next_level);
                         try new_inode.set(0, inode.id());

@@ -12,7 +12,7 @@ pub const Error = tagged.Error || error{
 };
 
 pub const magic = "FULLAZFD";
-pub const format_version: u16 = 1;
+pub const format_version: u16 = 2;
 const U16 = PackedInt(u16, .little);
 const U32 = PackedInt(u32, .little);
 
@@ -57,6 +57,7 @@ pub const Tag = struct {
     pub const next_component_page_kind: u16 = 15;
     pub const catalog_epoch: u16 = 16;
     pub const generation: u16 = 17;
+    pub const id_radix_free_leaf_root: u16 = 18;
 };
 
 const known_tags = [_]u16{
@@ -77,6 +78,7 @@ const known_tags = [_]u16{
     Tag.next_component_page_kind,
     Tag.catalog_epoch,
     Tag.generation,
+    Tag.id_radix_free_leaf_root,
 };
 
 pub const State = struct {
@@ -92,6 +94,7 @@ pub const State = struct {
     catalog_record_count: u64,
     live_component_count: u64,
     id_radix_root: ?u64,
+    id_radix_free_leaf_root: ?u64,
     name_bpt_root: ?u64,
     next_component_id: u64,
     next_component_page_kind: u16,
@@ -196,6 +199,7 @@ fn appendState(writer: *tagged.Writer, state: State) Error!void {
     try appendInt(writer, Tag.catalog_record_count, u64, state.catalog_record_count);
     try appendInt(writer, Tag.live_component_count, u64, state.live_component_count);
     try appendInt(writer, Tag.id_radix_root, u64, state.id_radix_root orelse 0);
+    try appendInt(writer, Tag.id_radix_free_leaf_root, u64, state.id_radix_free_leaf_root orelse 0);
     try appendInt(writer, Tag.name_bpt_root, u64, state.name_bpt_root orelse 0);
     try appendInt(writer, Tag.next_component_id, u64, state.next_component_id);
     try appendInt(writer, Tag.next_component_page_kind, u16, state.next_component_page_kind);
@@ -296,6 +300,10 @@ fn decodeState(payload: []const u8) Error!State {
             Tag.generation => {
                 found[16] = true;
                 state.generation = try readInt(field.value, u64);
+            },
+            Tag.id_radix_free_leaf_root => {
+                found[17] = true;
+                state.id_radix_free_leaf_root = decodeOptionalPid(try readInt(field.value, u64));
             },
             else => {},
         }
