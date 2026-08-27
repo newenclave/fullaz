@@ -5,7 +5,14 @@ const slots = @import("../../../slots/slots.zig");
 const errors = @import("../../../core/errors.zig");
 const algorithm = @import("../../../core/algorithm.zig");
 
-pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime KeyT: type, comptime ValueSize: usize, comptime Endian: std.builtin.Endian, comptime read_only: bool) type {
+pub fn View(
+    comptime PageIdT: type,
+    comptime IndexT: type,
+    comptime KeyT: type,
+    comptime ValueSize: usize,
+    comptime Endian: std.builtin.Endian,
+    comptime read_only: bool,
+) type {
     const RadixTreePage = radix_tree_page.RadixTree(PageIdT, IndexT, KeyT, Endian);
 
     const HeaderPageView = header.View(PageIdT, IndexT, Endian, read_only);

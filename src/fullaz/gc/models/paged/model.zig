@@ -16,10 +16,52 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
     const state_magic = 0x4743_5354; // "GCST"
     const page_magic = 0x4743_5047; // "GCPG"
     const version = 1;
-    const state_len = 80;
     const common_len = 16;
     const queue_page_kind = 0x4743; // "GC"
     const PackedPageId = PackedInt(PageCacheT.Pid, .little);
+    const PackedCursor = PackedPageId;
+    const PackedU64 = PackedInt(u64, .little);
+    const nil_page_id = PackedPageId.max;
+    const MetadataPageHeader = extern struct {
+        magic: PackedInt(u32, .little),
+        role: u8,
+        version: u8,
+        reserved: [2]u8,
+        next: PackedU64,
+    };
+    const State = extern struct {
+        magic: PackedInt(u32, .little),
+        role: u8,
+        version: u8,
+        phase: u8,
+        reserved: u8,
+        snapshot_page_count: PackedCursor,
+        registry_digest: PackedU64,
+        prepare_cursor: PackedCursor,
+        sweep_cursor: PackedCursor,
+        mark_head: PackedPageId,
+        free_head: PackedPageId,
+        queue_first: PackedPageId,
+        queue_last: PackedPageId,
+        queue_total_size: PackedU64,
+    };
+    const metadata_header_len = @sizeOf(MetadataPageHeader);
+    const state_len = @sizeOf(State);
+
+    comptime {
+        if (@alignOf(MetadataPageHeader) != 1 or metadata_header_len != common_len or
+            @offsetOf(MetadataPageHeader, "magic") != 0 or
+            @offsetOf(MetadataPageHeader, "next") != 8)
+        {
+            @compileError("GC metadata page layout changed");
+        }
+        if (@alignOf(State) != 1 or state_len != 8 + 2 * @sizeOf(PackedU64) + 7 * @sizeOf(PackedPageId) or
+            @offsetOf(State, "magic") != 0 or @offsetOf(State, "phase") != 6 or
+            @offsetOf(State, "snapshot_page_count") != 8)
+        {
+            @compileError("GC state layout changed");
+        }
+    }
 
     const BaseError = PageCacheT.Error ||
         PageCacheT.Handle.Error ||
@@ -61,31 +103,59 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             }
 
             pub fn getFirst(self: *const QueueManagerSelf) QueueManagerSelf.Error!?QueueManagerSelf.PageId {
-                return self.model.stateOptionalPageId(.queue_first);
+                const state_page_id = try self.model.statePageId();
+                var page = try self.model.cache.fetch(state_page_id);
+                defer page.deinit();
+                const bytes = try page.data();
+                try self.model.validateStateBytes(bytes);
+                const first = (try self.model.stateView(bytes)).queue_first.get();
+                return if (first == nil_page_id) null else first;
             }
 
             pub fn setFirst(self: *QueueManagerSelf, page_id: ?QueueManagerSelf.PageId) QueueManagerSelf.Error!void {
-                try self.model.setStateOptionalPageId(.queue_first, page_id);
+                const state_page_id = try self.model.statePageId();
+                var page = try self.model.cache.fetch(state_page_id);
+                defer page.deinit();
+                const bytes = try page.dataMut();
+                try self.model.validateStateBytes(bytes);
+                (try self.model.stateMut(bytes)).queue_first.set(page_id orelse nil_page_id);
             }
 
             pub fn getLast(self: *const QueueManagerSelf) QueueManagerSelf.Error!?QueueManagerSelf.PageId {
-                return self.model.stateOptionalPageId(.queue_last);
+                const state_page_id = try self.model.statePageId();
+                var page = try self.model.cache.fetch(state_page_id);
+                defer page.deinit();
+                const bytes = try page.data();
+                try self.model.validateStateBytes(bytes);
+                const last = (try self.model.stateView(bytes)).queue_last.get();
+                return if (last == nil_page_id) null else last;
             }
 
             pub fn setLast(self: *QueueManagerSelf, page_id: ?QueueManagerSelf.PageId) QueueManagerSelf.Error!void {
-                try self.model.setStateOptionalPageId(.queue_last, page_id);
+                const state_page_id = try self.model.statePageId();
+                var page = try self.model.cache.fetch(state_page_id);
+                defer page.deinit();
+                const bytes = try page.dataMut();
+                try self.model.validateStateBytes(bytes);
+                (try self.model.stateMut(bytes)).queue_last.set(page_id orelse nil_page_id);
             }
 
             pub fn getTotalSize(self: *const QueueManagerSelf) QueueManagerSelf.Error!QueueManagerSelf.Size {
-                return self.model.stateU64(.queue_total_size);
+                const state_page_id = try self.model.statePageId();
+                var page = try self.model.cache.fetch(state_page_id);
+                defer page.deinit();
+                const bytes = try page.data();
+                try self.model.validateStateBytes(bytes);
+                return (try self.model.stateView(bytes)).queue_total_size.get();
             }
 
             pub fn setTotalSize(self: *QueueManagerSelf, size: QueueManagerSelf.Size) QueueManagerSelf.Error!void {
-                try self.model.setStateU64(
-                    try self.model.statePageId(),
-                    .queue_total_size,
-                    size,
-                );
+                const state_page_id = try self.model.statePageId();
+                var page = try self.model.cache.fetch(state_page_id);
+                defer page.deinit();
+                const bytes = try page.dataMut();
+                try self.model.validateStateBytes(bytes);
+                (try self.model.stateMut(bytes)).queue_total_size.set(size);
             }
         };
 
@@ -130,17 +200,27 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
         pub fn beginCycle(self: *Self, registry_digest: u64) Error!usize {
             try self.requireTransaction();
             if (self.isCycleActive()) {
-                return try self.stateUsize(.snapshot_page_count);
+                const state_page_id = try self.statePageId();
+                var page = try self.cache.fetch(state_page_id);
+                defer page.deinit();
+                const bytes = try page.data();
+                try self.validateStateBytes(bytes);
+                return @intCast((try self.stateView(bytes)).snapshot_page_count.get());
             }
 
             const state_page_id = try self.ensureStatePage();
             const snapshot_page_count = self.cache.pageCount();
-            try self.setStateU64(state_page_id, .snapshot_page_count, snapshot_page_count);
-            try self.setStateU64(state_page_id, .registry_digest, registry_digest);
-            try self.setStateU64(state_page_id, .prepare_cursor, 0);
-            try self.setStateU64(state_page_id, .sweep_cursor, 0);
-            try self.clearBitmap(state_page_id, .mark_head, .mark_bitmap);
-            try self.clearBitmap(state_page_id, .free_head, .free_bitmap);
+            {
+                var page = try self.cache.fetch(state_page_id);
+                defer page.deinit();
+                const state = try self.stateMut(try page.dataMut());
+                state.snapshot_page_count.set(@intCast(snapshot_page_count));
+                state.registry_digest.set(registry_digest);
+                state.prepare_cursor.set(0);
+                state.sweep_cursor.set(0);
+            }
+            try self.clearBitmap(state_page_id, .mark_bitmap);
+            try self.clearBitmap(state_page_id, .free_bitmap);
             try self.clearQueue();
             try self.setPhase(.preparing);
             return snapshot_page_count;
@@ -153,31 +233,68 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
         pub fn setPhase(self: *Self, phase_value: gc.Phase) Error!void {
             try self.requireTransaction();
             const state_page_id = try self.statePageId();
-            try self.setStateByte(state_page_id, 6, @intFromEnum(phase_value));
+            var page = try self.cache.fetch(state_page_id);
+            defer page.deinit();
+            const state = try self.stateMut(try page.dataMut());
+            state.phase = @intFromEnum(phase_value);
             self.phase_value = phase_value;
         }
 
         pub fn registryDigest(self: *const Self) u64 {
-            return self.stateU64(.registry_digest) catch 0;
+            const state_page_id = self.statePageId() catch return 0;
+            var page = self.cache.fetch(state_page_id) catch return 0;
+            defer page.deinit();
+            const bytes = page.data() catch return 0;
+            self.validateStateBytes(bytes) catch return 0;
+            const state = self.stateView(bytes) catch return 0;
+            return state.registry_digest.get();
         }
 
         pub fn snapshotPageCount(self: *const Self) usize {
-            return self.stateUsize(.snapshot_page_count) catch 0;
+            const state_page_id = self.statePageId() catch return 0;
+            var page = self.cache.fetch(state_page_id) catch return 0;
+            defer page.deinit();
+            const bytes = page.data() catch return 0;
+            self.validateStateBytes(bytes) catch return 0;
+            const state = self.stateView(bytes) catch return 0;
+            return @intCast(state.snapshot_page_count.get());
         }
 
         pub fn prepare(self: *Self, maximum_step_pages: usize) Error!bool {
             try self.requireTransaction();
             const state_page_id = try self.statePageId();
-            const snapshot_page_count = try self.stateUsize(.snapshot_page_count);
-            var cursor = try self.stateUsize(.prepare_cursor);
+            const progress = blk: {
+                var page = try self.cache.fetch(state_page_id);
+                defer page.deinit();
+                const bytes = try page.data();
+                try self.validateStateBytes(bytes);
+                const state = try self.stateView(bytes);
+                break :blk .{
+                    .snapshot_page_count = @as(usize, @intCast(state.snapshot_page_count.get())),
+                    .prepare_cursor = @as(usize, @intCast(state.prepare_cursor.get())),
+                };
+            };
+            const snapshot_page_count = progress.snapshot_page_count;
+            var cursor = progress.prepare_cursor;
             const end = @min(cursor +| maximum_step_pages, snapshot_page_count);
+            const free_root = blk: {
+                var page = try self.cache.fetch(state_page_id);
+                defer page.deinit();
+                const bytes = try page.data();
+                try self.validateStateBytes(bytes);
+                break :blk (try self.stateView(bytes)).free_head.get();
+            };
             while (cursor < end) : (cursor += 1) {
                 const page_id = std.math.cast(PageId, cursor) orelse return error.InvalidPageId;
                 if (try self.storage.isFree(page_id)) {
-                    try self.setBitmapBit(state_page_id, .free_head, .free_bitmap, page_id);
+                    try self.setBitmapBit(free_root, .free_bitmap, page_id);
                 }
             }
-            try self.setStateU64(state_page_id, .prepare_cursor, cursor);
+            var page = try self.cache.fetch(state_page_id);
+            defer page.deinit();
+            const bytes = try page.dataMut();
+            try self.validateStateBytes(bytes);
+            (try self.stateMut(bytes)).prepare_cursor.set(@intCast(cursor));
             return cursor == snapshot_page_count;
         }
 
@@ -185,16 +302,28 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             try self.requireTransaction();
             try self.validatePageId(page_id);
             const state_page_id = try self.statePageId();
-            if (try self.bitmapBit(state_page_id, .mark_head, .mark_bitmap, page_id)) {
+            const mark_root = blk: {
+                var page = try self.cache.fetch(state_page_id);
+                defer page.deinit();
+                const bytes = try page.data();
+                try self.validateStateBytes(bytes);
+                break :blk (try self.stateView(bytes)).mark_head.get();
+            };
+            if (try self.bitmapBit(mark_root, .mark_bitmap, page_id)) {
                 return false;
             }
-            try self.setBitmapBit(state_page_id, .mark_head, .mark_bitmap, page_id);
+            try self.setBitmapBit(mark_root, .mark_bitmap, page_id);
             return true;
         }
 
         pub fn isMarked(self: *const Self, page_id: PageId) bool {
             const state_page_id = self.storage.getRoot() orelse return false;
-            return self.bitmapBit(state_page_id, .mark_head, .mark_bitmap, page_id) catch false;
+            var page = self.cache.fetch(state_page_id) catch return false;
+            defer page.deinit();
+            const bytes = page.data() catch return false;
+            self.validateStateBytes(bytes) catch return false;
+            const state = self.stateView(bytes) catch return false;
+            return self.bitmapBit(state.mark_head.get(), .mark_bitmap, page_id) catch false;
         }
 
         pub fn enqueue(self: *Self, page_id: PageId) Error!void {
@@ -261,12 +390,23 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
         }
 
         pub fn sweepCursor(self: *const Self) PageId {
-            return std.math.cast(PageId, self.stateUsize(.sweep_cursor) catch 0) orelse 0;
+            const state_page_id = self.statePageId() catch return 0;
+            var page = self.cache.fetch(state_page_id) catch return 0;
+            defer page.deinit();
+            const bytes = page.data() catch return 0;
+            self.validateStateBytes(bytes) catch return 0;
+            const state = self.stateView(bytes) catch return 0;
+            return state.sweep_cursor.get();
         }
 
         pub fn setSweepCursor(self: *Self, page_id: PageId) Error!void {
             try self.requireTransaction();
-            try self.setStateU64(try self.statePageId(), .sweep_cursor, page_id);
+            const state_page_id = try self.statePageId();
+            var page = try self.cache.fetch(state_page_id);
+            defer page.deinit();
+            const bytes = try page.dataMut();
+            try self.validateStateBytes(bytes);
+            (try self.stateMut(bytes)).sweep_cursor.set(page_id);
         }
 
         pub fn isReserved(self: *Self, page_id: PageId) Error!bool {
@@ -277,7 +417,12 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
         pub fn isFree(self: *Self, page_id: PageId) Error!bool {
             try self.requireTransaction();
             try self.validatePageId(page_id);
-            return self.bitmapBit(try self.statePageId(), .free_head, .free_bitmap, page_id);
+            const state_page_id = try self.statePageId();
+            var page = try self.cache.fetch(state_page_id);
+            defer page.deinit();
+            const bytes = try page.data();
+            try self.validateStateBytes(bytes);
+            return self.bitmapBit((try self.stateView(bytes)).free_head.get(), .free_bitmap, page_id);
         }
 
         pub fn reclaim(self: *Self, page_id: PageId) Error!void {
@@ -289,32 +434,6 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             try self.requireTransaction();
             try self.clearQueue();
             try self.setPhase(.idle);
-        }
-
-        const StateField = enum {
-            snapshot_page_count,
-            registry_digest,
-            prepare_cursor,
-            sweep_cursor,
-            mark_head,
-            free_head,
-            queue_first,
-            queue_last,
-            queue_total_size,
-        };
-
-        fn stateOffset(field: StateField) usize {
-            return switch (field) {
-                .snapshot_page_count => 8,
-                .registry_digest => 16,
-                .prepare_cursor => 24,
-                .sweep_cursor => 32,
-                .mark_head => 40,
-                .free_head => 48,
-                .queue_first => 56,
-                .queue_last => 64,
-                .queue_total_size => 72,
-            };
         }
 
         fn requireTransaction(self: *const Self) BaseError!void {
@@ -336,10 +455,23 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
                 return error.StatePageTooSmall;
             }
             @memset(bytes, 0);
-            try writeU32(bytes, 0, state_magic);
-            bytes[4] = @intFromEnum(Role.state);
-            bytes[5] = version;
-            bytes[6] = @intFromEnum(gc.Phase.idle);
+            const state = try self.stateMut(bytes);
+            state.* = .{
+                .magic = .init(state_magic),
+                .role = @intFromEnum(Role.state),
+                .version = version,
+                .phase = @intFromEnum(gc.Phase.idle),
+                .reserved = 0,
+                .snapshot_page_count = .init(0),
+                .registry_digest = .init(0),
+                .prepare_cursor = .init(0),
+                .sweep_cursor = .init(0),
+                .mark_head = .init(nil_page_id),
+                .free_head = .init(nil_page_id),
+                .queue_first = .init(nil_page_id),
+                .queue_last = .init(nil_page_id),
+                .queue_total_size = .init(0),
+            };
             try self.storage.setRoot(page_id);
             return page_id;
         }
@@ -355,7 +487,7 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             defer page.deinit();
             const bytes = try page.data();
             try self.validateStateBytes(bytes);
-            return switch (bytes[6]) {
+            return switch ((try self.stateView(bytes)).phase) {
                 @intFromEnum(gc.Phase.idle) => .idle,
                 @intFromEnum(gc.Phase.preparing) => .preparing,
                 @intFromEnum(gc.Phase.marking) => .marking,
@@ -368,87 +500,51 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             _ = try self.readPhase(page_id);
         }
 
-        fn validateStateBytes(_: *const Self, bytes: []const u8) BaseError!void {
-            if (bytes.len < state_len or try readU32(bytes, 0) != state_magic or
-                bytes[4] != @intFromEnum(Role.state) or bytes[5] != version)
+        fn validateStateBytes(self: *const Self, bytes: []const u8) BaseError!void {
+            const state = try self.stateView(bytes);
+            if (state.magic.get() != state_magic or
+                state.role != @intFromEnum(Role.state) or state.version != version)
             {
                 return error.InvalidState;
             }
         }
 
-        fn stateU64(self: *const Self, field: StateField) BaseError!u64 {
-            var page = try self.cache.fetch(try self.statePageId());
-            defer page.deinit();
-            const bytes = try page.data();
-            try self.validateStateBytes(bytes);
-            return readU64(bytes, stateOffset(field));
-        }
-
-        fn stateUsize(self: *const Self, field: StateField) BaseError!usize {
-            return @intCast(try self.stateU64(field));
-        }
-
-        fn setStateU64(self: *Self, state_page_id: PageId, field: StateField, value: anytype) BaseError!void {
-            var page = try self.cache.fetch(state_page_id);
-            defer page.deinit();
-            const bytes = try page.dataMut();
-            try self.validateStateBytes(bytes);
-            try writeU64(bytes, stateOffset(field), @intCast(value));
-        }
-
-        fn setStateByte(self: *Self, state_page_id: PageId, offset: usize, value: u8) BaseError!void {
-            var page = try self.cache.fetch(state_page_id);
-            defer page.deinit();
-            const bytes = try page.dataMut();
-            try self.validateStateBytes(bytes);
-            bytes[offset] = value;
-        }
-
-        fn statePageIdField(self: *const Self, state_page_id: PageId, field: StateField) BaseError!PageId {
-            var page = try self.cache.fetch(state_page_id);
-            defer page.deinit();
-            const bytes = try page.data();
-            try self.validateStateBytes(bytes);
-            return readPageId(bytes, stateOffset(field));
-        }
-
-        fn setStatePageId(self: *Self, state_page_id: PageId, field: StateField, page_id: PageId) BaseError!void {
-            var page = try self.cache.fetch(state_page_id);
-            defer page.deinit();
-            const bytes = try page.dataMut();
-            try self.validateStateBytes(bytes);
-            try writePageId(bytes, stateOffset(field), page_id);
-        }
-
-        fn stateOptionalPageId(self: *const Self, field: StateField) BaseError!?PageId {
-            const value = try self.stateU64(field);
-            if (value == 0) {
-                return null;
+        fn stateView(_: *const Self, bytes: []const u8) BaseError!*const State {
+            if (bytes.len < state_len) {
+                return error.InvalidState;
             }
-            return try pageIdFromU64(value);
+            return @ptrCast(bytes.ptr);
         }
 
-        fn setStateOptionalPageId(self: *Self, field: StateField, page_id: ?PageId) BaseError!void {
-            try self.setStateU64(
-                try self.statePageId(),
-                field,
-                if (page_id) |value| value else 0,
-            );
+        fn stateMut(_: *Self, bytes: []u8) BaseError!*State {
+            if (bytes.len < state_len) {
+                return error.InvalidState;
+            }
+            return @ptrCast(bytes.ptr);
         }
 
-        fn clearBitmap(self: *Self, state_page_id: PageId, field: StateField, role: Role) BaseError!void {
+        fn clearBitmap(self: *Self, state_page_id: PageId, role: Role) BaseError!void {
             var head_id: PageId = undefined;
             {
                 var state = try self.cache.fetch(state_page_id);
                 defer state.deinit();
                 const bytes = try state.dataMut();
                 try self.validateStateBytes(bytes);
-                const stored_head = try readU64(bytes, stateOffset(field));
-                if (stored_head == 0) {
+                const state_view = try self.stateMut(bytes);
+                const stored_head = switch (role) {
+                    .mark_bitmap => state_view.mark_head.get(),
+                    .free_bitmap => state_view.free_head.get(),
+                    .state => return error.InvalidState,
+                };
+                if (stored_head == nil_page_id) {
                     head_id = try self.createMetadataPage(role);
-                    try writePageId(bytes, stateOffset(field), head_id);
+                    switch (role) {
+                        .mark_bitmap => state_view.mark_head.set(head_id),
+                        .free_bitmap => state_view.free_head.set(head_id),
+                        .state => return error.InvalidState,
+                    }
                 } else {
-                    head_id = try pageIdFromU64(stored_head);
+                    head_id = stored_head;
                 }
             }
             var current: ?PageId = head_id;
@@ -463,9 +559,9 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             }
         }
 
-        fn bitmapBit(self: *const Self, state_page_id: PageId, field: StateField, role: Role, page_id: PageId) BaseError!bool {
+        fn bitmapBit(self: *const Self, root_id: PageId, role: Role, page_id: PageId) BaseError!bool {
             const byte_index: usize = @intCast(page_id / 8);
-            var current_id = try self.statePageIdField(state_page_id, field);
+            var current_id = root_id;
             var page_index: usize = 0;
             const target_index = byte_index / self.bitmapBytesPerPage();
             while (page_index < target_index) : (page_index += 1) {
@@ -482,11 +578,10 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             return (bytes[common_len + byte_index % self.bitmapBytesPerPage()] & (@as(u8, 1) << @intCast(page_id % 8))) != 0;
         }
 
-        fn setBitmapBit(self: *Self, state_page_id: PageId, field: StateField, role: Role, page_id: PageId) BaseError!void {
+        fn setBitmapBit(self: *Self, root_id: PageId, role: Role, page_id: PageId) BaseError!void {
             const byte_index: usize = @intCast(page_id / 8);
             var page = try self.bitmapPage(
-                state_page_id,
-                field,
+                root_id,
                 role,
                 byte_index / self.bitmapBytesPerPage(),
                 true,
@@ -498,13 +593,12 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
 
         fn bitmapPage(
             self: *Self,
-            state_page_id: PageId,
-            field: StateField,
+            root_id: PageId,
             role: Role,
             page_index: usize,
             create: bool,
         ) BaseError!Page {
-            var current_id = try self.statePageIdField(state_page_id, field);
+            var current_id = root_id;
             var index: usize = 0;
             while (index < page_index) : (index += 1) {
                 var current = try self.cache.fetch(current_id);
@@ -513,7 +607,7 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
                 var next = try self.nextPageId(bytes);
                 if (next == null and create) {
                     next = try self.createMetadataPage(role);
-                    try writePageId(bytes, 8, next.?);
+                    (try metadataHeaderMut(bytes)).next.set(@intCast(next.?));
                 }
                 current.deinit();
                 current_id = next orelse return error.InvalidState;
@@ -548,9 +642,13 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
                 return error.StatePageTooSmall;
             }
             @memset(bytes, 0);
-            try writeU32(bytes, 0, page_magic);
-            bytes[4] = @intFromEnum(role);
-            bytes[5] = version;
+            (try metadataHeaderMut(bytes)).* = .{
+                .magic = .init(page_magic),
+                .role = @intFromEnum(role),
+                .version = version,
+                .reserved = .{ 0, 0 },
+                .next = .init(0),
+            };
             return page.pid();
         }
 
@@ -561,78 +659,61 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             if (bytes.len < common_len) {
                 return false;
             }
-            const magic = try readU32(bytes, 0);
-            return (magic == state_magic and bytes[4] == @intFromEnum(Role.state) and bytes[5] == version) or
-                (magic == page_magic and bytes[5] == version and bytes[4] >= @intFromEnum(Role.mark_bitmap) and
-                    bytes[4] <= @intFromEnum(Role.free_bitmap)) or
+            const header = try metadataHeaderView(bytes);
+            return (header.magic.get() == state_magic and header.role == @intFromEnum(Role.state) and header.version == version) or
+                (header.magic.get() == page_magic and header.version == version and header.role >= @intFromEnum(Role.mark_bitmap) and
+                    header.role <= @intFromEnum(Role.free_bitmap)) or
                 (bytes.len >= @sizeOf(u16) and
                     std.mem.readInt(u16, bytes[0..@sizeOf(u16)], .little) == queue_page_kind);
         }
 
         fn validatePageId(self: *const Self, page_id: PageId) BaseError!void {
-            if (page_id >= try self.stateUsize(.snapshot_page_count)) {
+            const state_page_id = try self.statePageId();
+            var page = try self.cache.fetch(state_page_id);
+            defer page.deinit();
+            const bytes = try page.data();
+            try self.validateStateBytes(bytes);
+            if (page_id >= (try self.stateView(bytes)).snapshot_page_count.get()) {
                 return error.InvalidPageId;
             }
         }
 
         fn validateMetadata(_: *const Self, bytes: []const u8, role: Role) BaseError!void {
-            if (bytes.len < common_len or try readU32(bytes, 0) != page_magic or
-                bytes[4] != @intFromEnum(role) or bytes[5] != version)
+            if (bytes.len < metadata_header_len) {
+                return error.InvalidMetadataPage;
+            }
+            const header = try metadataHeaderView(bytes);
+            if (header.magic.get() != page_magic or
+                header.role != @intFromEnum(role) or header.version != version)
             {
                 return error.InvalidMetadataPage;
             }
         }
 
         fn nextPageId(_: *const Self, bytes: []const u8) BaseError!?PageId {
-            const value = try readU64(bytes, 8);
+            const value = (try metadataHeaderView(bytes)).next.get();
             if (value == 0) {
                 return null;
             }
-            return try pageIdFromU64(value);
+            return std.math.cast(PageId, value) orelse error.InvalidState;
         }
 
         fn bitmapBytesPerPage(self: *const Self) usize {
             return self.cache.pageSize() - common_len;
         }
 
-        fn readU32(bytes: []const u8, offset: usize) BaseError!u32 {
-            if (offset + 4 > bytes.len) {
+        fn metadataHeaderView(bytes: []const u8) BaseError!*const MetadataPageHeader {
+            if (bytes.len < metadata_header_len) {
                 return error.InvalidState;
             }
-            return std.mem.readInt(u32, bytes[offset..][0..4], .little);
+            return @ptrCast(bytes.ptr);
         }
 
-        fn writeU32(bytes: []u8, offset: usize, value: u32) BaseError!void {
-            if (offset + 4 > bytes.len) {
+        fn metadataHeaderMut(bytes: []u8) BaseError!*MetadataPageHeader {
+            if (bytes.len < metadata_header_len) {
                 return error.InvalidState;
             }
-            std.mem.writeInt(u32, bytes[offset..][0..4], value, .little);
-        }
-
-        fn readU64(bytes: []const u8, offset: usize) BaseError!u64 {
-            if (offset + 8 > bytes.len) {
-                return error.InvalidState;
-            }
-            return std.mem.readInt(u64, bytes[offset..][0..8], .little);
-        }
-
-        fn writeU64(bytes: []u8, offset: usize, value: u64) BaseError!void {
-            if (offset + 8 > bytes.len) {
-                return error.InvalidState;
-            }
-            std.mem.writeInt(u64, bytes[offset..][0..8], value, .little);
-        }
-
-        fn readPageId(bytes: []const u8, offset: usize) BaseError!PageId {
-            return pageIdFromU64(try readU64(bytes, offset));
-        }
-
-        fn writePageId(bytes: []u8, offset: usize, page_id: PageId) BaseError!void {
-            try writeU64(bytes, offset, page_id);
-        }
-
-        fn pageIdFromU64(value: u64) BaseError!PageId {
-            return std.math.cast(PageId, value) orelse error.InvalidState;
+            return @ptrCast(bytes.ptr);
         }
     };
 }
