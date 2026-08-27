@@ -291,7 +291,17 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             try self.setPhase(.idle);
         }
 
-        const StateField = enum { snapshot_page_count, registry_digest, prepare_cursor, sweep_cursor, mark_head, free_head, queue_first, queue_last, queue_total_size };
+        const StateField = enum {
+            snapshot_page_count,
+            registry_digest,
+            prepare_cursor,
+            sweep_cursor,
+            mark_head,
+            free_head,
+            queue_first,
+            queue_last,
+            queue_total_size,
+        };
 
         fn stateOffset(field: StateField) usize {
             return switch (field) {
@@ -474,13 +484,26 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
 
         fn setBitmapBit(self: *Self, state_page_id: PageId, field: StateField, role: Role, page_id: PageId) BaseError!void {
             const byte_index: usize = @intCast(page_id / 8);
-            var page = try self.bitmapPage(state_page_id, field, role, byte_index / self.bitmapBytesPerPage(), true);
+            var page = try self.bitmapPage(
+                state_page_id,
+                field,
+                role,
+                byte_index / self.bitmapBytesPerPage(),
+                true,
+            );
             defer page.deinit();
             const bytes = try page.dataMut();
             bytes[common_len + byte_index % self.bitmapBytesPerPage()] |= @as(u8, 1) << @intCast(page_id % 8);
         }
 
-        fn bitmapPage(self: *Self, state_page_id: PageId, field: StateField, role: Role, page_index: usize, create: bool) BaseError!Page {
+        fn bitmapPage(
+            self: *Self,
+            state_page_id: PageId,
+            field: StateField,
+            role: Role,
+            page_index: usize,
+            create: bool,
+        ) BaseError!Page {
             var current_id = try self.statePageIdField(state_page_id, field);
             var index: usize = 0;
             while (index < page_index) : (index += 1) {
