@@ -22,6 +22,7 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
     const PackedCursor = PackedPageId;
     const PackedU64 = PackedInt(u64, .little);
     const nil_page_id = PackedPageId.max;
+
     const MetadataPageHeader = extern struct {
         magic: PackedInt(u32, .little),
         role: u8,
@@ -29,6 +30,7 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
         reserved: [2]u8,
         next: PackedU64,
     };
+
     const State = extern struct {
         magic: PackedInt(u32, .little),
         role: u8,
@@ -45,6 +47,7 @@ pub fn Paged(comptime PageCacheT: type, comptime StorageManagerT: type) type {
         queue_last: PackedPageId,
         queue_total_size: PackedU64,
     };
+
     const metadata_header_len = @sizeOf(MetadataPageHeader);
     const state_len = @sizeOf(State);
 
