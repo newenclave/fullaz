@@ -82,3 +82,25 @@ pub fn requiresAppendOnlyDensePageCache(comptime T: type) void {
         @compileError("PageCache must guarantee append-only dense page IDs");
     }
 }
+
+pub fn requiresForkablePageCache(comptime T: type) void {
+    requiresTransactionalPageCache(T);
+    requiresTypeDeclaration(T, "PidPolicyType");
+    requiresTypeDeclaration(T, "BackingFork");
+
+    const PidPolicyType = T.PidPolicyType;
+    const BackingFork = T.BackingFork;
+    const Error = T.Error;
+    if (!@hasDecl(PidPolicyType, "RemapContextType")) {
+        @compileError("Forkable PageCache PidPolicyType missing RemapContextType");
+    }
+    const RemapContextType = PidPolicyType.RemapContextType;
+    requiresFnSignature(BackingFork, "targetPid", fn (*const BackingFork) T.Pid);
+    requiresFnSignature(
+        T,
+        "prepareBackingFork",
+        fn (*T, T.Pid, RemapContextType) Error!?BackingFork,
+    );
+    requiresFnSignature(T, "commitBackingFork", fn (*T, *BackingFork) void);
+    requiresFnSignature(T, "discardBackingFork", fn (*T, *BackingFork) void);
+}

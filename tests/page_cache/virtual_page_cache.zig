@@ -100,6 +100,104 @@ fn PagedStateManager(comptime CacheT: type) type {
     };
 }
 
+const CowEvents = struct {
+    prepares: usize = 0,
+    discards: usize = 0,
+    written: usize = 0,
+    old_pid: ?u32 = null,
+    new_pid: ?u32 = null,
+};
+
+const CowPidPolicy = struct {
+    const Self = @This();
+
+    pub const PageId = u32;
+    pub const Error = error{};
+    pub const RemapContextType = *CowEvents;
+
+    pending: ?struct {
+        events: *CowEvents,
+        old_pid: PageId,
+        new_pid: PageId,
+    } = null,
+
+    pub fn init() Self {
+        return .{};
+    }
+
+    pub fn prepareRemap(
+        self: *Self,
+        events: RemapContextType,
+        old_pid: PageId,
+        new_pid: PageId,
+    ) Error!void {
+        std.debug.assert(self.pending == null);
+        self.pending = .{
+            .events = events,
+            .old_pid = old_pid,
+            .new_pid = new_pid,
+        };
+        events.prepares += 1;
+    }
+
+    pub fn discard(self: *Self) void {
+        if (self.pending) |pending| {
+            pending.events.discards += 1;
+            self.pending = null;
+        }
+    }
+
+    pub fn written(self: *Self) void {
+        const pending = self.pending orelse return;
+        pending.events.written += 1;
+        pending.events.old_pid = pending.old_pid;
+        pending.events.new_pid = pending.new_pid;
+        self.pending = null;
+    }
+};
+
+fn CowTypes() type {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCacheImpl(
+        Device,
+        fullaz.storage.memory_policy.DefaultMemoryPolicy,
+        fullaz.storage.wal.NoWal,
+        CowPidPolicy,
+    );
+    const Map = fullaz.storage.virtual_page_map.Memory(u32, u32);
+    const Cache = fullaz.storage.page_cache.VirtualPageCacheImpl(
+        InnerCache,
+        Map,
+        fullaz.storage.page_cache.CopyOnWritePolicy,
+    );
+
+    return struct {
+        device: Device = undefined,
+        inner: InnerCache = undefined,
+        map: Map = undefined,
+        cache: Cache = undefined,
+        events: CowEvents = .{},
+
+        fn init(self: *@This()) !void {
+            self.events = .{};
+            self.device = try Device.init(std.testing.allocator, 256);
+            errdefer self.device.deinit();
+            self.inner = try InnerCache.init(&self.device, std.testing.allocator, 8);
+            errdefer self.inner.deinit();
+            self.map = Map.init(std.testing.allocator);
+            errdefer self.map.deinit();
+            self.cache = Cache.init(&self.inner, &self.map, .init(&self.events));
+        }
+
+        fn deinit(self: *@This()) void {
+            self.cache.deinit();
+            self.map.deinit();
+            self.inner.deinit();
+            self.device.deinit();
+        }
+    };
+}
+
 const WritePolicyCounts = struct {
     begins: usize = 0,
     commits: usize = 0,
@@ -350,6 +448,83 @@ test "VirtualPageCache delegates persistent writes to its policy" {
     defer fetched.deinit();
     try std.testing.expectEqual(@as(u8, 0x5a), (try fetched.data())[0]);
     try std.testing.expectEqual(@as(u8, 0xa5), (try fetched.data())[1]);
+}
+
+test "VirtualPageCache copy-on-write rekeys every persistent alias" {
+    const Types = CowTypes();
+    var types: Types = undefined;
+    try types.init();
+    defer types.deinit();
+
+    var create_batch = try types.cache.begin();
+    var created = try types.cache.create();
+    const virtual_page_id = try created.pid();
+    (try created.dataMut())[0] = 0xaa;
+    created.deinit();
+    try create_batch.commit();
+    try std.testing.expectEqual(@as(u32, 0), try types.map.get(virtual_page_id));
+
+    var page = try types.cache.fetch(virtual_page_id);
+    defer page.deinit();
+    var cloned = try page.clone();
+    defer cloned.deinit();
+    var lock = try page.lockLayout();
+    defer lock.deinit();
+
+    (try page.dataMut())[0] = 0xbb;
+    try std.testing.expectEqual(@as(u32, 1), try types.map.get(virtual_page_id));
+    try std.testing.expectEqual(@as(u8, 0xbb), (try cloned.data())[0]);
+    try std.testing.expectEqual(@as(u8, 0xbb), (try lock.data())[0]);
+    try std.testing.expectEqual(@as(usize, 1), types.events.prepares);
+    try std.testing.expectEqual(@as(usize, 0), types.events.written);
+
+    try page.markDirty();
+    (try lock.dataMut())[1] = 0xcc;
+    try std.testing.expectEqual(@as(usize, 1), types.events.prepares);
+
+    lock.deinit();
+    cloned.deinit();
+    page.deinit();
+    try types.cache.flush(virtual_page_id);
+
+    try std.testing.expectEqual(@as(usize, 1), types.events.written);
+    try std.testing.expectEqual(@as(u32, 0), types.events.old_pid.?);
+    try std.testing.expectEqual(@as(u32, 1), types.events.new_pid.?);
+    try std.testing.expectEqual(@as(u8, 0xaa), types.device.storage.items[0]);
+    try std.testing.expectEqual(@as(u8, 0xbb), types.device.storage.items[256]);
+    try std.testing.expectEqual(@as(u8, 0xcc), types.device.storage.items[257]);
+}
+
+test "VirtualPageCache copy-on-write blocks use after partial discard" {
+    const Types = CowTypes();
+    var types: Types = undefined;
+    try types.init();
+    defer types.deinit();
+
+    {
+        var batch = try types.cache.begin();
+        var created = try types.cache.create();
+        const virtual_page_id = try created.pid();
+        (try created.dataMut())[0] = 0xaa;
+        created.deinit();
+        try batch.commit();
+
+        var rollback = try types.cache.begin();
+        var page = try types.cache.fetch(virtual_page_id);
+        (try page.dataMut())[0] = 0xbb;
+        try std.testing.expectError(error.PageBusy, rollback.discard());
+        try std.testing.expect(types.cache.transactionActive());
+        try std.testing.expectError(error.PageBusy, page.data());
+        try std.testing.expectError(error.PageBusy, types.cache.fetch(virtual_page_id));
+        page.deinit();
+        try rollback.discard();
+
+        try std.testing.expect(!types.cache.transactionActive());
+        try std.testing.expectEqual(@as(u32, 0), try types.map.get(virtual_page_id));
+        try std.testing.expectEqual(@as(usize, 1), types.inner.pageCount());
+        try std.testing.expectEqual(@as(usize, 1), types.events.discards);
+        try std.testing.expectEqual(@as(usize, 0), types.events.written);
+    }
 }
 
 test "VirtualPageCache propagates policy errors before allocation" {

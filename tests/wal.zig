@@ -167,7 +167,12 @@ test "WAL: a CRC-corrupt record is dropped on replay" {
 const Dev = fullaz.device.MemoryBlock(u32);
 const DefaultPolicy = fullaz.storage.memory_policy.DefaultMemoryPolicy;
 const WalT = wal.Wal(wal.MemoryLog, u32, .little);
-const WalCache = fullaz.storage.page_cache.PageCacheImpl(Dev, DefaultPolicy, WalT);
+const WalCache = fullaz.storage.page_cache.PageCacheImpl(
+    Dev,
+    DefaultPolicy,
+    WalT,
+    fullaz.storage.page_cache.RetainPidPolicy(Dev.BlockId),
+);
 const BLOCK = 64;
 
 test "WAL cache: commit applies to home and checkpoints the log" {

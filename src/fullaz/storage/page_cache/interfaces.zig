@@ -19,6 +19,33 @@ pub fn assertMemoryCachePolicy(comptime PolicyT: type, comptime FrameT: type) vo
     requiresFnSignature(PolicyT, "framesSlice", fn (*const PolicyT) []FrameT);
 }
 
+pub fn assertPidPolicy(comptime PolicyT: type, comptime PageIdT: type) void {
+    if (!@hasDecl(PolicyT, "PageId")) {
+        @compileError("PidPolicy missing PageId");
+    }
+    if (PolicyT.PageId != PageIdT) {
+        @compileError("PidPolicy.PageId must match PageCache.Pid");
+    }
+    if (!@hasDecl(PolicyT, "RemapContextType")) {
+        @compileError("PidPolicy missing RemapContextType");
+    }
+    if (!@hasDecl(PolicyT, "init")) {
+        @compileError("PidPolicy missing init");
+    }
+
+    requiresErrorDeclaration(PolicyT, "Error");
+    const Error = PolicyT.Error;
+    const RemapContextType = PolicyT.RemapContextType;
+    requiresFnSignature(PolicyT, "init", fn () PolicyT);
+    requiresFnSignature(
+        PolicyT,
+        "prepareRemap",
+        fn (*PolicyT, RemapContextType, PageIdT, PageIdT) Error!void,
+    );
+    requiresFnSignature(PolicyT, "discard", fn (*PolicyT) void);
+    requiresFnSignature(PolicyT, "written", fn (*PolicyT) void);
+}
+
 pub fn assertVirtualWritePolicy(comptime PolicyT: type, comptime ContextT: type) void {
     if (!@hasDecl(PolicyT, "WriteBatch")) {
         @compileError("Virtual write policy missing WriteBatch");

@@ -1,10 +1,67 @@
 const std = @import("std");
+const fullaz = @import("fullaz");
 const MemoryDevice = @import("fullaz").device.MemoryBlock;
 const PageCache = @import("fullaz").storage.page_cache.PageCache;
 const assertBlockDevice = @import("fullaz").device.interfaces.assertBlockDevice;
 const isBlockDevice = @import("fullaz").device.interfaces.isBlockDevice;
 
 const testing = std.testing;
+
+const PidPolicyEvents = struct {
+    prepares: usize = 0,
+    discards: usize = 0,
+    written: usize = 0,
+    old_pid: ?u32 = null,
+    new_pid: ?u32 = null,
+};
+
+const TrackingPidPolicy = struct {
+    const Self = @This();
+
+    pub const PageId = u32;
+    pub const Error = error{};
+    pub const RemapContextType = *PidPolicyEvents;
+
+    pending: ?struct {
+        events: *PidPolicyEvents,
+        old_pid: PageId,
+        new_pid: PageId,
+    } = null,
+
+    pub fn init() Self {
+        return .{};
+    }
+
+    pub fn prepareRemap(
+        self: *Self,
+        events: RemapContextType,
+        old_pid: PageId,
+        new_pid: PageId,
+    ) Error!void {
+        std.debug.assert(self.pending == null);
+        self.pending = .{
+            .events = events,
+            .old_pid = old_pid,
+            .new_pid = new_pid,
+        };
+        events.prepares += 1;
+    }
+
+    pub fn discard(self: *Self) void {
+        if (self.pending) |pending| {
+            pending.events.discards += 1;
+            self.pending = null;
+        }
+    }
+
+    pub fn written(self: *Self) void {
+        const pending = self.pending orelse return;
+        pending.events.written += 1;
+        pending.events.old_pid = pending.old_pid;
+        pending.events.new_pid = pending.new_pid;
+        self.pending = null;
+    }
+};
 
 const MemoryPolicyTestFrame = struct {
     const Self = @This();
@@ -100,6 +157,101 @@ test "PageCache: fetch same page returns cached frame" {
     // Both handles should point to the same frame
     try testing.expectEqual(handle1.frame, handle2.frame);
     try testing.expectEqual(@as(usize, 2), handle1.frame.?.ref_count);
+}
+
+test "PageCache backing fork rekeys every alias and retires after writeback" {
+    const Device = MemoryDevice(u32);
+    const Cache = fullaz.storage.page_cache.PageCacheImpl(
+        Device,
+        fullaz.storage.memory_policy.DefaultMemoryPolicy,
+        fullaz.storage.wal.NoWal,
+        TrackingPidPolicy,
+    );
+
+    var device = try Device.init(testing.allocator, 256);
+    defer device.deinit();
+    var cache = try Cache.init(&device, testing.allocator, 4);
+    defer cache.deinit();
+    var events = PidPolicyEvents{};
+
+    {
+        var page = try cache.create();
+        defer page.deinit();
+        (try page.dataMut())[0] = 0xaa;
+    }
+    try cache.flushAll();
+
+    var first = try cache.fetch(0);
+    defer first.deinit();
+    var cloned = try first.clone();
+    defer cloned.deinit();
+    var lock = try first.lockLayout();
+    defer lock.deinit();
+
+    var fork = (try cache.prepareBackingFork(0, &events)).?;
+    try testing.expectEqual(@as(u32, 1), fork.targetPid());
+    try testing.expectEqual(@as(u32, 0), try first.pid());
+    try testing.expectEqual(@as(u32, 0), try cloned.pid());
+    try testing.expectEqual(@as(u32, 0), try lock.pid());
+
+    cache.commitBackingFork(&fork);
+    try testing.expectEqual(@as(u32, 1), try first.pid());
+    try testing.expectEqual(@as(u32, 1), try cloned.pid());
+    try testing.expectEqual(@as(u32, 1), try lock.pid());
+    try testing.expectEqual(@as(u8, 0xaa), (try cloned.data())[0]);
+    try testing.expectEqual(@as(usize, 0), events.written);
+
+    (try first.dataMut())[0] = 0xbb;
+    lock.deinit();
+    cloned.deinit();
+    first.deinit();
+    try cache.flush(1);
+
+    try testing.expectEqual(@as(usize, 1), events.prepares);
+    try testing.expectEqual(@as(usize, 1), events.written);
+    try testing.expectEqual(@as(u32, 0), events.old_pid.?);
+    try testing.expectEqual(@as(u32, 1), events.new_pid.?);
+    try testing.expectEqual(@as(u8, 0xaa), device.storage.items[0]);
+    try testing.expectEqual(@as(u8, 0xbb), device.storage.items[256]);
+}
+
+test "PageCache backing fork discard does not retire the source PID" {
+    const Device = MemoryDevice(u32);
+    const Cache = fullaz.storage.page_cache.PageCacheImpl(
+        Device,
+        fullaz.storage.memory_policy.DefaultMemoryPolicy,
+        fullaz.storage.wal.NoWal,
+        TrackingPidPolicy,
+    );
+
+    var device = try Device.init(testing.allocator, 256);
+    defer device.deinit();
+    var cache = try Cache.init(&device, testing.allocator, 4);
+    defer cache.deinit();
+    var events = PidPolicyEvents{};
+
+    {
+        var page = try cache.create();
+        defer page.deinit();
+        (try page.dataMut())[0] = 0xaa;
+    }
+    try cache.flushAll();
+
+    var batch = try cache.begin();
+    var page = try cache.fetch(0);
+    var fork = (try cache.prepareBackingFork(0, &events)).?;
+    cache.commitBackingFork(&fork);
+    (try page.dataMut())[0] = 0xbb;
+    page.deinit();
+    try batch.discard();
+
+    try testing.expectEqual(@as(usize, 1), device.blocksCount());
+    try testing.expectEqual(@as(usize, 1), events.prepares);
+    try testing.expectEqual(@as(usize, 1), events.discards);
+    try testing.expectEqual(@as(usize, 0), events.written);
+    var restored = try cache.fetch(0);
+    defer restored.deinit();
+    try testing.expectEqual(@as(u8, 0xaa), (try restored.data())[0]);
 }
 
 test "PageCache: create allocates new page" {

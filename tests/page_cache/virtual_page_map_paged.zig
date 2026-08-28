@@ -99,6 +99,35 @@ test "VirtualPageMap paged formats and opens typed state" {
     try std.testing.expect(Map.state_size <= manager.state_bytes.len);
 }
 
+test "VirtualPageMap paged mutates outside an owned batch" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Cache = fullaz.storage.page_cache.PageCache(Device);
+    const Manager = TestStateManager(128);
+    const Map = fullaz.storage.virtual_page_map.Paged(Cache, Manager, u32);
+    const settings = Map.Settings{
+        .virtual_to_physical = .{ .leaf = 1, .inode = 2 },
+        .physical_to_virtual = .{ .leaf = 3, .inode = 4 },
+    };
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 16);
+    defer cache.deinit();
+    var manager = Manager{};
+    var map = try Map.format(&cache, &manager, settings);
+    defer map.deinit();
+
+    const virtual_page_id = try map.set(41);
+    try map.remap(virtual_page_id, 73);
+    try std.testing.expect(!map.transactionActive());
+    try std.testing.expectEqual(@as(u32, 73), try map.get(virtual_page_id));
+    try cache.flushAll();
+
+    var opened = try Map.open(&cache, &manager, settings);
+    defer opened.deinit();
+    try std.testing.expectEqual(@as(u32, 73), try opened.get(virtual_page_id));
+}
+
 test "VirtualPageMap paged rejects invalid state and settings" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Cache = fullaz.storage.page_cache.PageCache(Device);

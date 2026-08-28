@@ -23,7 +23,12 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
     comptime device_interfaces.assertBlockDevice(DeviceT);
 
     const WalT = if (LogDeviceT) |LogT| wal.Wal(LogT, DeviceT.BlockId, .little) else wal.NoWal;
-    const RawCache = page_cache.PageCacheImpl(DeviceT, memory_policy.DefaultMemoryPolicy, WalT);
+    const RawCache = page_cache.PageCacheImpl(
+        DeviceT,
+        memory_policy.DefaultMemoryPolicy,
+        WalT,
+        page_cache.RetainPidPolicy(DeviceT.BlockId),
+    );
     const DevicePageId = DeviceT.BlockId;
     const Log = LogDeviceT orelse void;
     const LogError = if (LogDeviceT) |LogT| LogT.Error else error{};

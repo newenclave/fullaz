@@ -20,7 +20,12 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
     comptime device_interfaces.assertLogDevice(LogDeviceT);
 
     const WalT = wal.Wal(LogDeviceT, SchemaT.PageId, .little);
-    const RawCache = page_cache.PageCacheImpl(DeviceT, memory_policy.DefaultMemoryPolicy, WalT);
+    const RawCache = page_cache.PageCacheImpl(
+        DeviceT,
+        memory_policy.DefaultMemoryPolicy,
+        WalT,
+        page_cache.RetainPidPolicy(DeviceT.BlockId),
+    );
     const Common = StaticDatabaseCommon(SchemaT, DeviceT, RawCache);
     const Store = Common.StoreType;
     const Cache = Common.CacheType;

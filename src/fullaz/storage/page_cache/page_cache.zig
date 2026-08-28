@@ -5,6 +5,7 @@ const errors = core.errors;
 const assertBlockDevice = @import("../../device/device.zig").interfaces.assertBlockDevice;
 const memory_policy = @import("memory_policy.zig");
 const memory_policy_iface = @import("interfaces.zig");
+const pid_policy = @import("pid_policy.zig");
 
 const wal_mod = @import("../wal/wal.zig");
 
@@ -15,8 +16,15 @@ pub const VirtualPageCache = @import("virtual_page_cache.zig").VirtualPageCache;
 pub const VirtualPageCacheImpl = @import("virtual_page_cache.zig").VirtualPageCacheImpl;
 
 pub const InPlaceWritePolicy = @import("write_policy.zig").InPlaceWritePolicy;
+pub const CopyOnWritePolicy = @import("write_policy.zig").CopyOnWritePolicy;
+pub const RetainPidPolicy = pid_policy.Retain;
 
-pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (type) type, comptime WalPolicy: type) type {
+pub fn PageCacheImpl(
+    comptime DeviceT: type,
+    comptime MemoryCachePolicy: fn (type) type,
+    comptime WalPolicy: type,
+    comptime PidPolicy: type,
+) type {
     // Compile-time check that DeviceT is a valid block device
     comptime assertBlockDevice(DeviceT);
 
@@ -36,6 +44,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         layout_locked: bool,
         prev: ?*Self,
         next: ?*Self,
+        pid_pol: PidPolicy = undefined,
         pub fn init() Self {
             return Self{
                 .pid = undefined,
@@ -46,6 +55,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                 .layout_locked = false,
                 .prev = null,
                 .next = null,
+                .pid_pol = .init(),
             };
         }
         pub fn isPinned(self: *const Self) bool {
@@ -177,6 +187,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
 
     const Policy = MemoryCachePolicy(Frame);
     comptime memory_policy_iface.assertMemoryCachePolicy(Policy, Frame);
+    comptime memory_policy_iface.assertPidPolicy(PidPolicy, DeviceT.BlockId);
 
     return struct {
         const Self = @This();
@@ -194,6 +205,18 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         const FrameHashMap = std.AutoHashMap(Pid, *Frame);
 
         pub const Handle = PageHandle;
+        pub const PidPolicyType = PidPolicy;
+
+        pub const BackingFork = struct {
+            frame: *Frame,
+            source_pid: Pid,
+            target_pid: Pid,
+            active: bool = true,
+
+            pub fn targetPid(self: *const BackingFork) Pid {
+                return self.target_pid;
+            }
+        };
 
         // Extract device error set from method signatures
         const DeviceError = DeviceT.Error;
@@ -203,6 +226,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             DeviceError ||
             std.mem.Allocator.Error ||
             WalErrors ||
+            PidPolicy.Error ||
             Handle.Error;
 
         device: *DeviceT = undefined,
@@ -305,9 +329,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
                     }
                 }
                 if (frame.frame_type == .dirty) {
-                    // Write back dirty page
-                    _ = self.device.writeBlock(frame.pid, frame.data) catch {};
-                    frame.frame_type = .clean;
+                    self.writeFrame(frame) catch {};
                 }
             }
 
@@ -369,6 +391,57 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             return PageHandle.init(ff);
         }
 
+        pub fn prepareBackingFork(
+            self: *Self,
+            source_pid: Pid,
+            context: PidPolicy.RemapContextType,
+        ) Error!?BackingFork {
+            const frame = self.frames_cache.get(source_pid) orelse return error.InvalidId;
+            if (frame.pid != source_pid or frame.frame_type == .temporary) {
+                return error.InvalidId;
+            }
+            if (frame.frame_type == .dirty) {
+                return null;
+            }
+
+            try self.frames_cache.ensureUnusedCapacity(1);
+            const target_pid = try self.device.appendBlock();
+            if (self.locked) {
+                self.appended_in_batch += 1;
+            }
+            frame.pid_pol.prepareRemap(context, source_pid, target_pid) catch |err| {
+                frame.pid_pol.discard();
+                self.markTransactionFailed();
+                return err;
+            };
+            return .{
+                .frame = frame,
+                .source_pid = source_pid,
+                .target_pid = target_pid,
+            };
+        }
+
+        pub fn commitBackingFork(self: *Self, fork: *BackingFork) void {
+            std.debug.assert(fork.active);
+            std.debug.assert(fork.frame.pid == fork.source_pid);
+            std.debug.assert(self.frames_cache.get(fork.source_pid) == fork.frame);
+            std.debug.assert(self.frames_cache.get(fork.target_pid) == null);
+
+            self.frames_cache.putAssumeCapacityNoClobber(fork.target_pid, fork.frame);
+            fork.frame.pid = fork.target_pid;
+            _ = self.frames_cache.remove(fork.source_pid);
+            fork.frame.frame_type = .dirty;
+            fork.active = false;
+        }
+
+        pub fn discardBackingFork(_: *Self, fork: *BackingFork) void {
+            if (!fork.active) {
+                return;
+            }
+            fork.frame.pid_pol.discard();
+            fork.active = false;
+        }
+
         pub fn availableFrames(self: *const Self) usize {
             var count: usize = 0;
             for (self.policy.framesSlice()) |*frame| {
@@ -394,8 +467,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         fn flushPage(self: *Self, pid: Pid) Error!void {
             if (self.frames_cache.get(pid)) |frame| {
                 if (frame.frame_type == .dirty) {
-                    try self.device.writeBlock(frame.pid, frame.data);
-                    frame.frame_type = .clean;
+                    try self.writeFrame(frame);
                 }
             }
         }
@@ -412,8 +484,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             while (it.next()) |entry| {
                 const frame = entry.value_ptr.*;
                 if (frame.frame_type == .dirty) {
-                    try self.device.writeBlock(frame.pid, frame.data);
-                    frame.frame_type = .clean;
+                    try self.writeFrame(frame);
                 }
             }
         }
@@ -485,6 +556,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             // Drop every dirty frame without writing it.
             for (fslice) |*frame| {
                 if (frame.frame_type == .dirty) {
+                    frame.pid_pol.discard();
                     frame.frame_type = .clean;
                     self.policy.unlink(frame);
                     _ = self.frames_cache.remove(frame.pid);
@@ -524,16 +596,27 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         fn evict(self: *Self, frame: *Frame) Error!void {
             self.policy.unlink(frame);
             if (frame.frame_type == .dirty) {
-                try self.device.writeBlock(frame.pid, frame.data);
-                frame.frame_type = .clean;
+                try self.writeFrame(frame);
             }
             if (frame.frame_type != .temporary) {
                 _ = self.frames_cache.remove(frame.pid);
             }
         }
+
+        fn writeFrame(self: *Self, frame: *Frame) Error!void {
+            std.debug.assert(frame.frame_type == .dirty);
+            try self.device.writeBlock(frame.pid, frame.data);
+            frame.pid_pol.written();
+            frame.frame_type = .clean;
+        }
     };
 }
 
 pub fn PageCache(comptime DeviceT: type) type {
-    return PageCacheImpl(DeviceT, memory_policy.DefaultMemoryPolicy, wal_mod.NoWal);
+    return PageCacheImpl(
+        DeviceT,
+        memory_policy.DefaultMemoryPolicy,
+        wal_mod.NoWal,
+        pid_policy.Retain(DeviceT.BlockId),
+    );
 }

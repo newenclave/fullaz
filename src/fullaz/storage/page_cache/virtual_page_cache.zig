@@ -36,6 +36,7 @@ pub fn VirtualPageCacheImpl(
         pub const VirtualPageMapType = VirtualPageMapT;
         pub const InnerHandleType = InnerHandle;
         pub const InnerLayoutLockType = InnerHandle.LayoutLock;
+        pub const PhysicalPageIdType = InnerCacheT.Pid;
         pub const VirtualPageIdType = VirtualPageId;
 
         pub const CacheRefs = struct {
@@ -45,13 +46,15 @@ pub fn VirtualPageCacheImpl(
 
         pub const HandleTarget = struct {
             refs: CacheRefs,
-            virtual_page_id: ?VirtualPageId,
+            virtual_page_id: VirtualPageId,
+            backing_page_id: PhysicalPageIdType,
             inner: *InnerHandle,
         };
 
         pub const LayoutTarget = struct {
             refs: CacheRefs,
-            virtual_page_id: ?VirtualPageId,
+            virtual_page_id: VirtualPageId,
+            backing_page_id: PhysicalPageIdType,
             inner: *InnerHandle.LayoutLock,
         };
     };
@@ -61,6 +64,12 @@ pub fn VirtualPageCacheImpl(
 
     return struct {
         const Self = @This();
+
+        const TransactionPhase = enum {
+            idle,
+            active,
+            discarding,
+        };
 
         const VirtualHandle = struct {
             const HandleSelf = @This();
@@ -87,6 +96,7 @@ pub fn VirtualPageCacheImpl(
                 }
 
                 pub fn pid(self: *const LayoutLockSelf) HandleError!VirtualPageId {
+                    try self.owner.ensureUsable();
                     return switch (self.identity) {
                         .persistent => |virtual_page_id| virtual_page_id,
                         .temporary => error.InvalidId,
@@ -94,15 +104,19 @@ pub fn VirtualPageCacheImpl(
                 }
 
                 pub fn data(self: *const LayoutLockSelf) HandleError![]const u8 {
+                    try self.owner.ensureUsable();
                     return self.inner.data();
                 }
 
                 pub fn dataMut(self: *LayoutLockSelf) HandleError![]u8 {
+                    try self.owner.ensureUsable();
                     switch (self.identity) {
                         .persistent => |virtual_page_id| {
+                            const backing_page_id = try self.inner.pid();
                             try self.owner.write_policy.prepareLayoutWrite(.{
                                 .refs = self.owner.refs(),
                                 .virtual_page_id = virtual_page_id,
+                                .backing_page_id = backing_page_id,
                                 .inner = &self.inner,
                             });
                         },
@@ -121,11 +135,13 @@ pub fn VirtualPageCacheImpl(
             }
 
             pub fn markDirty(self: *HandleSelf) HandleError!void {
+                try self.owner.ensureUsable();
                 try self.prepareWrite();
                 return self.inner.markDirty();
             }
 
             pub fn pid(self: *const HandleSelf) HandleError!VirtualPageId {
+                try self.owner.ensureUsable();
                 return switch (self.identity) {
                     .persistent => |virtual_page_id| blk: {
                         _ = try self.inner.pid();
@@ -136,19 +152,23 @@ pub fn VirtualPageCacheImpl(
             }
 
             pub fn data(self: *const HandleSelf) HandleError![]const u8 {
+                try self.owner.ensureUsable();
                 return self.inner.data();
             }
 
             pub fn dataMut(self: *HandleSelf) HandleError![]u8 {
+                try self.owner.ensureUsable();
                 try self.prepareWrite();
                 return self.inner.dataMut();
             }
 
             pub fn isLayoutLocked(self: *const HandleSelf) HandleError!bool {
+                try self.owner.ensureUsable();
                 return self.inner.isLayoutLocked();
             }
 
             pub fn lockLayout(self: *const HandleSelf) HandleError!LayoutLock {
+                try self.owner.ensureUsable();
                 return .{
                     .inner = try self.inner.lockLayout(),
                     .identity = self.identity,
@@ -157,6 +177,7 @@ pub fn VirtualPageCacheImpl(
             }
 
             pub fn clone(self: *const HandleSelf) HandleError!HandleSelf {
+                try self.owner.ensureUsable();
                 return .{
                     .inner = try self.inner.clone(),
                     .identity = self.identity,
@@ -165,6 +186,7 @@ pub fn VirtualPageCacheImpl(
             }
 
             pub fn take(self: *HandleSelf) HandleError!HandleSelf {
+                try self.owner.ensureUsable();
                 return .{
                     .inner = try self.inner.take(),
                     .identity = self.identity,
@@ -175,9 +197,11 @@ pub fn VirtualPageCacheImpl(
             fn prepareWrite(self: *HandleSelf) HandleError!void {
                 switch (self.identity) {
                     .persistent => |virtual_page_id| {
+                        const backing_page_id = try self.inner.pid();
                         try self.owner.write_policy.prepareHandleWrite(.{
                             .refs = self.owner.refs(),
                             .virtual_page_id = virtual_page_id,
+                            .backing_page_id = backing_page_id,
                             .inner = &self.inner,
                         });
                     },
@@ -199,6 +223,7 @@ pub fn VirtualPageCacheImpl(
                 inactive,
             };
 
+            cache: *Self,
             inner: InnerCacheT.WriteBatch,
             mapping: VirtualPageMapT.WriteBatch,
             policy: WritePolicy.WriteBatch,
@@ -212,6 +237,7 @@ pub fn VirtualPageCacheImpl(
                 self.mapping.commit();
                 self.policy.commit();
                 self.phase = .inactive;
+                self.cache.transaction_phase = .idle;
             }
 
             pub fn discard(self: *WriteBatch) Error!void {
@@ -228,14 +254,17 @@ pub fn VirtualPageCacheImpl(
                     self.mapping.discard();
                     self.phase = .state_restored;
                 }
+                self.cache.transaction_phase = .discarding;
                 try self.inner.discard();
                 self.phase = .inactive;
+                self.cache.transaction_phase = .idle;
             }
         };
 
         inner: *InnerCacheT,
         vpm: *VirtualPageMapT,
         write_policy: WritePolicy,
+        transaction_phase: TransactionPhase = .idle,
 
         pub fn init(
             inner: *InnerCacheT,
@@ -255,6 +284,7 @@ pub fn VirtualPageCacheImpl(
         }
 
         pub fn getTemporaryPage(self: *Self) Error!Handle {
+            try self.ensureUsable();
             return .{
                 .inner = try self.inner.getTemporaryPage(),
                 .identity = .temporary,
@@ -263,19 +293,26 @@ pub fn VirtualPageCacheImpl(
         }
 
         pub fn begin(self: *Self) Error!WriteBatch {
+            if (self.transaction_phase != .idle) {
+                return error.BatchActive;
+            }
             var inner = try self.inner.begin();
             errdefer inner.discard() catch {};
             const generation = self.inner.transactionGeneration() orelse return error.TransactionInactive;
             var mapping = try self.vpm.begin();
             errdefer mapping.discard();
+            const policy = try self.write_policy.begin(self.refs(), generation);
+            self.transaction_phase = .active;
             return .{
+                .cache = self,
                 .inner = inner,
                 .mapping = mapping,
-                .policy = try self.write_policy.begin(self.refs(), generation),
+                .policy = policy,
             };
         }
 
         pub fn fetch(self: *Self, virtual_page_id: Pid) Error!Handle {
+            try self.ensureUsable();
             const physical_page_id = try self.vpm.get(virtual_page_id);
             return .{
                 .inner = try self.inner.fetch(physical_page_id),
@@ -285,6 +322,7 @@ pub fn VirtualPageCacheImpl(
         }
 
         pub fn create(self: *Self) Error!Handle {
+            try self.ensureUsable();
             try self.write_policy.prepareCreate(self.refs());
             try self.vpm.prepareSet();
             var inner_handle = try self.inner.create();
@@ -297,6 +335,7 @@ pub fn VirtualPageCacheImpl(
             self.write_policy.created(.{
                 .refs = self.refs(),
                 .virtual_page_id = virtual_page_id,
+                .backing_page_id = physical_page_id,
                 .inner = &inner_handle,
             });
             return .{
@@ -307,10 +346,12 @@ pub fn VirtualPageCacheImpl(
         }
 
         pub fn flush(self: *Self, virtual_page_id: Pid) Error!void {
+            try self.ensureUsable();
             return self.inner.flush(try self.vpm.get(virtual_page_id));
         }
 
         pub fn flushAll(self: *Self) Error!void {
+            try self.ensureUsable();
             return self.inner.flushAll();
         }
 
@@ -323,11 +364,12 @@ pub fn VirtualPageCacheImpl(
         }
 
         pub fn isPinned(self: *const Self, virtual_page_id: Pid) Error!bool {
+            try self.ensureUsable();
             return self.inner.isPinned(try self.vpm.get(virtual_page_id));
         }
 
         pub fn transactionActive(self: *const Self) bool {
-            return self.inner.transactionActive();
+            return self.transaction_phase != .idle;
         }
 
         pub fn transactionGeneration(self: *const Self) ?u64 {
@@ -343,6 +385,12 @@ pub fn VirtualPageCacheImpl(
                 .inner = self.inner,
                 .vpm = self.vpm,
             };
+        }
+
+        fn ensureUsable(self: *const Self) error{PageBusy}!void {
+            if (self.transaction_phase == .discarding) {
+                return error.PageBusy;
+            }
         }
 
         comptime {

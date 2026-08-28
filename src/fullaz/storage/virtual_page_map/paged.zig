@@ -200,6 +200,18 @@ pub fn Paged(
             }
         };
 
+        const MutationState = struct {
+            state: *State,
+            lease: ?StateLeaseType = null,
+
+            pub fn deinit(self: *MutationState) void {
+                if (self.lease) |*lease| {
+                    lease.deinit();
+                    self.lease = null;
+                }
+            }
+        };
+
         cache: *PageCacheT,
         storage_manager: *StorageManagerT,
         settings: Settings,
@@ -262,12 +274,15 @@ pub fn Paged(
         }
 
         pub fn prepareSet(self: *Self) Error!void {
-            const state = try self.activeState();
-            try self.validateNextVirtualPageId(state);
+            var mutation = try self.mutationState();
+            defer mutation.deinit();
+            try self.validateNextVirtualPageId(mutation.state);
         }
 
         pub fn set(self: *Self, physical_page_id: PhysicalPageIdT) Error!VirtualPageIdT {
-            const state = try self.activeState();
+            var mutation = try self.mutationState();
+            defer mutation.deinit();
+            const state = mutation.state;
             if (try self.physicalToVirtualGet(state, physical_page_id)) |virtual_page_id| {
                 if ((try self.virtualToPhysicalGet(state, virtual_page_id)) != physical_page_id) {
                     return error.InconsistentMapping;
@@ -303,7 +318,9 @@ pub fn Paged(
             virtual_page_id: VirtualPageIdT,
             physical_page_id: PhysicalPageIdT,
         ) Error!void {
-            const state = try self.activeState();
+            var mutation = try self.mutationState();
+            defer mutation.deinit();
+            const state = mutation.state;
             const old_physical_page_id = try self.getFromState(state, virtual_page_id);
             if (old_physical_page_id == physical_page_id) {
                 return;
@@ -389,6 +406,22 @@ pub fn Paged(
                 return error.TransactionInactive;
             }
             return stateMut(self.active_state_bytes orelse unreachable);
+        }
+
+        fn mutationState(self: *Self) Error!MutationState {
+            if (self.batch_active) {
+                return .{ .state = try self.activeState() };
+            }
+
+            var lease = try self.storage_manager.state();
+            errdefer lease.deinit();
+            const bytes = try lease.dataMut();
+            const state = try stateMut(bytes);
+            try validateState(self.cache, state);
+            return .{
+                .state = state,
+                .lease = lease,
+            };
         }
 
         fn activeStateConst(self: *const Self) Error!*const State {
