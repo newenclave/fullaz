@@ -1,7 +1,7 @@
 const std = @import("std");
 const PackedInt = @import("../../core/packed_int.zig").PackedInt;
 const page_cache_contract = @import("../../contracts/page_cache.zig");
-const interfaces = @import("interfaces.zig");
+const storage_manager_contract = @import("../../contracts/storage_manager.zig");
 const virtual_page_map_contract = @import("../../contracts/virtual_page_map.zig");
 const radix_tree = @import("../../radix_tree/radix_tree.zig");
 
@@ -11,7 +11,7 @@ pub fn Paged(
     comptime VirtualPageIdT: type,
 ) type {
     comptime page_cache_contract.requiresTransactionalPageCache(PageCacheT);
-    comptime interfaces.assertPagedStorageManager(StorageManagerT, PageCacheT.Pid);
+    comptime storage_manager_contract.assertPagedStorageManager(StorageManagerT, PageCacheT.Pid);
 
     const PhysicalPageIdT = PageCacheT.Pid;
     const PackedPhysicalPageId = PackedInt(PhysicalPageIdT, .little);
