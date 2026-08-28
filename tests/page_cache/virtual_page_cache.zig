@@ -6,7 +6,11 @@ fn TestTypes(comptime VirtualPageIdT: type) type {
     const Device = fullaz.device.MemoryBlock(u32);
     const InnerCache = fullaz.storage.page_cache.PageCache(Device);
     const Map = fullaz.storage.virtual_page_map.Memory(u32, VirtualPageIdT);
-    const Cache = fullaz.storage.page_cache.VirtualPageCache(InnerCache, Map);
+    const Cache = fullaz.storage.page_cache.VirtualPageCacheImpl(
+        InnerCache,
+        Map,
+        fullaz.storage.page_cache.InPlaceWritePolicy,
+    );
 
     comptime {
         if (@hasDecl(Cache, "UnderlyingDevice")) {
@@ -27,7 +31,7 @@ fn TestTypes(comptime VirtualPageIdT: type) type {
             errdefer self.inner.deinit();
             self.map = Map.init(std.testing.allocator);
             errdefer self.map.deinit();
-            self.cache = Cache.init(&self.inner, &self.map);
+            self.cache = Cache.init(&self.inner, &self.map, .init());
         }
 
         fn deinit(self: *@This()) void {
@@ -93,6 +97,131 @@ fn PagedStateManager(comptime CacheT: type) type {
         pub fn destroyPage(self: *Self, _: PageId) ManagerError!void {
             self.destroyed_pages += 1;
         }
+    };
+}
+
+const WritePolicyCounts = struct {
+    begins: usize = 0,
+    commits: usize = 0,
+    discards: usize = 0,
+    prepare_creates: usize = 0,
+    created: usize = 0,
+    handle_writes: usize = 0,
+    layout_writes: usize = 0,
+};
+
+fn RecordingWritePolicy(comptime ContextT: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Error = error{};
+
+        pub const WriteBatch = struct {
+            counts: *WritePolicyCounts,
+
+            pub fn commit(self: *@This()) void {
+                self.counts.commits += 1;
+            }
+
+            pub fn discard(self: *@This()) void {
+                self.counts.discards += 1;
+            }
+        };
+
+        counts: *WritePolicyCounts,
+
+        pub fn init(counts: *WritePolicyCounts) Self {
+            return .{ .counts = counts };
+        }
+
+        pub fn deinit(_: *Self) void {}
+
+        pub fn begin(
+            self: *Self,
+            _: ContextT.CacheRefs,
+            _: u64,
+        ) Error!WriteBatch {
+            self.counts.begins += 1;
+            return .{ .counts = self.counts };
+        }
+
+        pub fn prepareCreate(
+            self: *Self,
+            _: ContextT.CacheRefs,
+        ) Error!void {
+            self.counts.prepare_creates += 1;
+        }
+
+        pub fn created(
+            self: *Self,
+            _: ContextT.HandleTarget,
+        ) void {
+            self.counts.created += 1;
+        }
+
+        pub fn prepareHandleWrite(
+            self: *Self,
+            _: ContextT.HandleTarget,
+        ) Error!void {
+            self.counts.handle_writes += 1;
+        }
+
+        pub fn prepareLayoutWrite(
+            self: *Self,
+            _: ContextT.LayoutTarget,
+        ) Error!void {
+            self.counts.layout_writes += 1;
+        }
+    };
+}
+
+fn RejectingWritePolicy(comptime ContextT: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Error = error{WriteRejected};
+
+        pub const WriteBatch = struct {
+            pub fn commit(_: *@This()) void {}
+
+            pub fn discard(_: *@This()) void {}
+        };
+
+        pub fn init() Self {
+            return .{};
+        }
+
+        pub fn deinit(_: *Self) void {}
+
+        pub fn begin(
+            _: *Self,
+            _: ContextT.CacheRefs,
+            _: u64,
+        ) Error!WriteBatch {
+            return .{};
+        }
+
+        pub fn prepareCreate(
+            _: *Self,
+            _: ContextT.CacheRefs,
+        ) Error!void {
+            return error.WriteRejected;
+        }
+
+        pub fn created(
+            _: *Self,
+            _: ContextT.HandleTarget,
+        ) void {}
+
+        pub fn prepareHandleWrite(
+            _: *Self,
+            _: ContextT.HandleTarget,
+        ) Error!void {}
+
+        pub fn prepareLayoutWrite(
+            _: *Self,
+            _: ContextT.LayoutTarget,
+        ) Error!void {}
     };
 }
 
@@ -172,6 +301,83 @@ test "VirtualPageCache resolves fallible pinned state through the VPM" {
     try batch.commit();
 }
 
+test "VirtualPageCache delegates persistent writes to its policy" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCache(Device);
+    const Map = fullaz.storage.virtual_page_map.Memory(u32, u32);
+    const Cache = fullaz.storage.page_cache.VirtualPageCacheImpl(
+        InnerCache,
+        Map,
+        RecordingWritePolicy,
+    );
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var inner = try InnerCache.init(&device, std.testing.allocator, 4);
+    defer inner.deinit();
+    var map = Map.init(std.testing.allocator);
+    defer map.deinit();
+    var counts = WritePolicyCounts{};
+    var cache = Cache.init(&inner, &map, .init(&counts));
+    defer cache.deinit();
+
+    var batch = try cache.begin();
+    try std.testing.expectEqual(@as(usize, 1), counts.begins);
+    var page = try cache.create();
+    const virtual_page_id = try page.pid();
+    const physical_page_id = try map.get(virtual_page_id);
+    try std.testing.expectEqual(@as(usize, 1), counts.prepare_creates);
+    try std.testing.expectEqual(@as(usize, 1), counts.created);
+
+    try page.markDirty();
+    (try page.dataMut())[0] = 0x5a;
+    var lock = try page.lockLayout();
+    (try lock.dataMut())[1] = 0xa5;
+    var temporary = try cache.getTemporaryPage();
+    (try temporary.dataMut())[0] = 0xff;
+    temporary.deinit();
+    page.deinit();
+    lock.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), counts.handle_writes);
+    try std.testing.expectEqual(@as(usize, 1), counts.layout_writes);
+    try std.testing.expectEqual(physical_page_id, try map.get(virtual_page_id));
+    try std.testing.expectEqual(@as(usize, 1), inner.pageCount());
+    try batch.commit();
+    try std.testing.expectEqual(@as(usize, 1), counts.commits);
+
+    var fetched = try cache.fetch(virtual_page_id);
+    defer fetched.deinit();
+    try std.testing.expectEqual(@as(u8, 0x5a), (try fetched.data())[0]);
+    try std.testing.expectEqual(@as(u8, 0xa5), (try fetched.data())[1]);
+}
+
+test "VirtualPageCache propagates policy errors before allocation" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCache(Device);
+    const Map = fullaz.storage.virtual_page_map.Memory(u32, u32);
+    const Cache = fullaz.storage.page_cache.VirtualPageCacheImpl(
+        InnerCache,
+        Map,
+        RejectingWritePolicy,
+    );
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var inner = try InnerCache.init(&device, std.testing.allocator, 2);
+    defer inner.deinit();
+    var map = Map.init(std.testing.allocator);
+    defer map.deinit();
+    var cache = Cache.init(&inner, &map, .init());
+    defer cache.deinit();
+
+    var batch = try cache.begin();
+    try std.testing.expectError(error.WriteRejected, cache.create());
+    try std.testing.expectEqual(@as(usize, 0), inner.pageCount());
+    try std.testing.expectEqual(@as(usize, 0), map.pageCount());
+    try batch.discard();
+}
+
 test "VirtualPageCache commits and discards pages with their mappings" {
     const Types = TestTypes(u32);
 
@@ -206,7 +412,11 @@ test "VirtualPageCache reserves VPM capacity before allocating a physical page" 
     const Device = fullaz.device.MemoryBlock(u32);
     const InnerCache = fullaz.storage.page_cache.PageCache(Device);
     const Map = fullaz.storage.virtual_page_map.Memory(u32, u32);
-    const Cache = fullaz.storage.page_cache.VirtualPageCache(InnerCache, Map);
+    const Cache = fullaz.storage.page_cache.VirtualPageCacheImpl(
+        InnerCache,
+        Map,
+        fullaz.storage.page_cache.InPlaceWritePolicy,
+    );
 
     var device = try Device.init(std.testing.allocator, 256);
     defer device.deinit();
@@ -215,7 +425,7 @@ test "VirtualPageCache reserves VPM capacity before allocating a physical page" 
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
     var map = Map.init(failing.allocator());
     defer map.deinit();
-    var cache = Cache.init(&inner, &map);
+    var cache = Cache.init(&inner, &map, .init());
 
     var batch = try cache.begin();
     failing.fail_index = failing.alloc_index;
@@ -229,7 +439,11 @@ test "VirtualPageCache commits and discards a page-backed Paged VPM state lease"
     const InnerCache = fullaz.storage.page_cache.PageCache(Device);
     const Manager = PagedStateManager(InnerCache);
     const Map = fullaz.storage.virtual_page_map.Paged(InnerCache, Manager, u32);
-    const Cache = fullaz.storage.page_cache.VirtualPageCache(InnerCache, Map);
+    const Cache = fullaz.storage.page_cache.VirtualPageCacheImpl(
+        InnerCache,
+        Map,
+        fullaz.storage.page_cache.InPlaceWritePolicy,
+    );
     const settings = Map.Settings{
         .virtual_to_physical = .{ .leaf = 1, .inode = 2 },
         .physical_to_virtual = .{ .leaf = 3, .inode = 4 },
@@ -249,7 +463,7 @@ test "VirtualPageCache commits and discards a page-backed Paged VPM state lease"
     defer map.deinit();
     try setup_batch.commit();
 
-    var cache = Cache.init(&inner, &map);
+    var cache = Cache.init(&inner, &map, .init());
     defer cache.deinit();
     var batch = try cache.begin();
     try std.testing.expectEqual(@as(usize, 1), manager.active_state_leases);
@@ -314,7 +528,11 @@ test "VirtualPageCache BtpTree: Create and insert" {
     const Device = dev.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
     const Map = fullaz.storage.virtual_page_map.Memory(u32, u32);
-    const Cache = fullaz.storage.page_cache.VirtualPageCache(PageCache, Map);
+    const Cache = fullaz.storage.page_cache.VirtualPageCacheImpl(
+        PageCache,
+        Map,
+        fullaz.storage.page_cache.InPlaceWritePolicy,
+    );
 
     const BptModel = bpt.models.PagedModel(Cache, NoneStorageManager, keyCmp, void);
 
@@ -326,7 +544,7 @@ test "VirtualPageCache BtpTree: Create and insert" {
     var map = Map.init(allocator);
     defer map.deinit();
 
-    var vcache = Cache.init(&cache, &map);
+    var vcache = Cache.init(&cache, &map, .init());
     defer vcache.deinit();
 
     const available_before = cache.availableFrames();

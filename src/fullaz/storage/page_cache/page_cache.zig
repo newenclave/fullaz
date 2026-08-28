@@ -10,7 +10,11 @@ const wal_mod = @import("../wal/wal.zig");
 
 pub const MemoryReclaimingCache = @import("memory_reclaiming_cache.zig").MemoryReclaimingCache;
 pub const PersistentReclaimingCache = @import("persistent_reclaiming_cache.zig").PersistentReclaimingCache;
+
 pub const VirtualPageCache = @import("virtual_page_cache.zig").VirtualPageCache;
+pub const VirtualPageCacheImpl = @import("virtual_page_cache.zig").VirtualPageCacheImpl;
+
+pub const InPlaceWritePolicy = @import("write_policy.zig").InPlaceWritePolicy;
 
 pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (type) type, comptime WalPolicy: type) type {
     // Compile-time check that DeviceT is a valid block device
