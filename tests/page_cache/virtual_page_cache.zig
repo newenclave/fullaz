@@ -38,6 +38,64 @@ fn TestTypes(comptime VirtualPageIdT: type) type {
     };
 }
 
+fn PagedStateManager(comptime CacheT: type) type {
+    return struct {
+        const Self = @This();
+        const ManagerError = CacheT.Error;
+
+        pub const PageId = CacheT.Pid;
+        pub const Error = ManagerError;
+        pub const StateLeaseType = StateLease;
+
+        pub const StateLease = struct {
+            const LeaseError = CacheT.Handle.Error;
+
+            pub const Error = LeaseError;
+
+            handle: CacheT.Handle,
+            manager: *Self,
+
+            pub fn data(self: *const @This()) LeaseError![]const u8 {
+                return self.handle.data();
+            }
+
+            pub fn dataMut(self: *@This()) LeaseError![]u8 {
+                return self.handle.dataMut();
+            }
+
+            pub fn deinit(self: *@This()) void {
+                self.handle.deinit();
+                self.manager.active_state_leases -= 1;
+            }
+        };
+
+        cache: *CacheT,
+        state_page_id: PageId,
+        active_state_leases: usize = 0,
+        destroyed_pages: usize = 0,
+
+        pub fn init(cache: *CacheT, state_page_id: PageId) Self {
+            return .{
+                .cache = cache,
+                .state_page_id = state_page_id,
+            };
+        }
+
+        pub fn state(self: *Self) ManagerError!StateLease {
+            const handle = try self.cache.fetch(self.state_page_id);
+            self.active_state_leases += 1;
+            return .{
+                .handle = handle,
+                .manager = self,
+            };
+        }
+
+        pub fn destroyPage(self: *Self, _: PageId) ManagerError!void {
+            self.destroyed_pages += 1;
+        }
+    };
+}
+
 test "VirtualPageCache exposes virtual page IDs only" {
     const Types = TestTypes(u16);
 
@@ -164,6 +222,61 @@ test "VirtualPageCache reserves VPM capacity before allocating a physical page" 
     try std.testing.expectError(error.OutOfMemory, cache.create());
     try std.testing.expectEqual(@as(usize, 0), inner.pageCount());
     try batch.discard();
+}
+
+test "VirtualPageCache commits and discards a page-backed Paged VPM state lease" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCache(Device);
+    const Manager = PagedStateManager(InnerCache);
+    const Map = fullaz.storage.virtual_page_map.Paged(InnerCache, Manager, u32);
+    const Cache = fullaz.storage.page_cache.VirtualPageCache(InnerCache, Map);
+    const settings = Map.Settings{
+        .virtual_to_physical = .{ .leaf = 1, .inode = 2 },
+        .physical_to_virtual = .{ .leaf = 3, .inode = 4 },
+    };
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var inner = try InnerCache.init(&device, std.testing.allocator, 32);
+    defer inner.deinit();
+
+    var setup_batch = try inner.begin();
+    var state_page = try inner.create();
+    const state_page_id = try state_page.pid();
+    state_page.deinit();
+    var manager = Manager.init(&inner, state_page_id);
+    var map = try Map.format(&inner, &manager, settings);
+    defer map.deinit();
+    try setup_batch.commit();
+
+    var cache = Cache.init(&inner, &map);
+    defer cache.deinit();
+    var batch = try cache.begin();
+    try std.testing.expectEqual(@as(usize, 1), manager.active_state_leases);
+    var page = try cache.create();
+    const virtual_page_id = try page.pid();
+    (try page.dataMut())[0] = 0x7a;
+    page.deinit();
+    try batch.commit();
+    try std.testing.expectEqual(@as(usize, 0), manager.active_state_leases);
+
+    var fetched = try cache.fetch(virtual_page_id);
+    defer fetched.deinit();
+    try std.testing.expectEqual(@as(u8, 0x7a), (try fetched.data())[0]);
+    try std.testing.expectEqual(@as(usize, 0), manager.active_state_leases);
+
+    const physical_page_count = inner.pageCount();
+    var rollback_batch = try cache.begin();
+    try std.testing.expectEqual(@as(usize, 1), manager.active_state_leases);
+    var cancelled = try cache.create();
+    cancelled.deinit();
+    try rollback_batch.discard();
+    try std.testing.expectEqual(@as(usize, 0), manager.active_state_leases);
+    try std.testing.expectEqual(physical_page_count, inner.pageCount());
+    try std.testing.expectEqual(@as(usize, 1), cache.pageCount());
+    var retained = try cache.fetch(virtual_page_id);
+    defer retained.deinit();
+    try std.testing.expectEqual(@as(u8, 0x7a), (try retained.data())[0]);
 }
 
 const PageCacheT = @import("fullaz").storage.page_cache.PageCache;

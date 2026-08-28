@@ -106,6 +106,7 @@ test {
     _ = @import("page_cache/memory_reclaiming_cache.zig");
     _ = @import("page_cache/virtual_page_cache.zig");
     _ = @import("page_cache/virtual_page_map_memory.zig");
+    _ = @import("page_cache/virtual_page_map_paged.zig");
     _ = @import("long_store.zig");
     _ = @import("free_list.zig");
     _ = @import("wal.zig");

@@ -119,26 +119,36 @@ pub fn VirtualPageCache(
         pub const append_only_dense_page_ids = VirtualPageMapT.append_only_dense_virtual_page_ids;
 
         pub const WriteBatch = struct {
+            const Phase = enum {
+                active,
+                state_restored,
+                inactive,
+            };
+
             inner: InnerCacheT.WriteBatch,
             mapping: VirtualPageMapT.WriteBatch,
-            active: bool = true,
+            phase: Phase = .active,
 
             pub fn commit(self: *WriteBatch) Error!void {
-                if (!self.active) {
+                if (self.phase != .active) {
                     return error.TransactionInactive;
                 }
                 try self.inner.commit();
                 self.mapping.commit();
-                self.active = false;
+                self.phase = .inactive;
             }
 
             pub fn discard(self: *WriteBatch) Error!void {
-                if (!self.active) {
-                    return error.TransactionInactive;
+                switch (self.phase) {
+                    .active => {
+                        self.mapping.discard();
+                        self.phase = .state_restored;
+                    },
+                    .state_restored => {},
+                    .inactive => return error.TransactionInactive,
                 }
                 try self.inner.discard();
-                self.mapping.discard();
-                self.active = false;
+                self.phase = .inactive;
             }
         };
 
@@ -164,11 +174,11 @@ pub fn VirtualPageCache(
         }
 
         pub fn begin(self: *Self) Error!WriteBatch {
-            var mapping = try self.vpm.begin();
-            errdefer mapping.discard();
+            var inner = try self.inner.begin();
+            errdefer inner.discard() catch {};
             return .{
-                .inner = try self.inner.begin(),
-                .mapping = mapping,
+                .inner = inner,
+                .mapping = try self.vpm.begin(),
             };
         }
 
