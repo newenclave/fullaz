@@ -30,7 +30,6 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
 
         pub const Handle = InnerCacheT.Handle;
         pub const Pid = PageId;
-        pub const UnderlyingDevice = InnerCacheT.UnderlyingDevice;
         pub const Error = InnerCacheT.Error || StoreT.Error || error{
             PageAlreadyFree,
             PageIdExhausted,
@@ -116,7 +115,7 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             {
                 return Error.PageNotAllocated;
             }
-            if (self.inner.isPinned(page_id)) {
+            if (try self.inner.isPinned(page_id)) {
                 return Error.PageStillPinned;
             }
             if (try self.isFree(page_id)) {
@@ -148,7 +147,7 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             return self.store.pageCount();
         }
 
-        pub fn isPinned(self: *const Self, page_id: PageId) bool {
+        pub fn isPinned(self: *const Self, page_id: PageId) Error!bool {
             return self.inner.isPinned(page_id);
         }
 

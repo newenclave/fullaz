@@ -27,13 +27,12 @@ pub fn PagedModel(
         }
     }
 
-    const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
-    const BlockIdType = BlockDevice.BlockId;
-    const RtreePage = page_rtree.Rtree(BlockIdType, u16, CoordT, dims, Endian);
+    const CachePageId = PageCacheT.Pid;
+    const RtreePage = page_rtree.Rtree(CachePageId, u16, CoordT, dims, Endian);
 
-    const RtreeView = rtree_view.View(BlockIdType, u16, CoordT, dims, Endian, false);
-    const RtreeViewConst = rtree_view.View(BlockIdType, u16, CoordT, dims, Endian, true);
+    const RtreeView = rtree_view.View(CachePageId, u16, CoordT, dims, Endian, false);
+    const RtreeViewConst = rtree_view.View(CachePageId, u16, CoordT, dims, Endian, true);
     const HeaderPageView = RtreeViewConst.PageViewType;
 
     const Key = geometry.BoundingBox(CoordT, dims);
@@ -62,8 +61,8 @@ pub fn PagedModel(
         };
 
     const idOrNull = struct {
-        fn call(id: BlockIdType) ?BlockIdType {
-            return if (id == std.math.maxInt(BlockIdType)) null else id;
+        fn call(id: CachePageId) ?CachePageId {
+            return if (id == std.math.maxInt(CachePageId)) null else id;
         }
     }.call;
 
@@ -75,10 +74,10 @@ pub fn PagedModel(
         pub const Error = ErrorSet;
 
         handle: PageHandle = undefined,
-        self_id: BlockIdType = undefined,
+        self_id: CachePageId = undefined,
         ctx: *Context = undefined,
 
-        fn init(ph: PageHandle, self_id: BlockIdType, ctx: *Context) Self {
+        fn init(ph: PageHandle, self_id: CachePageId, ctx: *Context) Self {
             return .{ .handle = ph, .self_id = self_id, .ctx = ctx };
         }
 
@@ -94,7 +93,7 @@ pub fn PagedModel(
             };
         }
 
-        pub fn id(self: *const Self) BlockIdType {
+        pub fn id(self: *const Self) CachePageId {
             return self.self_id;
         }
 
@@ -146,14 +145,14 @@ pub fn PagedModel(
             return view.clear();
         }
 
-        pub fn getParent(self: *const Self) Error!?BlockIdType {
+        pub fn getParent(self: *const Self) Error!?CachePageId {
             const view = ConstView.init(try self.handle.data());
             return idOrNull(view.subheader().parent.get());
         }
 
-        pub fn setParent(self: *Self, parent: ?BlockIdType) Error!void {
+        pub fn setParent(self: *Self, parent: ?CachePageId) Error!void {
             if (parent) |page_id| {
-                if (page_id == std.math.maxInt(BlockIdType)) {
+                if (page_id == std.math.maxInt(CachePageId)) {
                     return Error.BadData;
                 }
             }
@@ -202,10 +201,10 @@ pub fn PagedModel(
         pub const Error = ErrorSet;
 
         handle: PageHandle = undefined,
-        self_id: BlockIdType = undefined,
+        self_id: CachePageId = undefined,
         ctx: *Context = undefined,
 
-        fn init(ph: PageHandle, self_id: BlockIdType, ctx: *Context) Self {
+        fn init(ph: PageHandle, self_id: CachePageId, ctx: *Context) Self {
             return .{ .handle = ph, .self_id = self_id, .ctx = ctx };
         }
 
@@ -221,7 +220,7 @@ pub fn PagedModel(
             };
         }
 
-        pub fn id(self: *const Self) BlockIdType {
+        pub fn id(self: *const Self) CachePageId {
             return self.self_id;
         }
 
@@ -268,14 +267,14 @@ pub fn PagedModel(
             return view.clear();
         }
 
-        pub fn getParent(self: *const Self) Error!?BlockIdType {
+        pub fn getParent(self: *const Self) Error!?CachePageId {
             const view = ConstView.init(try self.handle.data());
             return idOrNull(view.subheader().parent.get());
         }
 
-        pub fn setParent(self: *Self, parent: ?BlockIdType) Error!void {
+        pub fn setParent(self: *Self, parent: ?CachePageId) Error!void {
             if (parent) |page_id| {
-                if (page_id == std.math.maxInt(BlockIdType)) {
+                if (page_id == std.math.maxInt(CachePageId)) {
                     return Error.BadData;
                 }
             }
@@ -297,18 +296,18 @@ pub fn PagedModel(
             try view.setLevel(level);
         }
 
-        pub fn getChild(self: *const Self, pos: usize) Error!BlockIdType {
+        pub fn getChild(self: *const Self, pos: usize) Error!CachePageId {
             const view = ConstView.init(try self.handle.data());
             return try view.getChild(pos);
         }
 
-        pub fn canInsertChild(self: *const Self, _: Key, _: BlockIdType) Error!bool {
+        pub fn canInsertChild(self: *const Self, _: Key, _: CachePageId) Error!bool {
             const view = ConstView.init(try self.handle.data());
             if ((try view.entries()) >= max_entries_v) return false;
             return (try view.canAppend()) != .not_enough;
         }
 
-        pub fn insertChild(self: *Self, mbr: Key, child: BlockIdType) Error!void {
+        pub fn insertChild(self: *Self, mbr: Key, child: CachePageId) Error!void {
             const status = blk: {
                 const view = ConstView.init(try self.handle.data());
                 if ((try view.entries()) >= max_entries_v) {
@@ -343,20 +342,20 @@ pub fn PagedModel(
 
         fn deinit(_: *Self) void {}
 
-        pub fn getRoot(self: *const Self) ?BlockIdType {
+        pub fn getRoot(self: *const Self) ?CachePageId {
             return self.ctx.storage_mgr.getRoot();
         }
 
-        pub fn setRoot(self: *Self, new_root: ?BlockIdType) Error!void {
+        pub fn setRoot(self: *Self, new_root: ?CachePageId) Error!void {
             if (new_root) |page_id| {
-                if (page_id == std.math.maxInt(BlockIdType)) {
+                if (page_id == std.math.maxInt(CachePageId)) {
                     return Error.BadData;
                 }
             }
             return self.ctx.storage_mgr.setRoot(new_root);
         }
 
-        pub fn destroy(self: *Self, id: BlockIdType) Error!void {
+        pub fn destroy(self: *Self, id: CachePageId) Error!void {
             return self.ctx.storage_mgr.destroyPage(id);
         }
 
@@ -364,7 +363,7 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            if (pid == std.math.maxInt(BlockIdType)) {
+            if (pid == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             errdefer {
@@ -380,7 +379,7 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            if (pid == std.math.maxInt(BlockIdType)) {
+            if (pid == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             errdefer {
@@ -393,9 +392,9 @@ pub fn PagedModel(
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
 
-        pub fn loadLeaf(self: *Self, id_opt: ?BlockIdType) Error!?LeafImpl {
+        pub fn loadLeaf(self: *Self, id_opt: ?CachePageId) Error!?LeafImpl {
             const id = id_opt orelse return null;
-            if (id == std.math.maxInt(BlockIdType)) {
+            if (id == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             var ph = try self.ctx.cache.fetch(id);
@@ -415,9 +414,9 @@ pub fn PagedModel(
             return LeafImpl.init(ph, id, &self.ctx);
         }
 
-        pub fn loadInode(self: *Self, id_opt: ?BlockIdType) Error!?InodeImpl {
+        pub fn loadInode(self: *Self, id_opt: ?CachePageId) Error!?InodeImpl {
             const id = id_opt orelse return null;
-            if (id == std.math.maxInt(BlockIdType)) {
+            if (id == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             var ph = try self.ctx.cache.fetch(id);
@@ -437,8 +436,8 @@ pub fn PagedModel(
             return InodeImpl.init(ph, id, &self.ctx);
         }
 
-        pub fn isLeafId(self: *Self, id: BlockIdType) Error!bool {
-            if (id == std.math.maxInt(BlockIdType)) {
+        pub fn isLeafId(self: *Self, id: CachePageId) Error!bool {
+            if (id == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             var ph = try self.ctx.cache.fetch(id);
@@ -481,7 +480,7 @@ pub fn PagedModel(
     return struct {
         const Self = @This();
 
-        pub const NodeIdType = BlockIdType;
+        pub const NodeIdType = CachePageId;
         pub const Error = ErrorSet;
         pub const KeyType = Key;
         pub const ValueInType = ValueType;
@@ -490,7 +489,6 @@ pub fn PagedModel(
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
         pub const AccessorType = AccessorImpl;
-        pub const BlockDeviceType = BlockDevice;
         pub const max_entries = max_entries_v;
 
         accessor_state: AccessorType,
@@ -553,7 +551,7 @@ pub fn PagedModel(
         /// Parent links are maintenance links, not ownership edges.
         pub fn scanInodeRefs(
             self: *const Self,
-            page_id: BlockIdType,
+            page_id: CachePageId,
             page: []const u8,
             visitor: anytype,
         ) !void {
@@ -569,7 +567,7 @@ pub fn PagedModel(
 
         pub fn scanLeafRefs(
             self: *const Self,
-            page_id: BlockIdType,
+            page_id: CachePageId,
             page: []const u8,
             visitor: anytype,
         ) !void {

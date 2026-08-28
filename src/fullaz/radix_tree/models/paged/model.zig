@@ -1,6 +1,4 @@
 const std = @import("std");
-const device_interface = @import("../../../device/interfaces.zig");
-const page_cache = @import("../../../storage/storage.zig").page_cache;
 const radix_page = @import("view.zig");
 const contracts = @import("../../../contracts/contracts.zig");
 const core = @import("../../../core/core.zig");
@@ -39,10 +37,9 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         header.ValidationError ||
         error{InvalidSettings};
 
-    const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
-    const BlockIdType = BlockDevice.BlockId;
-    const RawPageId = BlockIdType;
+    const CachePageId = PageCacheT.Pid;
+    const RawPageId = CachePageId;
     const Index = u16;
     const InputValue = []const u8;
     const OutputValue = InputValue;
@@ -117,7 +114,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             self.* = undefined;
         }
 
-        pub fn id(self: *const Self) BlockIdType {
+        pub fn id(self: *const Self) CachePageId {
             return self.self_id;
         }
 
@@ -232,12 +229,12 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         const ConstPageViewType = ConstViewType.InodeSubheaderView;
 
         handle: PageHandle = undefined,
-        self_id: BlockIdType = undefined,
+        self_id: CachePageId = undefined,
         ctx: *Context = undefined,
 
         pub const Error = ErrorSet;
 
-        fn init(ph: PageHandle, self_id: BlockIdType, ctx: *Context) Self {
+        fn init(ph: PageHandle, self_id: CachePageId, ctx: *Context) Self {
             return .{
                 .handle = ph,
                 .self_id = self_id,
@@ -250,7 +247,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             self.* = undefined;
         }
 
-        pub fn id(self: *const Self) BlockIdType {
+        pub fn id(self: *const Self) CachePageId {
             return self.self_id;
         }
 
@@ -397,7 +394,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
         }
 
-        pub fn loadLeaf(self: *Self, id: BlockIdType) ErrorSet!LeafImpl {
+        pub fn loadLeaf(self: *Self, id: CachePageId) ErrorSet!LeafImpl {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const pid = try ph.pid();
@@ -503,7 +500,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             try current.clearFreeLeaf();
         }
 
-        pub fn isLeaf(self: *const Self, id: BlockIdType) ErrorSet!bool {
+        pub fn isLeaf(self: *const Self, id: CachePageId) ErrorSet!bool {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const pid = try ph.pid();
@@ -524,7 +521,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
 
-        pub fn loadInode(self: *Self, id: BlockIdType) ErrorSet!InodeImpl {
+        pub fn loadInode(self: *Self, id: CachePageId) ErrorSet!InodeImpl {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const pid = try ph.pid();
@@ -583,7 +580,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         pub const ValueInType = []const u8;
         pub const ValueOutType = ValueInType;
         pub const NodeIdType = RawPageId;
-        pub const PageId = BlockIdType;
+        pub const PageId = CachePageId;
 
         pub const Error = ErrorSet;
 

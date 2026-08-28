@@ -102,15 +102,14 @@ fn HandleDirectionalImpl(
     const PosType = StorageManagerT.Size;
     _ = PosType;
     const IndexT = u16;
-    const BlockDevice = PageCacheT.UnderlyingDevice;
-    const BlockIdType = BlockDevice.BlockId;
+    const CachePageId = PageCacheT.Pid;
     const has_tail = @hasDecl(StorageManagerT, "getLast") and @hasDecl(
         StorageManagerT,
         "setLast",
     );
 
     const ViewType = view.ViewImpl(
-        BlockIdType,
+        CachePageId,
         IndexT,
         AdditionalT,
         forward_only,
@@ -118,7 +117,7 @@ fn HandleDirectionalImpl(
         false,
     );
     const ViewTypeConst = view.ViewImpl(
-        BlockIdType,
+        CachePageId,
         IndexT,
         AdditionalT,
         forward_only,
@@ -197,7 +196,7 @@ fn HandleDirectionalImpl(
             return (try v.slotsDir()).size();
         }
 
-        pub fn id(self: *const Self) Error!BlockIdType {
+        pub fn id(self: *const Self) Error!CachePageId {
             return try self.ph.id();
         }
 
@@ -233,7 +232,7 @@ fn HandleDirectionalImpl(
             errors.IteratorError ||
             FsmError;
 
-        page_id: BlockIdType,
+        page_id: CachePageId,
         slot_id: usize,
         page: ?PageChainHandle.Chunk,
         page_chain: *PageChainHandle,
@@ -354,7 +353,7 @@ fn HandleDirectionalImpl(
 
         pub const Result = struct {
             value: []const u8,
-            page_id: BlockIdType,
+            page_id: CachePageId,
             pos: usize,
         };
 
@@ -517,7 +516,7 @@ fn HandleDirectionalImpl(
 
         pub const Result = struct {
             value: []const u8,
-            page_id: BlockIdType,
+            page_id: CachePageId,
             pos: usize,
         };
 
@@ -625,7 +624,7 @@ fn HandleDirectionalImpl(
 
     return struct {
         const Self = @This();
-        pub const PageId = BlockIdType;
+        pub const PageId = CachePageId;
         pub const Index = IndexT;
         pub const View = ViewType;
         pub const Iterator = if (forward_only) ForwardIteratorImpl else BidirectionalIteratorImpl;

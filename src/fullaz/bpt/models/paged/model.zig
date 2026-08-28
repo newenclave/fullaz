@@ -1,6 +1,4 @@
 const std = @import("std");
-const device_interface = @import("../../../device/interfaces.zig");
-const page_cache = @import("../../../storage/storage.zig").page_cache;
 const bpt_page = @import("view.zig");
 const interfaces = @import("../interfaces.zig");
 const core = @import("../../../core/core.zig");
@@ -24,18 +22,17 @@ pub fn PagedModel(
         interfaces.requiresPageCache(PageCacheT);
     }
 
-    const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
-    const BlockIdType = BlockDevice.BlockId;
+    const CachePageId = PageCacheT.Pid;
 
     const BptPage = bpt_page.View(
-        BlockIdType,
+        CachePageId,
         u16,
         .little,
         false,
     );
     const BptPageConst = bpt_page.View(
-        BlockIdType,
+        CachePageId,
         u16,
         .little,
         true,
@@ -70,12 +67,12 @@ pub fn PagedModel(
         const PageViewType = BptPage.LeafSubheaderView;
         const PageViewTypeConst = BptPageConst.LeafSubheaderView;
         handle: PageHandle = undefined,
-        self_id: BlockIdType = undefined,
+        self_id: CachePageId = undefined,
         ctx: *Context = undefined,
 
         pub const Error = ErrorSet;
 
-        fn init(ph: PageHandle, self_id: BlockIdType, ctx: *Context) Self {
+        fn init(ph: PageHandle, self_id: CachePageId, ctx: *Context) Self {
             return .{
                 .handle = ph,
                 .self_id = self_id,
@@ -139,29 +136,29 @@ pub fn PagedModel(
             return (try view.get(pos)).value;
         }
 
-        pub fn getNext(self: *const Self) ?BlockIdType {
+        pub fn getNext(self: *const Self) ?CachePageId {
             const data = self.handle.data() catch return null;
             const view = PageViewTypeConst.init(data);
             const current = view.subheader().next.get();
-            if (current != std.math.maxInt(BlockIdType)) {
+            if (current != std.math.maxInt(CachePageId)) {
                 return current;
             }
             return null;
         }
 
-        pub fn getPrev(self: *const Self) ?BlockIdType {
+        pub fn getPrev(self: *const Self) ?CachePageId {
             const data = self.handle.data() catch return null;
             const view = PageViewTypeConst.init(data);
             const current = view.subheader().prev.get();
-            if (current != std.math.maxInt(BlockIdType)) {
+            if (current != std.math.maxInt(CachePageId)) {
                 return current;
             }
             return null;
         }
 
-        pub fn setNext(self: *Self, next_id: ?BlockIdType) Error!void {
+        pub fn setNext(self: *Self, next_id: ?CachePageId) Error!void {
             if (next_id) |page_id| {
-                if (page_id == std.math.maxInt(BlockIdType)) {
+                if (page_id == std.math.maxInt(CachePageId)) {
                     return Error.BadData;
                 }
             }
@@ -173,9 +170,9 @@ pub fn PagedModel(
             }
         }
 
-        pub fn setPrev(self: *Self, prev_id: ?BlockIdType) Error!void {
+        pub fn setPrev(self: *Self, prev_id: ?CachePageId) Error!void {
             if (prev_id) |page_id| {
-                if (page_id == std.math.maxInt(BlockIdType)) {
+                if (page_id == std.math.maxInt(CachePageId)) {
                     return Error.BadData;
                 }
             }
@@ -187,9 +184,9 @@ pub fn PagedModel(
             }
         }
 
-        pub fn setParent(self: *Self, parent_id: ?BlockIdType) Error!void {
+        pub fn setParent(self: *Self, parent_id: ?CachePageId) Error!void {
             if (parent_id) |page_id| {
-                if (page_id == std.math.maxInt(BlockIdType)) {
+                if (page_id == std.math.maxInt(CachePageId)) {
                     return Error.BadData;
                 }
             }
@@ -201,17 +198,17 @@ pub fn PagedModel(
             }
         }
 
-        pub fn getParent(self: *const Self) ?BlockIdType {
+        pub fn getParent(self: *const Self) ?CachePageId {
             const data = self.handle.data() catch return null;
             const view = PageViewTypeConst.init(data);
             const parent = view.subheader().parent.get();
-            if (parent != std.math.maxInt(BlockIdType)) {
+            if (parent != std.math.maxInt(CachePageId)) {
                 return parent;
             }
             return null;
         }
 
-        pub fn id(self: *const Self) BlockIdType {
+        pub fn id(self: *const Self) CachePageId {
             return self.self_id;
         }
 
@@ -291,10 +288,10 @@ pub fn PagedModel(
         pub const Error = ErrorSet;
 
         handle: PageHandle = undefined,
-        self_id: BlockIdType = undefined,
+        self_id: CachePageId = undefined,
         ctx: *Context = undefined,
 
-        fn init(ph: PageHandle, self_id: BlockIdType, ctx: *Context) Self {
+        fn init(ph: PageHandle, self_id: CachePageId, ctx: *Context) Self {
             return .{
                 .handle = ph,
                 .self_id = self_id,
@@ -347,14 +344,14 @@ pub fn PagedModel(
             return (try view.get(pos)).key;
         }
 
-        pub fn getChild(self: *const Self, pos: usize) Error!BlockIdType {
+        pub fn getChild(self: *const Self, pos: usize) Error!CachePageId {
             const view = PageViewTypeConst.init(try self.handle.data());
             const current_size = (try view.slotsDir()).size();
             if (pos < current_size) {
                 return (try view.get(pos)).child;
             } else if (pos == current_size) {
                 const child = view.subheader().rightmost_child.get();
-                if (child == std.math.maxInt(BlockIdType)) {
+                if (child == std.math.maxInt(CachePageId)) {
                     return Error.BadData;
                 }
                 return child;
@@ -363,7 +360,7 @@ pub fn PagedModel(
             }
         }
 
-        pub fn id(self: *const Self) BlockIdType {
+        pub fn id(self: *const Self) CachePageId {
             return self.self_id;
         }
 
@@ -378,7 +375,7 @@ pub fn PagedModel(
         }
 
         // TODO: move it to page/bpt.zig?
-        pub fn canInsertChild(self: *const Self, pos: usize, key: KeyType, cid: BlockIdType) Error!bool {
+        pub fn canInsertChild(self: *const Self, pos: usize, key: KeyType, cid: CachePageId) Error!bool {
             if (key.len > self.ctx.settings.maximum_key_size) {
                 return Error.KeyTooLarge;
             }
@@ -387,11 +384,11 @@ pub fn PagedModel(
             return try view.canInsert(pos, key, cid) != .not_enough;
         }
 
-        pub fn insertChild(self: *Self, pos: usize, key: KeyType, child_id: BlockIdType) Error!void {
+        pub fn insertChild(self: *Self, pos: usize, key: KeyType, child_id: CachePageId) Error!void {
             if (key.len > self.ctx.settings.maximum_key_size) {
                 return Error.KeyTooLarge;
             }
-            if (child_id == std.math.maxInt(BlockIdType)) {
+            if (child_id == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
 
@@ -412,8 +409,8 @@ pub fn PagedModel(
             try view_mut.insert(pos, key, child_id);
         }
 
-        pub fn updateChild(self: *Self, pos: usize, child_id: BlockIdType) Error!void {
-            if (child_id == std.math.maxInt(BlockIdType)) {
+        pub fn updateChild(self: *Self, pos: usize, child_id: CachePageId) Error!void {
+            if (child_id == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             var view = PageViewType.init(try self.handle.dataMut());
@@ -439,9 +436,9 @@ pub fn PagedModel(
             return view.updateKey(pos, key, try tmp_buf.dataMut());
         }
 
-        pub fn setParent(self: *Self, parent_id: ?BlockIdType) Error!void {
+        pub fn setParent(self: *Self, parent_id: ?CachePageId) Error!void {
             if (parent_id) |page_id| {
-                if (page_id == std.math.maxInt(BlockIdType)) {
+                if (page_id == std.math.maxInt(CachePageId)) {
                     return Error.BadData;
                 }
             }
@@ -454,11 +451,11 @@ pub fn PagedModel(
             }
         }
 
-        pub fn getParent(self: *const Self) ?BlockIdType {
+        pub fn getParent(self: *const Self) ?CachePageId {
             const data = self.handle.data() catch return null;
             const view = PageViewTypeConst.init(data);
             const parent = view.subheader().parent.get();
-            if (parent != std.math.maxInt(BlockIdType)) {
+            if (parent != std.math.maxInt(CachePageId)) {
                 return parent;
             }
             return null;
@@ -491,7 +488,7 @@ pub fn PagedModel(
         pub const Error = ErrorSet;
 
         pub const PageCache = PageCacheT;
-        const RootType = BlockIdType;
+        const RootType = CachePageId;
 
         ctx: Context = undefined,
 
@@ -511,14 +508,14 @@ pub fn PagedModel(
 
         pub fn setRoot(self: *Self, new_root: ?RootType) ErrorSet!void {
             if (new_root) |page_id| {
-                if (page_id == std.math.maxInt(BlockIdType)) {
+                if (page_id == std.math.maxInt(CachePageId)) {
                     return Error.BadData;
                 }
             }
             return try self.ctx.storage_mgr.setRoot(new_root);
         }
 
-        pub fn destroy(self: *Self, id: BlockIdType) ErrorSet!void {
+        pub fn destroy(self: *Self, id: CachePageId) ErrorSet!void {
             return self.ctx.storage_mgr.destroyPage(id);
         }
 
@@ -526,7 +523,7 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            if (pid == std.math.maxInt(BlockIdType)) {
+            if (pid == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             errdefer {
@@ -542,7 +539,7 @@ pub fn PagedModel(
             var ph = try self.ctx.cache.create();
             defer ph.deinit();
             const pid = try ph.pid();
-            if (pid == std.math.maxInt(BlockIdType)) {
+            if (pid == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             errdefer {
@@ -554,9 +551,9 @@ pub fn PagedModel(
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
 
-        pub fn loadLeaf(self: *Self, id_opt: ?BlockIdType) ErrorSet!?LeafImpl {
+        pub fn loadLeaf(self: *Self, id_opt: ?CachePageId) ErrorSet!?LeafImpl {
             const id = id_opt orelse return null;
-            if (id == std.math.maxInt(BlockIdType)) {
+            if (id == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             var ph = try self.ctx.cache.fetch(id);
@@ -581,9 +578,9 @@ pub fn PagedModel(
             return LeafImpl.init(ph, id, &self.ctx);
         }
 
-        pub fn loadInode(self: *Self, id_opt: ?BlockIdType) ErrorSet!?InodeImpl {
+        pub fn loadInode(self: *Self, id_opt: ?CachePageId) ErrorSet!?InodeImpl {
             const id = id_opt orelse return null;
-            if (id == std.math.maxInt(BlockIdType)) {
+            if (id == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             var ph = try self.ctx.cache.fetch(id);
@@ -608,8 +605,8 @@ pub fn PagedModel(
             return InodeImpl.init(ph, id, &self.ctx);
         }
 
-        pub fn isLeafId(self: *Self, id: BlockIdType) ErrorSet!bool {
-            if (id == std.math.maxInt(BlockIdType)) {
+        pub fn isLeafId(self: *Self, id: CachePageId) ErrorSet!bool {
+            if (id == std.math.maxInt(CachePageId)) {
                 return Error.BadData;
             }
             var ph = try self.ctx.cache.fetch(id);
@@ -712,7 +709,6 @@ pub fn PagedModel(
 
         pub const KeyBorrowType = KeyBorrowImpl;
 
-        pub const BlockDeviceType = BlockDevice;
         pub const AccessorType = AccessorImpl;
 
         pub const Error = ErrorSet;
@@ -720,8 +716,8 @@ pub fn PagedModel(
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
 
-        pub const NodeIdType = BlockIdType;
-        pub const PageId = BlockIdType;
+        pub const NodeIdType = CachePageId;
+        pub const PageId = CachePageId;
 
         accessor_state: AccessorType,
 

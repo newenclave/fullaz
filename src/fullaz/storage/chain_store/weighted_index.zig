@@ -93,18 +93,17 @@ pub fn WeightedIndex(
     comptime StorageManagerT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
-    const BlockDevice = PageCacheT.UnderlyingDevice;
-    const BlockIdType = BlockDevice.BlockId;
+    const CachePageId = PageCacheT.Pid;
     const SizeT = StorageManagerT.Size;
 
     const EntrySizeT = SizeT;
-    const Policy = IndexValuePolicy(BlockIdType, EntrySizeT, Endian);
-    const Entry = IndexEntry(BlockIdType, EntrySizeT, Endian);
+    const Policy = IndexValuePolicy(CachePageId, EntrySizeT, Endian);
+    const Entry = IndexEntry(CachePageId, EntrySizeT, Endian);
 
     const IdxMgr = struct {
         const Self = @This();
         pub const Error = StorageManagerT.Error;
-        pub const PageId = BlockIdType;
+        pub const PageId = CachePageId;
 
         sm: *StorageManagerT,
 
@@ -127,9 +126,9 @@ pub fn WeightedIndex(
         const Self = @This();
 
         pub const requires_root = true;
-        pub const PageId = BlockIdType;
+        pub const PageId = CachePageId;
         pub const Size = SizeT;
-        pub const LocatedRes = Located(BlockIdType, SizeT);
+        pub const LocatedRes = Located(CachePageId, SizeT);
         // Mirror Tree.Error (private): model errors ∪ the wbpt algorithm's own.
         pub const Error = Model.Error || errors.IteratorError || errors.BptError;
 

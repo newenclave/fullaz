@@ -16,9 +16,8 @@ pub const Settings = struct {
 
 pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type, comptime Endian: std.builtin.Endian) type {
     const PosType = StorageManagerT.Size;
-    const BlockDevice = PageCacheT.UnderlyingDevice;
-    const BlockIdType = BlockDevice.BlockId;
-    const NoIndexImpl = weighted_index.NoIndex(BlockIdType, PosType);
+    const CachePageId = PageCacheT.Pid;
+    const NoIndexImpl = weighted_index.NoIndex(CachePageId, PosType);
 
     return Indexed(PageCacheT, StorageManagerT, NoIndexImpl, Endian);
 }
@@ -57,13 +56,12 @@ pub fn Indexed(
 
     const PosType = StorageManagerT.Size;
     const Index = u16;
-    const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
-    const BlockIdType = BlockDevice.BlockId;
+    const CachePageId = PageCacheT.Pid;
 
-    const CommonPageViewConst = page_header.View(BlockIdType, Index, Endian, true);
-    const ViewTypes = chain_view.View(BlockIdType, Index, PosType, Endian, false);
-    const ViewTypesConst = chain_view.View(BlockIdType, Index, PosType, Endian, true);
+    const CommonPageViewConst = page_header.View(CachePageId, Index, Endian, true);
+    const ViewTypes = chain_view.View(CachePageId, Index, PosType, Endian, false);
+    const ViewTypesConst = chain_view.View(CachePageId, Index, PosType, Endian, true);
 
     const CommonErrors = PageCacheT.Error ||
         StorageManagerT.Error ||
@@ -114,7 +112,7 @@ pub fn Indexed(
             return v.linkMut();
         }
 
-        fn pid(self: *const Self) Error!BlockIdType {
+        fn pid(self: *const Self) Error!CachePageId {
             return try self.handle.pid();
         }
     };
@@ -150,7 +148,7 @@ pub fn Indexed(
             self.page = null;
         }
 
-        pub fn pid(self: *const Self) Error!BlockIdType {
+        pub fn pid(self: *const Self) Error!CachePageId {
             try self.testPage();
             const ph = self.page.?;
             return ph.pid();
@@ -310,7 +308,7 @@ pub fn Indexed(
     return struct {
         const Self = @This();
 
-        pub const Pid = BlockIdType;
+        pub const Pid = CachePageId;
         pub const Error = PageCacheT.Error ||
             CommonErrors ||
             errors.PageError ||
@@ -805,7 +803,7 @@ pub fn Indexed(
             return result;
         }
 
-        fn pushChunkImpl(self: *Self, chunk: *ChunkImpl, last: BlockIdType) Error!void {
+        fn pushChunkImpl(self: *Self, chunk: *ChunkImpl, last: CachePageId) Error!void {
             var cv = try chunk.viewMut();
 
             var last_chunk_ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
@@ -967,7 +965,7 @@ pub fn Indexed(
             try self.ctx.mgr.destroyPage(last);
         }
 
-        fn popImpl(self: *Self, prev: BlockIdType) Error!void {
+        fn popImpl(self: *Self, prev: CachePageId) Error!void {
             var prev_h = try self.loadPage(prev, self.ctx.settings.chunk_page_kind);
             defer prev_h.deinit();
             var prev_chunk = ChunkImpl.init(prev_h);

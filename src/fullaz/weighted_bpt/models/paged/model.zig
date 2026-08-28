@@ -1,6 +1,4 @@
 const std = @import("std");
-const device_interface = @import("../../../device/interfaces.zig");
-const page_cache = @import("../../../storage/storage.zig").page_cache;
 const wbpt_page = @import("view.zig");
 const contracts = @import("../../../contracts/contracts.zig");
 const core = @import("../../../core/core.zig");
@@ -23,16 +21,15 @@ pub fn PagedModel(
         contracts.page_cache.requiresPageCache(PageCacheT);
     }
 
-    const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
-    const BlockIdType = BlockDevice.BlockId;
+    const CachePageId = PageCacheT.Pid;
     const Weight = WeightT;
     const Index = u16;
 
     const Value = []const u8;
 
-    const WBptPage = wbpt_page.View(BlockIdType, Index, Weight, .little, false);
-    const WBptPageConst = wbpt_page.View(BlockIdType, Index, Weight, .little, true);
+    const WBptPage = wbpt_page.View(CachePageId, Index, Weight, .little, false);
+    const WBptPageConst = wbpt_page.View(CachePageId, Index, Weight, .little, true);
 
     const NodePosition = struct {
         pos: usize,
@@ -163,12 +160,12 @@ pub fn PagedModel(
         const PageViewTypeConst = WBptPageConst.LeafSubheaderView;
 
         handle: PageHandle = undefined,
-        self_id: BlockIdType = undefined,
+        self_id: CachePageId = undefined,
         ctx: *Context = undefined,
 
         pub const Error = ErrorSet;
 
-        fn init(ph: PageHandle, self_id: BlockIdType, ctx: *Context) Self {
+        fn init(ph: PageHandle, self_id: CachePageId, ctx: *Context) Self {
             return .{
                 .handle = ph,
                 .self_id = self_id,
@@ -199,7 +196,7 @@ pub fn PagedModel(
             return page_used < page_cap / 2;
         }
 
-        pub fn id(self: *const Self) BlockIdType {
+        pub fn id(self: *const Self) CachePageId {
             return self.self_id;
         }
 
@@ -213,32 +210,32 @@ pub fn PagedModel(
             return total;
         }
 
-        pub fn getParent(self: *const Self) Error!?BlockIdType {
+        pub fn getParent(self: *const Self) Error!?CachePageId {
             const view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParent();
         }
 
-        pub fn setParent(self: *Self, parent: ?BlockIdType) Error!void {
+        pub fn setParent(self: *Self, parent: ?CachePageId) Error!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.setParent(parent);
         }
 
-        pub fn getPrev(self: *const Self) Error!?BlockIdType {
+        pub fn getPrev(self: *const Self) Error!?CachePageId {
             const view = PageViewTypeConst.init(try self.handle.data());
             return try view.getPrev();
         }
 
-        pub fn setPrev(self: *Self, prev: ?BlockIdType) Error!void {
+        pub fn setPrev(self: *Self, prev: ?CachePageId) Error!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.setPrev(prev);
         }
 
-        pub fn getNext(self: *const Self) Error!?BlockIdType {
+        pub fn getNext(self: *const Self) Error!?CachePageId {
             const view = PageViewTypeConst.init(try self.handle.data());
             return try view.getNext();
         }
 
-        pub fn setNext(self: *Self, next: ?BlockIdType) Error!void {
+        pub fn setNext(self: *Self, next: ?CachePageId) Error!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.setNext(next);
         }
@@ -401,10 +398,10 @@ pub fn PagedModel(
         pub const Error = ErrorSet;
 
         handle: PageHandle = undefined,
-        self_id: BlockIdType = undefined,
+        self_id: CachePageId = undefined,
         ctx: *Context = undefined,
 
-        fn init(ph: PageHandle, self_id: BlockIdType, ctx: *Context) Self {
+        fn init(ph: PageHandle, self_id: CachePageId, ctx: *Context) Self {
             return .{
                 .handle = ph,
                 .self_id = self_id,
@@ -416,7 +413,7 @@ pub fn PagedModel(
             self.handle.deinit();
         }
 
-        pub fn id(self: *const Self) BlockIdType {
+        pub fn id(self: *const Self) CachePageId {
             return self.self_id;
         }
 
@@ -441,12 +438,12 @@ pub fn PagedModel(
             return view.subheader().total_weight.get();
         }
 
-        pub fn getParent(self: *const Self) Error!?BlockIdType {
+        pub fn getParent(self: *const Self) Error!?CachePageId {
             const view = PageViewTypeConst.init(try self.handle.data());
             return try view.getParent();
         }
 
-        pub fn setParent(self: *Self, parent: ?BlockIdType) Error!void {
+        pub fn setParent(self: *Self, parent: ?CachePageId) Error!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.setParent(parent);
         }
@@ -459,7 +456,7 @@ pub fn PagedModel(
             };
         }
 
-        pub fn insertChild(self: *Self, pos: usize, child: BlockIdType, weight: Weight) Error!void {
+        pub fn insertChild(self: *Self, pos: usize, child: CachePageId, weight: Weight) Error!void {
             var view = PageViewType.init(try self.handle.dataMut());
 
             const available = try self.canInsertImpl(pos, weight);
@@ -480,7 +477,7 @@ pub fn PagedModel(
             try view.remove(pos);
         }
 
-        pub fn getChild(self: *const Self, pos: usize) Error!BlockIdType {
+        pub fn getChild(self: *const Self, pos: usize) Error!CachePageId {
             const view = PageViewTypeConst.init(try self.handle.data());
             return (try view.get(pos)).child;
         }
@@ -495,7 +492,7 @@ pub fn PagedModel(
             try view.updateWeight(pos, new_weight);
         }
 
-        pub fn updateChild(self: *Self, pos: usize, new_child: BlockIdType) Error!void {
+        pub fn updateChild(self: *Self, pos: usize, new_child: CachePageId) Error!void {
             var view = PageViewType.init(try self.handle.dataMut());
             try view.updateChild(pos, new_child);
         }
@@ -552,7 +549,7 @@ pub fn PagedModel(
     const AccessorImpl = struct {
         const Self = @This();
 
-        pub const Pid = BlockIdType;
+        pub const Pid = CachePageId;
         pub const Error = ErrorSet;
 
         ctx: Context = undefined,
@@ -588,7 +585,7 @@ pub fn PagedModel(
             return LeafImpl.init(try ph.take(), pid, &self.ctx);
         }
 
-        pub fn loadLeaf(self: *Self, id: BlockIdType) ErrorSet!LeafImpl {
+        pub fn loadLeaf(self: *Self, id: CachePageId) ErrorSet!LeafImpl {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const pid = try ph.pid();
@@ -613,7 +610,7 @@ pub fn PagedModel(
             return InodeImpl.init(try ph.take(), pid, &self.ctx);
         }
 
-        pub fn loadInode(self: *Self, id: BlockIdType) ErrorSet!InodeImpl {
+        pub fn loadInode(self: *Self, id: CachePageId) ErrorSet!InodeImpl {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             const pid = try ph.pid();
@@ -645,7 +642,7 @@ pub fn PagedModel(
             return try slots_dir_a.canMergeWith(&slots_dir_b) != .not_enough;
         }
 
-        pub fn isLeaf(self: *const Self, id: BlockIdType) Error!bool {
+        pub fn isLeaf(self: *const Self, id: CachePageId) Error!bool {
             var ph = try self.ctx.cache.fetch(id);
             defer ph.deinit();
             var view = InodeImpl.PageViewTypeConst.init(try ph.data());
@@ -667,8 +664,8 @@ pub fn PagedModel(
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
 
-        pub const NodeIdType = BlockIdType;
-        pub const PageId = BlockIdType;
+        pub const NodeIdType = CachePageId;
+        pub const PageId = CachePageId;
 
         accessor_state: AccessorType,
 

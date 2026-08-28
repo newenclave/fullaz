@@ -59,9 +59,8 @@ pub fn HandleForwardImpl(
 ) type {
     const PosType = StorageManagerT.Size;
     const IndexT = u16;
-    const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
-    const BlockIdType = BlockDevice.BlockId;
+    const CachePageId = PageCacheT.Pid;
     const has_tail = @hasDecl(StorageManagerT, "getLast") and
         @hasDecl(StorageManagerT, "setLast");
 
@@ -71,7 +70,7 @@ pub fn HandleForwardImpl(
     _ = PosType;
 
     const ViewType = view.ViewImpl(
-        BlockIdType,
+        CachePageId,
         IndexT,
         AdditionalT,
         true,
@@ -79,7 +78,7 @@ pub fn HandleForwardImpl(
         false,
     );
     const ViewTypeConst = view.ViewImpl(
-        BlockIdType,
+        CachePageId,
         IndexT,
         AdditionalT,
         true,
@@ -136,17 +135,17 @@ pub fn HandleForwardImpl(
             return cv.dataMut();
         }
 
-        pub fn getNext(self: *Self) Error!?BlockIdType {
+        pub fn getNext(self: *Self) Error!?CachePageId {
             const cv = try self.view();
             return cv.getNext();
         }
 
-        pub fn setNext(self: *Self, pid: ?BlockIdType) Error!void {
+        pub fn setNext(self: *Self, pid: ?CachePageId) Error!void {
             var cv = try self.viewMut();
             cv.setNext(pid);
         }
 
-        pub fn id(self: *const Self) Error!BlockIdType {
+        pub fn id(self: *const Self) Error!CachePageId {
             return self.ph.pid();
         }
 
@@ -187,7 +186,7 @@ pub fn HandleForwardImpl(
             PageCacheT.Error ||
             ViewTypeConst.PageView.Error;
 
-        fn load(page_cache: *PageCacheT, page_kind: u16, pid: BlockIdType) Error!ChunkHandle {
+        fn load(page_cache: *PageCacheT, page_kind: u16, pid: CachePageId) Error!ChunkHandle {
             var page_handle = try page_cache.fetch(pid);
             errdefer page_handle.deinit();
             const cv = ViewTypeConst.Chunk.init(try page_handle.data());
@@ -214,7 +213,7 @@ pub fn HandleForwardImpl(
 
         pub const Result = struct {
             value: []const u8,
-            page_id: BlockIdType,
+            page_id: CachePageId,
         };
 
         page_cache: *PageCacheT,
@@ -223,7 +222,7 @@ pub fn HandleForwardImpl(
         page: ?ChunkHandle,
         cursor: Cursor,
 
-        fn init(page_cache: *PageCacheT, page_kind: u16, page_id: BlockIdType, cursor: Cursor) Error!Self {
+        fn init(page_cache: *PageCacheT, page_kind: u16, page_id: CachePageId, cursor: Cursor) Error!Self {
             return .{
                 .page_cache = page_cache,
                 .page_kind = page_kind,
@@ -306,7 +305,7 @@ pub fn HandleForwardImpl(
             PageCacheT.Error ||
             ViewTypeConst.PageView.Error;
 
-        pub const PageId = BlockIdType;
+        pub const PageId = CachePageId;
         pub const Chunk = ChunkHandle;
         pub const Subheader = SubheaderType;
         pub const Iterator = IteratorImpl;
@@ -578,9 +577,8 @@ pub fn HandleBidirectionalImpl(
 ) type {
     const PosType = StorageManagerT.Size;
     const IndexT = u16;
-    const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
-    const BlockIdType = BlockDevice.BlockId;
+    const CachePageId = PageCacheT.Pid;
 
     const EmptyStruct = extern struct {};
     const SubheaderType = if (SubheaderT == void) EmptyStruct else SubheaderT;
@@ -591,7 +589,7 @@ pub fn HandleBidirectionalImpl(
     _ = PosType;
 
     const ViewType = view.ViewImpl(
-        BlockIdType,
+        CachePageId,
         IndexT,
         AdditionalT,
         false,
@@ -599,7 +597,7 @@ pub fn HandleBidirectionalImpl(
         false,
     );
     const ViewTypeConst = view.ViewImpl(
-        BlockIdType,
+        CachePageId,
         IndexT,
         AdditionalT,
         false,
@@ -656,27 +654,27 @@ pub fn HandleBidirectionalImpl(
             return cv.dataMut();
         }
 
-        pub fn getNext(self: *Self) Error!?BlockIdType {
+        pub fn getNext(self: *Self) Error!?CachePageId {
             const cv = try self.view();
             return cv.getNext();
         }
 
-        pub fn getPrev(self: *Self) Error!?BlockIdType {
+        pub fn getPrev(self: *Self) Error!?CachePageId {
             const cv = try self.view();
             return cv.getPrev();
         }
 
-        pub fn setNext(self: *Self, pid: ?BlockIdType) Error!void {
+        pub fn setNext(self: *Self, pid: ?CachePageId) Error!void {
             var cv = try self.viewMut();
             cv.setNext(pid);
         }
 
-        pub fn setPrev(self: *Self, pid: ?BlockIdType) Error!void {
+        pub fn setPrev(self: *Self, pid: ?CachePageId) Error!void {
             var cv = try self.viewMut();
             cv.setPrev(pid);
         }
 
-        pub fn id(self: *const Self) Error!BlockIdType {
+        pub fn id(self: *const Self) Error!CachePageId {
             return self.ph.pid();
         }
 
@@ -717,7 +715,7 @@ pub fn HandleBidirectionalImpl(
             PageCacheT.Error ||
             ViewTypeConst.PageView.Error;
 
-        fn load(page_cache: *PageCacheT, page_kind: u16, pid: BlockIdType) Error!ChunkHandle {
+        fn load(page_cache: *PageCacheT, page_kind: u16, pid: CachePageId) Error!ChunkHandle {
             var page_handle = try page_cache.fetch(pid);
             errdefer page_handle.deinit();
             const cv = ViewTypeConst.Chunk.init(try page_handle.data());
@@ -744,7 +742,7 @@ pub fn HandleBidirectionalImpl(
 
         pub const Result = struct {
             value: []const u8,
-            page_id: BlockIdType,
+            page_id: CachePageId,
         };
 
         page_cache: *PageCacheT,
@@ -752,7 +750,7 @@ pub fn HandleBidirectionalImpl(
         page: ?ChunkHandle,
         cursor: Cursor,
 
-        fn init(page_cache: *PageCacheT, page_kind: u16, page_id: BlockIdType, cursor: Cursor) Error!Self {
+        fn init(page_cache: *PageCacheT, page_kind: u16, page_id: CachePageId, cursor: Cursor) Error!Self {
             return .{
                 .page_cache = page_cache,
                 .page_kind = page_kind,
@@ -867,7 +865,7 @@ pub fn HandleBidirectionalImpl(
             PageCacheT.Error ||
             ViewTypeConst.PageView.Error;
 
-        pub const PageId = BlockIdType;
+        pub const PageId = CachePageId;
         pub const Chunk = ChunkHandle;
         pub const Subheader = SubheaderType;
         pub const Iterator = IteratorImpl;

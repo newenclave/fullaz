@@ -19,13 +19,13 @@ pub fn Paged(
     comptime assertLocationAccessor(LocationAccessorT);
     comptime fsm_interfaces.assertSizePolicy(SizePolicyT);
 
-    const PidT = PageCacheT.UnderlyingDevice.BlockId;
-    comptime fsm_interfaces.assertSlabStorageManager(SlabStorageManagerT, PidT);
+    const CachePageId = PageCacheT.Pid;
+    comptime fsm_interfaces.assertSlabStorageManager(SlabStorageManagerT, CachePageId);
     const PageHandle = PageCacheT.Handle;
     const SizeClassT = SizePolicyT.SizeClass;
 
-    const View = view_mod.View(PidT, u16, SizeClassT, .little, false).SlabPageView;
-    const ConstView = view_mod.View(PidT, u16, SizeClassT, .little, true).SlabPageView;
+    const View = view_mod.View(CachePageId, u16, SizeClassT, .little, false).SlabPageView;
+    const ConstView = view_mod.View(CachePageId, u16, SizeClassT, .little, true).SlabPageView;
 
     const ClassChainManagerImpl = struct {
         const Self = @This();
@@ -35,15 +35,15 @@ pub fn Paged(
         sm: *SlabStorageManagerT,
         class: SizeClassT,
 
-        pub fn getFirst(self: *Self) SlabStorageManagerT.Error!?PidT {
+        pub fn getFirst(self: *Self) SlabStorageManagerT.Error!?CachePageId {
             return self.sm.getSizeClassRoot(self.class);
         }
 
-        pub fn setFirst(self: *Self, pid: ?PidT) SlabStorageManagerT.Error!void {
+        pub fn setFirst(self: *Self, pid: ?CachePageId) SlabStorageManagerT.Error!void {
             return self.sm.setSizeClassRoot(self.class, pid);
         }
 
-        pub fn destroyPage(self: *Self, pid: PidT) SlabStorageManagerT.Error!void {
+        pub fn destroyPage(self: *Self, pid: CachePageId) SlabStorageManagerT.Error!void {
             return self.sm.destroyPage(pid);
         }
     };
@@ -61,7 +61,7 @@ pub fn Paged(
             .little,
         );
 
-        pub const Pid = PidT;
+        pub const Pid = CachePageId;
         pub const Size = u16;
         pub const Error = PageChainHandle.Error ||
             LocationAccessorT.Error ||
@@ -225,7 +225,7 @@ pub fn Paged(
             chunk: PageChainHandle.Chunk,
         };
 
-        fn fetchSlab(self: *Self, pid: PidT) Error!PageHandle {
+        fn fetchSlab(self: *Self, pid: CachePageId) Error!PageHandle {
             var ph = try self.cache.fetch(pid);
             errdefer {
                 ph.deinit();
@@ -341,7 +341,7 @@ pub fn Paged(
             }
         }
 
-        fn writeLocation(self: *Self, data_pid: PidT, location: LocationAccessorT.Location) Error!void {
+        fn writeLocation(self: *Self, data_pid: CachePageId, location: LocationAccessorT.Location) Error!void {
             var ph = try self.cache.fetch(data_pid);
             defer {
                 ph.deinit();
@@ -349,7 +349,7 @@ pub fn Paged(
             try LocationAccessorT.write(try ph.dataMut(), location);
         }
 
-        fn readLocation(self: *Self, data_pid: PidT) Error!?LocationAccessorT.Location {
+        fn readLocation(self: *Self, data_pid: CachePageId) Error!?LocationAccessorT.Location {
             var ph = try self.cache.fetch(data_pid);
             defer {
                 ph.deinit();

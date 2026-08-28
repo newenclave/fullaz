@@ -9,7 +9,6 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
 
         pub const Handle = InnerCacheT.Handle;
         pub const Pid = InnerCacheT.Pid;
-        pub const UnderlyingDevice = InnerCacheT.UnderlyingDevice;
         pub const Error = InnerCacheT.Error ||
             std.mem.Allocator.Error ||
             error{
@@ -137,7 +136,7 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
             if (std.mem.indexOfScalar(Pid, self.free_pages.items, page_id) != null) {
                 return Error.PageAlreadyFree;
             }
-            if (self.inner.isPinned(page_id)) {
+            if (try self.inner.isPinned(page_id)) {
                 return Error.PageStillPinned;
             }
 
@@ -161,7 +160,7 @@ pub fn MemoryReclaimingCache(comptime InnerCacheT: type) type {
             return self.physical_page_count;
         }
 
-        pub fn isPinned(self: *const Self, page_id: Pid) bool {
+        pub fn isPinned(self: *const Self, page_id: Pid) Error!bool {
             return self.inner.isPinned(page_id);
         }
 

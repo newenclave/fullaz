@@ -27,7 +27,6 @@ pub fn requiresPageCache(comptime T: type) void {
     requiresErrorDeclaration(T, "Error");
     requiresTypeDeclaration(T, "Handle");
     requiresTypeDeclaration(T, "Pid");
-    requiresTypeDeclaration(T, "UnderlyingDevice");
     const Error = T.Error;
     const Handle = T.Handle;
 
@@ -48,7 +47,7 @@ pub fn requiresPageCache(comptime T: type) void {
 
 pub fn requiresPinAwarePageCache(comptime T: type) void {
     requiresPageCache(T);
-    requiresFnSignature(T, "isPinned", fn (*const T, T.Pid) bool);
+    requiresFnSignature(T, "isPinned", fn (*const T, T.Pid) T.Error!bool);
 }
 
 pub fn requiresTransactionalPageCache(comptime T: type) void {

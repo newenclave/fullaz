@@ -10,6 +10,7 @@ const wal_mod = @import("../wal/wal.zig");
 
 pub const MemoryReclaimingCache = @import("memory_reclaiming_cache.zig").MemoryReclaimingCache;
 pub const PersistentReclaimingCache = @import("persistent_reclaiming_cache.zig").PersistentReclaimingCache;
+pub const VirtualPageCache = @import("virtual_page_cache.zig").VirtualPageCache;
 
 pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (type) type, comptime WalPolicy: type) type {
     // Compile-time check that DeviceT is a valid block device
@@ -176,14 +177,13 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
     return struct {
         const Self = @This();
 
-        pub const UnderlyingDevice = DeviceT;
-        pub const Pid = UnderlyingDevice.BlockId;
+        pub const Pid = DeviceT.BlockId;
         /// Successful create() calls append 0-based dense IDs and failures consume no ID.
         pub const append_only_dense_page_ids: bool = if (@hasDecl(
-            UnderlyingDevice,
+            DeviceT,
             "append_only_dense_block_ids",
-        ) and @TypeOf(UnderlyingDevice.append_only_dense_block_ids) == bool)
-            UnderlyingDevice.append_only_dense_block_ids
+        ) and @TypeOf(DeviceT.append_only_dense_block_ids) == bool)
+            DeviceT.append_only_dense_block_ids
         else
             false;
 
@@ -201,7 +201,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             WalErrors ||
             Handle.Error;
 
-        device: *UnderlyingDevice = undefined,
+        device: *DeviceT = undefined,
         allocator: std.mem.Allocator = undefined,
         policy: Policy = undefined,
         frames_cache: FrameHashMap = undefined,
@@ -233,7 +233,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             }
         };
 
-        pub fn init(underlying_device: *UnderlyingDevice, allocator: std.mem.Allocator, init_maximum_pages: usize) Error!Self {
+        pub fn init(underlying_device: *DeviceT, allocator: std.mem.Allocator, init_maximum_pages: usize) Error!Self {
             if (WalPolicy.enabled) {
                 @compileError("WAL-enabled page cache must be created with initWal");
             }
@@ -247,7 +247,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
         }
 
         pub fn initWal(
-            underlying_device: *UnderlyingDevice,
+            underlying_device: *DeviceT,
             allocator: std.mem.Allocator,
             init_maximum_pages: usize,
             wal: WalPolicy,
@@ -375,7 +375,7 @@ pub fn PageCacheImpl(comptime DeviceT: type, comptime MemoryCachePolicy: fn (typ
             return count;
         }
 
-        pub fn isPinned(self: *const Self, pid: Pid) bool {
+        pub fn isPinned(self: *const Self, pid: Pid) Error!bool {
             const frame = self.frames_cache.get(pid) orelse return false;
             return frame.isPinned();
         }

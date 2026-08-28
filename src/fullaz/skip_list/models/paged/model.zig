@@ -19,15 +19,14 @@ pub fn Paged(
     comptime cmp: anytype,
     comptime CtxT: type,
 ) type {
-    const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
-    const BlockIdType = BlockDevice.BlockId;
+    const CachePageId = PageCacheT.Pid;
 
     const KeyT = []const u8;
     const ValueT = []const u8;
 
-    const NodeViewMut = SubheaderView(BlockIdType, u16, AdditionalT, .little, false);
-    const NodeViewConst = SubheaderView(BlockIdType, u16, AdditionalT, .little, true);
+    const NodeViewMut = SubheaderView(CachePageId, u16, AdditionalT, .little, false);
+    const NodeViewConst = SubheaderView(CachePageId, u16, AdditionalT, .little, true);
     const ConstSlotWrapper = NodeViewConst.ConstSlotWrapper;
     const SlotWrapper = NodeViewMut.ConstSlotWrapper;
 
@@ -44,7 +43,7 @@ pub fn Paged(
 
     const PidImpl = struct {
         const Self = @This();
-        page_id: BlockIdType,
+        page_id: CachePageId,
         slot_id: usize,
     };
 
@@ -284,7 +283,7 @@ pub fn Paged(
 
             // find a page with room (fsm), else create a fresh one
             var ph: PageHandle = undefined;
-            var page_id: BlockIdType = undefined;
+            var page_id: CachePageId = undefined;
             var is_new = false;
             if (try ctx.fsm.find(@intCast(full_slot_bytes))) |found| {
                 var fph = try ctx.cache.fetch(found);
@@ -413,7 +412,7 @@ pub fn Paged(
         pub const AccessorType = AccessorImpl;
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
-        pub const PageId = BlockIdType;
+        pub const PageId = CachePageId;
 
         pub const KeyIn = KeyT;
         pub const ValueIn = ValueT;
@@ -506,8 +505,4 @@ pub fn Paged(
             return v;
         }
     };
-
-    //const BlockDevice = PageCacheT.UnderlyingDevice;
-    // const PageHandle = PageCacheT.Handle;
-    // const BlockIdType = BlockDevice.BlockId;
 }

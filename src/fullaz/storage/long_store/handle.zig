@@ -18,14 +18,13 @@ pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type) type {
 
     const PosType = u32;
     const Index = u16;
-    const BlockDevice = PageCacheT.UnderlyingDevice;
     const PageHandle = PageCacheT.Handle;
-    const BlockIdType = BlockDevice.BlockId;
+    const CachePageId = PageCacheT.Pid;
 
-    //    const CommonPageView = page_header.View(BlockIdType, u16, .little, false);
-    const CommonPageViewConst = page_header.View(BlockIdType, Index, .little, true);
-    const ViewTypes = view.View(BlockIdType, Index, PosType, .little, false);
-    const ViewTypesConst = view.View(BlockIdType, Index, PosType, .little, true);
+    //    const CommonPageView = page_header.View(CachePageId, u16, .little, false);
+    const CommonPageViewConst = page_header.View(CachePageId, Index, .little, true);
+    const ViewTypes = view.View(CachePageId, Index, PosType, .little, false);
+    const ViewTypesConst = view.View(CachePageId, Index, PosType, .little, true);
 
     const CommonErrors = PageCacheT.Error ||
         StorageManagerT.Error;
@@ -137,7 +136,7 @@ pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             self.page = null;
         }
 
-        pub fn pid(self: *const Self) Error!BlockIdType {
+        pub fn pid(self: *const Self) Error!CachePageId {
             try self.testPage();
             const ph = switch (self.page.?) {
                 .header => |hdr| hdr.handle,
@@ -351,7 +350,7 @@ pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type) type {
     return struct {
         const Self = @This();
 
-        pub const Pid = BlockIdType;
+        pub const Pid = CachePageId;
         pub const Error = PageCacheT.Error ||
             CommonErrors ||
             errors.PageError;
@@ -784,7 +783,7 @@ pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             try self.ctx.mgr.destroyPage(last);
         }
 
-        fn pushChunkImpl(self: *Self, chunk: *ChunkImpl, last: BlockIdType) Error!void {
+        fn pushChunkImpl(self: *Self, chunk: *ChunkImpl, last: CachePageId) Error!void {
             var cv = try chunk.viewMut();
 
             var last_chunk_ph = try self.loadPage(last, self.ctx.settings.chunk_page_kind);
@@ -797,7 +796,7 @@ pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             cv.subheaderMut().link.back.set(last);
         }
 
-        fn popImpl(self: *Self, prev: BlockIdType) Error!void {
+        fn popImpl(self: *Self, prev: CachePageId) Error!void {
             var prev_h = try self.loadPage(prev, self.ctx.settings.chunk_page_kind);
             defer prev_h.deinit();
             var prev_chunk = ChunkImpl.init(prev_h);
