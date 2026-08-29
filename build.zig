@@ -364,6 +364,60 @@ pub fn build(b: *std.Build) void {
         "web-dispatch/index.html",
     ).step);
 
+    const db_lab_tests_mod = b.addModule("db_lab_tests", .{
+        .root_source_file = b.path("demos/db-lab/tests/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const db_lab = b.addModule("db_lab", .{
+        .root_source_file = b.path("demos/db-lab/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "fullaz", .module = mod },
+            .{ .name = "fullaz-db", .module = fullaz_db },
+        },
+    });
+    const db_lab_tests = b.addTest(.{ .root_module = db_lab_tests_mod });
+    db_lab_tests.root_module.addImport("fullaz", mod);
+    db_lab_tests.root_module.addImport("fullaz-db", fullaz_db);
+    db_lab_tests.root_module.addImport("db_lab", db_lab);
+    applyTestFilter(b, db_lab_tests, test_filter);
+    b.step("test-db-lab", "Run db-lab tests").dependOn(&b.addRunArtifact(db_lab_tests).step);
+
+    const db_lab_wasm = b.createModule(.{
+        .root_source_file = b.path("demos/db-lab/src/root.zig"),
+        .target = wasm_target,
+        .optimize = .ReleaseSmall,
+        .imports = &.{
+            .{ .name = "fullaz", .module = fullaz_wasm },
+            .{ .name = "fullaz-db", .module = fullaz_db_wasm },
+        },
+    });
+    const db_lab_wasm_exe = b.addExecutable(.{
+        .name = "db-lab",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("demos/db-lab/src/wasm.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{
+                .{ .name = "fullaz", .module = fullaz_wasm },
+                .{ .name = "fullaz-db", .module = fullaz_db_wasm },
+                .{ .name = "db_lab", .module = db_lab_wasm },
+            },
+        }),
+    });
+    db_lab_wasm_exe.entry = .disabled;
+    db_lab_wasm_exe.rdynamic = true;
+    const wasm_db_lab_step = b.step("wasm-db-lab", "Build the browser database lab");
+    wasm_db_lab_step.dependOn(&b.addInstallArtifact(db_lab_wasm_exe, .{
+        .dest_dir = .{ .override = .{ .custom = "web-db-lab" } },
+    }).step);
+    wasm_db_lab_step.dependOn(&b.addInstallFile(
+        b.path("demos/db-lab/web/index.html"),
+        "web-db-lab/index.html",
+    ).step);
+
     // Shared terminal plumbing for the full-screen demos. Not a demo itself,
     // so it gets a module and a test step rather than an addDemo call.
     const demo_common = b.addModule("demo_common", .{

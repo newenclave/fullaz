@@ -45,6 +45,17 @@ pub fn Memory(
                 self.active = false;
                 self.cache.batch_active = false;
             }
+
+            /// Drops transaction snapshots after the owning cache has entered
+            /// a terminal recovery state. The in-memory mapping is no longer
+            /// authoritative; reopen resolves it from durable state.
+            pub fn abandon(self: *WriteBatch) void {
+                std.debug.assert(self.active);
+                self.virtual_to_physical_snapshot.deinit(self.cache.allocator);
+                self.physical_to_virtual_snapshot.deinit();
+                self.active = false;
+                self.cache.batch_active = false;
+            }
         };
 
         allocator: std.mem.Allocator,

@@ -157,6 +157,27 @@ test "VirtualPageMap paged rejects invalid state and settings" {
     }));
 }
 
+test "VirtualPageMap paged rejects a CRC-corrupt state" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Cache = fullaz.storage.page_cache.PageCache(Device);
+    const Manager = TestStateManager(128);
+    const Map = fullaz.storage.virtual_page_map.Paged(Cache, Manager, u32);
+    const settings = Map.Settings{
+        .virtual_to_physical = .{ .leaf = 1, .inode = 2 },
+        .physical_to_virtual = .{ .leaf = 3, .inode = 4 },
+    };
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 16);
+    defer cache.deinit();
+    var manager = Manager{};
+    var map = try Map.format(&cache, &manager, settings);
+    map.deinit();
+    manager.state_bytes[Map.state_size - 1] ^= 1;
+    try std.testing.expectError(Map.Error.InvalidState, Map.open(&cache, &manager, settings));
+}
+
 test "VirtualPageMap paged rejects a short state region" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Cache = fullaz.storage.page_cache.PageCache(Device);

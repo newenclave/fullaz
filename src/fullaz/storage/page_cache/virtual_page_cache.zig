@@ -20,7 +20,7 @@ pub fn VirtualPageCacheImpl(
     comptime VirtualPageMapT: type,
     comptime WritePolicyFactoryT: fn (type) type,
 ) type {
-    comptime page_cache_contract.requiresAppendOnlyDensePageCache(InnerCacheT);
+    comptime page_cache_contract.requiresTransactionalPageCache(InnerCacheT);
     comptime virtual_page_map_contract.assertVirtualPageMap(VirtualPageMapT);
     comptime {
         if (InnerCacheT.Pid != VirtualPageMapT.PhysicalPageIdType) {
@@ -233,7 +233,15 @@ pub fn VirtualPageCacheImpl(
                 if (self.phase != .active) {
                     return error.TransactionInactive;
                 }
-                try self.inner.commit();
+                self.inner.commit() catch |err| {
+                    if (!self.cache.inner.transactionActive()) {
+                        self.policy.discard();
+                        self.mapping.abandon();
+                        self.phase = .inactive;
+                        self.cache.transaction_phase = .idle;
+                    }
+                    return err;
+                };
                 self.mapping.commit();
                 self.policy.commit();
                 self.phase = .inactive;

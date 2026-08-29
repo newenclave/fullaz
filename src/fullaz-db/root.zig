@@ -14,6 +14,7 @@ pub const PersistentReclaimingCache = page_cache.PersistentReclaimingCache;
 pub const MemoryDatabase = database.MemoryDatabase;
 pub const StaticDatabase = database.StaticDatabase;
 pub const StaticDatabaseWithWal = database.StaticDatabaseWithWal;
+pub const VirtualStaticDatabaseWithWal = database.VirtualStaticDatabaseWithWal;
 pub const DynamicDatabase = database.DynamicDatabase;
 pub const DynamicDatabaseWithWal = database.DynamicDatabaseWithWal;
 pub const DynamicSchemaDatabase = database.DynamicSchemaDatabase;

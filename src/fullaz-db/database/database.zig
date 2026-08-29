@@ -4,10 +4,12 @@ const memory = @import("memory.zig");
 const static = @import("static/static.zig");
 const superblock = @import("static/superblock.zig");
 const wal = @import("static/wal.zig");
+const virtual_wal = @import("static/virtual_wal.zig");
 
 pub const MemoryDatabase = memory.MemoryDatabase;
 pub const StaticDatabase = static.StaticDatabase;
 pub const StaticDatabaseWithWal = wal.StaticDatabaseWithWal;
+pub const VirtualStaticDatabaseWithWal = virtual_wal.VirtualStaticDatabaseWithWal;
 pub const DynamicDatabase = dynamic.DynamicDatabase;
 pub const DynamicDatabaseWithWal = dynamic.DynamicDatabaseWithWal;
 pub const DynamicSchemaDatabase = schema.DynamicSchemaDatabase;

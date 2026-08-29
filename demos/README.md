@@ -9,6 +9,7 @@ module + executable + test suite, wired into the top-level `build.zig`.
 | [`galaxy/`](galaxy) | A starfield explorer on the paged R\*-tree — the viewport is a window query, movement reveals deterministically-generated stars, the whole galaxy persists to one file. | `zig build run-galaxy -- <image> [--format] [--seed N] [cmd]` | `zig build test-galaxy` |
 | [`gravity/`](gravity) | An interactive Barnes-Hut galaxy simulation using the in-memory 2D orthtree and per-node mass aggregates. | `zig build run-gravity -- [--bodies N] [--theta X] [--dt X] [--seed N] [--central-mass X]` | `zig build test-gravity` |
 | [`cloud/`](cloud) | A 3-D point-cloud viewer on the paged **octree** — per-node aggregates drive level of detail, and the whole cloud lives in one image file. | `zig build run-cloud -- <image> [--format] [--points N] [--detail PERCENT]` | `zig build test-cloud` |
+| [`db-lab/`](db-lab) | Browser-only key/value database lab. It compares volatile memory, static WAL, and virtual WAL backends while showing transactions, B+ tree pages, and immediate page reclamation after deletion. | `zig build wasm-db-lab` | `zig build test-db-lab` |
 
 `demos/common/` is not a demo: it holds the terminal plumbing (raw-mode input,
 ANSI output, console size) shared by `gravity` and `cloud`. `zig build test-common`

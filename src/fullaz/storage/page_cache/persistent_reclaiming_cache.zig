@@ -39,26 +39,45 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
         };
 
         pub const WriteBatch = struct {
+            const Phase = enum {
+                active,
+                root_restored,
+                inactive,
+            };
+
             cache: *Self,
             inner: InnerCacheT.WriteBatch,
             root_snapshot: ?PageId,
-            active: bool = true,
+            phase: Phase = .active,
 
             pub fn commit(self: *WriteBatch) Error!void {
-                if (!self.active) {
+                if (self.phase != .active) {
                     return Error.TransactionInactive;
                 }
-                try self.inner.commit();
-                self.active = false;
+                self.inner.commit() catch |err| {
+                    if (!self.cache.inner.transactionActive()) {
+                        self.phase = .inactive;
+                    }
+                    return err;
+                };
+                self.phase = .inactive;
             }
 
             pub fn discard(self: *WriteBatch) Error!void {
-                if (!self.active) {
+                if (self.phase == .inactive) {
                     return Error.TransactionInactive;
                 }
-                try self.inner.discard();
-                try self.cache.store.setRoot(self.root_snapshot);
-                self.active = false;
+                if (self.phase == .active) {
+                    try self.cache.store.setRoot(self.root_snapshot);
+                    self.phase = .root_restored;
+                }
+                self.inner.discard() catch |err| {
+                    if (!self.cache.inner.transactionActive()) {
+                        self.phase = .inactive;
+                    }
+                    return err;
+                };
+                self.phase = .inactive;
             }
         };
 
@@ -94,9 +113,16 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
 
         pub fn create(self: *Self) Error!Handle {
             if (try self.pop()) |page_id| {
-                var handle = try self.inner.fetch(page_id);
+                var handle = self.inner.fetch(page_id) catch |err| {
+                    self.inner.markTransactionFailed();
+                    return err;
+                };
                 errdefer handle.deinit();
-                @memset(try handle.dataMut(), 0);
+                const bytes = handle.dataMut() catch |err| {
+                    self.inner.markTransactionFailed();
+                    return err;
+                };
+                @memset(bytes, 0);
                 return handle;
             }
             const next_page_id = std.math.cast(PageId, self.store.pageCount()) orelse
@@ -128,7 +154,10 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             const FreedMut = freed.View(PageId, .little, false);
             var view = FreedMut.init(try handle.dataMut());
             view.formatPage(next);
-            try self.store.setRoot(page_id);
+            self.store.setRoot(page_id) catch |err| {
+                self.inner.markTransactionFailed();
+                return err;
+            };
         }
 
         pub fn flush(self: *Self, page_id: PageId) Error!void {
@@ -169,28 +198,18 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             var steps: usize = 0;
             const page_count = self.store.pageCount();
             while (current) |page_id| {
-                const page_index = std.math.cast(usize, page_id) orelse return Error.BadFreeList;
-                if (page_id == nil or
-                    page_index >= page_count or
-                    self.store.isReserved(page_id) or
-                    steps >= page_count)
-                {
+                if (steps >= page_count) {
                     return Error.BadFreeList;
                 }
-                var handle = try self.inner.fetch(page_id);
-                defer handle.deinit();
-                const next = FreedView.init(try handle.data()).header().next.get();
-                current = if (next == nil) null else next;
+                current = try self.nextFreePage(page_id);
                 steps += 1;
             }
         }
 
         fn pop(self: *Self) Error!?PageId {
             const head = self.store.getRoot() orelse return null;
-            var handle = try self.inner.fetch(head);
-            defer handle.deinit();
-            const next = FreedView.init(try handle.data()).header().next.get();
-            try self.store.setRoot(if (next == nil) null else next);
+            const next = try self.nextFreePage(head);
+            try self.store.setRoot(next);
             return head;
         }
 
@@ -199,22 +218,46 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             var steps: usize = 0;
             const max_steps = self.store.pageCount();
             while (current) |candidate| {
-                if (candidate == nil or self.store.isReserved(candidate)) {
-                    return Error.BadFreeList;
-                }
                 if (candidate == page_id) {
                     return true;
                 }
                 if (steps >= max_steps) {
                     return Error.BadFreeList;
                 }
-                var handle = try self.inner.fetch(candidate);
-                defer handle.deinit();
-                const next = FreedView.init(try handle.data()).header().next.get();
-                current = if (next == nil) null else next;
+                current = try self.nextFreePage(candidate);
                 steps += 1;
             }
             return false;
+        }
+
+        fn nextFreePage(self: *Self, page_id: PageId) Error!?PageId {
+            try self.validateFreePageId(page_id);
+            var handle = try self.inner.fetch(page_id);
+            defer handle.deinit();
+            const bytes = try handle.data();
+            if (bytes.len < @sizeOf(FreedView.FreedHeader)) {
+                return Error.BadFreeList;
+            }
+            const header = FreedView.init(bytes).header();
+            if (header.kind.get() != std.math.maxInt(u16)) {
+                return Error.BadFreeList;
+            }
+            const next = header.next.get();
+            if (next == nil) {
+                return null;
+            }
+            try self.validateFreePageId(next);
+            if (next == page_id) {
+                return Error.BadFreeList;
+            }
+            return next;
+        }
+
+        fn validateFreePageId(self: *const Self, page_id: PageId) Error!void {
+            const page_index = std.math.cast(usize, page_id) orelse return Error.BadFreeList;
+            if (page_id == nil or page_index >= self.store.pageCount() or self.store.isReserved(page_id)) {
+                return Error.BadFreeList;
+            }
         }
 
         comptime {

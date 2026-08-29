@@ -38,6 +38,7 @@ pub const CacheError = error{
     PageBusy,
     TransactionInactive,
     TransactionRollbackOnly,
+    RecoveryRequired,
 };
 
 pub const IndexError = error{

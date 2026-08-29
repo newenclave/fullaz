@@ -192,6 +192,12 @@ pub fn PageCacheImpl(
     return struct {
         const Self = @This();
 
+        const Health = enum {
+            ready,
+            recovery_pending,
+            recovery_required,
+        };
+
         pub const Pid = DeviceT.BlockId;
         /// Successful create() calls append 0-based dense IDs and failures consume no ID.
         pub const append_only_dense_page_ids: bool = if (@hasDecl(
@@ -237,6 +243,7 @@ pub fn PageCacheImpl(
         appended_in_batch: usize = 0,
         batch_generation: u64 = 0,
         transaction_failed: bool = false,
+        health: Health = .ready,
         wal: WalPolicy = undefined,
 
         pub const WriteBatch = struct {
@@ -288,11 +295,56 @@ pub fn PageCacheImpl(
                 .allocator = allocator,
                 .policy = try Policy.init(allocator, underlying_device.blockSize(), init_maximum_pages),
                 .frames_cache = FrameHashMap.init(allocator),
+                .health = .recovery_pending,
                 .wal = wal,
             };
-            // trying to recore from the WAL
+            try self.recover();
+            try self.completeRecovery();
+            return self;
+        }
+
+        /// Opens a WAL-backed cache without checkpointing replayed data. The
+        /// owner must validate higher-level metadata, then call
+        /// completeRecovery() to make the recovered state writable.
+        pub fn initWalRecover(
+            underlying_device: *DeviceT,
+            allocator: std.mem.Allocator,
+            init_maximum_pages: usize,
+            wal: WalPolicy,
+        ) Error!Self {
+            if (!WalPolicy.enabled) {
+                @compileError("initWalRecover requires a WAL policy; use init for NoWal");
+            }
+            var self = Self{
+                .device = underlying_device,
+                .allocator = allocator,
+                .policy = try Policy.init(allocator, underlying_device.blockSize(), init_maximum_pages),
+                .frames_cache = FrameHashMap.init(allocator),
+                .health = .recovery_pending,
+                .wal = wal,
+            };
             try self.recover();
             return self;
+        }
+
+        /// Creates a fresh WAL-backed cache. Fresh format paths have no
+        /// durable transaction to replay or checkpoint.
+        pub fn initWalFresh(
+            underlying_device: *DeviceT,
+            allocator: std.mem.Allocator,
+            init_maximum_pages: usize,
+            wal: WalPolicy,
+        ) Error!Self {
+            if (!WalPolicy.enabled) {
+                @compileError("initWalFresh requires a WAL policy; use init for NoWal");
+            }
+            return .{
+                .device = underlying_device,
+                .allocator = allocator,
+                .policy = try Policy.init(allocator, underlying_device.blockSize(), init_maximum_pages),
+                .frames_cache = FrameHashMap.init(allocator),
+                .wal = wal,
+            };
         }
 
         pub fn pageCount(self: *const Self) usize {
@@ -310,11 +362,45 @@ pub fn PageCacheImpl(
             }.call;
             try self.wal.replay(self, applyRedo);
             try self.device.sync();
-            try self.wal.checkpoint();
+        }
+
+        /// Checkpoints replayed WAL data after the owning format has completed
+        /// semantic validation. This is intentionally separate from replay.
+        pub fn completeRecovery(self: *Self) Error!void {
+            if (!WalPolicy.enabled) {
+                return;
+            }
+            if (self.health == .recovery_required) {
+                return error.RecoveryRequired;
+            }
+            if (self.health == .ready) {
+                return;
+            }
+            self.wal.checkpoint() catch |err| {
+                self.health = .recovery_required;
+                return err;
+            };
+            self.health = .ready;
+        }
+
+        /// Removes an uncommitted appended tail after recovery has established
+        /// the durable physical high-water mark from validated metadata.
+        pub fn normalizeRecoveredPageCount(self: *Self, page_count: usize) Error!void {
+            if (self.health == .recovery_required) {
+                return error.RecoveryRequired;
+            }
+            const actual_count = self.device.blocksCount();
+            if (actual_count < page_count) {
+                return error.InvalidId;
+            }
+            if (actual_count > page_count) {
+                try self.device.truncateBlocks(actual_count - page_count);
+                try self.device.sync();
+            }
         }
 
         pub fn deinit(self: *Self) void {
-            if (self.locked) {
+            if (self.locked and self.health != .recovery_required) {
                 // roll it back if batch is still active
                 self.discardBatch(self.batch_generation) catch {};
             }
@@ -328,7 +414,7 @@ pub fn PageCacheImpl(
                         });
                     }
                 }
-                if (frame.frame_type == .dirty) {
+                if (frame.frame_type == .dirty and self.health != .recovery_required) {
                     self.writeFrame(frame) catch {};
                 }
             }
@@ -374,6 +460,7 @@ pub fn PageCacheImpl(
         }
 
         pub fn create(self: *Self) Error!Handle {
+            try self.requireReady();
             const ff = try self.acquireFrame();
             errdefer self.policy.pushFree(ff);
             try self.frames_cache.ensureUnusedCapacity(1);
@@ -396,6 +483,7 @@ pub fn PageCacheImpl(
             source_pid: Pid,
             context: PidPolicy.RemapContextType,
         ) Error!?BackingFork {
+            try self.requireReady();
             const frame = self.frames_cache.get(source_pid) orelse return error.InvalidId;
             if (frame.pid != source_pid or frame.frame_type == .temporary) {
                 return error.InvalidId;
@@ -458,6 +546,7 @@ pub fn PageCacheImpl(
         }
 
         pub fn flush(self: *Self, pid: Pid) Error!void {
+            try self.requireReady();
             if (self.locked) {
                 return Error.BatchActive;
             }
@@ -473,6 +562,7 @@ pub fn PageCacheImpl(
         }
 
         pub fn flushAll(self: *Self) Error!void {
+            try self.requireReady();
             if (self.locked) {
                 return Error.BatchActive;
             }
@@ -490,6 +580,7 @@ pub fn PageCacheImpl(
         }
 
         pub fn begin(self: *Self) Error!WriteBatch {
+            try self.requireReady();
             if (self.locked) {
                 return Error.BatchActive;
             }
@@ -518,19 +609,10 @@ pub fn PageCacheImpl(
                 // fsync the log (the commit point),
                 // apply to home and fsync it,
                 // and drop the now-redundant log.
-                var count: u32 = 0;
-                var it = self.frames_cache.iterator();
-                while (it.next()) |entry| {
-                    const frame = entry.value_ptr.*;
-                    if (frame.frame_type == .dirty) {
-                        try self.wal.appendPage(frame.pid, frame.data);
-                        count += 1;
-                    }
-                }
-                try self.wal.sealCommit(count);
-                try self.flushAllInternal();
-                try self.device.sync();
-                try self.wal.checkpoint();
+                self.commitWalBatch() catch {
+                    self.abandonFailedBatch();
+                    return error.RecoveryRequired;
+                };
             } else {
                 try self.flushAllInternal();
             }
@@ -580,6 +662,43 @@ pub fn PageCacheImpl(
             if (self.locked) {
                 self.transaction_failed = true;
             }
+        }
+
+        fn requireReady(self: *const Self) Error!void {
+            if (self.health != .ready) {
+                return Error.RecoveryRequired;
+            }
+        }
+
+        fn commitWalBatch(self: *Self) Error!void {
+            var count: u32 = 0;
+            var it = self.frames_cache.iterator();
+            while (it.next()) |entry| {
+                const frame = entry.value_ptr.*;
+                if (frame.frame_type == .dirty) {
+                    try self.wal.appendPage(frame.pid, frame.data);
+                    count += 1;
+                }
+            }
+            try self.wal.sealCommit(count);
+            try self.flushAllInternal();
+            try self.device.sync();
+            try self.wal.checkpoint();
+        }
+
+        fn abandonFailedBatch(self: *Self) void {
+            self.health = .recovery_required;
+            for (self.policy.framesSlice()) |*frame| {
+                if (frame.frame_type == .dirty) {
+                    frame.pid_pol.discard();
+                    self.policy.unlink(frame);
+                    _ = self.frames_cache.remove(frame.pid);
+                    self.policy.pushFree(frame);
+                }
+            }
+            self.appended_in_batch = 0;
+            self.transaction_failed = false;
+            self.locked = false;
         }
 
         fn acquireFrame(self: *Self) Error!*Frame {

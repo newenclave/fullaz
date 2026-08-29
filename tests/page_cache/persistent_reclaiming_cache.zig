@@ -102,3 +102,45 @@ test "Pages: persistent reclaiming cache reserves the free-list sentinel PID" {
     try std.testing.expectError(error.PageIdExhausted, cache.create());
     try std.testing.expectEqual(@as(usize, std.math.maxInt(u8)), device.blocksCount());
 }
+
+test "Pages: persistent reclaiming cache rejects an out-of-range free root before mutation" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCache(Device);
+    const Store = struct {
+        pub const PageId = u32;
+        pub const Error = error{};
+
+        root: ?PageId = 99,
+        page_count: usize = 1,
+
+        pub fn getRoot(self: *const @This()) ?PageId {
+            return self.root;
+        }
+
+        pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
+            self.root = root;
+        }
+
+        pub fn pageCount(self: *const @This()) usize {
+            return self.page_count;
+        }
+
+        pub fn isReserved(_: *const @This(), _: PageId) bool {
+            return false;
+        }
+    };
+    const Cache = fullaz_db.PersistentReclaimingCache(InnerCache, Store);
+
+    var device = try Device.init(std.testing.allocator, 256);
+    defer device.deinit();
+    var inner = try InnerCache.init(&device, std.testing.allocator, 4);
+    defer inner.deinit();
+    var page = try inner.create();
+    page.deinit();
+    var store = Store{};
+    var cache = Cache.init(&inner, &store);
+    defer cache.deinit();
+
+    try std.testing.expectError(error.BadFreeList, cache.create());
+    try std.testing.expectEqual(@as(?u32, 99), store.root);
+}

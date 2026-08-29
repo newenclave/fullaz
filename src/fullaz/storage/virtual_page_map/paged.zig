@@ -19,8 +19,8 @@ pub fn Paged(
     const PackedU16 = PackedInt(u16, .little);
     const PackedU32 = PackedInt(u32, .little);
     const nil_physical_page_id = std.math.maxInt(PhysicalPageIdT);
-    const state_magic = "FZVPM001";
-    const state_version = 1;
+    const state_magic = "FZVPM002";
+    const state_version = 2;
 
     const State = extern struct {
         magic: [state_magic.len]u8,
@@ -32,6 +32,7 @@ pub fn Paged(
         physical_to_virtual_root: PackedPhysicalPageId,
         physical_to_virtual_free_leaf_root: PackedPhysicalPageId,
         next_virtual_page_id: PackedVirtualPageId,
+        crc: PackedU32,
     };
     const state_byte_size = @sizeOf(State);
 
@@ -51,7 +52,8 @@ pub fn Paged(
             @offsetOf(State, "virtual_to_physical_free_leaf_root") != @offsetOf(State, "virtual_to_physical_root") + @sizeOf(PackedPhysicalPageId) or
             @offsetOf(State, "physical_to_virtual_root") != @offsetOf(State, "virtual_to_physical_free_leaf_root") + @sizeOf(PackedPhysicalPageId) or
             @offsetOf(State, "physical_to_virtual_free_leaf_root") != @offsetOf(State, "physical_to_virtual_root") + @sizeOf(PackedPhysicalPageId) or
-            @offsetOf(State, "next_virtual_page_id") != @offsetOf(State, "physical_to_virtual_free_leaf_root") + @sizeOf(PackedPhysicalPageId))
+            @offsetOf(State, "next_virtual_page_id") != @offsetOf(State, "physical_to_virtual_free_leaf_root") + @sizeOf(PackedPhysicalPageId) or
+            @offsetOf(State, "crc") != @offsetOf(State, "next_virtual_page_id") + @sizeOf(PackedVirtualPageId))
         {
             @compileError("VirtualPageMap paged state layout changed");
         }
@@ -198,6 +200,16 @@ pub fn Paged(
                 self.map.finishBatch();
                 self.active = false;
             }
+
+            /// Releases the transaction-held state after an inner cache has
+            /// entered a terminal recovery state. It deliberately does not
+            /// restore the snapshot because durable outcome is now resolved by
+            /// WAL replay on the next open.
+            pub fn abandon(self: *WriteBatch) void {
+                std.debug.assert(self.active);
+                self.map.finishBatch();
+                self.active = false;
+            }
         };
 
         const MutationState = struct {
@@ -241,7 +253,9 @@ pub fn Paged(
                 .physical_to_virtual_root = .init(nil_physical_page_id),
                 .physical_to_virtual_free_leaf_root = .init(nil_physical_page_id),
                 .next_virtual_page_id = .init(0),
+                .crc = .init(0),
             };
+            sealState(state);
             return .{
                 .cache = cache,
                 .storage_manager = storage_manager,
@@ -299,6 +313,7 @@ pub fn Paged(
             try self.physicalToVirtualSet(state, physical_page_id, virtual_page_id);
             state.next_virtual_page_id.set(virtual_page_id + 1);
             self.next_virtual_page_id += 1;
+            sealState(state);
             return virtual_page_id;
         }
 
@@ -332,6 +347,7 @@ pub fn Paged(
             try self.physicalToVirtualSet(state, physical_page_id, virtual_page_id);
             try self.virtualToPhysicalSet(state, virtual_page_id, physical_page_id);
             try self.physicalToVirtualFree(state, old_physical_page_id);
+            sealState(state);
         }
 
         pub fn pageCount(self: *const Self) usize {
@@ -381,7 +397,8 @@ pub fn Paged(
         fn validateState(cache: *const PageCacheT, state: *const State) Error!void {
             if (!std.mem.eql(u8, &state.magic, state_magic) or
                 state.byte_size.get() != state_byte_size or
-                state.reserved.get() != 0)
+                state.reserved.get() != 0 or
+                crc(state) != state.crc.get())
             {
                 return error.InvalidState;
             }
@@ -406,6 +423,20 @@ pub fn Paged(
                 return error.TransactionInactive;
             }
             return stateMut(self.active_state_bytes orelse unreachable);
+        }
+
+        fn sealState(state: *State) void {
+            state.crc.set(0);
+            state.crc.set(crc(state));
+        }
+
+        fn crc(state: *const State) u32 {
+            const bytes = std.mem.asBytes(state);
+            const crc_offset = @offsetOf(State, "crc");
+            var hasher = std.hash.Crc32.init();
+            hasher.update(bytes[0..crc_offset]);
+            hasher.update(bytes[crc_offset + @sizeOf(PackedU32) ..]);
+            return hasher.final();
         }
 
         fn mutationState(self: *Self) Error!MutationState {

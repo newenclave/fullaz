@@ -13,6 +13,7 @@ test {
     _ = @import("fullaz-db/database/memory.zig");
     _ = @import("fullaz-db/database/static.zig");
     _ = @import("fullaz-db/database/static_wal.zig");
+    _ = @import("fullaz-db/database/virtual_static_wal.zig");
     _ = @import("fullaz-db/database/dynamic.zig");
     _ = @import("fullaz-db/file/static_superblock.zig");
     _ = @import("fullaz-db/file/tagged_fields.zig");

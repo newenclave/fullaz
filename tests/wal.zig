@@ -255,6 +255,32 @@ test "WAL cache: recovery ignores an uncommitted txn" {
     try testing.expectEqual(@as(usize, 0), log.size());
 }
 
+test "WAL cache: staged recovery waits for semantic validation before checkpoint" {
+    const a = testing.allocator;
+    var dev = try Dev.init(a, BLOCK);
+    defer dev.deinit();
+    var log = try wal.MemoryLog.init(a);
+    defer log.deinit();
+
+    {
+        var w = try WalT.init(a, &log, dev.blockSize());
+        defer w.deinit();
+        try w.appendPage(0, &([_]u8{0xAC} ** BLOCK));
+        try w.sealCommit(1);
+    }
+
+    const w = try WalT.init(a, &log, dev.blockSize());
+    var cache = try WalCache.initWalRecover(&dev, a, 8, w);
+    defer cache.deinit();
+    try testing.expect(log.size() > 0);
+    try testing.expectError(error.RecoveryRequired, cache.begin());
+    try cache.completeRecovery();
+    try testing.expectEqual(@as(usize, 0), log.size());
+
+    var batch = try cache.begin();
+    try batch.discard();
+}
+
 test "WAL: FileLog round-trips across a reopen" {
     const io = std.testing.io;
     const path = ".zig-cache/wal_filelog.log";

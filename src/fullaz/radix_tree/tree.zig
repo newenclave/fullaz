@@ -330,10 +330,6 @@ pub fn Tree(comptime ModelT: type) type {
                             if (try acc.isLeaf(current_id)) {
                                 return try acc.loadLeaf(current_id);
                             } else {
-                                // Tree corruption: inode at level 0!
-                                std.debug.print("ERROR: Tree corruption detected!\n", .{});
-                                std.debug.print("  Expected: Leaf at level 0\n", .{});
-                                std.debug.print("  Got: Inode at PID {}\n", .{current_id});
                                 return Error.InconsistentLayout;
                             }
                         } else {
