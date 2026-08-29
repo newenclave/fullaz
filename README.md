@@ -100,7 +100,7 @@ If something can be made simpler for learning purposes, it probably will be.
 #### Sparse / virtual addressing structures
 
 - [X]  **Radix tables**
-- [ ]  **Virtual page table** (`vpid -> pid` mapping)
+- [X]  **Virtual page mapping** (low-level `VID -> PID` Memory/Paged VPM)
 - [ ]  **Snapshot-aware radix mapping**
 
 #### Sequence / weighted structures
@@ -140,13 +140,14 @@ If something can be made simpler for learning purposes, it probably will be.
 - [X]  **File-backed block device** (`FileBlock`)
 - [X]  **Free-space map + page reclamation** (`fsm`, free list)
 - [ ]  **Object/chunk store abstraction**
-- [ ]  **Dirty-page tracking**
+- [X]  **Dirty-page tracking**
 
 #### Durability & Recovery
 
 - [X]  **Write-Ahead Log (WAL)** (partially; simple redo-only)
 - [ ]  **Page diffs / delta logging** planned
-- [ ]  **Snapshot / copy-on-write experiments**
+- [X]  **Backing-replacement copy-on-write** (experimental; not snapshots/MVCC)
+- [ ]  **Snapshot-aware copy-on-write / MVCC**
 - [ ]  **Generation-based page tracking**
 
 ## Status
