@@ -169,16 +169,16 @@ pub fn Merger(
                 var winner_index = smallest_index;
                 for (cursors, 0..) |*cursor, index| {
                     const entry = cursor.current orelse continue;
-                    switch (cmp(ctx, entry.key, key)) {
-                        .lt => return Error.UnorderedKey,
-                        .eq => {
-                            const winner = cursors[winner_index].current.?;
-                            if (entry.metadata.lsn > winner.metadata.lsn) {
-                                winner_index = index;
-                            }
-                        },
-                        .gt => {},
-                        .unordered => return Error.UnorderedKey,
+                    const order = cmp(ctx, entry.key, key);
+                    if (order == .lt) {
+                        return Error.UnorderedKey;
+                    } else if (order == .eq) {
+                        const winner = cursors[winner_index].current.?;
+                        if (entry.metadata.lsn > winner.metadata.lsn) {
+                            winner_index = index;
+                        }
+                    } else if (order != .gt) {
+                        return Error.UnorderedKey;
                     }
                 }
                 const winner = cursors[winner_index].current.?;
@@ -215,11 +215,13 @@ pub fn Merger(
                         continue;
                     }
                     const entry = cursor.current orelse continue;
-                    switch (cmp(ctx, entry.key, key)) {
-                        .lt => return Error.UnorderedKey,
-                        .eq => try cursor.advance(),
-                        .gt => {},
-                        .unordered => return Error.UnorderedKey,
+                    const order = cmp(ctx, entry.key, key);
+                    if (order == .lt) {
+                        return Error.UnorderedKey;
+                    } else if (order == .eq) {
+                        try cursor.advance();
+                    } else if (order != .gt) {
+                        return Error.UnorderedKey;
                     }
                 }
                 try cursors[smallest_index].advance();
@@ -236,10 +238,11 @@ pub fn Merger(
                     continue;
                 };
                 const smallest_entry = cursors[smallest].current.?;
-                switch (cmp(ctx, entry.key, smallest_entry.key)) {
-                    .lt => smallest_index = index,
-                    .eq, .gt => {},
-                    .unordered => return Error.UnorderedKey,
+                const order = cmp(ctx, entry.key, smallest_entry.key);
+                if (order == .lt) {
+                    smallest_index = index;
+                } else if (order != .eq and order != .gt) {
+                    return Error.UnorderedKey;
                 }
             }
             return smallest_index;

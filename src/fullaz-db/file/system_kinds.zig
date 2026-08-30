@@ -7,7 +7,8 @@ pub const component_id_radix_inode: PageKind = 0x0003;
 pub const component_name_bpt_leaf: PageKind = 0x0004;
 pub const component_name_bpt_inode: PageKind = 0x0005;
 pub const component_metadata: PageKind = 0x0006;
-pub const first_reserved: PageKind = 0x0007;
+pub const retired_page_queue: PageKind = 0x0007;
+pub const first_reserved: PageKind = 0x0008;
 pub const first_component: PageKind = 0x0100;
 pub const invalid_sentinel: PageKind = 0xffff;
 
@@ -27,6 +28,7 @@ comptime {
         component_name_bpt_leaf,
         component_name_bpt_inode,
         component_metadata,
+        retired_page_queue,
     };
     for (assigned, 0..) |kind, index| {
         if (kind < catalog_slot_chain or kind >= first_reserved) {

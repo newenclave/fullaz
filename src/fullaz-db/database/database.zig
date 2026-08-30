@@ -5,11 +5,13 @@ const static = @import("static/static.zig");
 const superblock = @import("static/superblock.zig");
 const wal = @import("static/wal.zig");
 const virtual_wal = @import("static/virtual_wal.zig");
+const virtual_cow = @import("static/virtual_cow.zig");
 
 pub const MemoryDatabase = memory.MemoryDatabase;
 pub const StaticDatabase = static.StaticDatabase;
 pub const StaticDatabaseWithWal = wal.StaticDatabaseWithWal;
 pub const VirtualStaticDatabaseWithWal = virtual_wal.VirtualStaticDatabaseWithWal;
+pub const VirtualStaticDatabaseWithCow = virtual_cow.VirtualStaticDatabaseWithCow;
 pub const DynamicDatabase = dynamic.DynamicDatabase;
 pub const DynamicDatabaseWithWal = dynamic.DynamicDatabaseWithWal;
 pub const DynamicSchemaDatabase = schema.DynamicSchemaDatabase;

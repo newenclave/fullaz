@@ -97,10 +97,13 @@ pub fn SlotQueue(
 
         pub fn dequeue(self: *Self) Error!void {
             var chain_iterator = (try self.chain.iterator()) orelse return Error.EmptySet;
-            defer chain_iterator.deinit();
+            errdefer chain_iterator.deinit();
             _ = (try chain_iterator.next()) orelse return Error.EmptySet;
 
             var pending = try chain_iterator.markForRemoval();
+            // `clean` can remove the final slot and free its chunk page.
+            // Release the iterator's pin before doing that.
+            chain_iterator.deinit();
             defer pending.deinit();
             if (!try pending.clean()) {
                 return Error.InvalidIterator;

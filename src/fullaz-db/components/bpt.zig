@@ -1,7 +1,6 @@
 const std = @import("std");
 const component = @import("../component/component.zig");
 const managers = @import("../component/managers/managers.zig");
-const algorithm = @import("fullaz").core.algorithm;
 const interfaces = @import("fullaz").contracts.interfaces;
 const PackedInt = @import("fullaz").core.packed_int.PackedInt;
 const dynamic_metadata = @import("../file/metadata/dynamic.zig");
@@ -62,7 +61,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
         @compileError("fullaz-db.bpt CompareContext must be a type");
     }
     const CompareContextT = options.CompareContext;
-    const CompareFn = fn (CompareContextT, []const u8, []const u8) algorithm.Order;
+    const CompareFn = fn (CompareContextT, []const u8, []const u8) std.math.Order;
     if (@TypeOf(options.compare) != CompareFn) {
         @compileError("fullaz-db.bpt compare has an invalid signature");
     }

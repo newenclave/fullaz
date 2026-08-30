@@ -28,7 +28,7 @@ pub fn Writer(
     const PackedOffset = core.packed_int.PackedInt(Format.Offset, Format.Endian);
 
     const ByteCmp = struct {
-        fn compare(_: void, a: u8, b: u8) core.algorithm.Order {
+        fn compare(_: void, a: u8, b: u8) core.algorithm.PartialOrder {
             return core.algorithm.cmpNum({}, a, b);
         }
     };
@@ -255,14 +255,12 @@ pub fn Writer(
                 return Error.EntryCountMismatch;
             }
             if (self.last_key.items.len != 0) {
-                switch (cmp(self.ctx, self.last_key.items, key)) {
-                    .lt => {},
-                    .eq => {
-                        return Error.DuplicateKey;
-                    },
-                    .gt, .unordered => {
-                        return Error.UnorderedKey;
-                    },
+                const order = cmp(self.ctx, self.last_key.items, key);
+                if (order == .eq) {
+                    return Error.DuplicateKey;
+                }
+                if (order != .lt) {
+                    return Error.UnorderedKey;
                 }
             }
             const metadata_bytes = metadata.toBytes();

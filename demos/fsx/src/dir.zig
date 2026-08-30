@@ -4,15 +4,14 @@ const constants = @import("constants.zig");
 const inode = @import("inode.zig");
 
 const bpt = fullaz.bpt;
-const algorithm = fullaz.core.algorithm;
 
 const PageId = constants.PageId;
 const Inode = inode.Inode;
 
 pub const Error = error{NameTooLong};
 
-fn nameCmp(ctx: anytype, a: []const u8, b: []const u8) algorithm.Order {
-    return algorithm.cmpSlices(u8, a, b, algorithm.CmpNum(u8).asc, ctx) catch .gt;
+fn nameCmp(_: void, a: []const u8, b: []const u8) std.math.Order {
+    return std.mem.order(u8, a, b);
 }
 
 pub fn Directory(comptime PageCacheType: type) type {

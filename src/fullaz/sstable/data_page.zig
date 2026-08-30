@@ -199,16 +199,13 @@ pub fn DataPage(comptime Format: type) type {
                     var hi = self.blockCount();
                     while (lo < hi) {
                         const mid = lo + (hi - lo) / 2;
-                        switch (cmp(ctx, try self.fenceKey(mid), key)) {
-                            .lt => {
-                                lo = mid + 1;
-                            },
-                            .eq, .gt => {
-                                hi = mid;
-                            },
-                            .unordered => {
-                                return Error.Unordered;
-                            },
+                        const order = cmp(ctx, try self.fenceKey(mid), key);
+                        if (order == .lt) {
+                            lo = mid + 1;
+                        } else if (order == .eq or order == .gt) {
+                            hi = mid;
+                        } else {
+                            return Error.Unordered;
                         }
                     }
                     return lo;

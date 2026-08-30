@@ -1,12 +1,8 @@
 const std = @import("std");
 const fullaz_db = @import("fullaz-db");
 
-fn compare(_: void, left: []const u8, right: []const u8) @import("fullaz").core.algorithm.Order {
-    return switch (std.mem.order(u8, left, right)) {
-        .lt => .lt,
-        .eq => .eq,
-        .gt => .gt,
-    };
+fn compare(_: void, left: []const u8, right: []const u8) std.math.Order {
+    return std.mem.order(u8, left, right);
 }
 
 const CompareContext = struct {
@@ -17,17 +13,12 @@ fn compareWithContext(
     context: CompareContext,
     left: []const u8,
     right: []const u8,
-) @import("fullaz").core.algorithm.Order {
+) std.math.Order {
     const order = compare({}, left, right);
     if (!context.descending) {
         return order;
     }
-    return switch (order) {
-        .lt => .gt,
-        .eq => .eq,
-        .gt => .lt,
-        .unordered => .unordered,
-    };
+    return order.invert();
 }
 
 const SyntheticTrait = struct {
@@ -156,12 +147,8 @@ fn StressComparator(comptime ContextT: type) type {
             _: ContextT,
             left: []const u8,
             right: []const u8,
-        ) @import("fullaz").core.algorithm.Order {
-            return switch (std.mem.order(u8, left, right)) {
-                .lt => .lt,
-                .eq => .eq,
-                .gt => .gt,
-            };
+        ) std.math.Order {
+            return std.mem.order(u8, left, right);
         }
     };
 }

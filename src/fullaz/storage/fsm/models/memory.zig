@@ -78,7 +78,7 @@ pub fn Memory(comptime PidT: type, comptime SizeT: type) type {
             ) catch self.entries.items.len;
         }
 
-        fn entryCmp(_: void, e: Entry, key: SizeT) algorithm.Order {
+        fn entryCmp(_: void, e: Entry, key: SizeT) algorithm.PartialOrder {
             return algorithm.cmpNum({}, e.free, key);
         }
 

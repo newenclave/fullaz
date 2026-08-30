@@ -203,14 +203,12 @@ pub const Dictionary = struct {
         for (input, 0..) |entry, index| {
             try validateEntry(entry.key, entry.value);
             if (index > 0) {
-                switch (compareBytes({}, entries.items[index - 1].key, entry.key)) {
-                    .lt => {},
-                    .eq => {
-                        return Error.DuplicateKey;
-                    },
-                    .gt, .unordered => {
-                        return Error.UnorderedKey;
-                    },
+                const order = compareBytes({}, entries.items[index - 1].key, entry.key);
+                if (order == .eq) {
+                    return Error.DuplicateKey;
+                }
+                if (order != .lt) {
+                    return Error.UnorderedKey;
                 }
             }
             const owned = try Entry.init(self.allocator, entry.key, entry.value, .{
@@ -327,21 +325,19 @@ pub const Dictionary = struct {
     }
 };
 
-fn compareBytes(_: void, a: []const u8, b: []const u8) fullaz.core.algorithm.Order {
-    return switch (std.mem.order(u8, a, b)) {
-        .lt => .lt,
-        .eq => .eq,
-        .gt => .gt,
-    };
+fn compareBytes(_: void, a: []const u8, b: []const u8) std.math.Order {
+    return std.mem.order(u8, a, b);
 }
 
 fn findEntry(entries: []const Entry, key: []const u8) struct { index: usize, found: bool } {
     var index: usize = 0;
     while (index < entries.len) : (index += 1) {
-        switch (compareBytes({}, entries[index].key, key)) {
-            .lt => {},
-            .eq => return .{ .index = index, .found = true },
-            .gt, .unordered => return .{ .index = index, .found = false },
+        const order = compareBytes({}, entries[index].key, key);
+        if (order == .eq) {
+            return .{ .index = index, .found = true };
+        }
+        if (order == .gt) {
+            return .{ .index = index, .found = false };
         }
     }
     return .{ .index = index, .found = false };

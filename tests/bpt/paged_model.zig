@@ -32,8 +32,8 @@ fn Printer(comptime name: []const u8) type {
     };
 }
 
-fn keyCmp(ctx: anytype, k1: []const u8, k2: []const u8) algorithm.Order {
-    return algorithm.cmpSlices(u8, k1, k2, algorithm.CmpNum(u8).asc, ctx) catch .gt;
+fn keyCmp(_: void, k1: []const u8, k2: []const u8) std.math.Order {
+    return std.mem.order(u8, k1, k2);
 }
 
 const NoneStorageManager = struct {

@@ -1,9 +1,13 @@
 const std = @import("std");
 const errors = @import("errors.zig");
 
-pub const Order = enum { lt, eq, gt, unordered };
+pub const Order = std.math.Order;
 
-pub fn cmpNum(_: anytype, a: anytype, b: @TypeOf(a)) Order {
+/// A comparison result that can represent values without a total order, such
+/// as floating-point NaN.
+pub const PartialOrder = enum { lt, eq, gt, unordered };
+
+pub fn cmpNum(_: anytype, a: anytype, b: @TypeOf(a)) PartialOrder {
     const T = @TypeOf(a);
     const is_float = @typeInfo(T) == .float or @typeInfo(T) == .comptime_float;
     const is_int = @typeInfo(T) == .int or @typeInfo(T) == .comptime_int;
@@ -40,19 +44,29 @@ pub fn cmpNum(_: anytype, a: anytype, b: @TypeOf(a)) Order {
 
 pub fn CmpNum(comptime T: type) type {
     return struct {
-        pub fn asc(ctx: anytype, a: T, b: T) Order {
+        pub fn asc(ctx: anytype, a: T, b: T) PartialOrder {
             return cmpNum(ctx, a, b);
         }
-        pub fn desc(ctx: anytype, a: T, b: T) Order {
+        pub fn desc(ctx: anytype, a: T, b: T) PartialOrder {
             return cmpNum(ctx, b, a);
         }
     };
 }
 
-pub fn cmpSlices(comptime T: type, a: []const T, b: []const T, cmp: anytype, ctx: anytype) !Order {
+pub fn cmpSlices(
+    comptime T: type,
+    a: []const T,
+    b: []const T,
+    cmp: anytype,
+    ctx: anytype,
+) !PartialOrder {
     const SliceT = @TypeOf(a);
     const CmpReturnType = @TypeOf(cmp(ctx, a[0], a[0]));
     const is_error_union = @typeInfo(CmpReturnType) == .error_union;
+    const CmpOrder = if (is_error_union)
+        @typeInfo(CmpReturnType).error_union.payload
+    else
+        CmpReturnType;
 
     comptime {
         const ti = @typeInfo(SliceT);
@@ -61,6 +75,9 @@ pub fn cmpSlices(comptime T: type, a: []const T, b: []const T, cmp: anytype, ctx
         }
         if (@TypeOf(b) != SliceT) {
             @compileError("a and b must have the same slice type");
+        }
+        if (CmpOrder != PartialOrder) {
+            @compileError("cmpSlices comparator must return algorithm.PartialOrder");
         }
     }
 
@@ -103,6 +120,16 @@ pub fn CmpSlices(comptime T: type) type {
 pub fn lowerBound(comptime T: type, items: []const T, key: anytype, cmp: anytype, ctx: anytype) !usize {
     const CmpReturnType = @TypeOf(cmp(ctx, items[0], key));
     const is_error_union = @typeInfo(CmpReturnType) == .error_union;
+    const CmpOrder = if (is_error_union)
+        @typeInfo(CmpReturnType).error_union.payload
+    else
+        CmpReturnType;
+
+    comptime {
+        if (CmpOrder != Order and CmpOrder != PartialOrder) {
+            @compileError("lowerBound comparator must return std.math.Order or algorithm.PartialOrder");
+        }
+    }
 
     var lo: usize = 0;
     var hi: usize = items.len;
@@ -117,10 +144,15 @@ pub fn lowerBound(comptime T: type, items: []const T, key: anytype, cmp: anytype
                 break :blk raw;
             }
         };
-        switch (result) {
-            .lt => lo = mid + 1,
-            .eq, .gt => hi = mid,
-            .unordered => return errors.OrderError.Unordered,
+        if (result == .lt) {
+            lo = mid + 1;
+        } else if (result == .eq or result == .gt) {
+            hi = mid;
+        } else {
+            if (comptime CmpOrder == PartialOrder) {
+                return errors.OrderError.Unordered;
+            }
+            unreachable;
         }
     }
     return lo;
@@ -129,6 +161,16 @@ pub fn lowerBound(comptime T: type, items: []const T, key: anytype, cmp: anytype
 pub fn upperBound(comptime T: type, items: []const T, key: anytype, cmp: anytype, ctx: anytype) !usize {
     const CmpReturnType = @TypeOf(cmp(ctx, items[0], key));
     const is_error_union = @typeInfo(CmpReturnType) == .error_union;
+    const CmpOrder = if (is_error_union)
+        @typeInfo(CmpReturnType).error_union.payload
+    else
+        CmpReturnType;
+
+    comptime {
+        if (CmpOrder != Order and CmpOrder != PartialOrder) {
+            @compileError("upperBound comparator must return std.math.Order or algorithm.PartialOrder");
+        }
+    }
 
     var lo: usize = 0;
     var hi: usize = items.len;
@@ -143,10 +185,15 @@ pub fn upperBound(comptime T: type, items: []const T, key: anytype, cmp: anytype
                 break :blk raw;
             }
         };
-        switch (result) {
-            .gt => hi = mid,
-            .lt, .eq => lo = mid + 1,
-            .unordered => return errors.OrderError.Unordered,
+        if (result == .gt) {
+            hi = mid;
+        } else if (result == .lt or result == .eq) {
+            lo = mid + 1;
+        } else {
+            if (comptime CmpOrder == PartialOrder) {
+                return errors.OrderError.Unordered;
+            }
+            unreachable;
         }
     }
     return lo;

@@ -15,6 +15,7 @@ pub const MemoryDatabase = database.MemoryDatabase;
 pub const StaticDatabase = database.StaticDatabase;
 pub const StaticDatabaseWithWal = database.StaticDatabaseWithWal;
 pub const VirtualStaticDatabaseWithWal = database.VirtualStaticDatabaseWithWal;
+pub const VirtualStaticDatabaseWithCow = database.VirtualStaticDatabaseWithCow;
 pub const DynamicDatabase = database.DynamicDatabase;
 pub const DynamicDatabaseWithWal = database.DynamicDatabaseWithWal;
 pub const DynamicSchemaDatabase = database.DynamicSchemaDatabase;

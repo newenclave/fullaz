@@ -331,14 +331,16 @@ pub fn FrontCodedBlockWithMetadata(
 
             while (!itr.done()) {
                 const cur_key = itr.scratchKey();
-                switch (cmp_fn(cmp_ctx, cur_key, key)) {
-                    .lt => try itr.next(),
-                    .eq => return itr,
-                    .gt => {
-                        itr.deinit();
-                        return null;
-                    },
-                    .unordered => return FindError.Unordered,
+                const order = cmp_fn(cmp_ctx, cur_key, key);
+                if (order == .lt) {
+                    try itr.next();
+                } else if (order == .eq) {
+                    return itr;
+                } else if (order == .gt) {
+                    itr.deinit();
+                    return null;
+                } else {
+                    return FindError.Unordered;
                 }
             }
 

@@ -2,12 +2,8 @@ const std = @import("std");
 const fullaz = @import("fullaz");
 const fullaz_db = @import("fullaz-db");
 
-fn compare(_: void, left: []const u8, right: []const u8) fullaz.core.algorithm.Order {
-    return switch (std.mem.order(u8, left, right)) {
-        .lt => .lt,
-        .eq => .eq,
-        .gt => .gt,
-    };
+fn compare(_: void, left: []const u8, right: []const u8) std.math.Order {
+    return std.mem.order(u8, left, right);
 }
 
 /// Two deliberately small B+ trees. `tables` is a namespace catalog and

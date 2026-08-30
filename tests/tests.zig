@@ -14,6 +14,7 @@ test {
     _ = @import("fullaz-db/database/static.zig");
     _ = @import("fullaz-db/database/static_wal.zig");
     _ = @import("fullaz-db/database/virtual_static_wal.zig");
+    _ = @import("fullaz-db/database/virtual_static_cow.zig");
     _ = @import("fullaz-db/database/dynamic.zig");
     _ = @import("fullaz-db/file/static_superblock.zig");
     _ = @import("fullaz-db/file/tagged_fields.zig");
@@ -108,6 +109,7 @@ test {
     _ = @import("page_cache/virtual_page_cache.zig");
     _ = @import("page_cache/virtual_page_map_memory.zig");
     _ = @import("page_cache/virtual_page_map_paged.zig");
+    _ = @import("page_cache/virtual_page_map_cow_paged.zig");
     _ = @import("long_store.zig");
     _ = @import("free_list.zig");
     _ = @import("wal.zig");

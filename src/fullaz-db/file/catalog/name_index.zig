@@ -1,14 +1,9 @@
 const std = @import("std");
 const bpt = @import("fullaz").bpt;
-const Order = @import("fullaz").core.algorithm.Order;
 const system_kinds = @import("../system_kinds.zig");
 
-fn compare(_: void, left: []const u8, right: []const u8) Order {
-    return switch (std.mem.order(u8, left, right)) {
-        .lt => .lt,
-        .eq => .eq,
-        .gt => .gt,
-    };
+fn compare(_: void, left: []const u8, right: []const u8) std.math.Order {
+    return std.mem.order(u8, left, right);
 }
 
 /// Private paged B+ tree mapping exact component names to durable IDs.

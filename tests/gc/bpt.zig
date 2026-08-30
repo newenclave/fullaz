@@ -408,8 +408,8 @@ const PagedManager = struct {
     }
 };
 
-fn pageKeyCmp(_: void, left: []const u8, right: []const u8) algos.Order {
-    return algos.cmpSlices(u8, left, right, algos.CmpNum(u8).asc, {}) catch unreachable;
+fn pageKeyCmp(_: void, left: []const u8, right: []const u8) std.math.Order {
+    return std.mem.order(u8, left, right);
 }
 
 test "GC: paged model resumes while reclaiming one BPT graph" {

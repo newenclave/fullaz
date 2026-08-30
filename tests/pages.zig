@@ -499,8 +499,8 @@ fn randomString(
 }
 
 const MyCmp = struct {
-    pub fn cmp(_: void, a: []const u8, b: []const u8) !algorithm.Order {
-        return try algorithm.cmpSlices(u8, a, b, algorithm.CmpNum(u8).asc, {});
+    pub fn cmp(_: void, a: []const u8, b: []const u8) !std.math.Order {
+        return std.mem.order(u8, a, b);
     }
 };
 

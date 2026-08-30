@@ -35,7 +35,7 @@ const StrSliceCmp = struct {
 };
 
 const UnorderedSliceCmp = struct {
-    pub fn cmp(_: void, _: []const u8, _: []const u8) algo.Order {
+    pub fn cmp(_: void, _: []const u8, _: []const u8) algo.PartialOrder {
         return .unordered;
     }
 };

@@ -190,7 +190,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub fn lowerBoundWith(
             self: *const Self,
             key: []const u8,
-            comptime cmp: anytype, // comparator function fn (ctx, a, b) algorithm.Order
+            comptime cmp: anytype, // comparator function fn (ctx, a, b) std.math.Order
             ctx: anytype, // context for comparator
         ) ErrorSet!usize {
             const Ctx = @TypeOf(ctx);
@@ -198,7 +198,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
                 slot_dir: ConstSlotsDirType,
                 user_ctx: Ctx,
 
-                fn less(wrapper: *const @This(), a: ConstSlotsDirType.Entry, key_b: []const u8) !algorithm.Order {
+                fn less(wrapper: *const @This(), a: ConstSlotsDirType.Entry, key_b: []const u8) !std.math.Order {
                     const slot_key = try wrapper.slot_dir.getByEntry(&a);
                     const slot_values = try keyValueFromBuffer(slot_key);
                     return cmp(wrapper.user_ctx, slot_values.key, key_b);
@@ -454,7 +454,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
         pub fn upperBoundWith(
             self: *const Self,
             key: []const u8,
-            comptime cmp: anytype, // comparator function fn (ctx, a, b) algorithm.Order
+            comptime cmp: anytype, // comparator function fn (ctx, a, b) std.math.Order
             ctx: anytype, // context for comparator
         ) ErrorSet!usize {
             const Ctx = @TypeOf(ctx);
@@ -462,7 +462,7 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
                 slot_dir: ConstSlotsDirType,
                 user_ctx: Ctx,
 
-                fn less(wrapper: *const @This(), a: ConstSlotsDirType.Entry, key_b: []const u8) !algorithm.Order {
+                fn less(wrapper: *const @This(), a: ConstSlotsDirType.Entry, key_b: []const u8) !std.math.Order {
                     const slot_key = try wrapper.slot_dir.getByEntry(&a);
                     const slot_values = try keyChildFromBuffer(slot_key);
                     return cmp(wrapper.user_ctx, slot_values.key, key_b);

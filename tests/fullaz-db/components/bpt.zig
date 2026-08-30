@@ -2,12 +2,8 @@ const std = @import("std");
 const fullaz = @import("fullaz");
 const fullaz_db = @import("fullaz-db");
 
-fn compare(_: void, left: []const u8, right: []const u8) fullaz.core.algorithm.Order {
-    return switch (std.mem.order(u8, left, right)) {
-        .lt => .lt,
-        .eq => .eq,
-        .gt => .gt,
-    };
+fn compare(_: void, left: []const u8, right: []const u8) std.math.Order {
+    return std.mem.order(u8, left, right);
 }
 
 const CompareContext = struct {
@@ -18,17 +14,12 @@ fn compareWithContext(
     context: CompareContext,
     left: []const u8,
     right: []const u8,
-) fullaz.core.algorithm.Order {
+) std.math.Order {
     const ascending = compare({}, left, right);
     if (!context.descending) {
         return ascending;
     }
-    return switch (ascending) {
-        .lt => .gt,
-        .eq => .eq,
-        .gt => .lt,
-        .unordered => .unordered,
-    };
+    return ascending.invert();
 }
 
 fn TestBackend(comptime CacheT: type) type {

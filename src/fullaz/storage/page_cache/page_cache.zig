@@ -11,6 +11,7 @@ const wal_mod = @import("../wal/wal.zig");
 
 pub const MemoryReclaimingCache = @import("memory_reclaiming_cache.zig").MemoryReclaimingCache;
 pub const PersistentReclaimingCache = @import("persistent_reclaiming_cache.zig").PersistentReclaimingCache;
+pub const ReusablePageCache = @import("reusable_page_cache.zig").ReusablePageCache;
 
 pub const VirtualPageCache = @import("virtual_page_cache.zig").VirtualPageCache;
 pub const VirtualPageCacheImpl = @import("virtual_page_cache.zig").VirtualPageCacheImpl;
@@ -497,6 +498,37 @@ pub fn PageCacheImpl(
             if (self.locked) {
                 self.appended_in_batch += 1;
             }
+            return try self.prepareBackingForkAt(frame, source_pid, target_pid, context);
+        }
+
+        /// Forks `source_pid` onto an already allocated but unreachable target
+        /// page. The caller owns the target's allocation lifecycle.
+        pub fn prepareBackingForkTo(
+            self: *Self,
+            source_pid: Pid,
+            target_pid: Pid,
+            context: PidPolicy.RemapContextType,
+        ) Error!?BackingFork {
+            try self.requireReady();
+            const frame = self.frames_cache.get(source_pid) orelse return error.InvalidId;
+            if (frame.pid != source_pid or frame.frame_type == .temporary or target_pid == source_pid) {
+                return error.InvalidId;
+            }
+            if (frame.frame_type == .dirty) {
+                return null;
+            }
+            try self.frames_cache.ensureUnusedCapacity(1);
+            try self.dropReusableTargetFrame(target_pid);
+            return try self.prepareBackingForkAt(frame, source_pid, target_pid, context);
+        }
+
+        fn prepareBackingForkAt(
+            self: *Self,
+            frame: *Frame,
+            source_pid: Pid,
+            target_pid: Pid,
+            context: PidPolicy.RemapContextType,
+        ) Error!BackingFork {
             frame.pid_pol.prepareRemap(context, source_pid, target_pid) catch |err| {
                 frame.pid_pol.discard();
                 self.markTransactionFailed();
@@ -507,6 +539,16 @@ pub fn PageCacheImpl(
                 .source_pid = source_pid,
                 .target_pid = target_pid,
             };
+        }
+
+        fn dropReusableTargetFrame(self: *Self, target_pid: Pid) Error!void {
+            const target = self.frames_cache.get(target_pid) orelse return;
+            if (target.isPinned() or target.frame_type != .clean) {
+                return error.PageBusy;
+            }
+            self.policy.unlink(target);
+            _ = self.frames_cache.remove(target_pid);
+            self.policy.pushFree(target);
         }
 
         pub fn commitBackingFork(self: *Self, fork: *BackingFork) void {
