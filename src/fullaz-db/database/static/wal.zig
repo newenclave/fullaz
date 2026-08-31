@@ -124,7 +124,6 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
                 const core = try self.activeCore();
                 try writeSuperblock(core, true);
                 try core.transaction_cache_batch.commit();
-                try core.device.sync();
                 core.transaction_active = false;
             }
 

@@ -35,8 +35,17 @@ pub fn MemoryLog(comptime OffsetT: type) type {
         }
 
         pub fn reset(self: *Self) Error!void {
-            self.buf.clearRetainingCapacity();
-            self.synced = 0;
+            try self.truncate(0);
+        }
+
+        /// Discards the suffix beginning at `end`.
+        pub fn truncate(self: *Self, end: Offset) Error!void {
+            const length = std.math.cast(usize, end) orelse return Error.BadData;
+            if (length > self.buf.items.len) {
+                return Error.BadData;
+            }
+            self.buf.shrinkRetainingCapacity(length);
+            self.synced = @min(self.synced, end);
         }
 
         pub fn size(self: *const Self) Offset {

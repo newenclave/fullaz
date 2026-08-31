@@ -29,6 +29,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         WalT,
         page_cache.RetainPidPolicy(DeviceT.BlockId),
     );
+
     const DevicePageId = DeviceT.BlockId;
     const Log = LogDeviceT orelse void;
     const LogError = if (LogDeviceT) |LogT| LogT.Error else error{};
@@ -103,6 +104,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             self.state.catalog_last = if (value) |page_id| @intCast(page_id) else null;
         }
     };
+
     const IndexManager = struct {
         pub const PageId = DeviceT.BlockId;
         pub const Error = Cache.Error;
@@ -133,9 +135,11 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             return self.cache.free(page_id);
         }
     };
+
     const Catalog = file.CatalogStore(Cache, CatalogManager);
     const CatalogIds = file.CatalogIdIndex(Cache, IndexManager);
     const CatalogNames = file.CatalogNameIndex(Cache, IndexManager);
+
     const ComponentBackend = struct {
         pub const PageId = DevicePageId;
         pub const CacheType = Cache;
@@ -155,6 +159,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             return self.cache_ptr;
         }
     };
+
     const Core = struct {
         allocator: std.mem.Allocator,
         device: DeviceT,
@@ -183,23 +188,28 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         pub const RawCacheType = RawCache;
         pub const CacheType = Cache;
         pub const State = file.boot.State;
+
         pub const CatalogCompactionResult = struct {
             records_before: u64,
             records_retained: u64,
             historical_records_removed: u64,
             metadata_pages_reclaimed: u64,
         };
+
         pub const ComponentReclamationResult = struct {
             component_id: u64,
             metadata_page_reclaimed: bool,
         };
+
         pub const CatalogStoreType = Catalog;
         pub const CatalogIdIndexType = CatalogIds;
         pub const CatalogNameIndexType = CatalogNames;
+
         pub const InitOptions = struct {
             image_id: [16]u8,
             cache_frames: usize = 64,
         };
+
         pub const Error = std.mem.Allocator.Error ||
             DeviceT.Error ||
             LogError ||
@@ -305,34 +315,52 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             if (comptime LogDeviceT) |_| {
                 core.log = log_value;
                 errdefer core.log.deinit();
+
                 var wal_value = try WalT.init(allocator, &core.log, @intCast(core.device.blockSize()));
                 errdefer wal_value.deinit();
-                core.raw_cache = try RawCache.initWal(&core.device, allocator, options.cache_frames, wal_value);
+
+                core.raw_cache = try RawCache.initWal(
+                    &core.device,
+                    allocator,
+                    options.cache_frames,
+                    wal_value,
+                );
             } else {
-                core.raw_cache = try RawCache.init(&core.device, allocator, options.cache_frames);
+                core.raw_cache = try RawCache.init(
+                    &core.device,
+                    allocator,
+                    options.cache_frames,
+                );
             }
             errdefer core.raw_cache.deinit();
+
             core.state = state;
             core.reclaim_store = .{ .device = &core.device, .state = &core.state };
             core.cache = Cache.init(&core.raw_cache, &core.reclaim_store);
             errdefer core.cache.deinit();
+
             core.catalog_manager = .{ .state = &core.state, .cache = &core.cache };
             core.catalog_id_manager = .{
                 .root = &core.state.id_radix_root,
                 .free_leaf_root = &core.state.id_radix_free_leaf_root,
                 .cache = &core.cache,
             };
+
             core.catalog_name_manager = .{
                 .root = &core.state.name_bpt_root,
                 .free_leaf_root = &core.state.id_radix_free_leaf_root,
                 .cache = &core.cache,
             };
+
             core.catalog = try Catalog.init(&core.cache, &core.catalog_manager);
             errdefer core.catalog.deinit();
+
             core.catalog_ids = try CatalogIds.init(&core.cache, &core.catalog_id_manager);
             errdefer core.catalog_ids.deinit();
+
             core.catalog_names = try CatalogNames.init(&core.cache, &core.catalog_name_manager);
             errdefer core.catalog_names.deinit();
+
             core.transaction_active = false;
             return core;
         }
@@ -392,7 +420,13 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 return error.InvalidBootPage;
             }
             const state = try initialState(&device, options);
-            const core = try initCore(allocator, device, log_value, state, options);
+            const core = try initCore(
+                allocator,
+                device,
+                log_value,
+                state,
+                options,
+            );
             errdefer deinitCore(core, false);
             try writeBoot(core);
             try core.raw_cache.flushAll();
@@ -415,6 +449,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
 
             var device = device_value;
             errdefer device.deinit();
+
             const core = try initCore(
                 allocator,
                 device,
@@ -423,26 +458,32 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 options,
             );
             errdefer deinitCore(core, false);
+
             const view = blk: {
                 var page = try core.raw_cache.fetch(0);
                 defer page.deinit();
                 break :blk try file.boot.read(try page.data(), try expected(&core.device, options));
             };
+
             if (view.state.page_count != core.device.blocksCount()) {
                 return error.PageCountMismatch;
             }
+
             if (!view.state.clean) {
                 return error.DirtyDatabase;
             }
+
             core.state = view.state;
             core.catalog_manager.state = &core.state;
             core.catalog_id_manager.root = &core.state.id_radix_root;
             core.catalog_id_manager.free_leaf_root = &core.state.id_radix_free_leaf_root;
             core.catalog_name_manager.root = &core.state.name_bpt_root;
             core.catalog_name_manager.free_leaf_root = &core.state.id_radix_free_leaf_root;
+
             if (core.state.free_root) |free_root| {
                 _ = std.math.cast(DevicePageId, free_root) orelse return error.BadFreeList;
             }
+
             try core.cache.validateFreeList();
             return .{ .core_ = core };
         }
@@ -516,13 +557,17 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 };
                 const dependencies = try core.allocator.alloc(u64, previous.dependency_count);
                 defer core.allocator.free(dependencies);
+
                 for (dependencies, 0..) |*dependency, index| {
                     dependency.* = (try previous.getDependency(index)).?;
                 }
+
                 const record_bytes = try core.allocator.alloc(u8, core.device.blockSize());
                 defer core.allocator.free(record_bytes);
+
                 const record_scratch = try core.allocator.alloc(u8, core.device.blockSize());
                 defer core.allocator.free(record_scratch);
+
                 try file.catalog_record.format(record_bytes, record_scratch, .{
                     .component_id = previous.component_id,
                     .revision = revision,
@@ -537,6 +582,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     .dependency_ids = dependencies,
                     .state = state,
                 }, previous.payload);
+
                 return try core.catalog.append(
                     record_bytes[0..try file.catalog_record.encodedByteSize(record_bytes)],
                 );
@@ -570,20 +616,26 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             /// Reserves one durable ID and an unreusable page-kind range.
             pub fn allocateComponent(self: *Transaction, page_kind_count: usize) Error!ComponentAllocation {
                 try self.requireActive();
+
                 const core = self.corePtr();
+
                 const count = std.math.cast(component.PageKind, page_kind_count) orelse
                     return error.PageKindExhausted;
+
                 if (count == 0 or core.state.next_component_id == std.math.maxInt(u64)) {
                     return if (count == 0) error.PageKindExhausted else error.ComponentIdExhausted;
                 }
+
                 const range_end = std.math.add(
                     u32,
                     core.state.next_component_page_kind,
                     count,
                 ) catch return error.PageKindExhausted;
+
                 if (range_end >= file.system_kinds.invalid_sentinel) {
                     return error.PageKindExhausted;
                 }
+
                 const allocation = ComponentAllocation{
                     .component_id = core.state.next_component_id,
                     .page_kinds = .{
@@ -591,6 +643,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                         .count = count,
                     },
                 };
+
                 core.state.next_component_id += 1;
                 core.state.next_component_page_kind = @intCast(range_end);
                 return allocation;
@@ -696,6 +749,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     .active,
                     previous.metadata_root_pid,
                 );
+
                 mutated = true;
                 try core.catalog_ids.set(component_id, successor);
                 try core.catalog_names.set(new_name, component_id);
@@ -861,8 +915,10 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 }
                 var retained_ids = std.AutoHashMap(u64, void).init(core.allocator);
                 defer retained_ids.deinit();
+
                 var reclaimed_revisions = std.AutoHashMap(u64, u32).init(core.allocator);
                 defer reclaimed_revisions.deinit();
+
                 var metadata = std.AutoHashMap(DevicePageId, MetadataReference).init(core.allocator);
                 defer metadata.deinit();
 
@@ -1181,7 +1237,9 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 try core.transaction_batch.commit();
                 core.transaction_active = false;
                 self.active = false;
-                try core.device.sync();
+                if (comptime LogDeviceT == null) {
+                    try core.device.sync();
+                }
             }
 
             pub fn rollback(self: *Transaction) Error!void {
@@ -1216,17 +1274,19 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             core.state_snapshot = core.state;
             core.transaction_batch = try core.cache.begin();
             core.transaction_active = true;
-            core.state.clean = false;
-            writeBoot(core) catch |err| {
-                core.transaction_batch.discard() catch {};
-                core.state = core.state_snapshot;
-                core.transaction_active = false;
-                return err;
-            };
-            var page = try core.raw_cache.fetch(0);
-            defer page.deinit();
-            try core.device.writeBlock(0, @constCast(try page.data()));
-            try core.device.sync();
+            if (comptime LogDeviceT == null) {
+                core.state.clean = false;
+                writeBoot(core) catch |err| {
+                    core.transaction_batch.discard() catch {};
+                    core.state = core.state_snapshot;
+                    core.transaction_active = false;
+                    return err;
+                };
+                var page = try core.raw_cache.fetch(0);
+                defer page.deinit();
+                try core.device.writeBlock(0, @constCast(try page.data()));
+                try core.device.sync();
+            }
             return .{ .core_ = core };
         }
 

@@ -63,6 +63,7 @@ pub fn Wal(comptime LogBackendT: type, comptime PidT: type, comptime Endian: std
         pub const commit_rec_len: Offset = @sizeOf(CommitRec);
         pub const log_header_len: Offset = @sizeOf(LogHeader);
         pub const Offset = LogBackendT.Offset;
+
         pub const Identity = struct {
             image_id: [16]u8,
             schema_digest: [32]u8,
@@ -135,6 +136,12 @@ pub fn Wal(comptime LogBackendT: type, comptime PidT: type, comptime Endian: std
         }
 
         pub fn checkpoint(self: *Self) Error!void {
+            if (self.identity != null and @hasDecl(LogBackendT, "truncate")) {
+                // The header was synced before any records, so it remains a
+                // valid empty WAL after discarding only the record suffix.
+                try self.backend.truncate(self.record_start);
+                return;
+            }
             try self.backend.reset();
             if (self.identity != null) {
                 try self.writeLogHeader();

@@ -7,6 +7,50 @@ const testing = std.testing;
 const PAGE = 8;
 const Wal = wal.Wal(wal.MemoryLog, u32, .little);
 
+const CountingMemoryLog = struct {
+    const Self = @This();
+    const Inner = wal.MemoryLog;
+
+    pub const Error = Inner.Error;
+    pub const Offset = Inner.Offset;
+
+    inner: Inner,
+    sync_count: usize = 0,
+
+    fn init(allocator: std.mem.Allocator) Error!Self {
+        return .{ .inner = try Inner.init(allocator) };
+    }
+
+    fn deinit(self: *Self) void {
+        self.inner.deinit();
+    }
+
+    pub fn append(self: *Self, bytes: []const u8) Error!void {
+        return self.inner.append(bytes);
+    }
+
+    pub fn sync(self: *Self) Error!void {
+        self.sync_count += 1;
+        return self.inner.sync();
+    }
+
+    pub fn reset(self: *Self) Error!void {
+        return self.inner.reset();
+    }
+
+    pub fn truncate(self: *Self, end: Offset) Error!void {
+        return self.inner.truncate(end);
+    }
+
+    pub fn size(self: *const Self) Offset {
+        return self.inner.size();
+    }
+
+    pub fn readAt(self: *const Self, offset: Offset, dst: []u8) Error!void {
+        return self.inner.readAt(offset, dst);
+    }
+};
+
 const Collector = struct {
     pids: [16]u32 = undefined,
     first: [16]u8 = undefined,
@@ -42,6 +86,30 @@ test "WAL: identity-bound logs reject another image" {
     var wrong_identity = identity;
     wrong_identity.image_id[0] ^= 1;
     try testing.expectError(error.WalIdentityMismatch, Wal.initWithIdentity(a, &log, PAGE, wrong_identity));
+}
+
+test "WAL: identity checkpoint keeps its durable header without a second sync" {
+    const a = testing.allocator;
+    const CountingWal = wal.Wal(CountingMemoryLog, u32, .little);
+    var log = try CountingMemoryLog.init(a);
+    defer log.deinit();
+    var w = try CountingWal.initWithIdentity(a, &log, PAGE, identity);
+    defer w.deinit();
+
+    try testing.expectEqual(@as(usize, 1), log.sync_count);
+    try w.appendPage(5, &page(0xAA));
+    try w.sealCommit(1);
+    try testing.expectEqual(@as(usize, 2), log.sync_count);
+
+    try w.checkpoint();
+    try testing.expectEqual(@as(usize, 2), log.sync_count);
+    try testing.expectEqual(CountingWal.log_header_len, log.size());
+
+    var reopened = try CountingWal.initWithIdentity(a, &log, PAGE, identity);
+    defer reopened.deinit();
+    var col = Collector{};
+    try reopened.replay(&col, Collector.cb);
+    try testing.expectEqual(@as(usize, 0), col.n);
 }
 
 test "WAL: commit count and PID are integrity protected" {

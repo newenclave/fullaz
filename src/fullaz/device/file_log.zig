@@ -53,10 +53,18 @@ pub fn FileLog(comptime OffsetT: type) type {
         }
 
         pub fn reset(self: *Self) Error!void {
-            self.file.setLength(self.io, 0) catch {
+            try self.truncate(0);
+        }
+
+        /// Discards the suffix beginning at `end`.
+        pub fn truncate(self: *Self, end: Offset) Error!void {
+            if (end > self.end) {
+                return Error.BadData;
+            }
+            self.file.setLength(self.io, @intCast(end)) catch {
                 return Error.IoError;
             };
-            self.end = 0;
+            self.end = end;
         }
 
         pub fn size(self: *const Self) Offset {

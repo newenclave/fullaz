@@ -18,6 +18,166 @@ fn prep(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
 
+const SyncCounts = struct {
+    device: usize = 0,
+    log: usize = 0,
+};
+
+const CountingMemoryDevice = struct {
+    const Self = @This();
+    const Inner = fullaz.device.MemoryBlock(u32);
+
+    pub const BlockId = Inner.BlockId;
+    pub const Error = Inner.Error;
+    pub const append_only_dense_block_ids = Inner.append_only_dense_block_ids;
+
+    inner: Inner,
+    counts: *SyncCounts,
+
+    fn init(allocator: std.mem.Allocator, block_size: usize, counts: *SyncCounts) Error!Self {
+        return .{
+            .inner = try Inner.init(allocator, block_size),
+            .counts = counts,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.inner.deinit();
+    }
+
+    pub fn isValidId(self: *const Self, page_id: BlockId) bool {
+        return self.inner.isValidId(page_id);
+    }
+
+    pub fn isOpen(self: *const Self) bool {
+        return self.inner.isOpen();
+    }
+
+    pub fn blockSize(self: *const Self) usize {
+        return self.inner.blockSize();
+    }
+
+    pub fn blocksCount(self: *const Self) usize {
+        return self.inner.blocksCount();
+    }
+
+    pub fn appendBlock(self: *Self) Error!BlockId {
+        return self.inner.appendBlock();
+    }
+
+    pub fn truncateBlocks(self: *Self, count: usize) Error!void {
+        return self.inner.truncateBlocks(count);
+    }
+
+    pub fn readBlock(self: *const Self, page_id: BlockId, bytes: []u8) Error!void {
+        return self.inner.readBlock(page_id, bytes);
+    }
+
+    pub fn writeBlock(self: *Self, page_id: BlockId, bytes: []u8) Error!void {
+        return self.inner.writeBlock(page_id, bytes);
+    }
+
+    pub fn sync(self: *Self) Error!void {
+        self.counts.device += 1;
+        return self.inner.sync();
+    }
+};
+
+const CountingMemoryLog = struct {
+    const Self = @This();
+    const Inner = fullaz.device.MemoryLog(u32);
+
+    pub const Error = Inner.Error;
+    pub const Offset = Inner.Offset;
+
+    inner: Inner,
+    counts: *SyncCounts,
+
+    fn init(allocator: std.mem.Allocator, counts: *SyncCounts) Error!Self {
+        return .{
+            .inner = try Inner.init(allocator),
+            .counts = counts,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.inner.deinit();
+    }
+
+    pub fn append(self: *Self, bytes: []const u8) Error!void {
+        return self.inner.append(bytes);
+    }
+
+    pub fn sync(self: *Self) Error!void {
+        self.counts.log += 1;
+        return self.inner.sync();
+    }
+
+    pub fn reset(self: *Self) Error!void {
+        return self.inner.reset();
+    }
+
+    pub fn truncate(self: *Self, end: Offset) Error!void {
+        return self.inner.truncate(end);
+    }
+
+    pub fn size(self: *const Self) Offset {
+        return self.inner.size();
+    }
+
+    pub fn readAt(self: *const Self, offset: Offset, bytes: []u8) Error!void {
+        return self.inner.readAt(offset, bytes);
+    }
+};
+
+test "fullaz-db: WAL static database syncs each file once per commit" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 });
+    const Database = fullaz_db.StaticDatabaseWithWal(
+        Schema,
+        CountingMemoryDevice,
+        CountingMemoryLog,
+    );
+    var counts = SyncCounts{};
+    var database = try Database.format(
+        std.testing.allocator,
+        try CountingMemoryDevice.init(std.testing.allocator, 1024, &counts),
+        try CountingMemoryLog.init(std.testing.allocator, &counts),
+        .{ .image_id = [_]u8{3} ** 16, .components = .{} },
+    );
+    defer database.deinit();
+    counts = .{};
+
+    var transaction = try database.begin();
+    try transaction.commit();
+
+    try std.testing.expectEqual(@as(usize, 1), counts.device);
+    try std.testing.expectEqual(@as(usize, 1), counts.log);
+}
+
+test "fullaz-db: WAL dynamic database defers sync until commit" {
+    const Database = fullaz_db.DynamicDatabaseWithWal(
+        CountingMemoryDevice,
+        CountingMemoryLog,
+    );
+    var counts = SyncCounts{};
+    var database = try Database.format(
+        std.testing.allocator,
+        try CountingMemoryDevice.init(std.testing.allocator, 1024, &counts),
+        try CountingMemoryLog.init(std.testing.allocator, &counts),
+        .{ .image_id = [_]u8{4} ** 16 },
+    );
+    defer database.deinit();
+    counts = .{};
+
+    var transaction = try database.begin();
+    try std.testing.expectEqual(@as(usize, 0), counts.device);
+    try std.testing.expectEqual(@as(usize, 0), counts.log);
+    try transaction.commit();
+
+    try std.testing.expectEqual(@as(usize, 1), counts.device);
+    try std.testing.expectEqual(@as(usize, 1), counts.log);
+}
+
 test "fullaz-db: WAL static database reopens chainStore metadata" {
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
         "blob",
