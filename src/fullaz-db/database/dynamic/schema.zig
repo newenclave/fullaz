@@ -1,10 +1,12 @@
 const std = @import("std");
+const fullaz = @import("fullaz");
 const device_interfaces = @import("fullaz").device.interfaces;
 const shape = @import("../../component/shape.zig");
 const DynamicDatabase = @import("dynamic.zig").DynamicDatabase;
 const DynamicDatabaseWithWal = @import("dynamic.zig").DynamicDatabaseWithWal;
 const catalog_record = @import("../../file/catalog/record.zig");
 const schema_fingerprint = @import("../../component/fingerprint.zig");
+const component = @import("../../component/component.zig");
 
 /// A compiled schema layered on the dynamic database catalog.
 pub fn DynamicSchemaDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
@@ -107,6 +109,8 @@ fn DynamicSchemaDatabaseImpl(
         pub const Error = Database.Error ||
             Cache.Error ||
             catalog_record.Error ||
+            Database.GcModelType.Error ||
+            Database.GcCollectorType.Error ||
             shape.componentErrors(Bindings, 0) ||
             error{MetadataFormatVersionMismatch};
 
@@ -174,6 +178,7 @@ fn DynamicSchemaDatabaseImpl(
 
             pub fn commit(self: *TransactionSelf) Error!void {
                 try self.requireActive();
+                try requireTransactionIdle(self.core);
                 inline for (SchemaT.fields, 0..) |field, index| {
                     var loaded = (try self.core.database.getByName(field.name)) orelse
                         return error.MissingComponent;
@@ -192,6 +197,7 @@ fn DynamicSchemaDatabaseImpl(
 
             pub fn rollback(self: *TransactionSelf) Error!void {
                 try self.requireActive();
+                try requireTransactionIdle(self.core);
                 try self.raw.rollback();
                 restoreTransactionStates(self.core, self.states);
                 self.active = false;
@@ -217,8 +223,24 @@ fn DynamicSchemaDatabaseImpl(
             core.initialized_count = 0;
         }
 
+        fn requireTransactionIdle(core: *const Core) Error!void {
+            return shape.requireTransactionIdle(SchemaT, Bindings, &core.components);
+        }
+
+        fn requireInitializedComponentsIdle(core: *const Core) Error!void {
+            inline for (SchemaT.fields, 0..) |field, index| {
+                if (index < core.initialized_count) {
+                    try Bindings[index].requireTransactionIdle(
+                        &@field(core.components, field.name),
+                    );
+                }
+            }
+        }
+
         fn deinitCore(core: *Core) void {
             const allocator = core.allocator;
+            requireInitializedComponentsIdle(core) catch
+                @panic("DynamicSchemaDatabase.deinit called with an active value editor");
             deinitComponents(core);
             core.database.deinit();
             allocator.destroy(core);
@@ -376,6 +398,12 @@ fn DynamicSchemaDatabaseImpl(
             return Binding.proxyConst(&@field(self.coreConstPtr().components, name));
         }
 
+        /// Exposes the shared transactional cache for diagnostics and focused
+        /// storage tests. Component mutations still require `begin()`.
+        pub fn cache(self: *Self) *Cache {
+            return self.corePtr().database.cache();
+        }
+
         /// Starts the only mutable access scope. Active transactions roll back on deinit.
         /// Catalog rename and drop operations belong to the raw control plane:
         /// this facade's runtimes are bound to compile-time schema field names.
@@ -388,6 +416,55 @@ fn DynamicSchemaDatabaseImpl(
                 .raw = raw,
                 .states = captureTransactionStates(core),
             };
+        }
+
+        pub fn startGarbageCollection(self: *Self) Error!void {
+            const core = self.corePtr();
+            const Collector = Database.GcCollectorType;
+            var session = try core.database.beginGcSession();
+            defer session.deinit();
+            var roots: std.ArrayList(Collector.PageId) = .empty;
+            defer roots.deinit(core.allocator);
+            const collector = try session.collector();
+            try session.registerSystemScanners();
+            try session.appendSystemRoots(&roots);
+            inline for (SchemaT.fields, 0..) |field, index| {
+                const Binding = Bindings[index];
+                comptime component.assertGc(Binding, Collector);
+                const Capability = Binding.Gc(Collector);
+                const runtime: *const Binding.Runtime = &@field(core.components, field.name);
+                try Capability.appendRoots(runtime, core.allocator, &roots);
+                try Capability.registerScanners(runtime, collector);
+            }
+            try session.start(roots.items);
+            try session.commit();
+        }
+
+        pub fn stepGarbageCollection(self: *Self, maximum_pages: usize) Error!fullaz.gc.StepStatus {
+            const core = self.corePtr();
+            const Collector = Database.GcCollectorType;
+            var session = try core.database.beginGcSession();
+            defer session.deinit();
+            const collector = try session.collector();
+            try session.registerSystemScanners();
+            inline for (SchemaT.fields, 0..) |field, index| {
+                const Binding = Bindings[index];
+                comptime component.assertGc(Binding, Collector);
+                const Capability = Binding.Gc(Collector);
+                const runtime: *const Binding.Runtime = &@field(core.components, field.name);
+                try Capability.registerScanners(runtime, collector);
+            }
+            const status = try session.step(maximum_pages);
+            try session.commit();
+            return status;
+        }
+
+        pub fn cancelGarbageCollection(self: *Self) Error!void {
+            const core = self.corePtr();
+            var session = try core.database.beginGcSession();
+            defer session.deinit();
+            try session.abort();
+            try session.commit();
         }
 
         pub fn deinit(self: *Self) void {

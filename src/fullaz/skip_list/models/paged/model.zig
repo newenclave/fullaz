@@ -21,6 +21,13 @@ pub fn Paged(
 ) type {
     const PageHandle = PageCacheT.Handle;
     const CachePageId = PageCacheT.Pid;
+    const StructuralMutationCoordinator = core.structural_mutation.StructuralMutationCoordinator;
+    const StructuralMutationError = core.structural_mutation.Error;
+    const ErrorSet = PageCacheT.Error ||
+        StorageManagerT.Error ||
+        FsmT.Error ||
+        errors.SlotsError ||
+        StructuralMutationError;
 
     const KeyT = []const u8;
     const ValueT = []const u8;
@@ -224,17 +231,108 @@ pub fn Paged(
         pub const KeyIn = KeyT;
         pub const ValueIn = ValueT;
         pub const Pid = PidImpl;
-        pub const Error = PageCacheT.Error ||
-            StorageManagerT.Error ||
-            FsmT.Error ||
-            errors.SlotsError;
+        pub const Error = ErrorSet;
+        const ValueEditorImpl = struct {
+            const EditorSelf = @This();
+
+            pub const Error = ErrorSet;
+            pub const ValueMutType = []u8;
+
+            layout_lock: ?PageHandle.LayoutLock,
+            snapshot: ?PageHandle,
+            position: usize,
+            value_len: usize,
+            coordinator: *StructuralMutationCoordinator,
+            open: bool = true,
+
+            fn init(
+                layout_lock: PageHandle.LayoutLock,
+                snapshot: PageHandle,
+                position: usize,
+                value_len: usize,
+                coordinator: *StructuralMutationCoordinator,
+            ) EditorSelf {
+                return .{
+                    .layout_lock = layout_lock,
+                    .snapshot = snapshot,
+                    .position = position,
+                    .value_len = value_len,
+                    .coordinator = coordinator,
+                };
+            }
+
+            pub fn valueMut(self: *EditorSelf) ErrorSet!ValueMutType {
+                try self.ensureOpen();
+                if (self.layout_lock) |*layout_lock| {
+                    var view = NodeViewMut.init(try layout_lock.dataMut());
+                    const value = (try view.getMut(self.position)).value;
+                    if (value.len != self.value_len) {
+                        return error.EditorInvalidated;
+                    }
+                    return value;
+                }
+                return error.EditorInvalidated;
+            }
+
+            pub fn finish(self: *EditorSelf) ErrorSet!void {
+                try self.ensureOpen();
+                self.close();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                self.restore() catch @panic("SkipList value editor rollback failed");
+                self.close();
+            }
+
+            fn ensureOpen(self: *const EditorSelf) ErrorSet!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+            }
+
+            fn restore(self: *EditorSelf) ErrorSet!void {
+                if (self.layout_lock) |*layout_lock| {
+                    if (self.snapshot) |*snapshot| {
+                        const snapshot_bytes = try snapshot.data();
+                        var view = NodeViewMut.init(try layout_lock.dataMut());
+                        const value = (try view.getMut(self.position)).value;
+                        if (value.len != self.value_len) {
+                            return error.EditorInvalidated;
+                        }
+                        @memcpy(value, snapshot_bytes[0..self.value_len]);
+                        return;
+                    }
+                }
+                return error.EditorInvalidated;
+            }
+
+            fn close(self: *EditorSelf) void {
+                if (self.layout_lock) |*layout_lock| {
+                    layout_lock.deinit();
+                    self.layout_lock = null;
+                }
+                if (self.snapshot) |*snapshot| {
+                    snapshot.deinit();
+                    self.snapshot = null;
+                }
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
+        pub const ValueEditorType = ValueEditorImpl;
         pub const Path = PathImpl;
 
         context: ContextImpl,
+        coordinator: StructuralMutationCoordinator = .{},
 
         fn init(ctx: ContextImpl) Self {
             return Self{
                 .context = ctx,
+                .coordinator = .{},
             };
         }
 
@@ -400,6 +498,25 @@ pub fn Paged(
         pub fn deinitPath(self: *Self, path: *PathImpl) void {
             path.deinit(self.context.allocator);
         }
+
+        pub fn openValueEditor(self: *Self, node: *NodeImpl) Error!ValueEditorType {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+            const value = try node.getValue();
+            var snapshot = try self.context.cache.getTemporaryPage();
+            errdefer snapshot.deinit();
+            const snapshot_bytes = try snapshot.dataMut();
+            @memcpy(snapshot_bytes[0..value.len], value);
+            var layout_lock = try node.ph.lockLayout();
+            errdefer layout_lock.deinit();
+            return ValueEditorType.init(
+                layout_lock,
+                snapshot,
+                node.pid.slot_id,
+                value.len,
+                &self.coordinator,
+            );
+        }
     };
 
     return struct {
@@ -410,6 +527,7 @@ pub fn Paged(
             errors.SetError;
 
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = AccessorType.ValueEditorType;
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
         pub const PageId = CachePageId;
@@ -481,6 +599,10 @@ pub fn Paged(
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
 
         pub fn keysCompare(self: *const Self, k1: KeyIn, k2: KeyIn) std.math.Order {

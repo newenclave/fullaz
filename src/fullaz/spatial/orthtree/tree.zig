@@ -1,3 +1,4 @@
+const std = @import("std");
 const interfaces = @import("models/interfaces.zig");
 
 pub const VisitorResult = enum {
@@ -32,6 +33,62 @@ pub fn TreeImpl(comptime ModelT: type) type {
         pub const ValueBorrow = Model.ValueBorrow;
         pub const dimension = Box.dimension;
         pub const child_count = 1 << dimension;
+
+        /// A mutable lease for one entry returned by `queryEditable`.
+        /// `finish` updates every enclosing trait before committing the value.
+        pub const ValueEditor = struct {
+            const EditorSelf = @This();
+
+            tree: *Self,
+            node_id: NodeId,
+            box: Box,
+            editor: Model.ValueEditorType,
+
+            pub fn valueMut(self: *EditorSelf) Model.ValueEditorType.Error!Model.ValueEditorType.ValueMut {
+                return self.editor.valueMut();
+            }
+
+            pub fn finish(self: *EditorSelf) Error!void {
+                const old_value = try self.editor.originalValue();
+                const new_value = try self.editor.value();
+                try self.tree.updateTraitsAlongPath(self.node_id, self.box, old_value, new_value);
+                self.editor.finish() catch |err| {
+                    self.tree.updateTraitsAlongPath(self.node_id, self.box, new_value, old_value) catch {
+                        @panic("OrthTree trait update rollback failed");
+                    };
+                    return err;
+                };
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                self.editor.deinit();
+            }
+        };
+
+        /// A query callback receives this borrowed handle for its current match.
+        /// It can open an editor without consuming or removing the entry.
+        pub const EditableQueryHit = struct {
+            const HitSelf = @This();
+
+            tree: *Self,
+            node: *Node,
+            entries: *Node.EntriesMut,
+            cursor: *Node.EntriesMut.Cursor,
+            box: Box,
+
+            pub fn editValue(self: *HitSelf) Error!ValueEditor {
+                return .{
+                    .tree = self.tree,
+                    .node_id = self.node.id(),
+                    .box = self.box,
+                    .editor = try self.tree.model.openValueEditor(
+                        self.node,
+                        self.entries,
+                        self.cursor,
+                    ),
+                };
+            }
+        };
 
         model: *Model,
 
@@ -74,6 +131,12 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn initRootBounds(self: *Self, bbox: Box) ErrorSet!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
+            return self.initRootBoundsImpl(bbox);
+        }
+
+        fn initRootBoundsImpl(self: *Self, bbox: Box) ErrorSet!void {
             const acc = self.accessor();
             if (acc.getRoot()) |_| {
                 return ErrorSet.AlreadyInitialized;
@@ -84,6 +147,8 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn insert(self: *Self, child_box: Box, value: Value) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const acc = self.accessor();
             if (acc.getRoot()) |root_id| {
                 const needs_growth = blk: {
@@ -92,18 +157,18 @@ pub fn TreeImpl(comptime ModelT: type) type {
                     break :blk !root_node.bounds().containsBox(&child_box);
                 };
                 if (needs_growth) {
-                    try self.growRootToContain(child_box);
+                    try self.growRootToContainImpl(child_box);
                 }
 
                 var root_node = try acc.loadNode(acc.getRoot().?);
                 defer acc.deinitNode(&root_node);
-                try self.insertIntoNode(&root_node, child_box, value);
+                try self.insertIntoNodeImpl(&root_node, child_box, value);
                 try self.model.incrementEntriesCount();
             } else {
-                try self.initRootBounds(child_box);
+                try self.initRootBoundsImpl(child_box);
                 var root_node = try acc.loadNode(acc.getRoot().?);
                 defer acc.deinitNode(&root_node);
-                try self.insertIntoNode(&root_node, child_box, value);
+                try self.insertIntoNodeImpl(&root_node, child_box, value);
                 try self.model.incrementEntriesCount();
             }
         }
@@ -117,7 +182,18 @@ pub fn TreeImpl(comptime ModelT: type) type {
             }
         }
 
+        pub fn queryEditable(self: *Self, qbox: Box, comptime callback: anytype, ctx: anytype) Error!void {
+            const acc = self.accessor();
+            if (acc.getRoot()) |root_id| {
+                var root_node = try acc.loadNode(root_id);
+                defer acc.deinitNode(&root_node);
+                try self.queryEditableNode(&root_node, qbox, callback, ctx);
+            }
+        }
+
         pub fn remove(self: *Self, qbox: Box, comptime predicate: anytype, ctx: anytype) Error!bool {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const acc = self.accessor();
             if (acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
@@ -135,6 +211,8 @@ pub fn TreeImpl(comptime ModelT: type) type {
         /// Removes every entry selected by `predicate` within `qbox`.
         /// Partial progress is retained if predicate, trait, count, or cleanup fails.
         pub fn removeIf(self: *Self, qbox: Box, comptime predicate: anytype, ctx: anytype) Error!usize {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const acc = self.accessor();
             if (acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
@@ -212,12 +290,18 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn insertIntoNode(self: *Self, node: *Node, child_box: Box, value: Value) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
+            return self.insertIntoNodeImpl(node, child_box, value);
+        }
+
+        fn insertIntoNodeImpl(self: *Self, node: *Node, child_box: Box, value: Value) Error!void {
             if (!node.isLeaf()) {
                 const node_box = node.bounds();
                 if (Self.childIndexFor(&node_box, &child_box)) |child_id| {
                     var next_node = try self.accessor().loadNode(node.getChild(child_id).?);
                     defer self.accessor().deinitNode(&next_node);
-                    try self.insertIntoNode(&next_node, child_box, value);
+                    try self.insertIntoNodeImpl(&next_node, child_box, value);
                     try self.onInsert(node, child_box, value);
                     return;
                 } else {
@@ -228,10 +312,10 @@ pub fn TreeImpl(comptime ModelT: type) type {
             }
             if (!(try node.canInsertEntry(child_box, value)) and node.canSplit()) {
                 const node_id = node.id();
-                try self.splitNode(node);
+                try self.splitNodeImpl(node);
                 var split_node = try self.accessor().loadNode(node_id);
                 defer self.accessor().deinitNode(&split_node);
-                try self.insertIntoNode(&split_node, child_box, value);
+                try self.insertIntoNodeImpl(&split_node, child_box, value);
                 return;
             }
             try node.addEntry(child_box, value);
@@ -239,6 +323,12 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn splitNode(self: *Self, node: *Node) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
+            return self.splitNodeImpl(node);
+        }
+
+        fn splitNodeImpl(self: *Self, node: *Node) Error!void {
             try node.beforeSplit();
             const acc = self.accessor();
             const parent_id = node.id();
@@ -284,6 +374,12 @@ pub fn TreeImpl(comptime ModelT: type) type {
         }
 
         pub fn growRootToContain(self: *Self, box: Box) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
+            return self.growRootToContainImpl(box);
+        }
+
+        fn growRootToContainImpl(self: *Self, box: Box) Error!void {
             var acc = self.accessor();
             var current_root_id = acc.getRoot() orelse return;
 
@@ -378,6 +474,47 @@ pub fn TreeImpl(comptime ModelT: type) type {
                     var child_node = try self.accessor().loadNode(child_id);
                     defer self.accessor().deinitNode(&child_node);
                     try self.queryNode(&child_node, qbox, callback, ctx);
+                }
+            }
+        }
+
+        fn queryEditableNode(
+            self: *Self,
+            node: *Node,
+            qbox: Box,
+            comptime callback: anytype,
+            ctx: anytype,
+        ) Error!void {
+            if (!node.bounds().overlaps(&qbox)) {
+                return;
+            }
+
+            var entries = try node.entriesMut();
+            defer entries.deinit();
+            var cursor = try entries.cursor();
+            defer cursor.deinit();
+            while (try cursor.next()) |entry| {
+                const entry_box = entry.box();
+                if (entry_box.overlaps(&qbox)) {
+                    var hit = EditableQueryHit{
+                        .tree = self,
+                        .node = node,
+                        .entries = &entries,
+                        .cursor = &cursor,
+                        .box = entry_box,
+                    };
+                    try callback(ctx, &hit);
+                }
+            }
+
+            if (node.isLeaf()) {
+                return;
+            }
+            inline for (0..child_count) |i| {
+                if (node.getChild(i)) |child_id| {
+                    var child_node = try self.accessor().loadNode(child_id);
+                    defer self.accessor().deinitNode(&child_node);
+                    try self.queryEditableNode(&child_node, qbox, callback, ctx);
                 }
             }
         }
@@ -594,6 +731,53 @@ pub fn TreeImpl(comptime ModelT: type) type {
         fn onRemove(self: *Self, node: *Node, box: Box, value: Value) Error!void {
             if (@hasDecl(Model, "onRemove")) {
                 try self.model.onRemove(node, box, value);
+            }
+        }
+
+        fn updateTraitsAlongPath(
+            self: *Self,
+            start_id: NodeId,
+            box: Box,
+            old_value: Value,
+            new_value: Value,
+        ) Error!void {
+            var current_id: ?NodeId = start_id;
+            while (current_id) |node_id| {
+                var node = try self.accessor().loadNode(node_id);
+                defer self.accessor().deinitNode(&node);
+                const parent_id = try node.getParent();
+                self.model.onUpdate(&node, box, old_value, new_value) catch |err| {
+                    self.rollbackTraitUpdates(start_id, node_id, box, new_value, old_value);
+                    return err;
+                };
+                current_id = parent_id;
+            }
+        }
+
+        fn rollbackTraitUpdates(
+            self: *Self,
+            start_id: NodeId,
+            failed_id: NodeId,
+            box: Box,
+            old_value: Value,
+            new_value: Value,
+        ) void {
+            var current_id: ?NodeId = start_id;
+            while (current_id) |node_id| {
+                if (std.meta.eql(node_id, failed_id)) {
+                    return;
+                }
+                var node = self.accessor().loadNode(node_id) catch {
+                    @panic("OrthTree trait update rollback could not load a node");
+                };
+                defer self.accessor().deinitNode(&node);
+                const parent_id = node.getParent() catch {
+                    @panic("OrthTree trait update rollback could not load a parent");
+                };
+                self.model.onUpdate(&node, box, old_value, new_value) catch {
+                    @panic("OrthTree trait update rollback failed");
+                };
+                current_id = parent_id;
             }
         }
 

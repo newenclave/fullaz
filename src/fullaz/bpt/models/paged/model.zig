@@ -3,10 +3,12 @@ const bpt_page = @import("view.zig");
 const interfaces = @import("../interfaces.zig");
 const core = @import("../../../core/core.zig");
 const errors = core.errors;
+const StructuralMutationCoordinator = core.structural_mutation.StructuralMutationCoordinator;
 
 pub const Settings = struct {
     maximum_key_size: usize = 128,
     maximum_value_size: usize = 128,
+    fixed_value_size: ?usize = null,
     leaf_page_kind: u16 = 0,
     inode_page_kind: u16 = 1,
 };
@@ -52,6 +54,7 @@ pub fn PagedModel(
     const ErrorSet = HeaderPageView.Error ||
         errors.PageError ||
         errors.SlotsError ||
+        core.structural_mutation.Error ||
         PageCacheT.Error ||
         StorageManagerT.Error ||
         errors.OrderError ||
@@ -221,6 +224,11 @@ pub fn PagedModel(
             if (value) |value_data| {
                 if (value_data.len > self.ctx.settings.maximum_value_size) {
                     return Error.ValueTooLarge;
+                }
+                if (self.ctx.settings.fixed_value_size) |fixed_value_size| {
+                    if (value_data.len != fixed_value_size) {
+                        return Error.ValueNotFixedLength;
+                    }
                 }
             }
         }
@@ -483,6 +491,96 @@ pub fn PagedModel(
         }
     };
 
+    const ValueEditorImpl = struct {
+        const Self = @This();
+
+        pub const Error = ErrorSet;
+
+        layout_lock: ?PageHandle.LayoutLock,
+        snapshot: ?PageHandle,
+        position: usize,
+        value_len: usize,
+        coordinator: *StructuralMutationCoordinator,
+        open: bool = true,
+
+        fn init(
+            layout_lock: PageHandle.LayoutLock,
+            snapshot: PageHandle,
+            position: usize,
+            value_len: usize,
+            coordinator: *StructuralMutationCoordinator,
+        ) Self {
+            return .{
+                .layout_lock = layout_lock,
+                .snapshot = snapshot,
+                .position = position,
+                .value_len = value_len,
+                .coordinator = coordinator,
+            };
+        }
+
+        pub fn valueMut(self: *Self) Error![]u8 {
+            try self.ensureOpen();
+            if (self.layout_lock) |*layout_lock| {
+                var view = LeafImpl.PageViewType.init(try layout_lock.dataMut());
+                const value = try view.valueMut(self.position);
+                if (value.len != self.value_len) {
+                    return error.EditorInvalidated;
+                }
+                return value;
+            }
+            return error.EditorInvalidated;
+        }
+
+        pub fn finish(self: *Self) Error!void {
+            try self.ensureOpen();
+            self.close();
+        }
+
+        pub fn deinit(self: *Self) void {
+            if (!self.open) {
+                return;
+            }
+            self.restore() catch @panic("BPT value editor rollback failed");
+            self.close();
+        }
+
+        fn ensureOpen(self: *const Self) Error!void {
+            if (!self.open) {
+                return error.EditorInvalidated;
+            }
+        }
+
+        fn restore(self: *Self) Error!void {
+            if (self.layout_lock) |*layout_lock| {
+                if (self.snapshot) |*snapshot| {
+                    const snapshot_bytes = try snapshot.data();
+                    var view = LeafImpl.PageViewType.init(try layout_lock.dataMut());
+                    const value = try view.valueMut(self.position);
+                    if (value.len != self.value_len) {
+                        return error.EditorInvalidated;
+                    }
+                    @memcpy(value, snapshot_bytes[0..self.value_len]);
+                    return;
+                }
+            }
+            return error.EditorInvalidated;
+        }
+
+        fn close(self: *Self) void {
+            if (self.layout_lock) |*layout_lock| {
+                layout_lock.deinit();
+                self.layout_lock = null;
+            }
+            if (self.snapshot) |*snapshot| {
+                snapshot.deinit();
+                self.snapshot = null;
+            }
+            self.coordinator.finishValueEditor();
+            self.open = false;
+        }
+    };
+
     const AccessorImpl = struct {
         const Self = @This();
         pub const Error = ErrorSet;
@@ -491,10 +589,12 @@ pub fn PagedModel(
         const RootType = CachePageId;
 
         ctx: Context = undefined,
+        coordinator: StructuralMutationCoordinator = .{},
 
         fn init(ctx: Context) Self {
             return .{
                 .ctx = ctx,
+                .coordinator = .{},
             };
         }
 
@@ -650,6 +750,27 @@ pub fn PagedModel(
             }
         }
 
+        pub fn openValueEditor(self: *Self, leaf: *LeafImpl, pos: usize) Error!ValueEditorImpl {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+
+            const value = try leaf.getValue(pos);
+            var snapshot = try self.ctx.cache.getTemporaryPage();
+            errdefer snapshot.deinit();
+            const snapshot_bytes = try snapshot.dataMut();
+            @memcpy(snapshot_bytes[0..value.len], value);
+
+            var layout_lock = try leaf.handle.lockLayout();
+            errdefer layout_lock.deinit();
+            return ValueEditorImpl.init(
+                layout_lock,
+                snapshot,
+                pos,
+                value.len,
+                &self.coordinator,
+            );
+        }
+
         pub fn borrowKeyfromInode(self: *Self, inode: *const InodeImpl, pos: usize) ErrorSet!KeyBorrowImpl {
             const view = InodeImpl.PageViewTypeConst.init(try inode.handle.data());
             const entry = try view.get(pos);
@@ -710,6 +831,7 @@ pub fn PagedModel(
         pub const KeyBorrowType = KeyBorrowImpl;
 
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = ValueEditorImpl;
 
         pub const Error = ErrorSet;
 
@@ -724,6 +846,11 @@ pub fn PagedModel(
         pub fn init(device: *PageCacheT, storage_mgr: *StorageManagerT, settings: Settings, ctx: CtxT) Error!Self {
             if (settings.leaf_page_kind == settings.inode_page_kind) {
                 return Error.InvalidSettings;
+            }
+            if (settings.fixed_value_size) |fixed_value_size| {
+                if (fixed_value_size > settings.maximum_value_size) {
+                    return Error.InvalidSettings;
+                }
             }
             const maximum_leaf_content = std.math.add(
                 usize,
@@ -836,6 +963,10 @@ pub fn PagedModel(
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
 
         pub fn keyBorrowAsLike(_: *const Self, key: *const KeyBorrowType) KeyLikeType {

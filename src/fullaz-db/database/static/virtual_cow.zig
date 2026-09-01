@@ -343,6 +343,7 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
 
             pub fn commit(self: *TransactionSelf) Error!void {
                 const core = try self.activeCore();
+                try requireTransactionIdle(core);
                 if (core.commit_generation == std.math.maxInt(u64)) {
                     core.poisoned = true;
                     return error.CommitGenerationExhausted;
@@ -371,6 +372,7 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
 
             pub fn rollback(self: *TransactionSelf) Error!void {
                 const core = try self.activeCore();
+                try requireTransactionIdle(core);
                 core.retired_queue.deinit();
                 try core.transaction_cache_batch.discard();
                 restoreRetiredQueueState(core);
@@ -454,6 +456,10 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
                 );
             }
             return states;
+        }
+
+        fn requireTransactionIdle(core: *const Core) Error!void {
+            return shape.requireTransactionIdle(SchemaT, bindings, &core.components);
         }
 
         fn restoreTransactionStates(core: *Core, states: TransactionStates) void {
@@ -945,6 +951,8 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
             if (core.transaction_active) {
                 @panic("VirtualStaticDatabaseWithCow.deinit called with an active transaction");
             }
+            requireTransactionIdle(core) catch
+                @panic("VirtualStaticDatabaseWithCow.deinit called with an active value editor");
             deinitCore(core);
             self.* = undefined;
         }

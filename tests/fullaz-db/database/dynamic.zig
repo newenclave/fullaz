@@ -332,6 +332,8 @@ const ReclaimTrait = struct {
 
             pub fn initRuntime(_: *Runtime, _: *BackendT, _: fullaz_db.PageKindRange, _: InitOptions) Error!void {}
             pub fn deinitRuntime(_: *Runtime) void {}
+
+            pub fn requireTransactionIdle(_: *const Runtime) Error!void {}
             pub fn captureTransactionState(_: *const Runtime) TransactionState {}
             pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
             pub fn proxy(runtime: *Runtime) Proxy {
@@ -1337,6 +1339,11 @@ test "fullaz-db: dynamic schema database reuses reclaimed BPT pages after reopen
         var transaction = try database.begin();
         try std.testing.expect(try transaction.get("index").insert("key", "value"));
         try transaction.commit();
+        try database.startGarbageCollection();
+        while (try database.stepGarbageCollection(1) != .complete) {}
+        var found = (try database.getConst("index").find("key")).?;
+        defer found.deinit();
+        try std.testing.expectEqualStrings("value", (try found.get()).?.value);
     }
     {
         var device = try Device.open(io, path, 1024);
@@ -1681,4 +1688,674 @@ test "fullaz-db: WAL dynamic schema database commits and reopens" {
         defer database.deinit();
         try std.testing.expectEqual(@as(u64, 3), try database.getConst("blob").size());
     }
+}
+
+test "fullaz-db: dynamic schema GC completes and releases its lease" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 });
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+
+    const device = try Device.init(std.testing.allocator, 1024);
+    var database = try Database.format(std.testing.allocator, device, .{
+        .image_id = [_]u8{0x47} ** 16,
+        .cache_frames = 32,
+    });
+    defer database.deinit();
+
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+
+    var transaction = try database.begin();
+    defer transaction.deinit();
+    try transaction.commit();
+}
+
+test "fullaz-db: dynamic schema embedded BPT hierarchy edits and collects child roots" {
+    const ChildDescriptor = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 2,
+        .maximum_key_size = 32,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    });
+    const Hierarchy = fullaz_db.Hierarchy(.{
+        .registry_id = 0x1234,
+        .types = &.{
+            .{
+                .tag = "folder",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = ChildDescriptor,
+                .allowed_child_type_ids = &.{ 1, 2 },
+            },
+            .{
+                .tag = "document",
+                .type_id = 2,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = ChildDescriptor,
+                .allowed_child_type_ids = &.{},
+            },
+        },
+    });
+    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 32,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    }));
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        .{ .image_id = [_]u8{0xE1} ** 16, .components = .{ .tree = .{} } },
+    );
+    defer database.deinit();
+
+    var child_root: u32 = undefined;
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("folder", tree.embed("folder")));
+        try std.testing.expect(try tree.insert("raw", tree.raw("folder", "plain")));
+        try std.testing.expectError(
+            error.IncorrectKind,
+            tree.openEmbeddedForEdit("raw", "folder"),
+        );
+        try std.testing.expectError(
+            error.IncorrectType,
+            tree.openEmbeddedForEdit("folder", "document"),
+        );
+
+        var editor = (try tree.openEmbeddedForEdit("folder", "folder")).?;
+        defer editor.deinit();
+        try std.testing.expectError(error.ValueEditorActive, tree.insert("blocked", tree.embed("folder")));
+        try editor.finish();
+        try transaction.rollback();
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("folder", tree.embed("folder")));
+        var editor = (try tree.openEmbeddedForEdit("folder", "folder")).?;
+        defer editor.deinit();
+        try std.testing.expect(try editor.insert("child", editor.raw("folder", "value")));
+        child_root = editor.root().?;
+        var found = (try editor.find("child")).?;
+        const child_value = (try found.get()).?.value;
+        try std.testing.expectEqualStrings(
+            "value",
+            (try fullaz_db.value_envelope.readRaw(
+                child_value,
+                Hierarchy.typeIdentityByTag("folder"),
+            )).payload,
+        );
+        found.deinit();
+        try editor.finish();
+        try transaction.commit();
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.remove("folder"));
+        try transaction.commit();
+    }
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(child_root));
+}
+
+test "fullaz-db: dynamic schema recursive embedded BPT hierarchy retains nested envelopes" {
+    const FolderDescriptor = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 2,
+        .maximum_key_size = 32,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    });
+    const ChainStoreDescriptor = fullaz_db.chainStore(.{});
+    const Hierarchy = fullaz_db.Hierarchy(.{
+        .registry_id = 0x1240,
+        .types = &.{
+            .{
+                .tag = "folder",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = FolderDescriptor,
+                .allowed_child_type_ids = &.{ 1, 2 },
+            },
+            .{
+                .tag = "document",
+                .type_id = 2,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = ChainStoreDescriptor,
+                .allowed_child_type_ids = &.{},
+            },
+            .{
+                .tag = "forbidden",
+                .type_id = 3,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = ChainStoreDescriptor,
+                .allowed_child_type_ids = &.{},
+            },
+        },
+    });
+    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 32,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    }));
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        .{ .image_id = [_]u8{0xE9} ** 16, .components = .{ .tree = .{} } },
+    );
+    defer database.deinit();
+
+    var folder_root: u32 = undefined;
+    var nested_folder_root: u32 = undefined;
+    var document_chunk: u32 = undefined;
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("root", tree.embed("folder")));
+        var folder = (try tree.openEmbeddedForEdit("root", "folder")).?;
+        defer folder.deinit();
+        try std.testing.expectError(error.ChildTypeNotAllowed, folder.embed("forbidden"));
+        try std.testing.expect(try folder.insert("raw", folder.raw("folder", "plain")));
+        try std.testing.expect(try folder.insert("sub", try folder.embed("folder")));
+        folder_root = folder.root().?;
+
+        var nested = (try folder.openEmbeddedForEdit("sub", "folder")).?;
+        defer nested.deinit();
+        try std.testing.expectError(
+            error.EditorActive,
+            folder.insert("blocked", folder.raw("folder", "blocked")),
+        );
+        try std.testing.expectError(error.ChildEditorActive, folder.finish());
+        try std.testing.expect(try nested.insert("raw", nested.raw("folder", "nested raw")));
+        try std.testing.expect(try nested.update("raw", nested.raw("folder", "updated nested raw")));
+        try std.testing.expect(try nested.insert("document", try nested.embed("document")));
+        nested_folder_root = nested.root().?;
+
+        var raw = (try nested.find("raw")).?;
+        try std.testing.expectEqualStrings(
+            "updated nested raw",
+            (try fullaz_db.value_envelope.readRaw(
+                (try raw.get()).?.value,
+                Hierarchy.typeIdentityByTag("folder"),
+            )).payload,
+        );
+        raw.deinit();
+
+        var document = (try nested.openEmbeddedForEdit("document", "document")).?;
+        defer document.deinit();
+        try document.append("recursive document");
+        document_chunk = (try document.first()).?;
+        try document.finish();
+        try nested.finish();
+        try folder.finish();
+        try transaction.commit();
+    }
+
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    inline for (.{ folder_root, nested_folder_root, document_chunk }) |page_id| {
+        var retained = try database.cache().fetch(page_id);
+        retained.deinit();
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.remove("root"));
+        try transaction.commit();
+    }
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    inline for (.{ folder_root, nested_folder_root, document_chunk }) |page_id| {
+        try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(page_id));
+    }
+}
+
+test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and collects child roots" {
+    const WeightedSequenceDescriptor = fullaz_db.weightedSequence(.{ .maximum_chunk_size = 64 });
+    const Hierarchy = fullaz_db.Hierarchy(.{
+        .registry_id = 0x1237,
+        .types = &.{
+            .{
+                .tag = "sequence",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = WeightedSequenceDescriptor,
+                .allowed_child_type_ids = &.{},
+            },
+        },
+    });
+    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 32,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    }));
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        .{ .image_id = [_]u8{0xE4} ** 16, .components = .{ .tree = .{} } },
+    );
+    defer database.deinit();
+
+    var child_root: u32 = undefined;
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("sequence", tree.embed("sequence")));
+        var editor = (try tree.openEmbeddedForEdit("sequence", "sequence")).?;
+        defer editor.deinit();
+        try std.testing.expectError(error.ValueEditorActive, tree.insert("blocked", tree.embed("sequence")));
+        try editor.finish();
+        try transaction.rollback();
+    }
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("sequence", tree.embed("sequence")));
+        var editor = (try tree.openEmbeddedForEdit("sequence", "sequence")).?;
+        defer editor.deinit();
+        try editor.append("abcdef");
+        try editor.insert(3, "XYZ");
+        try editor.erase(3, 3);
+        try editor.replace(1, 4, "Q");
+        var read: [3]u8 = undefined;
+        try std.testing.expectEqual(@as(usize, 3), try editor.readAt(0, &read));
+        try std.testing.expectEqualStrings("aQf", &read);
+        try editor.clear();
+        try std.testing.expectEqual(@as(u64, 0), try editor.size());
+        var bytes = [_]u8{0xA5} ** 2048;
+        try editor.append(&bytes);
+        child_root = editor.root().?;
+        try editor.finish();
+        try transaction.commit();
+    }
+
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    var retained = try database.cache().fetch(child_root);
+    retained.deinit();
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        var editor = (try tree.openEmbeddedForEdit("sequence", "sequence")).?;
+        defer editor.deinit();
+        var read: [1]u8 = undefined;
+        try std.testing.expectEqual(@as(usize, 1), try editor.readAt(0, &read));
+        try std.testing.expectEqual(@as(u8, 0xA5), read[0]);
+        try editor.finish();
+        try transaction.rollback();
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.remove("sequence"));
+        try transaction.commit();
+    }
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(child_root));
+}
+
+test "fullaz-db: dynamic schema embedded ChainStore hierarchy traces and collects chunks" {
+    const BptDescriptor = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 2,
+        .maximum_key_size = 32,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    });
+    const ChainStoreDescriptor = fullaz_db.chainStore(.{});
+    const Hierarchy = fullaz_db.Hierarchy(.{
+        .registry_id = 0x1235,
+        .types = &.{
+            .{
+                .tag = "folder",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = BptDescriptor,
+                .allowed_child_type_ids = &.{ 1, 2 },
+            },
+            .{
+                .tag = "blob",
+                .type_id = 2,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = ChainStoreDescriptor,
+                .allowed_child_type_ids = &.{},
+            },
+        },
+    });
+    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 32,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    }));
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        .{ .image_id = [_]u8{0xE2} ** 16, .components = .{ .tree = .{} } },
+    );
+    defer database.deinit();
+
+    var first_chunk: u32 = undefined;
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("folder", tree.embed("folder")));
+        try std.testing.expect(try tree.insert("blob", tree.embed("blob")));
+        try std.testing.expect(try tree.insert("raw", tree.raw("blob", "plain")));
+        try std.testing.expectError(
+            error.IncorrectKind,
+            tree.openEmbeddedForEdit("raw", "blob"),
+        );
+        try std.testing.expectError(
+            error.IncorrectType,
+            tree.openEmbeddedForEdit("folder", "blob"),
+        );
+
+        var editor = (try tree.openEmbeddedForEdit("blob", "blob")).?;
+        defer editor.deinit();
+        try editor.append("hello");
+        var extra = [_]u8{0xA5} ** 2048;
+        try editor.append(&extra);
+        try std.testing.expectEqual(@as(u64, 2053), try editor.size());
+        var read: [5]u8 = undefined;
+        try std.testing.expectEqual(@as(usize, 5), try editor.readAt(0, &read));
+        try std.testing.expectEqualStrings("hello", &read);
+        first_chunk = (try editor.first()).?;
+        try editor.finish();
+        try transaction.commit();
+    }
+
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    var retained = try database.cache().fetch(first_chunk);
+    retained.deinit();
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.remove("blob"));
+        try transaction.commit();
+    }
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(first_chunk));
+}
+
+test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects heap state" {
+    const SlotHeapDescriptor = fullaz_db.slotHeap(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 2,
+        .maximum_key_size = 4,
+        .maximum_value_size = 128,
+        .maximum_level = 4,
+        .size_classes = fullaz_db.SlotHeapSizeClasses{ .one = {} },
+    });
+    const Hierarchy = fullaz_db.Hierarchy(.{
+        .registry_id = 0x1238,
+        .types = &.{
+            .{
+                .tag = "queue",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = SlotHeapDescriptor,
+                .allowed_child_type_ids = &.{},
+            },
+        },
+    });
+    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 32,
+        .maximum_value_size = 320,
+        .fixed_value_size = 320,
+    }));
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 4096),
+        .{ .image_id = [_]u8{0xE8} ** 16, .components = .{ .tree = .{} } },
+    );
+    defer database.deinit();
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("queue", tree.embed("queue")));
+        var editor = (try tree.openEmbeddedForEdit("queue", "queue")).?;
+        defer editor.deinit();
+        try std.testing.expectError(error.ValueEditorActive, tree.insert("blocked", tree.embed("queue")));
+        try editor.finish();
+        try transaction.rollback();
+    }
+
+    var child_root: u32 = undefined;
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("queue", tree.embed("queue")));
+        var editor = (try tree.openEmbeddedForEdit("queue", "queue")).?;
+        defer editor.deinit();
+        var value = [_]u8{0xA5} ** 128;
+        for (0..96) |index| {
+            var key: [4]u8 = undefined;
+            _ = try std.fmt.bufPrint(&key, "{d:0>4}", .{96 - index});
+            try editor.push(&key, &value);
+        }
+        var top = try editor.top();
+        try std.testing.expectEqualSlices(u8, "0001", try top.key());
+        try std.testing.expectError(error.TopPinned, editor.pop());
+        top.deinit();
+        try std.testing.expectEqual(@as(u64, 96), try editor.count());
+        child_root = editor.root().?;
+        try editor.finish();
+        try transaction.commit();
+    }
+
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    {
+        var retained = try database.cache().fetch(child_root);
+        retained.deinit();
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        var editor = (try tree.openEmbeddedForEdit("queue", "queue")).?;
+        defer editor.deinit();
+        var top = try editor.top();
+        defer top.deinit();
+        try std.testing.expectEqualSlices(u8, "0001", try top.key());
+        top.deinit();
+        try editor.pop();
+        try editor.push("0000", "replacement");
+        try editor.finish();
+        try transaction.rollback();
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.remove("queue"));
+        try transaction.commit();
+    }
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(child_root));
+}
+
+test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects child roots" {
+    const RtreeDescriptor = fullaz_db.rtree(.{
+        .Coord = i32,
+        .dimensions = 2,
+        .maximum_entries = 4,
+        .maximum_value_size = 32,
+    });
+    const Hierarchy = fullaz_db.Hierarchy(.{
+        .registry_id = 0x1236,
+        .types = &.{
+            .{
+                .tag = "spatial",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = RtreeDescriptor,
+                .allowed_child_type_ids = &.{},
+            },
+        },
+    });
+    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 32,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    }));
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    const BoundingBox = fullaz.spatial.BoundingBox(i32, 2);
+    const SearchCounter = struct {
+        fn call(count: *usize, _: BoundingBox, value: []const u8) void {
+            if (std.mem.eql(u8, value, "point")) {
+                count.* += 1;
+            }
+        }
+    };
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        .{ .image_id = [_]u8{0xE3} ** 16, .components = .{ .tree = .{} } },
+    );
+    defer database.deinit();
+
+    const point = BoundingBox.initWith(.{ 1, 1 }, .{ 3, 3 });
+    const query = BoundingBox.initWith(.{ 0, 0 }, .{ 100, 100 });
+    var child_root: u32 = undefined;
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("spatial", tree.embed("spatial")));
+        var editor = (try tree.openEmbeddedForEdit("spatial", "spatial")).?;
+        defer editor.deinit();
+        try editor.insert(point, "point");
+        try std.testing.expectError(error.ValueEditorActive, tree.insert("blocked", tree.embed("spatial")));
+        try editor.finish();
+        try transaction.rollback();
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("spatial", tree.embed("spatial")));
+        var editor = (try tree.openEmbeddedForEdit("spatial", "spatial")).?;
+        defer editor.deinit();
+        for (0..5) |index| {
+            const coordinate: i32 = @intCast(index * 10);
+            try editor.insert(
+                BoundingBox.initWith(
+                    .{ coordinate, coordinate },
+                    .{ coordinate + 3, coordinate + 3 },
+                ),
+                "point",
+            );
+        }
+        child_root = editor.root().?;
+        var hit_count: usize = 0;
+        try editor.search(query, &hit_count, SearchCounter.call);
+        try std.testing.expectEqual(@as(usize, 5), hit_count);
+        try editor.finish();
+        try transaction.commit();
+    }
+
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    var retained = try database.cache().fetch(child_root);
+    retained.deinit();
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        var editor = (try tree.openEmbeddedForEdit("spatial", "spatial")).?;
+        defer editor.deinit();
+        var hit_count: usize = 0;
+        try editor.search(query, &hit_count, SearchCounter.call);
+        try std.testing.expectEqual(@as(usize, 5), hit_count);
+        try editor.finish();
+        try transaction.rollback();
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.remove("spatial"));
+        try transaction.commit();
+    }
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(child_root));
 }

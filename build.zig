@@ -234,6 +234,18 @@ pub fn build(b: *std.Build) void {
             .source = "tests/compile_errors/pages/static_bpt_compare_context.zig",
             .expected = "StaticDatabase BPT components require CompareContext = void",
         },
+        .{
+            .source = "tests/compile_errors/hierarchy/duplicate_allowed_child_type_id.zig",
+            .expected = "Duplicate fullaz-db Hierarchy allowed child type ID",
+        },
+        .{
+            .source = "tests/compile_errors/hierarchy/unknown_allowed_child_type_id.zig",
+            .expected = "Unknown fullaz-db Hierarchy allowed child type ID",
+        },
+        .{
+            .source = "tests/compile_errors/hierarchy/bpt_allowed_child_envelope_too_large.zig",
+            .expected = "fullaz-db Hierarchy BPT fixed_value_size cannot hold every allowed child envelope",
+        },
     }) |fixture| {
         addCompileErrorFixture(
             b,

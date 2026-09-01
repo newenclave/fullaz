@@ -1,5 +1,6 @@
 const std = @import("std");
 const interfaces = @import("interfaces.zig");
+const StructuralMutationCoordinator = @import("../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 pub const Settings = struct {
     key_size: usize,
@@ -42,7 +43,7 @@ pub fn Memory(
             OutOfBounds,
             ValueTooLarge,
             WrongNodeKind,
-        };
+        } || @import("../../../core/core.zig").structural_mutation.Error;
 
     const LeafEntry = struct {
         key: []u8,
@@ -518,6 +519,52 @@ pub fn Memory(
         cached_top: ?Location = null,
         entries_count: Count = 0,
         available_inode_heads: []?NodeId,
+        coordinator: StructuralMutationCoordinator = .{},
+
+        const ValueEditorImpl = struct {
+            const EditorSelf = @This();
+
+            pub const Error = ErrorSet;
+            pub const ValueMutType = []u8;
+
+            value: []u8,
+            snapshot: []u8,
+            coordinator: *StructuralMutationCoordinator,
+            allocator: std.mem.Allocator,
+            open: bool = true,
+
+            pub fn valueMut(self: *EditorSelf) ErrorSet![]u8 {
+                try self.ensureOpen();
+                return self.value;
+            }
+
+            pub fn finish(self: *EditorSelf) ErrorSet!void {
+                try self.ensureOpen();
+                self.close();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                @memcpy(self.value, self.snapshot);
+                self.close();
+            }
+
+            fn ensureOpen(self: *const EditorSelf) ErrorSet!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+            }
+
+            fn close(self: *EditorSelf) void {
+                self.allocator.free(self.snapshot);
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
+        pub const ValueEditorType = ValueEditorImpl;
 
         fn init(
             allocator: std.mem.Allocator,
@@ -541,6 +588,7 @@ pub fn Memory(
                     .settings = settings,
                 },
                 .available_inode_heads = heads,
+                .coordinator = .{},
             };
         }
 
@@ -706,6 +754,23 @@ pub fn Memory(
             leaf.container.space_registered = false;
         }
 
+        pub fn openValueEditor(self: *Self, leaf: *LeafImpl, index: usize) Error!ValueEditorType {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+            if (index >= leaf.container.entries.items.len) {
+                return Error.OutOfBounds;
+            }
+            const value = leaf.container.entries.items[index].value;
+            const snapshot = try self.ctx.allocator.dupe(u8, value);
+            errdefer self.ctx.allocator.free(snapshot);
+            return .{
+                .value = value,
+                .snapshot = snapshot,
+                .coordinator = &self.coordinator,
+                .allocator = self.ctx.allocator,
+            };
+        }
+
         fn getNode(self: *Self, pid: NodeId) Error!NodeVariant {
             if (pid >= self.nodes.items.len) {
                 return Error.InvalidId;
@@ -729,6 +794,7 @@ pub fn Memory(
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = AccessorType.ValueEditorType;
         pub const Error = ErrorSet;
 
         accessor_state: AccessorType,
@@ -753,6 +819,10 @@ pub fn Memory(
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
 
         pub fn compareKeys(self: *const Self, left: KeyOutType, right: KeyOutType) Error!std.math.Order {

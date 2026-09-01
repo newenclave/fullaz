@@ -5,6 +5,7 @@ const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
 const requiresField = interfaces.requiresField;
+const StructuralMutationCoordinator = @import("../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 pub fn assertBox(comptime K: type) void {
     requiresTypeDeclaration(K, "Coord");
@@ -135,6 +136,10 @@ fn assertAccessor(comptime M: type) void {
     requiresFnSignature(A, "deinitNode", fn (*A, *M.Node) void);
 }
 
+/// An editable model must expose an `onUpdate` hook for replacing an entry's
+/// old contribution with its new contribution. If the hook returns an error,
+/// it must leave that node's trait unchanged; the tree reverses already
+/// updated ancestors before returning the error.
 pub fn assertModel(comptime M: type) void {
     requiresErrorDeclaration(M, "Error");
     requiresTypeDeclaration(M, "NodeId");
@@ -167,6 +172,14 @@ pub fn assertModel(comptime M: type) void {
     requiresFnSignature(M, "valueBorrowAsIn", fn (*const M, *const ValueBorrow) ValueIn);
     requiresFnSignature(M, "finalizeBorrowValue", fn (*M, *ValueBorrow) Error!void);
     requiresFnSignature(M, "deinitBorrowValue", fn (*M, *ValueBorrow) void);
+    requiresTypeDeclaration(M, "ValueEditorType");
+    requiresFnSignature(M, "structuralMutationCoordinator", fn (*M) *StructuralMutationCoordinator);
+    requiresFnSignature(
+        M,
+        "openValueEditor",
+        fn (*M, *M.Node, *M.Node.EntriesMut, *M.Node.EntriesMut.Cursor) M.Error!M.ValueEditorType,
+    );
+    requiresFnSignature(M, "onUpdate", fn (*M, *M.Node, M.Box, M.ValueIn, M.ValueIn) M.Error!void);
 }
 
 pub fn requiresLegacyPagedStorageManager(comptime T: type) void {

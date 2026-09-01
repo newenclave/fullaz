@@ -4,6 +4,7 @@ const interfaces = @import("../../../contracts/interfaces.zig");
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
+const StructuralMutationCoordinator = @import("../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 pub const WinnerChange = enum {
     unchanged,
@@ -129,6 +130,31 @@ fn assertAccessor(comptime ModelT: type) void {
     requiresFnSignature(Accessor, "removeLeafSpace", fn (*Accessor, NodeId) Error!void);
 }
 
+/// A value editor leases one existing leaf value without changing its key,
+/// slot size, or heap topology.
+///
+/// ```zig
+/// const ValueEditor = struct {
+///     pub const Error = error{};
+///     pub const ValueMutType = []u8;
+///     pub fn valueMut(self: *@This()) Error!ValueMutType { _ = self; return &.{}; }
+///     pub fn finish(self: *@This()) Error!void { _ = self; }
+///     pub fn deinit(self: *@This()) void { _ = self; }
+/// };
+/// ```
+fn assertValueEditor(comptime ModelT: type) void {
+    const Editor = ModelT.ValueEditorType;
+    const Error = ModelT.Error;
+    requiresErrorDeclaration(Editor, "Error");
+    requiresTypeDeclaration(Editor, "ValueMutType");
+    if (Editor.Error != Error) {
+        @compileError(@typeName(Editor) ++ ".Error must match " ++ @typeName(ModelT) ++ ".Error");
+    }
+    requiresFnSignature(Editor, "valueMut", fn (*Editor) Error!Editor.ValueMutType);
+    requiresFnSignature(Editor, "finish", fn (*Editor) Error!void);
+    requiresFnSignature(Editor, "deinit", fn (*Editor) void);
+}
+
 /// A slot-heap model supplies page-like leaves/inodes and metadata access.
 ///
 /// ```zig
@@ -157,14 +183,26 @@ pub fn assertModel(comptime ModelT: type) void {
     requiresTypeDeclaration(ModelT, "LeafType");
     requiresTypeDeclaration(ModelT, "InodeType");
     requiresTypeDeclaration(ModelT, "AccessorType");
+    requiresTypeDeclaration(ModelT, "ValueEditorType");
 
     assertLocation(ModelT.LocationType, ModelT.NodeIdType, ModelT.SlotIdType);
     assertLeaf(ModelT);
     assertInode(ModelT);
     assertAccessor(ModelT);
+    assertValueEditor(ModelT);
 
     const Error = ModelT.Error;
     requiresFnSignature(ModelT, "accessor", fn (*ModelT) *ModelT.AccessorType);
+    requiresFnSignature(
+        ModelT.AccessorType,
+        "openValueEditor",
+        fn (*ModelT.AccessorType, *ModelT.LeafType, usize) ModelT.Error!ModelT.ValueEditorType,
+    );
+    requiresFnSignature(
+        ModelT,
+        "structuralMutationCoordinator",
+        fn (*ModelT) *StructuralMutationCoordinator,
+    );
     requiresFnSignature(
         ModelT,
         "compareKeys",

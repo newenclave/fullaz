@@ -221,3 +221,34 @@ test "SkipList: iterator remove test" {
     timestampPrint("Done removing the keys...\n", .{});
     try std.testing.expectEqual(count, half);
 }
+
+test "SkipList memory: iterator value editor preserves duplicate identity and generations" {
+    var prng: std.Random.DefaultPrng = .init(1);
+    const Model = MemoryModel(u32, u32, keyCmp, void);
+    var model = try Model.init(std.testing.allocator, 4, prng.random());
+    defer model.deinit();
+    const SL = SkipList(Model);
+    var sl = SL.init(&model);
+
+    try sl.insert(1, 10);
+    try sl.insert(1, 20);
+    var it = try sl.find(1);
+    defer it.deinit();
+    try std.testing.expectEqual(@as(u32, 20), (try it.value()).*);
+
+    var editor = (try it.editValue()).?;
+    (try editor.valueMut()).* = 30;
+    try std.testing.expectError(error.ValueEditorActive, sl.insert(2, 2));
+    try std.testing.expectError(error.ValueEditorActive, it.editValue());
+    editor.deinit();
+    try std.testing.expectEqual(@as(u32, 20), (try it.value()).*);
+
+    var finished = (try it.editValue()).?;
+    (try finished.valueMut()).* = 40;
+    try finished.finish();
+    try std.testing.expectEqual(@as(u32, 40), (try it.value()).*);
+    try std.testing.expectError(error.EditorInvalidated, finished.valueMut());
+
+    try sl.insert(2, 2);
+    try std.testing.expectError(error.StaleIterator, it.value());
+}

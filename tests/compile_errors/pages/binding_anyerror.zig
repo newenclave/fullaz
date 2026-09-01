@@ -20,6 +20,7 @@ const Binding = struct {
     }
 
     pub fn deinitRuntime(_: *Runtime) void {}
+    pub fn requireTransactionIdle(_: *const Runtime) Error!void {}
 
     pub fn captureTransactionState(_: *const Runtime) TransactionState {}
 

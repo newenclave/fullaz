@@ -8,7 +8,11 @@ pub const component_name_bpt_leaf: PageKind = 0x0004;
 pub const component_name_bpt_inode: PageKind = 0x0005;
 pub const component_metadata: PageKind = 0x0006;
 pub const retired_page_queue: PageKind = 0x0007;
-pub const first_reserved: PageKind = 0x0008;
+pub const gc_state: PageKind = 0x0008;
+pub const gc_mark_bitmap: PageKind = 0x0009;
+pub const gc_free_bitmap: PageKind = 0x000a;
+pub const gc_queue: PageKind = 0x000b;
+pub const first_reserved: PageKind = 0x000c;
 pub const first_component: PageKind = 0x0100;
 pub const invalid_sentinel: PageKind = 0xffff;
 
@@ -29,6 +33,10 @@ comptime {
         component_name_bpt_inode,
         component_metadata,
         retired_page_queue,
+        gc_state,
+        gc_mark_bitmap,
+        gc_free_bitmap,
+        gc_queue,
     };
     for (assigned, 0..) |kind, index| {
         if (kind < catalog_slot_chain or kind >= first_reserved) {

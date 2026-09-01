@@ -4,6 +4,7 @@ const interfaces = @import("../interfaces.zig");
 const geometry = @import("../../../geometry.zig");
 const page_rtree = @import("../../../../page/rtree.zig");
 const errors = @import("../../../../core/errors.zig");
+const StructuralMutationCoordinator = @import("../../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 pub const Settings = struct {
     leaf_page_kind: u16 = 0,
@@ -54,6 +55,7 @@ pub fn PagedModel(
         errors.SlotsError ||
         PageCacheT.Error ||
         StorageManagerT.Error ||
+        @import("../../../../core/core.zig").structural_mutation.Error ||
         error{
             ValueTooLarge,
             NodeFull,
@@ -335,9 +337,87 @@ pub fn PagedModel(
         pub const PageCache = PageCacheT;
 
         ctx: Context,
+        coordinator: StructuralMutationCoordinator = .{},
+
+        const ValueEditorImpl = struct {
+            const EditorSelf = @This();
+
+            pub const Error = ErrorSet;
+            pub const ValueMutType = []u8;
+
+            layout_lock: ?PageHandle.LayoutLock,
+            snapshot: ?PageHandle,
+            position: usize,
+            value_len: usize,
+            coordinator: *StructuralMutationCoordinator,
+            open: bool = true,
+
+            pub fn valueMut(self: *EditorSelf) ErrorSet![]u8 {
+                try self.ensureOpen();
+                if (self.layout_lock) |*layout_lock| {
+                    var view = LeafImpl.MutView.init(try layout_lock.dataMut());
+                    const value = try view.getValueMut(self.position);
+                    if (value.len != self.value_len) {
+                        return error.EditorInvalidated;
+                    }
+                    return value;
+                }
+                return error.EditorInvalidated;
+            }
+
+            pub fn finish(self: *EditorSelf) ErrorSet!void {
+                try self.ensureOpen();
+                self.close();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                self.restore() catch @panic("R-tree value editor rollback failed");
+                self.close();
+            }
+
+            fn ensureOpen(self: *const EditorSelf) ErrorSet!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+            }
+
+            fn restore(self: *EditorSelf) ErrorSet!void {
+                if (self.layout_lock) |*layout_lock| {
+                    if (self.snapshot) |*snapshot| {
+                        const snapshot_bytes = try snapshot.data();
+                        var view = LeafImpl.MutView.init(try layout_lock.dataMut());
+                        const value = try view.getValueMut(self.position);
+                        if (value.len != self.value_len) {
+                            return error.EditorInvalidated;
+                        }
+                        @memcpy(value, snapshot_bytes[0..self.value_len]);
+                        return;
+                    }
+                }
+                return error.EditorInvalidated;
+            }
+
+            fn close(self: *EditorSelf) void {
+                if (self.layout_lock) |*layout_lock| {
+                    layout_lock.deinit();
+                    self.layout_lock = null;
+                }
+                if (self.snapshot) |*snapshot| {
+                    snapshot.deinit();
+                    self.snapshot = null;
+                }
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
+        pub const ValueEditorType = ValueEditorImpl;
 
         fn init(ctx: Context) Self {
-            return .{ .ctx = ctx };
+            return .{ .ctx = ctx, .coordinator = .{} };
         }
 
         fn deinit(_: *Self) void {}
@@ -475,6 +555,27 @@ pub fn PagedModel(
                 v.deinit();
             }
         }
+
+        pub fn openValueEditor(self: *Self, leaf: *LeafImpl, position: usize) Error!ValueEditorType {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+
+            const value = try leaf.getValue(position);
+            var snapshot = try self.ctx.cache.getTemporaryPage();
+            errdefer snapshot.deinit();
+            const snapshot_bytes = try snapshot.dataMut();
+            @memcpy(snapshot_bytes[0..value.len], value);
+
+            var layout_lock = try leaf.handle.lockLayout();
+            errdefer layout_lock.deinit();
+            return .{
+                .layout_lock = layout_lock,
+                .snapshot = snapshot,
+                .position = position,
+                .value_len = value.len,
+                .coordinator = &self.coordinator,
+            };
+        }
     };
 
     return struct {
@@ -489,6 +590,7 @@ pub fn PagedModel(
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = AccessorType.ValueEditorType;
         pub const max_entries = max_entries_v;
 
         accessor_state: AccessorType,
@@ -590,6 +692,10 @@ pub fn PagedModel(
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
 
         pub fn valueOutAsIn(_: *const Self, value: ValueOutType) ValueInType {

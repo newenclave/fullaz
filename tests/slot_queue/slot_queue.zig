@@ -71,3 +71,33 @@ test "SlotQueue: enqueue, front, dequeue, and iterate" {
     try std.testing.expect(try queue.isEmpty());
     try std.testing.expectError(error.EmptySet, queue.dequeue());
 }
+
+test "SlotQueue: front and iterator value editors" {
+    const Queue = SlotQueue(Cache, RootOnlyStorageManager, .little);
+
+    var manager = RootOnlyStorageManager{};
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var queue = try Queue.init(&cache, &manager, .{});
+    defer queue.deinit();
+
+    try queue.enqueue("front");
+    var front = try queue.front();
+    defer front.deinit();
+    var editor = try front.editValue();
+    defer editor.deinit();
+    (try editor.valueMut())[0] = 'F';
+    try std.testing.expectError(error.ValueEditorActive, queue.enqueue("blocked"));
+    try editor.finish();
+    try std.testing.expectEqualStrings("Front", try front.value());
+
+    var iterator = (try queue.iterator()).?;
+    defer iterator.deinit();
+    const current = (try iterator.next()).?;
+    var rollback = (try iterator.editValue()).?;
+    (try rollback.valueMut())[1] = 'X';
+    rollback.deinit();
+    try std.testing.expectEqualStrings("Front", current);
+}

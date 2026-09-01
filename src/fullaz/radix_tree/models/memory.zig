@@ -1,5 +1,7 @@
 const std = @import("std");
 const errors = @import("../../core/errors.zig");
+const StructuralMutationCoordinator = @import("../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
+const StructuralMutationError = @import("../../core/core.zig").structural_mutation.Error;
 
 const KeySplitter = @import("../splitter.zig").Splitter;
 
@@ -17,7 +19,8 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
         errors.PageError ||
         errors.IndexError ||
         errors.SpaceError ||
-        std.mem.Allocator.Error;
+        std.mem.Allocator.Error ||
+        StructuralMutationError;
 
     const SplitKeyImpl = struct {
         const Self = @This();
@@ -356,12 +359,57 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
 
         pub const Error = ErrorSet || Splitter.Error;
 
+        const ValueEditorImpl = struct {
+            const EditorSelf = @This();
+
+            pub const Error = ErrorSet;
+            pub const ValueMutType = *ValueT;
+
+            leaf: *LeafContainer,
+            position: usize,
+            snapshot: ValueT,
+            coordinator: *StructuralMutationCoordinator,
+            open: bool = true,
+
+            pub fn valueMut(self: *EditorSelf) ErrorSet!ValueMutType {
+                try self.ensureOpen();
+                return &self.leaf.cont.items[self.position].?;
+            }
+
+            pub fn finish(self: *EditorSelf) ErrorSet!void {
+                try self.ensureOpen();
+                self.close();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                self.leaf.cont.items[self.position] = self.snapshot;
+                self.close();
+            }
+
+            fn ensureOpen(self: *const EditorSelf) ErrorSet!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+            }
+
+            fn close(self: *EditorSelf) void {
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
+        pub const ValueEditorType = ValueEditorImpl;
+
         alloc: std.mem.Allocator,
         sett: SettingsImpl,
         cont: Container,
         splitter: Splitter,
         root: ?PidType = null,
         free_leaf_ids: std.AutoHashMap(PidType, void),
+        coordinator: StructuralMutationCoordinator = .{},
 
         fn init(alloc: std.mem.Allocator, sett: SettingsImpl) Error!Self {
             return Self{
@@ -370,6 +418,7 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
                 .splitter = Splitter.init(sett.inode_base, sett.leaf_base),
                 .sett = sett,
                 .free_leaf_ids = std.AutoHashMap(PidType, void).init(alloc),
+                .coordinator = .{},
             };
         }
 
@@ -470,6 +519,19 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
             sk.deinit(self.alloc);
         }
 
+        pub fn openValueEditor(self: *Self, leaf: *LeafImpl, key: KeyT) Error!ValueEditorType {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+            _ = try leaf.get(key);
+            const position: usize = @intCast(key);
+            return .{
+                .leaf = leaf.container,
+                .position = position,
+                .snapshot = leaf.container.cont.items[position].?,
+                .coordinator = &self.coordinator,
+            };
+        }
+
         pub fn isLeaf(self: *const Self, pid: PidType) Error!bool {
             if (pid >= self.cont.items.len) {
                 return Error.InvalidId;
@@ -539,6 +601,7 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
         pub const ValueOutType = ValueT;
 
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = AccessorType.ValueEditorType;
         pub const InodeType = InodeImpl;
         pub const LeafType = LeafImpl;
         pub const SplitKeyType = AccessorType.SplitKeyResult;
@@ -559,6 +622,10 @@ pub fn Model(comptime KeyT: type, comptime ValueT: type) type {
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
 
         pub fn getSettings(self: *const Self) *const Settings {

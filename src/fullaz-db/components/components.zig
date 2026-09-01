@@ -1,6 +1,8 @@
 const managers = @import("../component/managers/managers.zig");
 
 pub const bpt = @import("bpt.zig").bpt;
+pub const hierarchyBpt = @import("hierarchy_bpt.zig").hierarchyBpt;
+pub const hierarchyStore = @import("hierarchy_store.zig").hierarchyStore;
 pub const rtree = @import("rtree.zig").rtree;
 pub const slotHeap = @import("slot_heap.zig").slotHeap;
 pub const chainStore = @import("chain_store.zig").chainStore;

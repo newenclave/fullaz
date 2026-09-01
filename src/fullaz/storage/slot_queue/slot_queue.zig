@@ -17,6 +17,7 @@ pub fn SlotQueue(
         pub const Error = Chain.Error || errors.SetError;
         pub const ValueIn = Chain.ValueIn;
         pub const PageId = Chain.PageId;
+        pub const ValueEditor = Chain.ValueEditor;
 
         /// Owns the iterator that keeps the peeked value borrowed from the queue.
         pub const Peek = struct {
@@ -28,6 +29,11 @@ pub fn SlotQueue(
             pub fn value(self: *const PeekSelf) Error![]const u8 {
                 const result = (try self.iterator.get()) orelse return Error.InvalidIterator;
                 return result.value;
+            }
+
+            /// Opens an exact-length mutable editor for the peeked front value.
+            pub fn editValue(self: *PeekSelf) Error!ValueEditor {
+                return (try self.iterator.editValue()) orelse Error.InvalidIterator;
             }
 
             pub fn deinit(self: *PeekSelf) void {
@@ -44,6 +50,11 @@ pub fn SlotQueue(
             pub fn next(self: *IteratorSelf) Error!?[]const u8 {
                 const result = (try self.iterator.next()) orelse return null;
                 return result.value;
+            }
+
+            /// Opens an exact-length mutable editor for the current iterator value.
+            pub fn editValue(self: *IteratorSelf) Error!?ValueEditor {
+                return self.iterator.editValue();
             }
 
             pub fn deinit(self: *IteratorSelf) void {

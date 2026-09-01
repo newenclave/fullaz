@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const geometry = @import("../../geometry.zig");
 const limits = @import("../limits.zig");
+const StructuralMutationCoordinator = @import("../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -26,7 +27,7 @@ pub fn Model(
         NodeFull,
         InvalidId,
         BadData,
-    } || std.mem.Allocator.Error;
+    } || std.mem.Allocator.Error || @import("../../../core/core.zig").structural_mutation.Error;
 
     const LeafEntry = struct { mbr: Key, value: ValueT };
     const InodeEntry = struct { mbr: Key, child: Pid };
@@ -293,11 +294,56 @@ pub fn Model(
         ctx: Context,
         values: NodeList,
         root: ?Pid = null,
+        coordinator: StructuralMutationCoordinator = .{},
+
+        const ValueEditorImpl = struct {
+            const EditorSelf = @This();
+
+            pub const Error = ModelError;
+            pub const ValueMutType = *ValueT;
+
+            value: *ValueT,
+            snapshot: ValueT,
+            coordinator: *StructuralMutationCoordinator,
+            open: bool = true,
+
+            pub fn valueMut(self: *EditorSelf) ModelError!*ValueT {
+                try self.ensureOpen();
+                return self.value;
+            }
+
+            pub fn finish(self: *EditorSelf) ModelError!void {
+                try self.ensureOpen();
+                self.close();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                self.value.* = self.snapshot;
+                self.close();
+            }
+
+            fn ensureOpen(self: *const EditorSelf) ModelError!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+            }
+
+            fn close(self: *EditorSelf) void {
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
+        pub const ValueEditorType = ValueEditorImpl;
 
         fn init(allocator: std.mem.Allocator) Error!Self {
             return .{
                 .ctx = .{ .allocator = allocator },
                 .values = try NodeList.initCapacity(allocator, 0),
+                .coordinator = .{},
             };
         }
 
@@ -456,6 +502,20 @@ pub fn Model(
                 self.values.items[pid] = null;
             }
         }
+
+        pub fn openValueEditor(self: *Self, leaf: *LeafImpl, position: usize) Error!ValueEditorType {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+            if (position >= leaf.container.entries.items.len) {
+                return Error.OutOfBounds;
+            }
+            const value = &leaf.container.entries.items[position].value;
+            return .{
+                .value = value,
+                .snapshot = value.*,
+                .coordinator = &self.coordinator,
+            };
+        }
     };
 
     return struct {
@@ -470,6 +530,7 @@ pub fn Model(
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = AccessorType.ValueEditorType;
         pub const max_entries: usize = max_entries_v;
 
         accessor_state: AccessorType,
@@ -486,6 +547,10 @@ pub fn Model(
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
 
         pub fn valueOutAsIn(_: *const Self, value: ValueOutType) ValueInType {

@@ -3,6 +3,7 @@ const interfaces = @import("../../contracts/interfaces.zig");
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
+const StructuralMutationCoordinator = @import("../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 /// A split key must expose its digit type and indexed digit access.
 pub fn assertSplitKey(comptime SplitKeyT: type) void {
@@ -95,6 +96,26 @@ pub fn assertAccessor(comptime ModelT: type) void {
     requiresFnSignature(AccessorType, "deinitInode", fn (*AccessorType, *InodeType) void);
     requiresFnSignature(AccessorType, "splitKey", fn (*const AccessorType, KeyInType) Error!SplitKeyType);
     requiresFnSignature(AccessorType, "deinitSplitKey", fn (*AccessorType, *SplitKeyType) void);
+    requiresFnSignature(
+        AccessorType,
+        "openValueEditor",
+        fn (*AccessorType, *LeafType, KeyInType) AccessorType.Error!ModelT.ValueEditorType,
+    );
+}
+
+/// A value editor owns mutable access to one fixed-size stored value.
+///
+/// A model exposes `ValueEditorType` with `ValueMutType`, `valueMut()`,
+/// `finish()`, and `deinit()`; call `assertValueEditor(Model)`.
+pub fn assertValueEditor(comptime ModelT: type) void {
+    const Editor = ModelT.ValueEditorType;
+    const Error = Editor.Error;
+
+    requiresErrorDeclaration(Editor, "Error");
+    requiresTypeDeclaration(Editor, "ValueMutType");
+    requiresFnSignature(Editor, "valueMut", fn (*Editor) Error!Editor.ValueMutType);
+    requiresFnSignature(Editor, "finish", fn (*Editor) Error!void);
+    requiresFnSignature(Editor, "deinit", fn (*Editor) void);
 }
 
 /// A paged Radix storage manager additionally owns the free-leaf-list root.
@@ -126,12 +147,15 @@ pub fn assertModel(comptime ModelT: type) void {
     requiresTypeDeclaration(ModelT, "InodeType");
     requiresTypeDeclaration(ModelT, "SplitKeyType");
     requiresTypeDeclaration(ModelT, "AccessorType");
+    requiresTypeDeclaration(ModelT, "ValueEditorType");
     requiresTypeDeclaration(ModelT, "Settings");
 
     assertLeaf(ModelT);
     assertInode(ModelT);
     assertAccessor(ModelT);
+    assertValueEditor(ModelT);
 
     requiresFnSignature(ModelT, "accessor", fn (*ModelT) *ModelT.AccessorType);
+    requiresFnSignature(ModelT, "structuralMutationCoordinator", fn (*ModelT) *StructuralMutationCoordinator);
     requiresFnSignature(ModelT, "getSettings", fn (*const ModelT) *const ModelT.Settings);
 }

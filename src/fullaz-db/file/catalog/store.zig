@@ -144,6 +144,15 @@ pub fn CatalogStore(comptime CacheT: type, comptime ManagerT: type) type {
             self.chain.releaseCachedTail();
         }
 
+        pub fn scanChunkRefs(
+            self: *const Self,
+            page_id: CacheT.Pid,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.chain.scanChunkRefs(page_id, page, visitor);
+        }
+
         /// Collects unique physical pages containing the current catalog chain.
         pub fn collectPageIds(self: *Self, allocator: std.mem.Allocator, record_count: u64) Error![]CacheT.Pid {
             var page_ids: std.ArrayList(CacheT.Pid) = .empty;

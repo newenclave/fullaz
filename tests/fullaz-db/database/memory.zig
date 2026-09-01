@@ -50,6 +50,8 @@ const SyntheticTrait = struct {
 
             pub fn deinitRuntime(_: *Runtime) void {}
 
+            pub fn requireTransactionIdle(_: *const Runtime) Error!void {}
+
             pub fn captureTransactionState(_: *const Runtime) TransactionState {}
 
             pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
@@ -118,6 +120,8 @@ fn LifecycleTrait(comptime id: u8, comptime fail_init: bool) type {
                     runtime.state.push(std.ascii.toUpper(id));
                     runtime.* = undefined;
                 }
+
+                pub fn requireTransactionIdle(_: *const Runtime) Error!void {}
 
                 pub fn captureTransactionState(_: *const Runtime) TransactionState {}
 
@@ -376,6 +380,62 @@ test "fullaz-db: memory database returns an exact typed BPT proxy" {
     const database_const: *const Db = &database;
     const tree_const = database_const.getConst("index");
     try std.testing.expect(@TypeOf(tree_const) == *const Binding.ConstProxy);
+}
+
+test "fullaz-db: BPT value editors gate terminal operations and preserve cancellation" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("index", fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 1,
+        .maximum_key_size = 16,
+        .maximum_value_size = 16,
+    }));
+    const Db = fullaz_db.MemoryDatabase(Schema);
+    const Binding = Schema.trait("index").Binding(Db.BackendType);
+
+    try std.testing.expect(@hasDecl(Binding.Proxy.Iterator, "editValue"));
+    try std.testing.expect(!@hasDecl(Binding.ConstProxy.Iterator, "editValue"));
+    try std.testing.expect(@hasDecl(Binding.Proxy, "openValueEditor"));
+    try std.testing.expect(!@hasDecl(Binding.ConstProxy, "openValueEditor"));
+
+    var database = try Db.init(std.testing.allocator, .{ .page_size = 512, .cache_frames = 8 });
+    defer database.deinit();
+
+    {
+        var transaction = try database.begin();
+        try std.testing.expect(try transaction.get("index").insert("key", "first"));
+        try transaction.commit();
+    }
+
+    var transaction = try database.begin();
+    const index = transaction.get("index");
+    var editor = (try index.openValueEditor("key")).?;
+    @memcpy(try editor.valueMut(), "final");
+    try std.testing.expectError(error.ValueEditorActive, transaction.commit());
+    try editor.finish();
+    try transaction.commit();
+    try std.testing.expectError(error.TransactionInactive, editor.valueMut());
+
+    {
+        var found = (try database.getConst("index").find("key")).?;
+        defer found.deinit();
+        try std.testing.expectEqualStrings("final", (try found.get()).?.value);
+    }
+
+    var cancelled = try database.begin();
+    const cancelled_index = cancelled.get("index");
+    {
+        var iterator = (try cancelled_index.find("key")).?;
+        defer iterator.deinit();
+        var cancelled_editor = (try iterator.editValue()).?;
+        @memcpy(try cancelled_editor.valueMut(), "wrong");
+        cancelled_editor.deinit();
+    }
+    try cancelled.rollback();
+
+    var found = (try database.getConst("index").find("key")).?;
+    defer found.deinit();
+    try std.testing.expectEqualStrings("final", (try found.get()).?.value);
 }
 
 test "fullaz-db: BPT splits byte-skewed variable values on 512-byte pages" {

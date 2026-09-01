@@ -7,3 +7,4 @@ pub const static_stack = @import("static_stack.zig");
 pub const callback_helpers = @import("callback_helpers.zig");
 pub const memory = @import("memory.zig");
 pub const bloom = @import("bloom.zig");
+pub const structural_mutation = @import("structural_mutation.zig");

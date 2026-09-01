@@ -4,7 +4,6 @@ const algorithm = @import("fullaz").core.algorithm;
 const bpt = @import("fullaz").bpt;
 const PageCacheT = @import("fullaz").storage.page_cache.PageCache;
 const dev = @import("fullaz").device;
-const assertIsStorageManager = @import("fullaz").bpt.models.interfaces.assertIsStorageManager;
 const printer = @import("test_printer");
 
 fn prepFile(io: std.Io, path: []const u8) void {
@@ -67,6 +66,8 @@ fn DestroyTrackingStorageManager(comptime CacheT: type) type {
         cache: *CacheT,
         root: ?PageId = null,
         destroyed_pages: usize = 0,
+        last_pinned_page: ?PageId = null,
+        last_pinned_ref_count: usize = 0,
 
         pub fn getRoot(self: *const Self) ?PageId {
             return self.root;
@@ -79,6 +80,8 @@ fn DestroyTrackingStorageManager(comptime CacheT: type) type {
         pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
             if (self.cache.frames_cache.get(page_id)) |frame| {
                 if (frame.ref_count != 0) {
+                    self.last_pinned_page = page_id;
+                    self.last_pinned_ref_count = frame.ref_count;
                     return Error.PageStillPinned;
                 }
             }
@@ -88,19 +91,18 @@ fn DestroyTrackingStorageManager(comptime CacheT: type) type {
 }
 
 fn TestContext(comptime page_size: usize, comptime cache_frames: usize) type {
-    //assertIsStorageManager(NoneStorageManager);
-
     return struct {
         const Self = @This();
         pub const Device = dev.MemoryBlock(u32);
         pub const PageCache = PageCacheT(Device);
-        pub const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+        pub const StorageManager = DestroyTrackingStorageManager(PageCache);
+        pub const BptModel = bpt.models.PagedModel(PageCache, StorageManager, keyCmp, void);
         pub const Tree = bpt.Bpt(BptModel);
 
         allocator: std.mem.Allocator,
         device: *Device,
         cache: *PageCache,
-        store_mgr: *NoneStorageManager,
+        store_mgr: *StorageManager,
         model: BptModel,
 
         pub fn init(allocator: std.mem.Allocator) !Self {
@@ -114,9 +116,9 @@ fn TestContext(comptime page_size: usize, comptime cache_frames: usize) type {
             cache.* = try PageCache.init(device, allocator, cache_frames);
             errdefer cache.deinit();
 
-            const store_mgr = try allocator.create(NoneStorageManager);
+            const store_mgr = try allocator.create(StorageManager);
             errdefer allocator.destroy(store_mgr);
-            store_mgr.* = NoneStorageManager{};
+            store_mgr.* = .{ .cache = cache };
 
             const model = try BptModel.init(cache, store_mgr, .{}, {});
 
@@ -667,6 +669,108 @@ test "Bpt paged: Create a tree" {
     defer tree.deinit();
 
     //tree.insert("hello", "world");
+}
+
+test "BPT paged value editor coordinates and finishes" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try BptModel.init(&cache, &store_mgr, .{}, {});
+    defer model.deinit();
+    var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
+    defer tree.deinit();
+    var same_model_tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
+    defer same_model_tree.deinit();
+
+    try std.testing.expect(try tree.insert("key", "abcd"));
+    var editor = (try tree.openValueEditor("key")).?;
+    try std.testing.expectError(error.ValueEditorActive, same_model_tree.openValueEditor("key"));
+    const value = try editor.valueMut();
+    try std.testing.expectEqualSlices(u8, "abcd", value);
+    value[1] = 'Z';
+
+    try std.testing.expectError(error.ValueEditorActive, tree.insert("other", "wxyz"));
+    try std.testing.expectError(error.ValueEditorActive, tree.update("key", "wxyz"));
+    try std.testing.expectError(error.ValueEditorActive, tree.remove("key"));
+    try std.testing.expectError(error.ValueEditorActive, tree.destroy());
+    var leaf = (try model.accessor().loadLeaf(store_mgr.getRoot())).?;
+    defer model.accessor().deinitLeaf(leaf);
+    try std.testing.expectError(error.ValueEditorActive, tree.fixParentIndex(&leaf));
+
+    try editor.finish();
+    try std.testing.expectError(error.EditorInvalidated, editor.valueMut());
+    try std.testing.expectError(error.EditorInvalidated, editor.finish());
+    editor.deinit();
+    const found = (try tree.find("key")).?;
+    defer found.deinit();
+    try std.testing.expectEqualSlices(u8, "aZcd", (try found.get()).?.value);
+    try std.testing.expect(try tree.update("key", "wxyz"));
+}
+
+test "BPT paged value editor edits an existing variable-length value" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try BptModel.init(&cache, &store_mgr, .{}, {});
+    defer model.deinit();
+    var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
+    defer tree.deinit();
+
+    try std.testing.expect(try tree.insert("key", "value"));
+    var iterator = (try tree.find("key")).?;
+    defer iterator.deinit();
+    var editor = (try iterator.editValue()).?;
+    const value = try editor.valueMut();
+    try std.testing.expectEqual(@as(usize, 5), value.len);
+    value[0] = 'V';
+    try editor.finish();
+    const found = (try tree.find("key")).?;
+    defer found.deinit();
+    try std.testing.expectEqualStrings("Value", (try found.get()).?.value);
+}
+
+test "BPT paged value editor rolls back and iterator edits reject structural changes" {
+    const allocator = std.testing.allocator;
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const BptModel = bpt.models.PagedModel(PageCache, NoneStorageManager, keyCmp, void);
+
+    var device = try Device.init(allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, allocator, 8);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try BptModel.init(&cache, &store_mgr, .{}, {});
+    defer model.deinit();
+    var tree = bpt.Bpt(BptModel).init(&model, .neighbor_share);
+    defer tree.deinit();
+
+    try std.testing.expect(try tree.insert("key", "value"));
+    var editor = (try tree.openValueEditor("key")).?;
+    (try editor.valueMut())[0] = 'V';
+    editor.deinit();
+    const restored = (try tree.find("key")).?;
+    defer restored.deinit();
+    try std.testing.expectEqualStrings("value", (try restored.get()).?.value);
+
+    var iterator = (try tree.find("key")).?;
+    defer iterator.deinit();
+    try std.testing.expect(try tree.insert("next", "other"));
+    try std.testing.expectError(error.StaleIterator, iterator.editValue());
 }
 
 test "Pages: paged BPT rejects invalid scalar settings" {
@@ -3025,15 +3129,75 @@ test "Bpt/paged Remove values" {
     // _ = try tree.dumpFormatted(formatKey, formatValue);
 }
 
+fn checkRandomRemovalWithTrackedDestruction(seed: u64) !void {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(seed);
+    const random = prng.random();
+    var ctx = try TestContext(1024, 32).init(allocator);
+    defer ctx.deinit();
+    errdefer std.debug.print(
+        "FAILED seed=0x{x:0>16} pinned_page={any} ref_count={}\n",
+        .{ seed, ctx.store_mgr.last_pinned_page, ctx.store_mgr.last_pinned_ref_count },
+    );
+    var tree = ctx.createTree();
+    const element_count = 500;
+    var inserted_keys = try std.ArrayList(u32).initCapacity(allocator, element_count);
+    defer inserted_keys.deinit(allocator);
+
+    for (0..element_count) |_| {
+        const key = random.int(u32);
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        if (try tree.insert(key_out, "")) {
+            try inserted_keys.append(allocator, key);
+        }
+    }
+
+    const removed_count = inserted_keys.items.len / 2;
+    for (inserted_keys.items[0..removed_count]) |key| {
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        try std.testing.expect(try tree.remove(key_out));
+    }
+    try std.testing.expect(ctx.store_mgr.destroyed_pages > 0);
+
+    for (inserted_keys.items[removed_count..]) |key| {
+        var key_buf: [32]u8 = undefined;
+        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+        var found = (try tree.find(key_out)).?;
+        defer found.deinit();
+        try std.testing.expectEqualStrings(key_out, (try found.get()).?.key);
+    }
+}
+
+test "Bpt/paged random removal releases every reclaimed page" {
+    const seeds = [_]u64{
+        0x0000_0000_0000_0000,
+        0x0123_4567_89ab_cdef,
+        0x6a09_e667_f3bc_c909,
+        0xbb67_ae85_84ca_a73b,
+        0xfeed_face_cafe_beef,
+        0xd15a_7c4d_ba5e_f00d,
+        0xffff_ffff_ffff_ffff,
+    };
+    for (seeds) |seed| {
+        try checkRandomRemovalWithTrackedDestruction(seed);
+    }
+}
+
 test "Bpt/paged Remove random values" {
     const prn = Printer("Remove Random").init();
-
-    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
+    const seed = try getRandomSeed();
+    var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
     const allocator = std.testing.allocator;
     var ctx = try TestContext(4096 / 4, 32).init(allocator);
     defer ctx.deinit();
+    errdefer std.debug.print(
+        "FAILED seed=0x{x:0>16} pinned_page={any} ref_count={}\n",
+        .{ seed, ctx.store_mgr.last_pinned_page, ctx.store_mgr.last_pinned_ref_count },
+    );
     var tree = ctx.createTree();
 
     const elements_to_insert = 5000;
@@ -3096,15 +3260,19 @@ test "Bpt/paged Remove random values" {
     inserted_keys.deinit(allocator);
 }
 
-test "Bpt/paged Remove random values banch operations" {
+test "Bpt/paged Remove random values batch operations" {
     const prn = Printer("Remove Random").init();
-
-    var prng = std.Random.DefaultPrng.init(try getRandomSeed());
+    const seed = try getRandomSeed();
+    var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
     const allocator = std.testing.allocator;
-    var ctx = try TestContext(4096 / 4, 16).init(allocator);
+    var ctx = try TestContext(4096 / 4, 128).init(allocator);
     defer ctx.deinit();
+    errdefer std.debug.print(
+        "FAILED seed=0x{x:0>16} pinned_page={any} ref_count={}\n",
+        .{ seed, ctx.store_mgr.last_pinned_page, ctx.store_mgr.last_pinned_ref_count },
+    );
     var tree = ctx.createTree();
 
     const elements_to_insert = 5000;
@@ -3112,21 +3280,22 @@ test "Bpt/paged Remove random values banch operations" {
     var inserted_keys = try std.ArrayList(u32).initCapacity(allocator, elements_to_insert);
     errdefer inserted_keys.deinit(allocator);
 
-    for (0..elements_to_insert) |_| {
-        const key = random.int(u32);
-        var key_buf: [32]u8 = undefined;
-        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
-        var buf: [32]u8 = undefined;
-        const value = try std.fmt.bufPrint(&buf, "{}", .{key});
-        if (try tree.insert(key_out, value)) {
-            //std.debug.print("Inserted key: {s}\n", .{key_out});
-            var wb = try ctx.cache.begin();
-            errdefer {
-                wb.discard() catch {};
+    var insert_index: usize = 0;
+    while (insert_index < elements_to_insert) {
+        var wb = try ctx.cache.begin();
+        errdefer wb.discard() catch {};
+        const end = insert_index + 1;
+        while (insert_index < end) : (insert_index += 1) {
+            const key = random.int(u32);
+            var key_buf: [32]u8 = undefined;
+            const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+            var buf: [32]u8 = undefined;
+            const value = try std.fmt.bufPrint(&buf, "{}", .{key});
+            if (try tree.insert(key_out, value)) {
+                try inserted_keys.append(allocator, key);
             }
-            try inserted_keys.append(allocator, key);
-            try wb.commit();
         }
+        try wb.commit();
     }
 
     prn.print("Inserted {} unique keys\n", .{inserted_keys.items.len});
@@ -3136,13 +3305,19 @@ test "Bpt/paged Remove random values banch operations" {
     // _ = try tree.dumpFormatted(formatKey, formatValue);
 
     // Update values
-    for (0..elements_to_insert / 2) |i| {
-        if (i >= inserted_keys.items.len) break;
-
-        const key = inserted_keys.items[i];
-        var key_buf: [32]u8 = undefined;
-        const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
-        try std.testing.expect(try tree.remove(key_out));
+    const remove_count = @min(elements_to_insert / 2, inserted_keys.items.len);
+    var remove_index: usize = 0;
+    while (remove_index < remove_count) {
+        var wb = try ctx.cache.begin();
+        errdefer wb.discard() catch {};
+        const end = remove_index + 1;
+        while (remove_index < end) : (remove_index += 1) {
+            const key = inserted_keys.items[remove_index];
+            var key_buf: [32]u8 = undefined;
+            const key_out = try std.fmt.bufPrint(&key_buf, "{}", .{key});
+            try std.testing.expect(try tree.remove(key_out));
+        }
+        try wb.commit();
     }
 
     // Verify updates

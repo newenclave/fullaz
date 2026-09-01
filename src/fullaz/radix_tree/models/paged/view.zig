@@ -139,6 +139,11 @@ pub fn View(
             return try slot_dir.get(key);
         }
 
+        pub fn valueMut(self: *Self, key: KeyT) ErrorSet![]u8 {
+            var slot_dir = try self.slotsDirMut();
+            return try slot_dir.getMut(key);
+        }
+
         pub fn isSet(self: *const Self, key: KeyT) ErrorSet!bool {
             const slot_dir = try self.slotsDir();
             return try slot_dir.isSet(key);

@@ -6,6 +6,7 @@ const PackedInt = @import("fullaz").core.packed_int.PackedInt;
 const dynamic_metadata = @import("../file/metadata/dynamic.zig");
 const tagged = @import("../file/tagged_fields.zig");
 const low_level_bpt = @import("fullaz").bpt;
+const gc = @import("fullaz").gc;
 const FingerprintWriter = @import("../component/fingerprint.zig").Writer;
 
 fn requireOption(comptime OptionsT: type, comptime name: []const u8) void {
@@ -32,6 +33,7 @@ fn isKnownOption(comptime name: []const u8) bool {
         std.mem.eql(u8, name, "comparator_id") or
         std.mem.eql(u8, name, "maximum_key_size") or
         std.mem.eql(u8, name, "maximum_value_size") or
+        std.mem.eql(u8, name, "fixed_value_size") or
         std.mem.eql(u8, name, "rebalance_policy") or
         std.mem.eql(u8, name, "format_version");
 }
@@ -84,6 +86,19 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
         usize,
         "fullaz-db.bpt maximum_value_size must fit usize",
     );
+    const configured_fixed_value_size: ?usize = if (@hasField(OptionsT, "fixed_value_size"))
+        unsignedOption(
+            options.fixed_value_size,
+            usize,
+            "fullaz-db.bpt fixed_value_size must fit usize",
+        )
+    else
+        null;
+    if (configured_fixed_value_size) |fixed_value_size| {
+        if (fixed_value_size > configured_maximum_value_size) {
+            @compileError("fullaz-db.bpt fixed_value_size cannot exceed maximum_value_size");
+        }
+    }
 
     const configured_format_version = if (@hasField(OptionsT, "format_version"))
         unsignedOption(
@@ -119,12 +134,14 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
         pub const compare = configured_compare;
         pub const maximum_key_size: usize = configured_maximum_key_size;
         pub const maximum_value_size: usize = configured_maximum_value_size;
+        pub const fixed_value_size: ?usize = configured_fixed_value_size;
         pub const rebalance_policy = configured_rebalance_policy;
 
         pub fn fingerprint(writer: *FingerprintWriter) void {
             writer.writeInt(u32, comparator_id);
             writer.writeInt(u64, @intCast(maximum_key_size));
             writer.writeInt(u64, @intCast(maximum_value_size));
+            writer.writeInt(u64, fixed_value_size orelse 0);
             writer.writeBytes(@tagName(rebalance_policy));
         }
 
@@ -200,23 +217,153 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 const Self = @This();
 
                 pub const Error = TreeT.Error || CacheT.Error;
-                pub const Iterator = ReadIteratorT;
+                pub const ConstIterator = ReadIteratorT;
+
+                pub const ValueEditor = struct {
+                    const EditorSelf = @This();
+
+                    editor: TreeT.ValueEditor,
+                    cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                    active_editor: *bool,
+                    transaction_generation: ?u64,
+
+                    fn cache(self: *const EditorSelf) *CacheT {
+                        return @ptrCast(self.cache_ptr);
+                    }
+
+                    fn requireTransaction(self: *const EditorSelf) Error!void {
+                        if (self.transaction_generation == null or
+                            self.cache().transactionGeneration() != self.transaction_generation)
+                        {
+                            return Error.TransactionInactive;
+                        }
+                    }
+
+                    pub fn valueMut(self: *EditorSelf) Error![]u8 {
+                        try self.requireTransaction();
+                        return self.editor.valueMut();
+                    }
+
+                    pub fn finish(self: *EditorSelf) Error!void {
+                        try self.requireTransaction();
+                        self.editor.finish() catch |err| {
+                            switch (err) {
+                                error.ValueEditorActive,
+                                error.StructuralMutationActive,
+                                error.StaleIterator,
+                                error.EditorInvalidated,
+                                => return err,
+                                else => self.cache().markTransactionFailed(),
+                            }
+                            return err;
+                        };
+                        self.active_editor.* = false;
+                    }
+
+                    pub fn deinit(self: *EditorSelf) void {
+                        self.editor.deinit();
+                        self.active_editor.* = false;
+                    }
+                };
+
+                pub const MutableIterator = struct {
+                    const IteratorSelf = @This();
+                    const GetPayload = @typeInfo(ReadIteratorT.GetReturn).error_union.payload;
+
+                    inner_value: ReadIteratorT,
+                    cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                    active_editor: *bool,
+                    transaction_generation: ?u64,
+
+                    fn cache(self: *const IteratorSelf) *CacheT {
+                        return @ptrCast(self.cache_ptr);
+                    }
+
+                    fn requireTransaction(self: *const IteratorSelf) Error!void {
+                        if (self.transaction_generation == null or
+                            self.cache().transactionGeneration() != self.transaction_generation)
+                        {
+                            return Error.TransactionInactive;
+                        }
+                    }
+
+                    fn wrap(
+                        allocator_value: std.mem.Allocator,
+                        inner_optional: ?TreeT.Iterator,
+                        cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                        active_editor: *bool,
+                        transaction_generation: ?u64,
+                    ) std.mem.Allocator.Error!?IteratorSelf {
+                        const inner_value = try ReadIteratorT.wrap(allocator_value, inner_optional);
+                        if (inner_value) |iterator_value| {
+                            return .{
+                                .inner_value = iterator_value,
+                                .cache_ptr = cache_ptr,
+                                .active_editor = active_editor,
+                                .transaction_generation = transaction_generation,
+                            };
+                        }
+                        return null;
+                    }
+
+                    pub fn get(self: *const IteratorSelf) Error!GetPayload {
+                        try self.requireTransaction();
+                        return self.inner_value.get();
+                    }
+
+                    pub fn next(self: *IteratorSelf) Error!GetPayload {
+                        try self.requireTransaction();
+                        return self.inner_value.next();
+                    }
+
+                    pub fn prev(self: *IteratorSelf) Error!GetPayload {
+                        try self.requireTransaction();
+                        return self.inner_value.prev();
+                    }
+
+                    pub fn editValue(self: *IteratorSelf) Error!?ValueEditor {
+                        try self.requireTransaction();
+                        if (self.active_editor.*) {
+                            return error.ValueEditorActive;
+                        }
+                        const inner_editor = try self.inner_value.inner().editValue();
+                        if (inner_editor) |editor| {
+                            self.active_editor.* = true;
+                            return .{
+                                .editor = editor,
+                                .cache_ptr = self.cache_ptr,
+                                .active_editor = self.active_editor,
+                                .transaction_generation = self.transaction_generation,
+                            };
+                        }
+                        return null;
+                    }
+
+                    pub fn deinit(self: *IteratorSelf) void {
+                        self.inner_value.deinit();
+                    }
+                };
+
+                pub const Iterator = MutableIterator;
 
                 tree_ptr: *align(@alignOf(TreeT)) anyopaque,
                 cache_ptr: *align(@alignOf(CacheT)) anyopaque,
                 allocator_value: std.mem.Allocator,
                 transaction_generation: ?u64,
+                active_editor: *bool,
 
                 fn init(
                     tree_value: *TreeT,
                     cache_value: *CacheT,
                     allocator_value: std.mem.Allocator,
+                    active_editor: *bool,
                 ) Self {
                     return .{
                         .tree_ptr = tree_value,
                         .cache_ptr = cache_value,
                         .allocator_value = allocator_value,
                         .transaction_generation = cache_value.transactionGeneration(),
+                        .active_editor = active_editor,
                     };
                 }
 
@@ -237,31 +384,68 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 }
 
                 pub fn iterator(self: *const Self) Error!?Iterator {
-                    return ReadIteratorT.wrap(
+                    try self.requireTransaction();
+                    return MutableIterator.wrap(
                         self.allocator_value,
                         try self.tree().iterator(),
+                        self.cache_ptr,
+                        self.active_editor,
+                        self.transaction_generation,
                     );
                 }
 
                 pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
-                    return ReadIteratorT.wrap(
+                    try self.requireTransaction();
+                    return MutableIterator.wrap(
                         self.allocator_value,
                         try self.tree().iteratorFromEnd(),
+                        self.cache_ptr,
+                        self.active_editor,
+                        self.transaction_generation,
                     );
                 }
 
                 pub fn find(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
-                    return ReadIteratorT.wrap(
+                    try self.requireTransaction();
+                    return MutableIterator.wrap(
                         self.allocator_value,
                         try self.tree().find(key),
+                        self.cache_ptr,
+                        self.active_editor,
+                        self.transaction_generation,
                     );
                 }
 
                 pub fn lowerBound(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
-                    return ReadIteratorT.wrap(
+                    try self.requireTransaction();
+                    return MutableIterator.wrap(
                         self.allocator_value,
                         try self.tree().lowerBound(key),
+                        self.cache_ptr,
+                        self.active_editor,
+                        self.transaction_generation,
                     );
+                }
+
+                pub fn openValueEditor(
+                    self: *const Self,
+                    key: ModelT.KeyLikeType,
+                ) Error!?ValueEditor {
+                    try self.requireTransaction();
+                    if (self.active_editor.*) {
+                        return error.ValueEditorActive;
+                    }
+                    const inner_editor = try self.tree().openValueEditor(key);
+                    if (inner_editor) |editor| {
+                        self.active_editor.* = true;
+                        return .{
+                            .editor = editor,
+                            .cache_ptr = self.cache_ptr,
+                            .active_editor = self.active_editor,
+                            .transaction_generation = self.transaction_generation,
+                        };
+                    }
+                    return null;
                 }
 
                 pub fn insert(
@@ -300,7 +484,8 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 const Self = @This();
 
                 pub const Error = TreeT.Error;
-                pub const Iterator = ReadIteratorT;
+                pub const ConstIterator = ReadIteratorT;
+                pub const Iterator = ConstIterator;
 
                 tree_ptr: *align(@alignOf(TreeT)) const anyopaque,
                 allocator_value: std.mem.Allocator,
@@ -355,11 +540,13 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 pub const Proxy = MutableProxyT;
                 pub const ConstProxy = ConstProxyT;
                 pub const Runtime = struct {
+                    page_kinds: component.PageKindRange,
                     manager: ManagerT,
                     model: ModelT,
                     tree: TreeT,
                     const_proxy: ConstProxy,
                     allocator_value: std.mem.Allocator,
+                    active_editor: bool = false,
                 };
                 pub const InitOptions = if (CompareContextT == void)
                     struct { compare_context: void = {} }
@@ -438,6 +625,50 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     }
                 };
 
+                pub fn Gc(comptime CollectorT: type) type {
+                    if (CollectorT.PageId != CacheT.Pid) {
+                        @compileError("fullaz-db BPT GC collector PageId must match CacheType.Pid");
+                    }
+                    return struct {
+                        pub const RootsError = std.mem.Allocator.Error;
+                        pub const RegisterError = CollectorT.Error;
+                        const leaf_scanner_version: CollectorT.ScannerVersion = 1;
+                        const inode_scanner_version: CollectorT.ScannerVersion = 1;
+
+                        pub fn appendRoots(
+                            runtime: *const Runtime,
+                            allocator: std.mem.Allocator,
+                            roots: *std.ArrayList(CollectorT.PageId),
+                        ) RootsError!void {
+                            if (runtime.manager.getRoot()) |root| {
+                                try roots.append(allocator, root);
+                            }
+                        }
+
+                        pub fn registerScanners(
+                            runtime: *const Runtime,
+                            collector: *CollectorT,
+                        ) RegisterError!void {
+                            const leaf_page_kind = runtime.page_kinds.kindAt(0) orelse unreachable;
+                            const inode_page_kind = runtime.page_kinds.kindAt(1) orelse unreachable;
+                            try collector.registerForCycle(
+                                leaf_page_kind,
+                                leaf_scanner_version,
+                                &runtime.tree,
+                                gc.scanners.method(CollectorT, TreeT, TreeT.scanLeafRefs),
+                                null,
+                            );
+                            try collector.registerForCycle(
+                                inode_page_kind,
+                                inode_scanner_version,
+                                &runtime.tree,
+                                gc.scanners.method(CollectorT, TreeT, TreeT.scanInodeRefs),
+                                null,
+                            );
+                        }
+                    };
+                }
+
                 pub fn initRuntime(
                     runtime: *Runtime,
                     backend: *BackendT,
@@ -452,6 +683,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     const inode_page_kind = page_kinds.kindAt(1) orelse
                         return Error.InvalidPageKinds;
 
+                    runtime.page_kinds = page_kinds;
                     runtime.manager = ManagerT.init(backend);
                     runtime.model = try ModelT.init(
                         backend.cache(),
@@ -459,6 +691,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                         .{
                             .maximum_key_size = configured_maximum_key_size,
                             .maximum_value_size = configured_maximum_value_size,
+                            .fixed_value_size = configured_fixed_value_size,
                             .leaf_page_kind = leaf_page_kind,
                             .inode_page_kind = inode_page_kind,
                         },
@@ -466,6 +699,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     );
                     runtime.tree = TreeT.init(&runtime.model, configured_rebalance_policy);
                     runtime.allocator_value = backend.allocator();
+                    runtime.active_editor = false;
                     runtime.const_proxy = ConstProxy.init(
                         &runtime.tree,
                         runtime.allocator_value,
@@ -473,13 +707,22 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 }
 
                 pub fn deinitRuntime(runtime: *Runtime) void {
+                    requireTransactionIdle(runtime) catch
+                        @panic("BPT runtime deinitialized with an active value editor");
                     runtime.tree.deinit();
                     runtime.model.deinit();
                     runtime.* = undefined;
                 }
 
                 pub fn reclaimPersistent(runtime: *Runtime) Error!void {
+                    try requireTransactionIdle(runtime);
                     try runtime.tree.destroy();
+                }
+
+                pub fn requireTransactionIdle(runtime: *const Runtime) Error!void {
+                    if (runtime.active_editor) {
+                        return error.ValueEditorActive;
+                    }
                 }
 
                 pub fn captureTransactionState(runtime: *const Runtime) TransactionState {
@@ -495,6 +738,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                         &runtime.tree,
                         runtime.manager.cache_ptr,
                         runtime.allocator_value,
+                        &runtime.active_editor,
                     );
                 }
 

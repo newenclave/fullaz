@@ -293,3 +293,38 @@ test "SlotHeap memory: randomized interleaved operations match an oracle" {
     }
     try validateHeap(&model);
 }
+
+test "SlotHeap memory: top value editor commits, rolls back, and blocks structural mutation" {
+    var model = try initModel();
+    defer model.deinit();
+    var heap = Heap.init(&model);
+    try heap.push("0001", "one");
+    try heap.push("0002", "two");
+
+    var editor = try heap.openValueEditor();
+    @memcpy(try editor.valueMut(), "ONE");
+    try std.testing.expectError(error.ValueEditorActive, heap.openValueEditor());
+    try std.testing.expectError(error.ValueEditorActive, heap.push("0000", "zero"));
+    try std.testing.expectError(error.ValueEditorActive, heap.pop());
+    try std.testing.expectError(error.ValueEditorActive, heap.clear());
+    try editor.finish();
+    try std.testing.expectError(error.EditorInvalidated, editor.valueMut());
+    editor.deinit();
+
+    var top = try heap.top();
+    try std.testing.expectEqualSlices(u8, "0001", try top.key());
+    try std.testing.expectEqualSlices(u8, "ONE", try top.value());
+    top.deinit();
+    try std.testing.expectEqual(@as(u64, 2), try heap.count());
+
+    var peek = try heap.mutableTop();
+    var rollback = try peek.editValue();
+    @memcpy(try rollback.valueMut(), "bad");
+    rollback.deinit();
+    peek.deinit();
+
+    top = try heap.top();
+    defer top.deinit();
+    try std.testing.expectEqualSlices(u8, "ONE", try top.value());
+    try validateHeap(&model);
+}

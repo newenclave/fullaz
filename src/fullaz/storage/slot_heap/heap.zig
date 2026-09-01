@@ -76,6 +76,26 @@ pub fn Heap(comptime ModelT: type) type {
         };
         pub const PageId = NodeId;
 
+        /// An owned mutable lease for the current top value. The top key and all
+        /// heap metadata remain unchanged while the editor is open.
+        pub const ValueEditor = struct {
+            const EditorSelf = @This();
+
+            editor: ModelT.ValueEditorType,
+
+            pub fn valueMut(self: *EditorSelf) ModelT.ValueEditorType.Error!ModelT.ValueEditorType.ValueMutType {
+                return self.editor.valueMut();
+            }
+
+            pub fn finish(self: *EditorSelf) ModelT.ValueEditorType.Error!void {
+                return self.editor.finish();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                self.editor.deinit();
+            }
+        };
+
         pub fn scanLeafRefs(
             self: *const Self,
             page_id: PageId,
@@ -97,8 +117,10 @@ pub fn Heap(comptime ModelT: type) type {
         /// Removes every entry through the normal heap path so associated FSM
         /// slabs are released together with emptied heap pages.
         pub fn clear(self: *Self) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             while (try self.count() != 0) {
-                try self.pop();
+                try self.popImpl();
             }
         }
 
@@ -125,6 +147,42 @@ pub fn Heap(comptime ModelT: type) type {
             }
 
             pub fn deinit(self: *PeekSelf) void {
+                if (self.leaf) |leaf| {
+                    self.model.accessor().deinitLeaf(leaf);
+                    self.leaf = null;
+                }
+            }
+        };
+
+        /// A top view that can open an owned editor for its exact value.
+        pub const MutablePeek = struct {
+            const MutablePeekSelf = @This();
+
+            model: *ModelT,
+            leaf: ?Leaf,
+
+            pub fn key(self: *const MutablePeekSelf) Error!KeyOut {
+                if (self.leaf) |*leaf| {
+                    return leaf.getKey(0);
+                }
+                return Error.EmptySet;
+            }
+
+            pub fn value(self: *const MutablePeekSelf) Error!ValueOut {
+                if (self.leaf) |*leaf| {
+                    return leaf.getValue(0);
+                }
+                return Error.EmptySet;
+            }
+
+            pub fn editValue(self: *MutablePeekSelf) Error!ValueEditor {
+                if (self.leaf) |*leaf| {
+                    return .{ .editor = try self.model.accessor().openValueEditor(leaf, 0) };
+                }
+                return Error.EmptySet;
+            }
+
+            pub fn deinit(self: *MutablePeekSelf) void {
                 if (self.leaf) |leaf| {
                     self.model.accessor().deinitLeaf(leaf);
                     self.leaf = null;
@@ -166,7 +224,30 @@ pub fn Heap(comptime ModelT: type) type {
             return .{ .model = self.model, .leaf = leaf };
         }
 
+        pub fn mutableTop(self: *Self) Error!MutablePeek {
+            const acc = self.model.accessor();
+            const location = acc.getCachedTop() orelse return Error.EmptySet;
+            if (location.slot_id != @as(SlotId, 0)) {
+                return Error.CorruptTree;
+            }
+            const leaf = try self.loadLeaf(location.page_id);
+            errdefer acc.deinitLeaf(leaf);
+            if (try leaf.size() == 0) {
+                return Error.CorruptTree;
+            }
+            return .{ .model = self.model, .leaf = leaf };
+        }
+
+        /// Opens an editor for the current top value without exposing a leaf.
+        pub fn openValueEditor(self: *Self) Error!ValueEditor {
+            var peek = try self.mutableTop();
+            defer peek.deinit();
+            return peek.editValue();
+        }
+
         pub fn push(self: *Self, key: KeyIn, value: ValueIn) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const previous_hint = self.insertion_hint;
             errdefer {
                 self.insertion_hint = previous_hint;
@@ -220,6 +301,12 @@ pub fn Heap(comptime ModelT: type) type {
         }
 
         pub fn pop(self: *Self) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
+            return self.popImpl();
+        }
+
+        fn popImpl(self: *Self) Error!void {
             const acc = self.model.accessor();
             const location = acc.getCachedTop() orelse return Error.EmptySet;
             if (location.slot_id != @as(SlotId, 0)) {

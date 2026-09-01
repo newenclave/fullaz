@@ -321,3 +321,42 @@ test "SlotHeap paged model: generic heap grows, orders, and cleans up" {
         try std.testing.expectEqual(@as(?u32, null), head);
     }
 }
+
+test "SlotHeap paged: top value editor preserves heap metadata and rolls back" {
+    var ctx: TestContext = undefined;
+    try ctx.initInPlace(192);
+    defer ctx.deinit();
+    var heap = Heap.init(&ctx.model);
+    try heap.push("0002", "two");
+    try heap.push("0001", "one");
+    const root = ctx.storage_manager.root;
+    const cached_top = ctx.storage_manager.cached_top;
+    const fsm_entries = ctx.fsm_model.entries.items.len;
+
+    var editor = try heap.openValueEditor();
+    @memcpy(try editor.valueMut(), "ONE");
+    try std.testing.expectError(error.ValueEditorActive, heap.openValueEditor());
+    try std.testing.expectError(error.ValueEditorActive, heap.pop());
+    try std.testing.expectError(error.ValueEditorActive, heap.clear());
+    try editor.finish();
+    try std.testing.expectError(error.EditorInvalidated, editor.valueMut());
+    editor.deinit();
+
+    try std.testing.expectEqual(root, ctx.storage_manager.root);
+    try std.testing.expectEqual(cached_top, ctx.storage_manager.cached_top);
+    try std.testing.expectEqual(fsm_entries, ctx.fsm_model.entries.items.len);
+    try std.testing.expectEqual(@as(u64, 2), try heap.count());
+    var top = try heap.top();
+    try std.testing.expectEqualSlices(u8, "0001", try top.key());
+    try std.testing.expectEqualSlices(u8, "ONE", try top.value());
+    top.deinit();
+
+    var peek = try heap.mutableTop();
+    var rollback = try peek.editValue();
+    @memcpy(try rollback.valueMut(), "bad");
+    rollback.deinit();
+    peek.deinit();
+    top = try heap.top();
+    defer top.deinit();
+    try std.testing.expectEqualSlices(u8, "ONE", try top.value());
+}

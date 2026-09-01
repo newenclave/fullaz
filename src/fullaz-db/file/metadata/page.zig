@@ -1,5 +1,6 @@
 const std = @import("std");
 const PackedInt = @import("fullaz").core.packed_int.PackedInt;
+const system_kinds = @import("../system_kinds.zig");
 
 pub const Error = error{
     BadComponentMetadataPage,
@@ -8,8 +9,17 @@ pub const Error = error{
     BufferTooSmall,
 };
 
-pub const magic = "FZCMETA1";
-pub const format_version: u16 = 1;
+pub const magic = [_]u8{
+    @truncate(system_kinds.component_metadata),
+    @truncate(system_kinds.component_metadata >> 8),
+    'C',
+    'M',
+    'E',
+    'T',
+    'A',
+    '2',
+};
+pub const format_version: u16 = 2;
 const U16 = PackedInt(u16, .little);
 const U32 = PackedInt(u32, .little);
 const U64 = PackedInt(u64, .little);
@@ -60,7 +70,7 @@ pub fn format(page: []u8, state: State, payload: []const u8) Error!void {
     @memset(page, 0);
     const envelope = envelopeMut(page) orelse return error.BadComponentMetadataPage;
     envelope.* = .{
-        .magic = magic.*,
+        .magic = magic,
         .version = U16.init(format_version),
         .header_size = U16.init(envelope_byte_size),
         .component_id = U64.init(state.component_id),
@@ -88,7 +98,7 @@ pub fn read(page: []const u8, expected: State) Error!View {
 /// Migrations use this to read an old revision before writing a new page.
 pub fn readAny(page: []const u8) Error!View {
     const envelope = envelopeConst(page) orelse return error.BadComponentMetadataPage;
-    if (!std.mem.eql(u8, &envelope.magic, magic) or
+    if (!std.mem.eql(u8, &envelope.magic, &magic) or
         envelope.header_size.get() != envelope_byte_size or
         envelope.reserved.get() != 0)
     {

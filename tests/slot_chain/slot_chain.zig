@@ -855,3 +855,48 @@ test "SlotChain: paged FSM stores its location in the effective header" {
     try std.testing.expect((try storage.getFirst()) == null);
     try std.testing.expect((try storage.getLast()) == null);
 }
+
+test "SlotChain: value editor commits, rolls back, and coordinates mutations" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+
+    var manager = NoneStorageManager{};
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var handle = try Handle.init(&cache, &manager, .{});
+    defer handle.deinit();
+
+    const ref = try handle.appendRef("abcd");
+    var iterator = (try handle.iterator()).?;
+    defer iterator.deinit();
+    _ = (try iterator.next()).?;
+
+    var editor = try handle.openValueEditor(ref);
+    defer editor.deinit();
+    const value = try editor.valueMut();
+    try std.testing.expectEqual(@as(usize, 4), value.len);
+    try std.testing.expectError(error.ValueEditorActive, iterator.editValue());
+    try std.testing.expectError(error.ValueEditorActive, handle.append("blocked"));
+    try std.testing.expectEqual(@as(usize, 1), try handle.size());
+    try std.testing.expectEqualStrings("abcd", (try iterator.get()).?.value);
+
+    value[0] = 'Z';
+    try editor.finish();
+    try std.testing.expectError(error.EditorInvalidated, editor.valueMut());
+    try std.testing.expectError(error.EditorInvalidated, editor.finish());
+    try std.testing.expectEqualStrings("Zbcd", (try iterator.get()).?.value);
+
+    var rollback = (try iterator.editValue()).?;
+    (try rollback.valueMut())[1] = 'Y';
+    rollback.deinit();
+    try std.testing.expectEqualStrings("Zbcd", (try iterator.get()).?.value);
+
+    var stale = (try handle.iterator()).?;
+    defer stale.deinit();
+    _ = (try stale.next()).?;
+    _ = try handle.append("next");
+    try std.testing.expectError(error.StaleIterator, stale.editValue());
+}

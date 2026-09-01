@@ -12,7 +12,7 @@ pub const Error = tagged.Error || error{
 };
 
 pub const magic = "FULLAZFD";
-pub const format_version: u16 = 2;
+pub const format_version: u16 = 3;
 const U16 = PackedInt(u16, .little);
 const U32 = PackedInt(u32, .little);
 
@@ -58,6 +58,9 @@ pub const Tag = struct {
     pub const catalog_epoch: u16 = 16;
     pub const generation: u16 = 17;
     pub const id_radix_free_leaf_root: u16 = 18;
+    pub const gc_state_root: u16 = 19;
+    pub const gc_cycle_active: u16 = 20;
+    pub const gc_cycle_generation: u16 = 21;
 };
 
 const known_tags = [_]u16{
@@ -79,6 +82,9 @@ const known_tags = [_]u16{
     Tag.catalog_epoch,
     Tag.generation,
     Tag.id_radix_free_leaf_root,
+    Tag.gc_state_root,
+    Tag.gc_cycle_active,
+    Tag.gc_cycle_generation,
 };
 
 pub const State = struct {
@@ -100,6 +106,9 @@ pub const State = struct {
     next_component_page_kind: u16,
     catalog_epoch: u64,
     generation: u64,
+    gc_state_root: ?u64 = null,
+    gc_cycle_active: bool = false,
+    gc_cycle_generation: u64 = 0,
 };
 
 pub const Expected = struct {
@@ -205,6 +214,9 @@ fn appendState(writer: *tagged.Writer, state: State) Error!void {
     try appendInt(writer, Tag.next_component_page_kind, u16, state.next_component_page_kind);
     try appendInt(writer, Tag.catalog_epoch, u64, state.catalog_epoch);
     try appendInt(writer, Tag.generation, u64, state.generation);
+    try appendInt(writer, Tag.gc_state_root, u64, state.gc_state_root orelse 0);
+    try appendInt(writer, Tag.gc_cycle_active, u8, @intFromBool(state.gc_cycle_active));
+    try appendInt(writer, Tag.gc_cycle_generation, u64, state.gc_cycle_generation);
 }
 
 fn appendInt(writer: *tagged.Writer, tag: u16, comptime T: type, value: T) Error!void {
@@ -305,6 +317,22 @@ fn decodeState(payload: []const u8) Error!State {
                 found[17] = true;
                 state.id_radix_free_leaf_root = decodeOptionalPid(try readInt(field.value, u64));
             },
+            Tag.gc_state_root => {
+                found[18] = true;
+                state.gc_state_root = decodeOptionalPid(try readInt(field.value, u64));
+            },
+            Tag.gc_cycle_active => {
+                found[19] = true;
+                const active = try readInt(field.value, u8);
+                if (active > 1) {
+                    return error.BadBoot;
+                }
+                state.gc_cycle_active = active == 1;
+            },
+            Tag.gc_cycle_generation => {
+                found[20] = true;
+                state.gc_cycle_generation = try readInt(field.value, u64);
+            },
             else => {},
         }
     }
@@ -334,6 +362,7 @@ fn validateState(state: State) Error!void {
         state.page_id_bits == 0 or state.page_id_bits % 8 != 0 or
         state.page_count == 0 or
         state.live_component_count > state.catalog_record_count or
+        (state.gc_cycle_active and state.gc_state_root == null) or
         state.next_component_id == 0 or
         state.next_component_page_kind < system_kinds.first_component or
         state.next_component_page_kind == system_kinds.invalid_sentinel)

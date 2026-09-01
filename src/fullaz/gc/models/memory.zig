@@ -82,11 +82,11 @@ pub fn Memory(comptime PageStoreT: type) type {
             self.phase_value = phase_value;
         }
 
-        pub fn registryDigest(self: *const Self) u64 {
+        pub fn registryDigest(self: *const Self) Error!u64 {
             return self.registry_digest;
         }
 
-        pub fn snapshotPageCount(self: *const Self) usize {
+        pub fn snapshotPageCount(self: *const Self) Error!usize {
             return self.snapshot_page_count;
         }
 
@@ -113,8 +113,8 @@ pub fn Memory(comptime PageStoreT: type) type {
             return true;
         }
 
-        pub fn isMarked(self: *const Self, page_id: usize) bool {
-            var marks = BitSet.initConst(self.marked_bytes, self.snapshot_page_count) catch return false;
+        pub fn isMarked(self: *const Self, page_id: usize) Error!bool {
+            var marks = try BitSet.initConst(self.marked_bytes, self.snapshot_page_count);
             return marks.isSet(page_id);
         }
 
@@ -147,7 +147,7 @@ pub fn Memory(comptime PageStoreT: type) type {
             return self.store.pageData(page);
         }
 
-        pub fn sweepCursor(self: *const Self) usize {
+        pub fn sweepCursor(self: *const Self) Error!usize {
             return self.sweep_cursor;
         }
 
@@ -163,6 +163,9 @@ pub fn Memory(comptime PageStoreT: type) type {
             if (page_id >= self.snapshot_page_count) {
                 return error.InvalidPageId;
             }
+            if (self.phase_value == .preparing or self.phase_value == .sweeping) {
+                return self.store.isFree(page_id);
+            }
             var free_set = try BitSet.initConst(self.free_bytes, self.snapshot_page_count);
             return free_set.isSet(page_id);
         }
@@ -172,6 +175,11 @@ pub fn Memory(comptime PageStoreT: type) type {
         }
 
         pub fn finishCycle(self: *Self) Error!void {
+            return self.abortCycle();
+        }
+
+        /// Discards pending traversal work and returns the model to idle.
+        pub fn abortCycle(self: *Self) Error!void {
             self.phase_value = .idle;
             self.queue.clearRetainingCapacity();
             self.queue_head = 0;

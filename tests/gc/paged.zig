@@ -27,7 +27,7 @@ const Store = struct {
 
 const Cache = struct {
     pub const PageId = usize;
-    pub const Error = error{ InvalidPageId, OutOfPages };
+    pub const Error = error{ InvalidPageId, OutOfPages, InjectedFailure };
     pub const Pid = PageId;
     pub const UnderlyingDevice = struct {
         pub const BlockId = PageId;
@@ -59,6 +59,7 @@ const Cache = struct {
 
     store: *Store,
     active: bool = false,
+    fail_fetch: bool = false,
 
     pub fn transactionActive(self: *const @This()) bool {
         return self.active;
@@ -69,6 +70,9 @@ const Cache = struct {
     }
 
     pub fn fetch(self: *@This(), page_id: PageId) Error!Handle {
+        if (self.fail_fetch) {
+            return error.InjectedFailure;
+        }
         if (page_id >= self.store.count or self.store.entries[page_id].free) {
             return error.InvalidPageId;
         }
@@ -175,8 +179,8 @@ test "GC: paged model persists unbounded chains and resumes after reopen" {
         var reopened_model = try Model.init(std.testing.allocator, &cache, &manager);
         var reopened = Collector.init(&reopened_model);
         defer reopened.deinit();
-        try reopened.registerResumed(1, 1, null, ScannerFixture.branch, null);
-        try reopened.registerResumed(2, 1, null, ScannerFixture.leaf, null);
+        try reopened.registerForCycle(1, 1, null, ScannerFixture.branch, null);
+        try reopened.registerForCycle(2, 1, null, ScannerFixture.leaf, null);
         while (try reopened.step(200) != .complete) {}
     }
 
@@ -195,4 +199,84 @@ test "GC: paged model requires an active transaction to open state" {
     var manager = StorageManager{ .store = &store };
 
     try std.testing.expectError(error.TransactionInactive, Model.init(std.testing.allocator, &cache, &manager));
+}
+
+test "GC: paged model uses configured private kinds and validates private pages" {
+    const state_kind = 0x9101;
+    const mark_bitmap_kind = 0x9102;
+    const free_bitmap_kind = 0x9103;
+    const queue_kind = 0x9104;
+    const Model = fullaz.gc.models.PagedWithKinds(
+        Cache,
+        StorageManager,
+        state_kind,
+        mark_bitmap_kind,
+        free_bitmap_kind,
+        queue_kind,
+    );
+    const Collector = fullaz.gc.Gc(Model);
+    const ScannerFixture = struct {
+        fn leaf(_: ?*const anyopaque, _: usize, _: []const u8, _: Collector.ReferenceSink) Collector.Error!void {}
+    };
+
+    var store = try Store.init(std.testing.allocator, 5);
+    defer store.deinit();
+    std.mem.writeInt(u16, store.entries[0].bytes[0..2], 1, .little);
+    for ([_]u16{ state_kind, mark_bitmap_kind, free_bitmap_kind, queue_kind }, 1..) |kind, page_id| {
+        std.mem.writeInt(u16, store.entries[page_id].bytes[0..2], kind, .little);
+    }
+    var cache = Cache{ .store = &store, .active = true };
+    var manager = StorageManager{ .store = &store };
+    var model = try Model.init(std.testing.allocator, &cache, &manager);
+    defer model.deinit();
+    var collector = Collector.init(&model);
+    defer collector.deinit();
+
+    try collector.register(1, 1, null, ScannerFixture.leaf, null);
+    try collector.start(&.{0});
+
+    try std.testing.expectEqual(@as(?usize, 5), store.gc_root);
+    try std.testing.expectEqual(state_kind, std.mem.readInt(u16, store.entries[5].bytes[0..2], .little));
+    try std.testing.expectEqual(mark_bitmap_kind, std.mem.readInt(u16, store.entries[6].bytes[0..2], .little));
+    try std.testing.expectEqual(free_bitmap_kind, std.mem.readInt(u16, store.entries[7].bytes[0..2], .little));
+    try std.testing.expectEqual(queue_kind, std.mem.readInt(u16, store.entries[8].bytes[0..2], .little));
+
+    while (try collector.step(16) != .complete) {}
+    try std.testing.expect(!store.entries[0].free);
+    for (1..5) |page_id| {
+        try std.testing.expect(store.entries[page_id].free);
+    }
+}
+
+test "GC: paged model propagates query failures and rejects free roots while preparing" {
+    const Model = fullaz.gc.models.Paged(Cache, StorageManager);
+    const Collector = fullaz.gc.Gc(Model);
+
+    var store = try Store.init(std.testing.allocator, 1);
+    defer store.deinit();
+    store.entries[0].free = true;
+    var cache = Cache{ .store = &store, .active = true };
+    var manager = StorageManager{ .store = &store };
+    var model = try Model.init(std.testing.allocator, &cache, &manager);
+    defer model.deinit();
+    var collector = Collector.init(&model);
+    defer collector.deinit();
+
+    try std.testing.expectError(error.FreePageReference, collector.start(&.{0}));
+    try collector.abortCycle();
+
+    store.entries[0].free = false;
+    try collector.start(&.{});
+    while (model.phase() != .marking) {
+        _ = try collector.step(16);
+    }
+
+    cache.fail_fetch = true;
+    try std.testing.expectError(error.InjectedFailure, model.registryDigest());
+    try std.testing.expectError(error.InjectedFailure, model.snapshotPageCount());
+    try std.testing.expectError(error.InjectedFailure, model.isMarked(0));
+    try std.testing.expectError(error.InjectedFailure, model.sweepCursor());
+    try std.testing.expectError(error.InjectedFailure, collector.step(1));
+    cache.fail_fetch = false;
+    try collector.abortCycle();
 }

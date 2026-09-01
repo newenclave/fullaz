@@ -91,6 +91,18 @@ pub fn componentErrors(comptime bindings_: anytype, comptime index: usize) type 
     return bindings_[index].Error || componentErrors(bindings_, index + 1);
 }
 
+/// Verifies that no component holds a mutable value editor. Call this before a
+/// transaction terminal operation performs any observable work.
+pub fn requireTransactionIdle(
+    comptime SchemaT: type,
+    comptime bindings_: anytype,
+    runtimes_: *const runtimes(SchemaT, bindings_),
+) componentErrors(bindings_, 0)!void {
+    inline for (SchemaT.fields, 0..) |field, index| {
+        try bindings_[index].requireTransactionIdle(&@field(runtimes_.*, field.name));
+    }
+}
+
 /// Persistent roots owned by the database rather than individual page types.
 /// Component metadata must be externally laid out because this structure is
 /// copied directly into the static database superblock.

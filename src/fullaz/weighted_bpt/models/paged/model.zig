@@ -152,7 +152,8 @@ pub fn PagedModel(
         errors.SlotsError ||
         PageCacheT.Error ||
         errors.OrderError ||
-        errors.BptError;
+        errors.BptError ||
+        core.structural_mutation.Error;
 
     const LeafImpl = struct {
         const Self = @This();
@@ -244,6 +245,11 @@ pub fn PagedModel(
             const view = PageViewTypeConst.init(try self.handle.data());
             const wv = try view.get(pos);
             return ValuePolicyType.init(self.ctx, wv.value);
+        }
+
+        pub fn updateValueWeight(self: *Self, pos: usize, weight: Weight) Error!void {
+            var view = PageViewType.init(try self.handle.dataMut());
+            try view.updateWeight(pos, weight);
         }
 
         fn compact(self: *Self, tmp_buf: []u8) Error!void {
@@ -548,16 +554,209 @@ pub fn PagedModel(
 
     const AccessorImpl = struct {
         const Self = @This();
+        const AccessorSelf = Self;
 
         pub const Pid = CachePageId;
         pub const Error = ErrorSet;
 
         ctx: Context = undefined,
+        coordinator: core.structural_mutation.StructuralMutationCoordinator = .{},
+
+        const ValueEditorImpl = struct {
+            const EditorSelf = @This();
+
+            pub const Error = ErrorSet;
+            pub const ValueMut = []u8;
+
+            layout_lock: ?PageHandle.LayoutLock,
+            snapshot: ?PageHandle,
+            leaf: ?LeafImpl,
+            position: usize,
+            value_len: usize,
+            accessor: *AccessorSelf,
+            coordinator: *core.structural_mutation.StructuralMutationCoordinator,
+            open: bool = true,
+
+            fn init(
+                layout_lock: PageHandle.LayoutLock,
+                snapshot: PageHandle,
+                leaf: LeafImpl,
+                position: usize,
+                value_len: usize,
+                coordinator: *core.structural_mutation.StructuralMutationCoordinator,
+                accessor: *AccessorSelf,
+            ) EditorSelf {
+                return .{
+                    .layout_lock = layout_lock,
+                    .snapshot = snapshot,
+                    .leaf = leaf,
+                    .position = position,
+                    .value_len = value_len,
+                    .coordinator = coordinator,
+                    .accessor = accessor,
+                };
+            }
+
+            pub fn valueMut(self: *EditorSelf) EditorSelf.Error!ValueMut {
+                try self.ensureOpen();
+                if (self.layout_lock) |*layout_lock| {
+                    var view = LeafImpl.PageViewType.init(try layout_lock.dataMut());
+                    const value_bytes = try view.valueMut(self.position);
+                    if (value_bytes.len != self.value_len) {
+                        return error.EditorInvalidated;
+                    }
+                    return value_bytes;
+                }
+                return error.EditorInvalidated;
+            }
+
+            pub fn originalValue(self: *const EditorSelf) EditorSelf.Error![]const u8 {
+                try self.ensureOpen();
+                if (self.snapshot) |*snapshot| {
+                    return (try snapshot.data())[0..self.value_len];
+                }
+                return error.EditorInvalidated;
+            }
+
+            pub fn value(self: *EditorSelf) EditorSelf.Error![]const u8 {
+                return self.valueMut();
+            }
+
+            pub fn finish(self: *EditorSelf) EditorSelf.Error!void {
+                try self.ensureOpen();
+                const leaf = self.leaf orelse return error.EditorInvalidated;
+                var old_policy = ValuePolicyType.init(leaf.ctx, try self.originalValue());
+                defer old_policy.deinit();
+                var new_policy = ValuePolicyType.init(leaf.ctx, try self.value());
+                defer new_policy.deinit();
+                try self.accessor.commitValueEditor(
+                    &self.leaf.?,
+                    self.position,
+                    try old_policy.weight(),
+                    try new_policy.weight(),
+                );
+                self.close();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                self.restore() catch @panic("WeightedBPT value editor rollback failed");
+                const leaf = self.leaf orelse @panic("WeightedBPT value editor lost its leaf");
+                var restored_policy = ValuePolicyType.init(leaf.ctx, self.originalValue() catch unreachable);
+                defer restored_policy.deinit();
+                self.accessor.commitValueEditor(
+                    &self.leaf.?,
+                    self.position,
+                    0,
+                    restored_policy.weight() catch unreachable,
+                ) catch @panic("WeightedBPT value editor rollback failed");
+                self.close();
+            }
+
+            fn ensureOpen(self: *const EditorSelf) EditorSelf.Error!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+            }
+
+            fn restore(self: *EditorSelf) EditorSelf.Error!void {
+                const old = try self.originalValue();
+                const value_bytes = try self.valueMut();
+                @memcpy(value_bytes, old);
+            }
+
+            fn close(self: *EditorSelf) void {
+                if (self.layout_lock) |*layout_lock| {
+                    layout_lock.deinit();
+                    self.layout_lock = null;
+                }
+                if (self.snapshot) |*snapshot| {
+                    snapshot.deinit();
+                    self.snapshot = null;
+                }
+                if (self.leaf) |*leaf| {
+                    leaf.deinit();
+                    self.leaf = null;
+                }
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
+        pub const ValueEditorType = ValueEditorImpl;
 
         fn init(ctx: Context) Self {
             return .{
                 .ctx = ctx,
+                .coordinator = .{},
             };
+        }
+
+        pub fn openValueEditor(self: *Self, leaf: *LeafImpl, pos: usize) Error!ValueEditorImpl {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+            var value = try leaf.getValue(pos);
+            defer value.deinit();
+            const value_bytes = try value.get();
+            var snapshot = try self.ctx.cache.getTemporaryPage();
+            errdefer snapshot.deinit();
+            const snapshot_bytes = try snapshot.dataMut();
+            @memcpy(snapshot_bytes[0..value_bytes.len], value_bytes);
+            var layout_lock = try leaf.handle.lockLayout();
+            errdefer layout_lock.deinit();
+            var editor_leaf = LeafImpl.init(try leaf.handle.clone(), leaf.id(), leaf.ctx);
+            errdefer editor_leaf.deinit();
+            return ValueEditorImpl.init(
+                layout_lock,
+                snapshot,
+                editor_leaf,
+                pos,
+                value_bytes.len,
+                &self.coordinator,
+                self,
+            );
+        }
+
+        fn commitValueEditor(
+            self: *Self,
+            leaf: *LeafImpl,
+            position: usize,
+            old_weight: Weight,
+            new_weight: Weight,
+        ) Error!void {
+            _ = old_weight;
+            try leaf.updateValueWeight(position, new_weight);
+            try self.fixLeafParentWeight(leaf);
+        }
+
+        fn fixLeafParentWeight(self: *Self, leaf: *const LeafImpl) Error!void {
+            const parent_id = try leaf.getParent() orelse return;
+            var parent = try self.loadInode(parent_id);
+            defer self.deinitInode(&parent);
+            const child_pos = try self.childPosition(&parent, leaf.id());
+            try parent.updateWeight(child_pos, try leaf.totalWeight());
+            try self.fixInodeParentWeight(&parent);
+        }
+
+        fn fixInodeParentWeight(self: *Self, inode: *const InodeImpl) Error!void {
+            const parent_id = try inode.getParent() orelse return;
+            var parent = try self.loadInode(parent_id);
+            defer self.deinitInode(&parent);
+            const child_pos = try self.childPosition(&parent, inode.id());
+            try parent.updateWeight(child_pos, try inode.totalWeight());
+            try self.fixInodeParentWeight(&parent);
+        }
+
+        fn childPosition(self: *Self, parent: *const InodeImpl, child_id: CachePageId) Error!usize {
+            _ = self;
+            for (0..try parent.size()) |index| {
+                if (try parent.getChild(index) == child_id) {
+                    return index;
+                }
+            }
+            return Error.BadData;
         }
 
         pub fn deinit(_: Self) void {
@@ -654,6 +853,7 @@ pub fn PagedModel(
         const Self = @This();
 
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = AccessorImpl.ValueEditorType;
         pub const WeightType = Weight;
         pub const NodePositionType = NodePosition;
         pub const Error = ErrorSet;
@@ -727,6 +927,12 @@ pub fn PagedModel(
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(
+            self: *Self,
+        ) *core.structural_mutation.StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
     };
 }

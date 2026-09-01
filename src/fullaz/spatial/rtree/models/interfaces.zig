@@ -5,6 +5,7 @@ const interfaces = @import("../../../contracts/interfaces.zig");
 const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
+const StructuralMutationCoordinator = @import("../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 pub const requiresStorageManager = contracts.storage_manager.requiresStorageManager;
 pub const requiresPageCache = contracts.page_cache.requiresPageCache;
@@ -48,6 +49,28 @@ pub fn assertModelAccessor(comptime Model: type) void {
     requiresFnSignature(A, "deinitInode", fn (*A, ?InodeType) void);
 
     requiresFnSignature(A, "isLeafId", fn (*A, NodeIdType) Error!bool);
+}
+
+/// A value editor leases one existing value without changing its stored size.
+///
+/// ```zig
+/// const ValueEditor = struct {
+///     pub const Error = error{};
+///     pub const ValueMutType = []u8;
+///     pub fn valueMut(self: *@This()) Error!ValueMutType { _ = self; return &.{}; }
+///     pub fn finish(self: *@This()) Error!void { _ = self; }
+///     pub fn deinit(self: *@This()) void { _ = self; }
+/// };
+/// ```
+pub fn assertValueEditor(comptime Model: type) void {
+    const Editor = Model.ValueEditorType;
+    requiresErrorDeclaration(Editor, "Error");
+    requiresTypeDeclaration(Editor, "ValueMutType");
+    const Error = Editor.Error;
+
+    requiresFnSignature(Editor, "valueMut", fn (*Editor) Error!Editor.ValueMutType);
+    requiresFnSignature(Editor, "finish", fn (*Editor) Error!void);
+    requiresFnSignature(Editor, "deinit", fn (*Editor) void);
 }
 
 // Common part for Leaf and Inode.
@@ -130,7 +153,16 @@ pub fn assertModel(comptime T: type) void {
     requiresTypeDeclaration(T, "AccessorType");
     assertModelAccessor(T);
 
+    requiresTypeDeclaration(T, "ValueEditorType");
+    assertValueEditor(T);
+    requiresFnSignature(
+        T.AccessorType,
+        "openValueEditor",
+        fn (*T.AccessorType, *T.LeafType, usize) T.AccessorType.Error!T.ValueEditorType,
+    );
+
     requiresFnSignature(T, "accessor", fn (*T) *T.AccessorType);
+    requiresFnSignature(T, "structuralMutationCoordinator", fn (*T) *StructuralMutationCoordinator);
     requiresFnSignature(T, "valueOutAsIn", fn (*const T, T.ValueOutType) T.ValueInType);
     requiresFnSignature(T, "copyValueOut", fn (*const T, T.ValueOutType) T.ValueBufType);
     requiresFnSignature(T, "valueBufAsIn", fn (*const T, *const T.ValueBufType) T.ValueInType);

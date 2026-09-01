@@ -5,6 +5,7 @@ const FingerprintWriter = @import("../component/fingerprint.zig").Writer;
 const SingleRootManager = @import("../component/managers/managers.zig").SingleRootManager;
 const weighted_bpt = @import("fullaz").weighted_bpt;
 const weighted_seq = @import("fullaz").storage.weighted_seq;
+const gc = @import("fullaz").gc;
 const dynamic_metadata = @import("../file/metadata/dynamic.zig");
 const tagged = @import("../file/tagged_fields.zig");
 
@@ -22,16 +23,16 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
             @compileError("Unknown fullaz-db.weightedSequence option: " ++ field.name);
         }
     }
-    const maximum_chunk_size =
+    const configured_maximum_chunk_size =
         if (@hasField(OptionsT, "maximum_chunk_size")) options.maximum_chunk_size else 256;
 
-    const ChunkSizeT = @TypeOf(maximum_chunk_size);
+    const ChunkSizeT = @TypeOf(configured_maximum_chunk_size);
 
     switch (@typeInfo(ChunkSizeT)) {
         .int, .comptime_int => {},
         else => @compileError("fullaz-db.weightedSequence maximum_chunk_size must be an unsigned integer"),
     }
-    const chunk_size = std.math.cast(usize, maximum_chunk_size) orelse
+    const chunk_size = std.math.cast(usize, configured_maximum_chunk_size) orelse
         @compileError("fullaz-db.weightedSequence maximum_chunk_size must fit usize");
     if (chunk_size == 0) {
         @compileError("fullaz-db.weightedSequence maximum_chunk_size must be non-zero");
@@ -42,6 +43,7 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
         pub const format_version: u32 = 1;
         pub const page_kind_count: usize = 2;
         pub const page_roles: [page_kind_count][]const u8 = .{ "leaf", "inode" };
+        pub const maximum_chunk_size: usize = chunk_size;
 
         pub fn fingerprint(writer: *FingerprintWriter) void {
             writer.writeInt(u64, @intCast(chunk_size));
@@ -144,6 +146,7 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
                 pub const Error = BindingError;
 
                 pub const Runtime = struct {
+                    page_kinds: component.PageKindRange,
                     manager: ManagerT,
                     model: ModelT,
                     tree: TreeT,
@@ -200,6 +203,50 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
                     }
                 };
 
+                pub fn Gc(comptime CollectorT: type) type {
+                    if (CollectorT.PageId != CacheT.Pid) {
+                        @compileError("fullaz-db WeightedSequence GC collector PageId must match CacheType.Pid");
+                    }
+                    return struct {
+                        pub const RootsError = std.mem.Allocator.Error;
+                        pub const RegisterError = CollectorT.Error;
+                        const leaf_scanner_version: CollectorT.ScannerVersion = 1;
+                        const inode_scanner_version: CollectorT.ScannerVersion = 1;
+
+                        pub fn appendRoots(
+                            runtime: *const Runtime,
+                            allocator: std.mem.Allocator,
+                            roots: *std.ArrayList(CollectorT.PageId),
+                        ) RootsError!void {
+                            if (runtime.manager.getRoot()) |root| {
+                                try roots.append(allocator, root);
+                            }
+                        }
+
+                        pub fn registerScanners(
+                            runtime: *const Runtime,
+                            collector: *CollectorT,
+                        ) RegisterError!void {
+                            const leaf_page_kind = runtime.page_kinds.kindAt(0) orelse unreachable;
+                            const inode_page_kind = runtime.page_kinds.kindAt(1) orelse unreachable;
+                            try collector.registerForCycle(
+                                leaf_page_kind,
+                                leaf_scanner_version,
+                                &runtime.sequence,
+                                gc.scanners.method(CollectorT, SequenceT, SequenceT.scanLeafRefs),
+                                null,
+                            );
+                            try collector.registerForCycle(
+                                inode_page_kind,
+                                inode_scanner_version,
+                                &runtime.sequence,
+                                gc.scanners.method(CollectorT, SequenceT, SequenceT.scanInodeRefs),
+                                null,
+                            );
+                        }
+                    };
+                }
+
                 pub fn initRuntime(
                     runtime: *Runtime,
                     backend: *BackendT,
@@ -211,6 +258,7 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
                     }
                     const leaf_kind = page_kinds.kindAt(0) orelse return error.InvalidPageKinds;
                     const inode_kind = page_kinds.kindAt(1) orelse return error.InvalidPageKinds;
+                    runtime.page_kinds = page_kinds;
                     runtime.manager = ManagerT.init(backend);
                     runtime.model = ModelT.init(backend.cache(), &runtime.manager, .{
                         .maximum_value_size = chunk_size,
@@ -227,6 +275,8 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
                     runtime.model.deinit();
                     runtime.* = undefined;
                 }
+
+                pub fn requireTransactionIdle(_: *const Runtime) BindingError!void {}
 
                 pub fn reclaimPersistent(runtime: *Runtime) BindingError!void {
                     try runtime.sequence.clear();

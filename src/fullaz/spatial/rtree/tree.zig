@@ -85,6 +85,26 @@ fn TreeWithConfig(
         pub const PageId = Pid;
         pub const min_fill: usize = @max(2, Max * 2 / 5); // 40% is minimum.
 
+        /// An owned mutable lease for one existing value. Value length and tree
+        /// topology remain stable until finish() or deinit().
+        pub const ValueEditor = struct {
+            const EditorSelf = @This();
+
+            editor: ModelT.ValueEditorType,
+
+            pub fn valueMut(self: *EditorSelf) ModelT.ValueEditorType.Error!ModelT.ValueEditorType.ValueMutType {
+                return self.editor.valueMut();
+            }
+
+            pub fn finish(self: *EditorSelf) ModelT.ValueEditorType.Error!void {
+                return self.editor.finish();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                self.editor.deinit();
+            }
+        };
+
         const max_depth = limits.max_depth;
         const orphan_cap = max_depth * min_fill;
 
@@ -165,6 +185,8 @@ fn TreeWithConfig(
         /// Releases every page reachable from the current root without applying
         /// normal R-tree condensation.
         pub fn destroy(self: *Self) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const accessor = self.model.accessor();
             const root_id = accessor.getRoot() orelse return;
             try self.destroyNode(root_id);
@@ -259,6 +281,35 @@ fn TreeWithConfig(
             try self.searchNode(root, query, ctx, cb, .intersection);
         }
 
+        /// Visits overlap hits with a mutable editor for each value. The editor
+        /// is valid only for the callback and rolls back unless finish() is called.
+        pub fn searchEditable(
+            self: *Self,
+            query: Key,
+            ctx: anytype,
+            cb: anytype,
+        ) (Error || CallbackError(@TypeOf(cb)))!void {
+            const acc = self.model.accessor();
+            const root = acc.getRoot() orelse {
+                return;
+            };
+            try self.searchEditableNode(root, query, ctx, cb, .overlap);
+        }
+
+        /// Like searchEditable(), using closed-box intersection matching.
+        pub fn searchIntersectingEditable(
+            self: *Self,
+            query: Key,
+            ctx: anytype,
+            cb: anytype,
+        ) (Error || CallbackError(@TypeOf(cb)))!void {
+            const acc = self.model.accessor();
+            const root = acc.getRoot() orelse {
+                return;
+            };
+            try self.searchEditableNode(root, query, ctx, cb, .intersection);
+        }
+
         const SearchMode = enum {
             overlap,
             intersection,
@@ -315,8 +366,80 @@ fn TreeWithConfig(
             }
         }
 
+        fn searchEditableNode(
+            self: *Self,
+            id: Pid,
+            query: Key,
+            ctx: anytype,
+            cb: anytype,
+            comptime search_mode: SearchMode,
+        ) (Error || CallbackError(@TypeOf(cb)))!void {
+            const acc = self.model.accessor();
+            if (try acc.isLeafId(id)) {
+                var leaf = (try acc.loadLeaf(id)).?;
+                defer acc.deinitLeaf(leaf);
+                const count = try leaf.size();
+                var index: usize = 0;
+                while (index < count) : (index += 1) {
+                    const mbr = try leaf.getMbr(index);
+                    const matches = switch (search_mode) {
+                        .intersection => mbr.intersects(&query),
+                        .overlap => mbr.overlaps(&query),
+                    };
+                    if (matches) {
+                        var editor = ValueEditor{
+                            .editor = try acc.openValueEditor(&leaf, index),
+                        };
+                        defer editor.deinit();
+                        try callEditableCallback(cb, ctx, mbr, &editor);
+                    }
+                }
+                return;
+            }
+
+            var child_ids: [Max]Pid = undefined;
+            const child_count = blk: {
+                var inode = (try acc.loadInode(id)).?;
+                defer acc.deinitInode(inode);
+                const count = try inode.size();
+                var found: usize = 0;
+                var index: usize = 0;
+                while (index < count) : (index += 1) {
+                    const mbr = try inode.getMbr(index);
+                    const matches = switch (search_mode) {
+                        .intersection => mbr.intersects(&query),
+                        .overlap => mbr.overlaps(&query),
+                    };
+                    if (matches) {
+                        child_ids[found] = try inode.getChild(index);
+                        found += 1;
+                    }
+                }
+                break :blk found;
+            };
+            for (child_ids[0..child_count]) |child_id| {
+                try self.searchEditableNode(child_id, query, ctx, cb, search_mode);
+            }
+        }
+
+        fn callEditableCallback(
+            callback: anytype,
+            context: anytype,
+            mbr: Key,
+            editor: *ValueEditor,
+        ) CallbackError(@TypeOf(callback))!void {
+            const ReturnT = callbackInfo(@TypeOf(callback)).return_type.?;
+            switch (@typeInfo(ReturnT)) {
+                .void => callback(context, mbr, editor),
+                .error_union => try callback(context, mbr, editor),
+                else => unreachable,
+            }
+        }
+
         // ---- insert ---- //
         pub fn insert(self: *Self, mbr: Key, value: ValueIn) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             var ctx = InsertCtx{};
             try self.insertValue(mbr, value, &ctx);
             try self.drainReinserts(&ctx);
@@ -677,6 +800,8 @@ fn TreeWithConfig(
         };
 
         pub fn remove(self: *Self, query: Key, ctx: anytype, matches: anytype) Error!bool {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const acc = self.model.accessor();
             const root = acc.getRoot() orelse {
                 return false;
@@ -702,6 +827,22 @@ fn TreeWithConfig(
 
             try self.condenseTree(&path, hit.leaf_id);
             return true;
+        }
+
+        /// Returns an editor for the first hit selected with remove()'s exact
+        /// intersection and predicate rules. Duplicate entries remain distinct.
+        pub fn openValueEditor(self: *Self, query: Key, ctx: anytype, matches: anytype) Error!?ValueEditor {
+            const acc = self.model.accessor();
+            const root = acc.getRoot() orelse return null;
+            var path = Path{};
+            const hit = (try self.findLeaf(root, query, ctx, matches, &path)) orelse return null;
+            var leaf = (try acc.loadLeaf(hit.leaf_id)).?;
+            const editor = acc.openValueEditor(&leaf, hit.entry_idx) catch |err| {
+                acc.deinitLeaf(leaf);
+                return err;
+            };
+            acc.deinitLeaf(leaf);
+            return .{ .editor = editor };
         }
 
         fn findLeaf(self: *Self, id: Pid, query: Key, ctx: anytype, matches: anytype, path: *Path) Error!?Hit {

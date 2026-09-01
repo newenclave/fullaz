@@ -80,4 +80,6 @@ pub const BptError = error{
     ValueTooLarge,
     NotEnoughTemporaryBuffer,
     NotEnoughSpaceForUpdate,
+    EditorOpen,
+    ValueNotFixedLength,
 };

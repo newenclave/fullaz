@@ -35,6 +35,11 @@ fn MassTrait(comptime Coord: type, comptime dimension: usize, comptime Value: ty
             _ = box;
             self.mass -= value;
         }
+
+        pub fn onUpdate(self: *Self, box: anytype, old_value: Value, new_value: Value) Error!void {
+            _ = box;
+            self.mass = self.mass - old_value + new_value;
+        }
     };
 }
 
@@ -56,6 +61,7 @@ fn FailingRemoveTrait(comptime Coord: type, comptime dimension: usize, comptime 
         pub fn onRemove(_: *Self, _: anytype, _: Value) Error!void {
             return error.RemoveFailed;
         }
+        pub fn onUpdate(_: *Self, _: anytype, _: Value, _: Value) Error!void {}
     };
 }
 
@@ -810,6 +816,55 @@ test "OrthTree: remove hook error for u32 coordinates" {
 
 test "OrthTree: remove hook error for f32 coordinates" {
     try expectRemoveHookError(f32);
+}
+
+test "OrthTree: editable query hits finish traits and roll back memory values" {
+    const Model = orthtree.models.MemoryImpl(i32, 2, u32, MassTrait);
+    const Tree = orthtree.tree.TreeImpl(Model);
+    const Box = Model.Box;
+    const EditContext = struct {
+        finish: bool,
+
+        fn edit(self: *@This(), hit: anytype) !void {
+            var editor = try hit.editValue();
+            defer editor.deinit();
+            (try editor.valueMut()).* += 1;
+            if (self.finish) {
+                try editor.finish();
+            }
+        }
+    };
+
+    var model = try Model.init(std.testing.allocator, 1);
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    const bounds = Box.create(.{ 0, 0 }, .{ 10, 10 });
+    try tree.insert(bounds, 5);
+    try tree.insert(Box.create(.{ 1, 1 }, .{ 2, 2 }), 7);
+
+    var rollback = EditContext{ .finish = false };
+    try tree.queryEditable(bounds, EditContext.edit, &rollback);
+    var root = try model.accessor().loadNode(model.accessor().getRoot().?);
+    defer model.accessor().deinitNode(&root);
+    try std.testing.expectEqual(@as(u32, 12), root.trait().mass);
+
+    var commit = EditContext{ .finish = true };
+    try tree.queryEditable(bounds, EditContext.edit, &commit);
+    try std.testing.expectEqual(@as(u32, 14), root.trait().mass);
+    var editor: ?Tree.ValueEditor = null;
+    const HoldContext = struct {
+        fn hold(slot: *@TypeOf(editor), hit: anytype) !void {
+            if (slot.* == null) {
+                slot.* = try hit.editValue();
+            }
+        }
+    };
+    try tree.queryEditable(bounds, HoldContext.hold, &editor);
+    defer editor.?.deinit();
+    try std.testing.expectError(
+        error.ValueEditorActive,
+        tree.insert(Box.create(.{ 20, 20 }, .{ 21, 21 }), 1),
+    );
 }
 
 fn countNodes(tree: anytype) !usize {

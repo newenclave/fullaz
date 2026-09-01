@@ -80,3 +80,38 @@ test "SlotStack: push, top, pop, and iterate" {
     try std.testing.expect(try stack.isEmpty());
     try std.testing.expectError(error.EmptySet, stack.pop());
 }
+
+test "SlotStack: top and iterator value editors" {
+    const Stack = SlotStack(Cache, StorageManager, .little);
+
+    var manager = StorageManager{};
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var stack = try Stack.init(&cache, &manager, .{});
+    defer stack.deinit();
+
+    try stack.push("bottom");
+    try stack.push("top");
+    var top = try stack.top();
+    defer top.deinit();
+    var editor = try top.editValue();
+    defer editor.deinit();
+    (try editor.valueMut())[0] = 'T';
+    try std.testing.expectError(error.ValueEditorActive, stack.push("blocked"));
+    try editor.finish();
+    try std.testing.expectEqualStrings("Top", try top.value());
+
+    var iterator = (try stack.iterator()).?;
+    defer iterator.deinit();
+    const bottom = (try iterator.next()).?;
+    var rollback = (try iterator.editValue()).?;
+    (try rollback.valueMut())[0] = 'B';
+    rollback.deinit();
+    try std.testing.expectEqualStrings("bottom", bottom);
+
+    try stack.pop();
+    try stack.pop();
+    try std.testing.expect(try stack.isEmpty());
+}

@@ -1,5 +1,6 @@
 const std = @import("std");
 const errors = @import("../../../core/errors.zig");
+const StructuralMutationCoordinator = @import("../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 const BoundingBox = @import("../../geometry.zig").BoundingBox;
 
@@ -31,6 +32,7 @@ pub fn MemoryImpl(
 
     const ErrorSet = std.mem.Allocator.Error ||
         TraitType.Error ||
+        @import("../../../core/structural_mutation.zig").Error ||
         errors.IndexError ||
         errors.SpaceError ||
         error{ AlreadyInitialized, InvalidId };
@@ -226,6 +228,55 @@ pub fn MemoryImpl(
         storage: *EntriesStorage,
         pub const Cursor = EntriesStorage.Cursor;
 
+        pub const ValueEditor = struct {
+            const EditorSelf = @This();
+            pub const Error = ErrorSet;
+            pub const ValueMut = *ValueT;
+
+            entry: *EntryImpl,
+            snapshot: ValueT,
+            coordinator: *StructuralMutationCoordinator,
+            open: bool = true,
+
+            pub fn valueMut(self: *EditorSelf) Error!*ValueT {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+                return &self.entry.data;
+            }
+
+            pub fn originalValue(self: *const EditorSelf) Error!ValueT {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+                return self.snapshot;
+            }
+
+            pub fn value(self: *const EditorSelf) Error!ValueT {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+                return self.entry.data;
+            }
+
+            pub fn finish(self: *EditorSelf) Error!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                self.entry.data = self.snapshot;
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
         pub fn init(storage: *EntriesStorage) Self {
             return .{ .storage = storage };
         }
@@ -251,6 +302,20 @@ pub fn MemoryImpl(
         pub fn markCurrentTombstone(self: *Self, entry_cursor: *Cursor) ErrorSet!void {
             _ = self;
             try entry_cursor.markCurrentTombstone();
+        }
+
+        pub fn openValueEditor(
+            self: *Self,
+            entry_cursor: *Cursor,
+            coordinator: *StructuralMutationCoordinator,
+        ) ErrorSet!ValueEditor {
+            const index = entry_cursor.current_index orelse return ErrorSet.OutOfBounds;
+            try coordinator.beginValueEditor();
+            return .{
+                .entry = &self.storage.list.items[index],
+                .snapshot = self.storage.list.items[index].data,
+                .coordinator = coordinator,
+            };
         }
     };
 
@@ -314,6 +379,7 @@ pub fn MemoryImpl(
         pub const Id = IdType;
         pub const Entries = EntriesWrapper;
         pub const EntriesMut = EntriesMutWrapper;
+        pub const ValueEditorType = EntriesMut.ValueEditor;
         pub const Trait = TraitType;
 
         node: *NodeImpl,
@@ -559,11 +625,13 @@ pub fn MemoryImpl(
         pub const ValueIn = ValueT;
         pub const ValueOut = ValueT;
         pub const ValueBorrow = ValueT;
+        pub const ValueEditorType = EntriesMutWrapper.ValueEditor;
         pub const Error = ErrorSet;
         pub const Trait = TraitType;
         pub const Settings = SettingsT;
 
         accessor_state: AccessorType,
+        coordinator: StructuralMutationCoordinator = .{},
 
         pub fn init(allocator: std.mem.Allocator, max_leaf_entries: usize) ErrorSet!Self {
             return initWithSettings(allocator, Trait.init(), .{
@@ -584,6 +652,7 @@ pub fn MemoryImpl(
         ) ErrorSet!Self {
             return Self{
                 .accessor_state = try AccessorType.init(allocator, trait, settings),
+                .coordinator = .{},
             };
         }
 
@@ -593,6 +662,19 @@ pub fn MemoryImpl(
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.coordinator;
+        }
+
+        pub fn openValueEditor(
+            self: *Self,
+            _: *Node,
+            entries: *Node.EntriesMut,
+            cursor: *Node.EntriesMut.Cursor,
+        ) ErrorSet!ValueEditorType {
+            return entries.openValueEditor(cursor, &self.coordinator);
         }
 
         pub fn incrementEntriesCount(self: *Self) ErrorSet!void {
@@ -646,6 +728,17 @@ pub fn MemoryImpl(
         pub fn onRemove(self: *Self, node: *Node, box: Box, value: ValueIn) ErrorSet!void {
             _ = self;
             try node.node.trait.onRemove(box, value);
+        }
+
+        pub fn onUpdate(
+            self: *Self,
+            node: *Node,
+            box: Box,
+            old_value: ValueIn,
+            new_value: ValueIn,
+        ) ErrorSet!void {
+            _ = self;
+            try node.node.trait.onUpdate(box, old_value, new_value);
         }
     };
 }

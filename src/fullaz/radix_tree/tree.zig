@@ -1,6 +1,8 @@
 const std = @import("std");
 const KeySplitter = @import("splitter.zig").Splitter;
 const errors = @import("../core/errors.zig");
+const StructuralMutationCoordinator = @import("../core/core.zig").structural_mutation.StructuralMutationCoordinator;
+const StructuralMutationError = @import("../core/core.zig").structural_mutation.Error;
 const model_interfaces = @import("models/interfaces.zig");
 
 pub fn Tree(comptime ModelT: type) type {
@@ -21,11 +23,32 @@ pub fn Tree(comptime ModelT: type) type {
 
         const Splitter = KeySplitter(KeyInType);
         pub const Error = Splitter.Error ||
-            Model.Error || errors.LayoutError;
+            Model.Error ||
+            errors.LayoutError ||
+            StructuralMutationError;
         pub const PageId = NodeIdType;
 
         model: *Model,
         splitter: Splitter,
+
+        /// An owned mutable lease for the exact value stored at one unique key.
+        pub const ValueEditor = struct {
+            const EditorSelf = @This();
+
+            editor: Model.ValueEditorType,
+
+            pub fn valueMut(self: *EditorSelf) Model.ValueEditorType.Error!Model.ValueEditorType.ValueMutType {
+                return self.editor.valueMut();
+            }
+
+            pub fn finish(self: *EditorSelf) Model.ValueEditorType.Error!void {
+                return self.editor.finish();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                self.editor.deinit();
+            }
+        };
 
         pub fn init(model: *Model) Self {
             return Self{
@@ -169,6 +192,8 @@ pub fn Tree(comptime ModelT: type) type {
         }
 
         pub fn set(self: *Self, key: KeyInType, value: ValueInType) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const acc = self.accessor();
             var split_key = try acc.splitKey(key);
             defer acc.deinitSplitKey(&split_key);
@@ -182,6 +207,8 @@ pub fn Tree(comptime ModelT: type) type {
 
         /// Stores `value` in an existing free leaf slot and returns its full key.
         pub fn takeFree(self: *Self, value: ValueInType) Error!?KeyInType {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const acc = self.accessor();
             var leaf = (try acc.getFreeLeaf()) orelse return null;
             defer acc.deinitLeaf(&leaf);
@@ -205,6 +232,8 @@ pub fn Tree(comptime ModelT: type) type {
         }
 
         pub fn free(self: *Self, key: KeyInType) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const acc = self.accessor();
             var split_key = try acc.splitKey(key);
             defer acc.deinitSplitKey(&split_key);
@@ -238,6 +267,20 @@ pub fn Tree(comptime ModelT: type) type {
                 }
                 // The deferred cleanup owns the nonempty leaf.
             }
+        }
+
+        /// Opens a mutable editor for the value at `key`, if the unique key exists.
+        pub fn openValueEditor(self: *Self, key: KeyInType) Error!?ValueEditor {
+            const acc = self.accessor();
+            var split_key = try acc.splitKey(key);
+            defer acc.deinitSplitKey(&split_key);
+            var leaf = (try self.findLeaf(&split_key)) orelse return null;
+            defer acc.deinitLeaf(&leaf);
+            const digit = split_key.get(0).digit;
+            if (!try leaf.isSet(digit)) {
+                return null;
+            }
+            return .{ .editor = try acc.openValueEditor(&leaf, digit) };
         }
 
         fn freeChild(self: *Self, inode_id: ?NodeIdType, id: KeyInType) Error!void {

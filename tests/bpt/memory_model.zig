@@ -286,6 +286,43 @@ test "Bpt Update values" {
     }
 }
 
+test "BPT memory value editor coordinates, finishes, rolls back, and rejects stale iterators" {
+    const allocator = std.testing.allocator;
+    const TreeTest = BptTest(u32, 5, algos.CmpNum(u32).asc);
+    var tree_test = try TreeTest.init(allocator);
+    defer tree_test.deinit();
+    var tree = try tree_test.createTree();
+    defer tree.deinit();
+    var same_model_tree = try tree_test.createTree();
+    defer same_model_tree.deinit();
+
+    try std.testing.expect(try tree.insert(1, "abcdefghijklmnop"));
+    var editor = (try tree.openValueEditor(1)).?;
+    try std.testing.expectError(error.ValueEditorActive, same_model_tree.openValueEditor(1));
+    try std.testing.expectError(error.ValueEditorActive, tree.insert(2, "qrstuvwxyzabcdef"));
+    const value = try editor.valueMut();
+    value[0] = 'Z';
+    try editor.finish();
+    try std.testing.expectError(error.EditorInvalidated, editor.valueMut());
+    try std.testing.expectError(error.EditorInvalidated, editor.finish());
+
+    var committed = (try tree.find(1)).?;
+    defer committed.deinit();
+    try std.testing.expectEqualSlices(u8, "Zbcdefghijklmnop", (try committed.get()).?.value);
+
+    var rollback = (try tree.openValueEditor(1)).?;
+    (try rollback.valueMut())[1] = 'Y';
+    rollback.deinit();
+    var restored = (try tree.find(1)).?;
+    defer restored.deinit();
+    try std.testing.expectEqualSlices(u8, "Zbcdefghijklmnop", (try restored.get()).?.value);
+
+    var iterator = (try tree.find(1)).?;
+    defer iterator.deinit();
+    try std.testing.expect(try tree.insert(2, "qrstuvwxyzabcdef"));
+    try std.testing.expectError(error.StaleIterator, iterator.editValue());
+}
+
 test "Some stress test" {
     const allocator = std.testing.allocator;
 

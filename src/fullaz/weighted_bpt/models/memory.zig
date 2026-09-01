@@ -1,6 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const core = @import("../../core/core.zig");
 const errors = @import("../../core/errors.zig");
+
+const StructuralMutationCoordinator = core.structural_mutation.StructuralMutationCoordinator;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -443,6 +446,10 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             return ValueViewImpl.init(self.leaf.values.items[pos].items);
         }
 
+        pub fn updateValueWeight(self: *Self, pos: usize, _: Weight) Error!void {
+            try self.checkPos(pos);
+        }
+
         pub fn canInsertWeight(self: *const Self, where: Weight, _: []const T) Error!bool {
             const current_weight = try self.size();
             const current_available = MaximumCapacity - current_weight;
@@ -534,6 +541,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
     const AccessorImpl = struct {
         const Self = @This();
+        const AccessorSelf = Self;
 
         const Error =
             errors.IndexError ||
@@ -544,12 +552,148 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
         ctx: Context = undefined,
         values: std.ArrayList(?NodeVariant),
         root: ?usize = null,
+        coordinator: StructuralMutationCoordinator = .{},
+
+        const ValueEditorImpl = struct {
+            const EditorSelf = @This();
+
+            pub const Error = AccessorSelf.Error || core.structural_mutation.Error;
+            pub const ValueMut = []T;
+
+            leaf: *LeafContainer,
+            leaf_id: Pid,
+            position: usize,
+            snapshot: Value,
+            accessor: *AccessorSelf,
+            open: bool = true,
+
+            pub fn valueMut(self: *EditorSelf) EditorSelf.Error!ValueMut {
+                try self.ensureOpen();
+                if (self.position >= self.leaf.values.items.len) {
+                    return error.EditorInvalidated;
+                }
+                return self.leaf.values.items[self.position].items;
+            }
+
+            pub fn originalValue(self: *const EditorSelf) EditorSelf.Error![]const T {
+                try self.ensureOpen();
+                return self.snapshot.items;
+            }
+
+            pub fn value(self: *const EditorSelf) EditorSelf.Error![]const T {
+                try self.ensureOpen();
+                if (self.position >= self.leaf.values.items.len) {
+                    return error.EditorInvalidated;
+                }
+                return self.leaf.values.items[self.position].items;
+            }
+
+            pub fn finish(self: *EditorSelf) EditorSelf.Error!void {
+                try self.ensureOpen();
+                const old_weight: Weight = @intCast(self.snapshot.items.len);
+                const new_weight: Weight = @intCast((try self.value()).len);
+                try self.accessor.commitValueEditor(self.leaf_id, self.position, old_weight, new_weight);
+                self.close();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                var current = self.leaf.values.items[self.position];
+                current.deinit(self.accessor.ctx.allocator);
+                self.leaf.values.items[self.position] = self.snapshot;
+                self.snapshot = .empty;
+                self.accessor.commitValueEditor(
+                    self.leaf_id,
+                    self.position,
+                    0,
+                    @intCast(self.leaf.values.items[self.position].items.len),
+                ) catch @panic("WeightedBPT value editor rollback failed");
+                self.close();
+            }
+
+            fn ensureOpen(self: *const EditorSelf) EditorSelf.Error!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+            }
+
+            fn close(self: *EditorSelf) void {
+                self.snapshot.deinit(self.accessor.ctx.allocator);
+                self.accessor.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
+        pub const ValueEditorType = ValueEditorImpl;
 
         fn init(allocator: std.mem.Allocator) Error!Self {
             return .{
                 .ctx = Context.init(allocator),
                 .values = try std.ArrayList(?NodeVariant).initCapacity(allocator, 0),
+                .coordinator = .{},
             };
+        }
+
+        pub fn openValueEditor(self: *Self, leaf: *LeafImpl, pos: usize) ValueEditorImpl.Error!ValueEditorImpl {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+            try leaf.checkPos(pos);
+
+            const source = leaf.leaf.values.items[pos];
+            var snapshot = try Value.initCapacity(self.ctx.allocator, source.items.len);
+            errdefer snapshot.deinit(self.ctx.allocator);
+            try snapshot.appendSlice(self.ctx.allocator, source.items);
+            return .{
+                .leaf = leaf.leaf,
+                .leaf_id = leaf.id(),
+                .position = pos,
+                .snapshot = snapshot,
+                .accessor = self,
+            };
+        }
+
+        fn commitValueEditor(
+            self: *Self,
+            leaf_id: Pid,
+            position: usize,
+            old_weight: Weight,
+            new_weight: Weight,
+        ) Error!void {
+            _ = old_weight;
+            var leaf = try self.loadLeaf(leaf_id);
+            defer self.deinitLeaf(&leaf);
+            try leaf.updateValueWeight(position, new_weight);
+            try self.fixLeafParentWeight(&leaf);
+        }
+
+        fn fixLeafParentWeight(self: *Self, leaf: *const LeafImpl) Error!void {
+            const parent_id = try leaf.getParent() orelse return;
+            var parent = try self.loadInode(parent_id);
+            defer self.deinitInode(&parent);
+            const child_pos = try self.childPosition(&parent, leaf.id());
+            try parent.updateWeight(child_pos, try leaf.totalWeight());
+            try self.fixInodeParentWeight(&parent);
+        }
+
+        fn fixInodeParentWeight(self: *Self, inode: *const InodeImpl) Error!void {
+            const parent_id = try inode.getParent() orelse return;
+            var parent = try self.loadInode(parent_id);
+            defer self.deinitInode(&parent);
+            const child_pos = try self.childPosition(&parent, inode.id());
+            try parent.updateWeight(child_pos, try inode.totalWeight());
+            try self.fixInodeParentWeight(&parent);
+        }
+
+        fn childPosition(self: *Self, parent: *const InodeImpl, child_id: Pid) Error!usize {
+            _ = self;
+            for (0..try parent.size()) |index| {
+                if (try parent.getChild(index) == child_id) {
+                    return index;
+                }
+            }
+            return Error.InvalidId;
         }
 
         pub fn deinit(self: *Self) void {
@@ -697,6 +841,7 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
     return struct {
         const Self = @This();
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = AccessorImpl.ValueEditorType;
         pub const ValueType = []const T;
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
@@ -711,7 +856,8 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
             AccessorImpl.Error ||
             LeafImpl.Error ||
             InodeImpl.Error ||
-            std.mem.Allocator.Error;
+            std.mem.Allocator.Error ||
+            core.structural_mutation.Error;
 
         accessor_state: AccessorType,
 
@@ -727,6 +873,10 @@ pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
     };
 }

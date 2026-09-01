@@ -1,4 +1,6 @@
 const std = @import("std");
+const StructuralMutationCoordinator = @import("../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
+const StructuralMutationError = @import("../../core/core.zig").structural_mutation.Error;
 
 pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype, comptime CtxT: type) type {
     const Context = struct {
@@ -121,6 +123,47 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         }
     };
 
+    const ValueEditorImpl = struct {
+        const Self = @This();
+
+        pub const Error = error{EditorInvalidated};
+        pub const ValueMutType = *ValueT;
+
+        element: *NodeElement,
+        snapshot: ValueT,
+        coordinator: *StructuralMutationCoordinator,
+        open: bool = true,
+
+        pub fn valueMut(self: *Self) Error!ValueMutType {
+            try self.ensureOpen();
+            return &self.element.value;
+        }
+
+        pub fn finish(self: *Self) Error!void {
+            try self.ensureOpen();
+            self.close();
+        }
+
+        pub fn deinit(self: *Self) void {
+            if (!self.open) {
+                return;
+            }
+            self.element.value = self.snapshot;
+            self.close();
+        }
+
+        fn ensureOpen(self: *const Self) Error!void {
+            if (!self.open) {
+                return error.EditorInvalidated;
+            }
+        }
+
+        fn close(self: *Self) void {
+            self.coordinator.finishValueEditor();
+            self.open = false;
+        }
+    };
+
     const PathImpl = struct {
         const Self = @This();
         pub const Error = error{ OutOfMemory, OutOfBounds };
@@ -180,12 +223,14 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         pub const ValueIn = ValueT;
         pub const Pid = PidImpl;
 
-        pub const Error = error{ OutOfMemory, OutOfBounds };
+        pub const Error = error{ OutOfMemory, OutOfBounds } || StructuralMutationError;
+        pub const ValueEditorType = ValueEditorImpl;
 
         ctx: Context,
         cmp_ctx: CtxT = undefined,
         cont: NodeContainer = undefined,
         roots: PidContainer = undefined,
+        coordinator: StructuralMutationCoordinator = .{},
 
         fn init(allocator: std.mem.Allocator, max_level: usize, rng: std.Random) Error!Self {
             var result = Self{
@@ -289,13 +334,24 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
         pub fn deinitPath(self: *Self, path: *PathImpl) void {
             path.deinit(self.ctx.allocator);
         }
+
+        pub fn openValueEditor(self: *Self, node: *NodeImpl) Error!ValueEditorImpl {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+            return .{
+                .element = node.element,
+                .snapshot = node.element.value,
+                .coordinator = &self.coordinator,
+            };
+        }
     };
 
     return struct {
         const Self = @This();
 
-        pub const Error = error{ OutOfMemory, OutOfBounds };
+        pub const Error = error{ OutOfMemory, OutOfBounds } || StructuralMutationError;
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = AccessorType.ValueEditorType;
 
         pub const Node = NodeImpl;
         pub const Pid = PidImpl;
@@ -325,6 +381,10 @@ pub fn Memory(comptime KeyT: type, comptime ValueT: type, comptime cmp: anytype,
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
 
         pub fn keysCompare(self: *const Self, k1: KeyIn, k2: KeyIn) std.math.Order {

@@ -237,6 +237,25 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime WeightT: typ
             };
         }
 
+        pub fn valueMut(self: *Self, pos: usize) ErrorSet![]u8 {
+            var slots_dir = try self.slotsDirMut();
+            const buffer = try slots_dir.getMut(pos);
+            if (buffer.len < @sizeOf(SlotHeaderType)) {
+                return ErrorSet.BadData;
+            }
+            return buffer[@sizeOf(SlotHeaderType)..];
+        }
+
+        pub fn updateWeight(self: *Self, pos: usize, weight: WeightT) ErrorSet!void {
+            var slots_dir = try self.slotsDirMut();
+            const buffer = try slots_dir.getMut(pos);
+            if (buffer.len < @sizeOf(SlotHeaderType)) {
+                return ErrorSet.BadData;
+            }
+            const slot: *SlotHeaderType = @ptrCast(&buffer[0]);
+            slot.weight.set(weight);
+        }
+
         pub fn canUpdate(self: *const Self, pos: usize, value: []const u8) ErrorSet!AvailableStatus {
             const total_size: usize = @sizeOf(SlotHeaderType) + value.len;
             var slot_dir = try self.slotsDir();

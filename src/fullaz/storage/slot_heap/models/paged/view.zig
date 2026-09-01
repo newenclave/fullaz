@@ -212,6 +212,16 @@ pub fn View(
             };
         }
 
+        pub fn getValueMut(self: *Self, index: usize) ErrorSet![]u8 {
+            var slot_dir = try self.slotsDirMut();
+            const bytes = try slot_dir.getMut(index);
+            const key_size: usize = @intCast(self.subheader().key_size.get());
+            if (bytes.len < key_size) {
+                return ErrorSet.BadData;
+            }
+            return bytes[key_size..];
+        }
+
         pub fn canAppend(self: *const Self, value_len: usize) ErrorSet!ConstLeafSlots.AvailableStatus {
             const key_size: usize = @intCast(self.subheader().key_size.get());
             const slot_len = std.math.add(usize, key_size, value_len) catch return .not_enough;

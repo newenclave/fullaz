@@ -756,3 +756,48 @@ test "RTree paged: scanners forward canonical child and value references" {
     try tree.scanInodeRefs(inode_id, try inode_page.data(), &inode_sink);
     try testing.expectEqual(leaf_id, inode_sink.child.?);
 }
+
+const EditIdx = struct {
+    value: u32,
+
+    fn call(self: *EditIdx, _: Key, editor: *rtree.RTree(Model).ValueEditor) !void {
+        const value = try editor.valueMut();
+        std.mem.writeInt(u32, value[0..4], self.value, .little);
+        try editor.finish();
+    }
+};
+
+test "RTree paged: value editor locks layout, rolls back, and edits query hits" {
+    var device = try Device.init(testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try PageCache.init(&device, testing.allocator, 16);
+    defer cache.deinit();
+    var store_mgr = NoneStorageManager{};
+    var model = try Model.init(&cache, &store_mgr, .{});
+    var tree = rtree.RTree(Model).init(&model);
+    const entry_box = box(2, 2, 4, 4);
+    try insertIdx(&tree, entry_box, 7);
+    try insertIdx(&tree, entry_box, 7);
+
+    const match = MatchIdx{ .want = 7 };
+    var editor = (try tree.openValueEditor(entry_box, &match, MatchIdx.call)).?;
+    const rollback_value = try editor.valueMut();
+    std.mem.writeInt(u32, rollback_value[0..4], 8, .little);
+    try testing.expectError(error.ValueEditorActive, tree.openValueEditor(entry_box, &match, MatchIdx.call));
+    try testing.expectError(error.ValueEditorActive, tree.insert(box(5, 5, 6, 6), "next"));
+    try testing.expectError(error.ValueEditorActive, tree.destroy());
+    editor.deinit();
+
+    var committed = (try tree.openValueEditor(entry_box, &match, MatchIdx.call)).?;
+    const committed_value = try committed.valueMut();
+    std.mem.writeInt(u32, committed_value[0..4], 9, .little);
+    try committed.finish();
+    try testing.expectError(error.EditorInvalidated, committed.valueMut());
+    committed.deinit();
+
+    var editable = EditIdx{ .value = 10 };
+    try tree.searchIntersectingEditable(entry_box, &editable, EditIdx.call);
+    const changed = MatchIdx{ .want = 10 };
+    try testing.expect(try tree.remove(entry_box, &changed, MatchIdx.call));
+    try testing.expect(try tree.remove(entry_box, &changed, MatchIdx.call));
+}

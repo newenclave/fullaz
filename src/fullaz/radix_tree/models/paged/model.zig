@@ -6,6 +6,8 @@ const errors = core.errors;
 const header = @import("../../../page/header.zig");
 const KeySplitter = @import("../../splitter.zig").Splitter;
 const model_interfaces = @import("../interfaces.zig");
+const StructuralMutationCoordinator = core.structural_mutation.StructuralMutationCoordinator;
+const StructuralMutationError = core.structural_mutation.Error;
 
 const SettingsImpl = struct {
     leaf_page_kind: u16 = 0,
@@ -35,7 +37,8 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         errors.SpaceError ||
         errors.OrderError ||
         header.ValidationError ||
-        error{InvalidSettings};
+        error{InvalidSettings} ||
+        StructuralMutationError;
 
     const PageHandle = PageCacheT.Handle;
     const CachePageId = PageCacheT.Pid;
@@ -329,16 +332,110 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
     const AccessorImpl = struct {
         const Self = @This();
         pub const Error = ErrorSet;
+        const ValueEditorImpl = struct {
+            const EditorSelf = @This();
+
+            pub const Error = ErrorSet;
+            pub const ValueMutType = []u8;
+
+            layout_lock: ?PageHandle.LayoutLock,
+            snapshot: ?PageHandle,
+            key: KeyT,
+            value_len: usize,
+            coordinator: *StructuralMutationCoordinator,
+            open: bool = true,
+
+            fn init(
+                layout_lock: PageHandle.LayoutLock,
+                snapshot: PageHandle,
+                key: KeyT,
+                value_len: usize,
+                coordinator: *StructuralMutationCoordinator,
+            ) EditorSelf {
+                return .{
+                    .layout_lock = layout_lock,
+                    .snapshot = snapshot,
+                    .key = key,
+                    .value_len = value_len,
+                    .coordinator = coordinator,
+                };
+            }
+
+            pub fn valueMut(self: *EditorSelf) ErrorSet!ValueMutType {
+                try self.ensureOpen();
+                if (self.layout_lock) |*layout_lock| {
+                    var view = LeafImpl.PageViewType.init(try layout_lock.dataMut());
+                    const value = try view.valueMut(self.key);
+                    if (value.len != self.value_len) {
+                        return error.EditorInvalidated;
+                    }
+                    return value;
+                }
+                return error.EditorInvalidated;
+            }
+
+            pub fn finish(self: *EditorSelf) ErrorSet!void {
+                try self.ensureOpen();
+                self.close();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                self.restore() catch @panic("RadixTree value editor rollback failed");
+                self.close();
+            }
+
+            fn ensureOpen(self: *const EditorSelf) ErrorSet!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+            }
+
+            fn restore(self: *EditorSelf) ErrorSet!void {
+                if (self.layout_lock) |*layout_lock| {
+                    if (self.snapshot) |*snapshot| {
+                        const snapshot_bytes = try snapshot.data();
+                        var view = LeafImpl.PageViewType.init(try layout_lock.dataMut());
+                        const value = try view.valueMut(self.key);
+                        if (value.len != self.value_len) {
+                            return error.EditorInvalidated;
+                        }
+                        @memcpy(value, snapshot_bytes[0..self.value_len]);
+                        return;
+                    }
+                }
+                return error.EditorInvalidated;
+            }
+
+            fn close(self: *EditorSelf) void {
+                if (self.layout_lock) |*layout_lock| {
+                    layout_lock.deinit();
+                    self.layout_lock = null;
+                }
+                if (self.snapshot) |*snapshot| {
+                    snapshot.deinit();
+                    self.snapshot = null;
+                }
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
+        pub const ValueEditorType = ValueEditorImpl;
         const SplitKeyResult = SplitKeyImpl;
         const KeyDigit = SplitterType.Result;
 
         ctx: Context = undefined,
         splitter: SplitterType = undefined,
+        coordinator: StructuralMutationCoordinator = .{},
 
         fn init(ctx: Context) Self {
             return .{
                 .ctx = ctx,
                 .splitter = SplitterType.init(ctx.settings.inode_base, ctx.settings.leaf_base),
+                .coordinator = .{},
             };
         }
 
@@ -556,6 +653,25 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             sk.deinit();
         }
 
+        pub fn openValueEditor(self: *Self, leaf: *LeafImpl, key: KeyT) Error!ValueEditorType {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+            const value = try leaf.get(key);
+            var snapshot = try self.ctx.cache.getTemporaryPage();
+            errdefer snapshot.deinit();
+            const snapshot_bytes = try snapshot.dataMut();
+            @memcpy(snapshot_bytes[0..value.len], value);
+            var layout_lock = try leaf.handle.lockLayout();
+            errdefer layout_lock.deinit();
+            return ValueEditorType.init(
+                layout_lock,
+                snapshot,
+                key,
+                value.len,
+                &self.coordinator,
+            );
+        }
+
         pub fn destroy(self: *Self, page_id: RawPageId) ErrorSet!void {
             try self.ctx.storage_mgr.destroyPage(page_id);
         }
@@ -574,6 +690,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = AccessorType.ValueEditorType;
         pub const SplitKeyType = AccessorType.SplitKeyResult;
         pub const KeyInType = KeyT;
         pub const KeyOutType = KeyT;
@@ -671,6 +788,10 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
     };
 }

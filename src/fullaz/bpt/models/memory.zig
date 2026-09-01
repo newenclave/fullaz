@@ -6,6 +6,7 @@ const errors = core.errors;
 
 const StaticVector = core.static_vector.StaticVector;
 const algos = core.algorithm;
+const StructuralMutationCoordinator = core.structural_mutation.StructuralMutationCoordinator;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -15,6 +16,7 @@ const ErrorSet = std.mem.Allocator.Error ||
     errors.SlotsError ||
     errors.PageError ||
     errors.OrderError ||
+    core.structural_mutation.Error ||
     EmptyError ||
     errors.StaticVectorError;
 
@@ -482,14 +484,60 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
         const LeafType = MemLeafType(KeyT, maximum_elements, cmp);
         const InodeType = MemInodeType(KeyT, maximum_elements, cmp);
 
+        const ValueEditorImpl = struct {
+            const EditorSelf = @This();
+
+            pub const Error = ErrorSet;
+
+            leaf: *MemoryLeafType,
+            position: usize,
+            snapshot: MemoryLeafType.ValueType,
+            coordinator: *StructuralMutationCoordinator,
+            open: bool = true,
+
+            pub fn valueMut(self: *EditorSelf) ErrorSet![]u8 {
+                try self.ensureOpen();
+                if (self.position < self.leaf.values.len) {
+                    return self.leaf.values.ptrAt(self.position).?[0..];
+                }
+                return ErrorSet.OutOfBounds;
+            }
+
+            pub fn finish(self: *EditorSelf) ErrorSet!void {
+                try self.ensureOpen();
+                self.close();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                self.leaf.values.data[self.position] = self.snapshot;
+                self.close();
+            }
+
+            fn ensureOpen(self: *const EditorSelf) ErrorSet!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+            }
+
+            fn close(self: *EditorSelf) void {
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
         const KeyBorrowType = LeafType.KeyBorrowType;
 
         pub const Error = ErrorSet;
+        pub const ValueEditorType = ValueEditorImpl;
 
         const RootType = usize;
         root: ?RootType = null,
         nodes: std.ArrayList(?*NodeType),
         allocator: std.mem.Allocator,
+        coordinator: StructuralMutationCoordinator = .{},
 
         pub fn getRoot(self: *const Self) ?RootType {
             return self.root;
@@ -503,6 +551,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
                 .root = null,
                 .nodes = try std.ArrayList(?*NodeType).initCapacity(allocator, 2),
                 .allocator = allocator,
+                .coordinator = .{},
             };
         }
 
@@ -551,6 +600,19 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
                     }
                 }
             }
+        }
+
+        pub fn openValueEditor(self: *Self, leaf: *LeafType, pos: usize) ErrorSet!ValueEditorType {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+            _ = try leaf.getValue(pos);
+            const memory_leaf = leaf.leaf orelse return ErrorSet.InvalidId;
+            return .{
+                .leaf = memory_leaf,
+                .position = pos,
+                .snapshot = memory_leaf.values.data[pos],
+                .coordinator = &self.coordinator,
+            };
         }
 
         pub fn createLeaf(self: *Self) ErrorSet!LeafType {
@@ -702,6 +764,7 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
         pub const ValueOutType = TypeMap(ValueBorrowType).View;
 
         pub const AccessorType = Accessor(KeyT, maximum_elements, cmp);
+        pub const ValueEditorType = AccessorType.ValueEditorType;
         pub const LeafType = AccessorType.LeafType;
         pub const InodeType = AccessorType.InodeType;
 
@@ -760,6 +823,10 @@ pub fn MemoryModel(comptime KeyT: type, comptime maximum_elements: usize, compti
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
 
         pub fn keyBorrowAsLike(_: *const Self, key: *const KeyBorrowType) KeyLikeType {

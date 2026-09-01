@@ -3,6 +3,7 @@ const device_interfaces = @import("fullaz").device.interfaces;
 const page_cache = @import("fullaz").storage.page_cache;
 const memory_policy = @import("fullaz").storage.memory_policy;
 const wal = @import("fullaz").storage.wal;
+const gc = @import("fullaz").gc;
 const component = @import("../../component/component.zig");
 const component_fingerprint = @import("../../component/fingerprint.zig");
 const PageKindRange = component.PageKindRange;
@@ -32,6 +33,11 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
 
     const DevicePageId = DeviceT.BlockId;
     const Log = LogDeviceT orelse void;
+    const WalInitialization = enum {
+        ready,
+        fresh,
+        recover,
+    };
     const LogError = if (LogDeviceT) |LogT| LogT.Error else error{};
     const WalError = if (LogDeviceT != null) WalT.Error else error{};
 
@@ -65,6 +71,46 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         }
     };
     const Cache = page_cache.PersistentReclaimingCache(RawCache, ReclaimStore);
+    const GcStore = struct {
+        pub const PageId = DevicePageId;
+        pub const Error = Cache.Error || error{PageIdTooLarge};
+
+        state: *file.boot.State,
+        cache: *Cache,
+
+        pub fn getRoot(self: *const @This()) ?PageId {
+            const root = self.state.gc_state_root orelse return null;
+            return std.math.cast(PageId, root) orelse unreachable;
+        }
+
+        pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
+            self.state.gc_state_root = if (root) |page_id|
+                std.math.cast(u64, page_id) orelse return error.PageIdTooLarge
+            else
+                null;
+        }
+
+        pub fn isReserved(_: *const @This(), page_id: PageId) bool {
+            return page_id == 0;
+        }
+
+        pub fn isFree(self: *const @This(), page_id: PageId) Error!bool {
+            return @constCast(self.cache).isFree(page_id);
+        }
+
+        pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
+            return self.cache.free(page_id);
+        }
+    };
+    const GcModel = gc.models.PagedWithKinds(
+        Cache,
+        GcStore,
+        file.system_kinds.gc_state,
+        file.system_kinds.gc_mark_bitmap,
+        file.system_kinds.gc_free_bitmap,
+        file.system_kinds.gc_queue,
+    );
+    const GcCollector = gc.Gc(GcModel);
 
     const CatalogManager = struct {
         pub const PageId = DeviceT.BlockId;
@@ -166,8 +212,10 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         log: Log,
         raw_cache: RawCache,
         state: file.boot.State,
+        boot_payload: ?[]u8 = null,
         reclaim_store: ReclaimStore,
         cache: Cache,
+        gc_store: GcStore,
         catalog_manager: CatalogManager,
         catalog_id_manager: IndexManager,
         catalog_name_manager: IndexManager,
@@ -188,6 +236,8 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         pub const RawCacheType = RawCache;
         pub const CacheType = Cache;
         pub const State = file.boot.State;
+        pub const GcModelType = GcModel;
+        pub const GcCollectorType = GcCollector;
 
         pub const CatalogCompactionResult = struct {
             records_before: u64,
@@ -231,6 +281,8 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 LogNotEmpty,
                 MissingBoot,
                 PageCountMismatch,
+                BadGcState,
+                GarbageCollectionActive,
                 DirtyDatabase,
                 InvalidBootPage,
                 PageIdTooLarge,
@@ -247,6 +299,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 ComponentNotDropped,
                 ComponentDescriptorMismatch,
                 MissingDependency,
+                DroppedComponentBlocksGc,
             };
 
         core_: *align(@alignOf(Core)) anyopaque,
@@ -291,6 +344,9 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 .next_component_page_kind = file.system_kinds.first_component,
                 .catalog_epoch = 0,
                 .generation = 0,
+                .gc_state_root = null,
+                .gc_cycle_active = false,
+                .gc_cycle_generation = 0,
             };
         }
 
@@ -300,6 +356,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             log_value: Log,
             state: State,
             options: InitOptions,
+            wal_initialization: WalInitialization,
         ) Error!*Core {
             if (options.cache_frames == 0) {
                 return error.InvalidCacheFrames;
@@ -319,12 +376,26 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 var wal_value = try WalT.init(allocator, &core.log, @intCast(core.device.blockSize()));
                 errdefer wal_value.deinit();
 
-                core.raw_cache = try RawCache.initWal(
-                    &core.device,
-                    allocator,
-                    options.cache_frames,
-                    wal_value,
-                );
+                core.raw_cache = switch (wal_initialization) {
+                    .ready => try RawCache.initWal(
+                        &core.device,
+                        allocator,
+                        options.cache_frames,
+                        wal_value,
+                    ),
+                    .fresh => try RawCache.initWalFresh(
+                        &core.device,
+                        allocator,
+                        options.cache_frames,
+                        wal_value,
+                    ),
+                    .recover => try RawCache.initWalRecover(
+                        &core.device,
+                        allocator,
+                        options.cache_frames,
+                        wal_value,
+                    ),
+                };
             } else {
                 core.raw_cache = try RawCache.init(
                     &core.device,
@@ -335,9 +406,11 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             errdefer core.raw_cache.deinit();
 
             core.state = state;
+            core.boot_payload = null;
             core.reclaim_store = .{ .device = &core.device, .state = &core.state };
             core.cache = Cache.init(&core.raw_cache, &core.reclaim_store);
             errdefer core.cache.deinit();
+            core.gc_store = .{ .state = &core.state, .cache = &core.cache };
 
             core.catalog_manager = .{ .state = &core.state, .cache = &core.cache };
             core.catalog_id_manager = .{
@@ -372,6 +445,9 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             core.catalog.deinit();
             core.cache.deinit();
             core.raw_cache.deinit();
+            if (core.boot_payload) |payload| {
+                allocator.free(payload);
+            }
             if (comptime LogDeviceT != null) {
                 core.log.deinit();
             }
@@ -386,7 +462,22 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             defer page.deinit();
             const scratch = try core.allocator.alloc(u8, core.device.blockSize());
             defer core.allocator.free(scratch);
-            try file.boot.format(try page.dataMut(), scratch, core.state, &.{});
+            try file.boot.format(
+                try page.dataMut(),
+                scratch,
+                core.state,
+                core.boot_payload orelse &.{},
+            );
+            const view = try file.boot.read(try page.data(), .{
+                .image_id = core.state.image_id,
+                .page_size = core.state.page_size,
+                .page_id_bits = core.state.page_id_bits,
+            });
+            const payload = try core.allocator.dupe(u8, view.payload);
+            if (core.boot_payload) |previous_payload| {
+                core.allocator.free(previous_payload);
+            }
+            core.boot_payload = payload;
         }
 
         fn sameRef(left: file.CatalogRef, right: file.CatalogRef) bool {
@@ -426,6 +517,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 log_value,
                 state,
                 options,
+                .fresh,
             );
             errdefer deinitCore(core, false);
             try writeBoot(core);
@@ -456,6 +548,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 log_value,
                 try initialState(&device, options),
                 options,
+                .recover,
             );
             errdefer deinitCore(core, false);
 
@@ -465,8 +558,15 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 break :blk try file.boot.read(try page.data(), try expected(&core.device, options));
             };
 
-            if (view.state.page_count != core.device.blocksCount()) {
+            if (view.state.page_count > core.device.blocksCount()) {
                 return error.PageCountMismatch;
+            }
+            if (comptime LogDeviceT == null) {
+                if (view.state.page_count != core.device.blocksCount()) {
+                    return error.PageCountMismatch;
+                }
+            } else {
+                try core.raw_cache.normalizeRecoveredPageCount(@intCast(view.state.page_count));
             }
 
             if (!view.state.clean) {
@@ -474,6 +574,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             }
 
             core.state = view.state;
+            core.boot_payload = try core.allocator.dupe(u8, view.payload);
             core.catalog_manager.state = &core.state;
             core.catalog_id_manager.root = &core.state.id_radix_root;
             core.catalog_id_manager.free_leaf_root = &core.state.id_radix_free_leaf_root;
@@ -483,8 +584,18 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             if (core.state.free_root) |free_root| {
                 _ = std.math.cast(DevicePageId, free_root) orelse return error.BadFreeList;
             }
+            if (core.state.gc_state_root) |gc_state_root| {
+                const page_id = std.math.cast(DevicePageId, gc_state_root) orelse
+                    return error.BadGcState;
+                if (@as(usize, @intCast(page_id)) >= core.device.blocksCount()) {
+                    return error.BadGcState;
+                }
+            }
 
             try core.cache.validateFreeList();
+            if (comptime LogDeviceT != null) {
+                try core.raw_cache.completeRecovery();
+            }
             return .{ .core_ = core };
         }
 
@@ -1265,8 +1376,202 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             }
         };
 
+        /// Internal transaction-scoped collector assembly used by typed dynamic schemas.
+        pub const GcSession = struct {
+            const SessionSelf = @This();
+
+            raw: Transaction,
+            store: GcStore = undefined,
+            model: GcModel = undefined,
+            collector_state: GcCollector = undefined,
+            initialized: bool = false,
+            active: bool = true,
+
+            pub const Error = Self.Error || GcModel.Error || GcCollector.Error;
+
+            fn corePtr(self: *SessionSelf) *Core {
+                return self.raw.corePtr();
+            }
+
+            fn ensureCollector(self: *SessionSelf) SessionSelf.Error!void {
+                if (self.initialized) {
+                    return;
+                }
+                const core = self.corePtr();
+                self.store = .{ .state = &core.state, .cache = &core.cache };
+                self.model = try GcModel.init(core.allocator, &core.cache, &self.store);
+                self.collector_state = GcCollector.init(&self.model);
+                self.initialized = true;
+            }
+
+            pub fn collector(self: *SessionSelf) SessionSelf.Error!*GcCollector {
+                try self.ensureCollector();
+                return &self.collector_state;
+            }
+
+            pub fn registerSystemScanners(self: *SessionSelf) SessionSelf.Error!void {
+                const core = self.corePtr();
+                const gc_collector = try self.collector();
+                const Metadata = struct {
+                    fn scan(
+                        _: ?*const anyopaque,
+                        _: DevicePageId,
+                        page: []const u8,
+                        _: GcCollector.ReferenceSink,
+                    ) GcCollector.Error!void {
+                        _ = file.component_metadata_page.readAny(page) catch return error.InvalidPage;
+                    }
+                };
+                try gc_collector.registerForCycle(
+                    file.system_kinds.catalog_slot_chain,
+                    1,
+                    &core.catalog,
+                    gc.scanners.method(GcCollector, Catalog, Catalog.scanChunkRefs),
+                    null,
+                );
+                try gc_collector.registerForCycle(
+                    file.system_kinds.component_id_radix_leaf,
+                    1,
+                    &core.catalog_ids,
+                    gc.scanners.method(GcCollector, CatalogIds, CatalogIds.scanLeafRefs),
+                    null,
+                );
+                try gc_collector.registerForCycle(
+                    file.system_kinds.component_id_radix_inode,
+                    1,
+                    &core.catalog_ids,
+                    gc.scanners.method(GcCollector, CatalogIds, CatalogIds.scanInodeRefs),
+                    null,
+                );
+                try gc_collector.registerForCycle(
+                    file.system_kinds.component_name_bpt_leaf,
+                    1,
+                    &core.catalog_names,
+                    gc.scanners.method(GcCollector, CatalogNames, CatalogNames.scanLeafRefs),
+                    null,
+                );
+                try gc_collector.registerForCycle(
+                    file.system_kinds.component_name_bpt_inode,
+                    1,
+                    &core.catalog_names,
+                    gc.scanners.method(GcCollector, CatalogNames, CatalogNames.scanInodeRefs),
+                    null,
+                );
+                try gc_collector.registerForCycle(
+                    file.system_kinds.component_metadata,
+                    1,
+                    null,
+                    Metadata.scan,
+                    null,
+                );
+            }
+
+            pub fn appendSystemRoots(
+                self: *SessionSelf,
+                roots: *std.ArrayList(DevicePageId),
+            ) SessionSelf.Error!void {
+                const core = self.corePtr();
+                inline for ([_]?u64{
+                    core.state.catalog_first,
+                    core.state.id_radix_root,
+                    core.state.name_bpt_root,
+                }) |root| {
+                    if (root) |raw_root| {
+                        try roots.append(core.allocator, std.math.cast(DevicePageId, raw_root) orelse return error.PageIdTooLarge);
+                    }
+                }
+                var iterator = try core.catalog.iterator(core.state.catalog_record_count);
+                defer iterator.deinit();
+                while (try iterator.next()) |entry| {
+                    if (entry.record.metadata_root_pid != 0) {
+                        try roots.append(
+                            core.allocator,
+                            std.math.cast(DevicePageId, entry.record.metadata_root_pid) orelse return error.PageIdTooLarge,
+                        );
+                    }
+                    const current_ref = (try core.catalog_ids.get(entry.record.component_id)) orelse
+                        return error.CatalogIndexMismatch;
+                    if (sameRef(entry.ref, current_ref) and entry.record.state == .dropped) {
+                        return error.DroppedComponentBlocksGc;
+                    }
+                }
+            }
+
+            pub fn start(self: *SessionSelf, roots: []const DevicePageId) SessionSelf.Error!void {
+                if (!self.active or self.corePtr().state.gc_cycle_active) {
+                    return error.GarbageCollectionActive;
+                }
+                try self.ensureCollector();
+                try self.collector_state.start(roots);
+                const core = self.corePtr();
+                core.state.gc_cycle_active = true;
+                core.state.gc_cycle_generation +%= 1;
+            }
+
+            pub fn step(self: *SessionSelf, maximum_pages: usize) SessionSelf.Error!gc.StepStatus {
+                if (!self.active or !self.corePtr().state.gc_cycle_active) {
+                    return error.BadGcState;
+                }
+                try self.ensureCollector();
+                const status = try self.collector_state.step(maximum_pages);
+                if (status == .complete) {
+                    self.corePtr().state.gc_cycle_active = false;
+                }
+                return status;
+            }
+
+            pub fn abort(self: *SessionSelf) SessionSelf.Error!void {
+                if (!self.active or !self.corePtr().state.gc_cycle_active) {
+                    return error.BadGcState;
+                }
+                try self.ensureCollector();
+                try self.collector_state.abortCycle();
+                self.corePtr().state.gc_cycle_active = false;
+            }
+
+            pub fn commit(self: *SessionSelf) SessionSelf.Error!void {
+                if (!self.active) {
+                    return error.TransactionInactive;
+                }
+                if (self.initialized) {
+                    self.collector_state.deinit();
+                    self.model.deinit();
+                    self.initialized = false;
+                }
+                try self.raw.commit();
+                self.active = false;
+            }
+
+            pub fn rollback(self: *SessionSelf) SessionSelf.Error!void {
+                if (!self.active) {
+                    return error.TransactionInactive;
+                }
+                if (self.initialized) {
+                    self.collector_state.deinit();
+                    self.model.deinit();
+                    self.initialized = false;
+                }
+                try self.raw.rollback();
+                self.active = false;
+            }
+
+            pub fn deinit(self: *SessionSelf) void {
+                if (self.active) {
+                    self.rollback() catch @panic("DynamicDatabase GC session rollback failed");
+                }
+                self.* = undefined;
+            }
+        };
+
         /// Starts the only mutable control-plane transaction.
         pub fn begin(self: *Self) Error!Transaction {
+            if (self.corePtr().state.gc_cycle_active) {
+                return error.GarbageCollectionActive;
+            }
+            return self.beginInternal();
+        }
+
+        fn beginInternal(self: *Self) Error!Transaction {
             const core = self.corePtr();
             if (core.transaction_active) {
                 return error.BatchActive;
@@ -1288,6 +1593,11 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 try core.device.sync();
             }
             return .{ .core_ = core };
+        }
+
+        /// Starts a transaction reserved for a single GC start, resume, or abort step.
+        pub fn beginGcSession(self: *Self) Error!GcSession {
+            return .{ .raw = try self.beginInternal() };
         }
 
         /// Loads the catalog revision currently indexed by a component ID.

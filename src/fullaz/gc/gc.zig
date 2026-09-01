@@ -121,6 +121,34 @@ pub fn Gc(comptime ModelT: type) type {
             );
         }
 
+        /// Registers a scanner for a new cycle or rebuilds one for an active
+        /// cycle restored from the model.
+        pub fn registerForCycle(
+            self: *Self,
+            page_kind: PageKind,
+            version: ScannerVersion,
+            context: ?*const anyopaque,
+            scan: Scanner,
+            value_scan: ?ValueScanner,
+        ) Error!void {
+            if (self.model.isCycleActive()) {
+                return self.registerResumed(
+                    page_kind,
+                    version,
+                    context,
+                    scan,
+                    value_scan,
+                );
+            }
+            return self.register(
+                page_kind,
+                version,
+                context,
+                scan,
+                value_scan,
+            );
+        }
+
         /// Registers a page scanner and an optional value scanner with separate
         /// caller-owned contexts.
         pub fn registerWithContexts(
@@ -285,7 +313,7 @@ pub fn Gc(comptime ModelT: type) type {
                     }
                 },
                 .marking => {
-                    if (self.model.registryDigest() != self.registryDigest()) {
+                    if (try self.model.registryDigest() != self.registryDigest()) {
                         return error.RegistryMismatch;
                     }
                     var processed: usize = 0;
@@ -314,9 +342,9 @@ pub fn Gc(comptime ModelT: type) type {
                 .sweeping => {
                     var processed: usize = 0;
                     while (processed < maximum_pages) : (processed += 1) {
-                        const page_id = self.model.sweepCursor();
+                        const page_id = try self.model.sweepCursor();
                         const page_index = std.math.cast(usize, page_id) orelse return error.InvalidPageId;
-                        if (page_index >= self.model.snapshotPageCount()) {
+                        if (page_index >= try self.model.snapshotPageCount()) {
                             try self.model.finishCycle();
                             return .complete;
                         }
@@ -325,9 +353,9 @@ pub fn Gc(comptime ModelT: type) type {
                             return .complete;
                         };
                         try self.model.setSweepCursor(next_page_id);
-                        if (try self.model.isReserved(page_id) or
-                            try self.model.isFree(page_id) or
-                            self.model.isMarked(page_id))
+                        if (try self.model.isFree(page_id) or
+                            try self.model.isReserved(page_id) or
+                            try self.model.isMarked(page_id))
                         {
                             continue;
                         }
@@ -339,9 +367,14 @@ pub fn Gc(comptime ModelT: type) type {
             return .in_progress;
         }
 
+        /// Ends an active cycle without reclaiming more pages.
+        pub fn abortCycle(self: *Self) Error!void {
+            return self.model.abortCycle();
+        }
+
         fn visitReference(context: *anyopaque, page_id: PageId) Error!void {
             const self: *Self = @ptrCast(@alignCast(context));
-            return self.enqueueReference(page_id, self.model.snapshotPageCount());
+            return self.enqueueReference(page_id, try self.model.snapshotPageCount());
         }
 
         fn enqueueReference(self: *Self, page_id: PageId, snapshot_page_count: usize) Error!void {

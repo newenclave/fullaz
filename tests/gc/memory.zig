@@ -3,7 +3,7 @@ const fullaz = @import("fullaz");
 
 const Store = struct {
     pub const PageId = usize;
-    pub const Error = error{InvalidPageId};
+    pub const Error = error{ InvalidPageId, ReservedCheckFailed };
 
     pub const Page = struct {
         kind_value: u16,
@@ -15,6 +15,7 @@ const Store = struct {
         bytes: []const u8,
         free: bool = false,
         reserved: bool = false,
+        reserved_check_fails: bool = false,
     };
 
     entries: []Entry,
@@ -53,6 +54,9 @@ const Store = struct {
     pub fn isReserved(self: *const @This(), page_id: usize) Error!bool {
         if (page_id >= self.entries.len) {
             return error.InvalidPageId;
+        }
+        if (self.entries[page_id].reserved_check_fails) {
+            return error.ReservedCheckFailed;
         }
         return self.entries[page_id].reserved;
     }
@@ -115,4 +119,46 @@ test "GC: memory model marks roots and sweeps only unreachable pages" {
     try std.testing.expect(entries[5].free);
     try std.testing.expect(entries[6].free);
     try std.testing.expect(!model.isCycleActive());
+}
+
+test "GC: memory model rejects free roots while preparing and aborts safely" {
+    const Model = fullaz.gc.models.Memory(Store);
+    const Collector = fullaz.gc.Gc(Model);
+
+    var entries = [_]Store.Entry{
+        .{ .kind_value = 1, .bytes = &.{}, .free = true },
+        .{ .kind_value = 1, .bytes = &.{} },
+    };
+    var store = Store{ .entries = &entries };
+    var model = Model.init(std.testing.allocator, &store);
+    defer model.deinit();
+    var collector = Collector.init(&model);
+    defer collector.deinit();
+
+    try std.testing.expectError(error.FreePageReference, collector.start(&.{0}));
+    try std.testing.expect(model.isCycleActive());
+    try collector.abortCycle();
+    try std.testing.expect(!model.isCycleActive());
+
+    try collector.start(&.{1});
+    try collector.abortCycle();
+    try std.testing.expect((try model.dequeue()) == null);
+}
+
+test "GC: sweep checks free pages before reservations" {
+    const Model = fullaz.gc.models.Memory(Store);
+    const Collector = fullaz.gc.Gc(Model);
+
+    var entries = [_]Store.Entry{
+        .{ .kind_value = 1, .bytes = &.{}, .free = true, .reserved_check_fails = true },
+    };
+    var store = Store{ .entries = &entries };
+    var model = Model.init(std.testing.allocator, &store);
+    defer model.deinit();
+    var collector = Collector.init(&model);
+    defer collector.deinit();
+
+    try collector.start(&.{});
+    while (try collector.step(1) != .complete) {}
+    try std.testing.expect(entries[0].free);
 }

@@ -122,6 +122,7 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
 
             pub fn commit(self: *TransactionSelf) Error!void {
                 const core = try self.activeCore();
+                try requireTransactionIdle(core);
                 try writeSuperblock(core, true);
                 try core.transaction_cache_batch.commit();
                 core.transaction_active = false;
@@ -129,6 +130,7 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
 
             pub fn rollback(self: *TransactionSelf) Error!void {
                 const core = try self.activeCore();
+                try requireTransactionIdle(core);
                 try core.transaction_cache_batch.discard();
                 restoreTransactionStates(core, core.transaction_component_states);
                 try writeSuperblock(core, true);
@@ -214,6 +216,10 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
                     @field(states, field.name),
                 );
             }
+        }
+
+        fn requireTransactionIdle(core: *const Core) Error!void {
+            return shape.requireTransactionIdle(SchemaT, bindings, &core.components);
         }
 
         fn writeSuperblock(core: *Core, clean: bool) Error!void {
@@ -406,6 +412,8 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
             if (core.transaction_active) {
                 @panic("StaticDatabase.deinit called with an active transaction");
             }
+            requireTransactionIdle(core) catch
+                @panic("StaticDatabase.deinit called with an active value editor");
             const allocator = core.allocator;
             deinitComponentPrefix(core, SchemaT.fields.len);
             core.cache.deinit();

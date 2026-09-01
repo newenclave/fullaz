@@ -34,6 +34,26 @@ pub fn Bpt(comptime ModelT: type) type {
         pub const InodeType = ModelT.InodeType;
         pub const LeafType = ModelT.LeafType;
 
+        /// An owned mutable lease for one value with a stable stored length.
+        /// The tree and its model must outlive the editor.
+        pub const ValueEditor = struct {
+            const EditorSelf = @This();
+
+            editor: ModelT.ValueEditorType,
+
+            pub fn valueMut(self: *EditorSelf) ModelT.ValueEditorType.Error![]u8 {
+                return self.editor.valueMut();
+            }
+
+            pub fn finish(self: *EditorSelf) ModelT.ValueEditorType.Error!void {
+                return self.editor.finish();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                self.editor.deinit();
+            }
+        };
+
         pub const Iterator = struct {
             const ItrSelf = @This();
 
@@ -55,9 +75,11 @@ pub fn Bpt(comptime ModelT: type) type {
                     .model = model,
                     .node = null,
                     .cursor = cursor,
+                    .structural_generation = 0,
                 };
                 if (model) |mod| {
                     var m = mod;
+                    res.structural_generation = m.structuralMutationCoordinator().generation();
                     const accessor = m.accessor();
                     if (try accessor.loadLeaf(node_id)) |node| {
                         res.node = node;
@@ -153,6 +175,21 @@ pub fn Bpt(comptime ModelT: type) type {
                 }
             }
 
+            /// Opens an editor for this iterator's exact current entry.
+            pub fn editValue(self: *ItrSelf) Error!?ValueEditor {
+                const model = self.model orelse return null;
+                try model.structuralMutationCoordinator().checkGeneration(self.structural_generation);
+                var node = self.node orelse return null;
+                const position = switch (self.cursor) {
+                    .on => |value| value,
+                    else => return null,
+                };
+                if (position >= try node.size()) {
+                    return null;
+                }
+                return .{ .editor = try model.accessor().openValueEditor(&node, position) };
+            }
+
             fn moveNext(self: *ItrSelf, next_id: ?NodeIdType) Error!bool {
                 if (self.model) |cmodel| {
                     var model = cmodel;
@@ -204,10 +241,14 @@ pub fn Bpt(comptime ModelT: type) type {
             model: ?*ModelT = null,
             node: ?LeafType,
             cursor: Cursor = .before_first,
+            structural_generation: u64,
         };
 
         pub fn init(model: *ModelT, repalance_policy: RebalancePolicy) Self {
-            return Self{ .model = model, .rebalance_policy = repalance_policy };
+            return Self{
+                .model = model,
+                .rebalance_policy = repalance_policy,
+            };
         }
 
         pub fn deinit(_: Self) void {
@@ -219,6 +260,8 @@ pub fn Bpt(comptime ModelT: type) type {
         /// This bypasses normal rebalancing, so callers must ensure the tree is
         /// no longer reachable before invoking it.
         pub fn destroy(self: *Self) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const accessor = self.model.accessor();
             const root_id = accessor.getRoot() orelse return;
             try self.destroyNode(root_id);
@@ -413,6 +456,8 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         pub fn insert(self: *Self, key: KeyLikeType, value: ValueInType) Error!bool {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const accessor = self.model.accessor();
             if (accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
@@ -455,6 +500,8 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         pub fn update(self: *Self, key: KeyLikeType, value: ValueInType) Error!bool {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const accessor = self.model.accessor();
             if (accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
@@ -487,6 +534,8 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         pub fn remove(self: *Self, key: KeyLikeType) Error!bool {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const accessor = self.model.accessor();
             if (accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
@@ -509,6 +558,28 @@ pub fn Bpt(comptime ModelT: type) type {
             return false;
         }
 
+        /// Opens the exact mutable bytes of an existing fixed-size value.
+        /// The returned editor keeps its leaf and page layout alive until deinit.
+        pub fn openValueEditor(self: *Self, key: KeyLikeType) Error!?ValueEditor {
+            const accessor = self.model.accessor();
+            const root = accessor.getRoot() orelse return null;
+            const search = try self.findLeafWith(key, root);
+            const leaf_const = search.leaf orelse return null;
+            var leaf = leaf_const;
+            if (!search.found) {
+                accessor.deinitLeaf(leaf);
+                return null;
+            }
+            const editor = accessor.openValueEditor(&leaf, search.position) catch |err| {
+                accessor.deinitLeaf(leaf);
+                return err;
+            };
+            accessor.deinitLeaf(leaf);
+            return .{
+                .editor = editor,
+            };
+        }
+
         // private methods
 
         fn removeImpl(self: *Self, leaf: *LeafType, pos: usize) Error!void {
@@ -518,7 +589,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
             try leaf.erase(pos);
             if (pos == 0 and try leaf.size() > 0) {
-                try self.fixParentIndex(leaf);
+                try self.fixParentIndexImpl(leaf);
             }
             try self.leafHandleUnderflow(leaf, self.model.keyBorrowAsLike(&key));
         }
@@ -537,7 +608,7 @@ pub fn Bpt(comptime ModelT: type) type {
                         defer accessor.deinitLeaf(leaf);
                         const first_key = try leaf.getKey(0);
                         const key_like = self.model.keyOutAsLike(first_key);
-                        try self.updateInodeKey(inode, key_pos - 1, key_like);
+                        try self.updateInodeKeyImpl(inode, key_pos - 1, key_like);
                     } else {
                         @breakpoint();
                         return Error.InvalidId;
@@ -567,7 +638,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 var parent = parent_const;
                 defer accessor.deinitInode(parent);
                 try self.inodeHandleUnderflow(&parent, key);
-                try self.fixParentIndex(leaf);
+                try self.fixParentIndexImpl(leaf);
             }
         }
 
@@ -659,7 +730,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
             try leaf.insertValue(insert_position, key, value);
             if (insert_position == 0) {
-                try self.fixParentIndex(leaf);
+                try self.fixParentIndexImpl(leaf);
             }
             return .{ .inserted = true, .position = insert_position };
         }
@@ -889,7 +960,7 @@ pub fn Bpt(comptime ModelT: type) type {
                     try inode.insertChild(0, parent_key, child_id);
 
                     // TODO: check if we can use getKey here instead
-                    try self.updateInodeKey(&parent, pos_in_parent - 1, key);
+                    try self.updateInodeKeyImpl(&parent, pos_in_parent - 1, key);
 
                     try self.swapChildren(left, try left.size(), try left.size() - 1);
                     try left.erase(try left.size() - 1);
@@ -923,7 +994,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
                     // TODO: check if we can use getKey here instead
                     try self.setChildParent(child_id, inode.id());
-                    try self.updateInodeKey(&parent, pos_in_parent, key);
+                    try self.updateInodeKeyImpl(&parent, pos_in_parent, key);
 
                     const last_child = try inode.getChild(try inode.size());
                     try inode.insertChild(try inode.size(), parent_key, last_child);
@@ -1261,7 +1332,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 if (try res.canInsertValue(insert_pos, key, value)) {
                     try res.insertValue(insert_pos, key, value);
                     if (insert_pos == 0) {
-                        try self.fixParentIndex(&res);
+                        try self.fixParentIndexImpl(&res);
                     }
                 } else {
                     try self.handleLeafOverflowDefault(&res, key, value, insert_pos);
@@ -1270,7 +1341,7 @@ pub fn Bpt(comptime ModelT: type) type {
                 if (try leaf.canInsertValue(pos, key, value)) {
                     try leaf.insertValue(pos, key, value);
                     if (pos == 0) {
-                        try self.fixParentIndex(leaf);
+                        try self.fixParentIndexImpl(leaf);
                     }
                 } else {
                     try self.handleLeafOverflowDefault(leaf, key, value, pos);
@@ -1457,6 +1528,12 @@ pub fn Bpt(comptime ModelT: type) type {
         }
 
         pub fn fixParentIndex(self: *Self, child: *const LeafType) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
+            return self.fixParentIndexImpl(child);
+        }
+
+        fn fixParentIndexImpl(self: *Self, child: *const LeafType) Error!void {
             const accessor = self.model.accessor();
             const parent_id = child.getParent();
             if (self.model.isValidId(parent_id)) {
@@ -1466,21 +1543,33 @@ pub fn Bpt(comptime ModelT: type) type {
                     const pos = try self.findChidIndexInParentLeaf(child);
                     // TODO: check if update is available
                     if (pos > 0) {
-                        try updateParentInodeKey(self, &parent, pos - 1, child);
+                        try self.updateParentInodeKeyImpl(&parent, pos - 1, child);
                     }
                 }
             }
         }
 
         pub fn updateParentInodeKey(self: *Self, parent: *InodeType, pos: usize, child: *const LeafType) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
+            return self.updateParentInodeKeyImpl(parent, pos, child);
+        }
+
+        fn updateParentInodeKeyImpl(self: *Self, parent: *InodeType, pos: usize, child: *const LeafType) Error!void {
             if (try child.size() == 0) {
                 return;
             }
             const first_key = try child.getKey(0);
-            try self.updateInodeKey(parent, pos, self.model.keyOutAsLike(first_key));
+            try self.updateInodeKeyImpl(parent, pos, self.model.keyOutAsLike(first_key));
         }
 
         pub fn updateInodeKey(self: *Self, inode: *InodeType, pos: usize, key: KeyLikeType) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
+            return self.updateInodeKeyImpl(inode, pos, key);
+        }
+
+        fn updateInodeKeyImpl(self: *Self, inode: *InodeType, pos: usize, key: KeyLikeType) Error!void {
             const accessor = self.model.accessor();
             if (try inode.canUpdateKey(pos, key)) {
                 try inode.updateKey(pos, key);
@@ -1491,16 +1580,16 @@ pub fn Bpt(comptime ModelT: type) type {
             defer accessor.deinitInode(right);
             const left_size = try inode.size();
             if (pos < left_size) {
-                return self.updateInodeKey(inode, pos, key);
+                return self.updateInodeKeyImpl(inode, pos, key);
             }
             if (pos > left_size) {
-                return self.updateInodeKey(&right, pos - left_size - 1, key);
+                return self.updateInodeKeyImpl(&right, pos - left_size - 1, key);
             }
 
             var parent = (try accessor.loadInode(inode.getParent())) orelse return Error.InvalidId;
             defer accessor.deinitInode(parent);
             const parent_pos = try self.findChidIndexInParentId(parent.id(), inode.id());
-            return self.updateInodeKey(&parent, parent_pos, key);
+            return self.updateInodeKeyImpl(&parent, parent_pos, key);
         }
 
         const SplitLeafResult = struct {

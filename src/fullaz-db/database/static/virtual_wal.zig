@@ -254,6 +254,7 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
 
             pub fn commit(self: *TransactionSelf) Error!void {
                 const core = try self.activeCore();
+                try requireTransactionIdle(core);
                 try writeSuperblock(core);
                 core.transaction_cache_batch.commit() catch |err| {
                     if (!core.logical_cache.transactionActive()) {
@@ -266,6 +267,7 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
 
             pub fn rollback(self: *TransactionSelf) Error!void {
                 const core = try self.activeCore();
+                try requireTransactionIdle(core);
                 try core.transaction_cache_batch.discard();
                 restoreTransactionStates(core, core.transaction_component_states);
                 core.transaction_active = false;
@@ -341,6 +343,10 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
                 );
             }
             return states;
+        }
+
+        fn requireTransactionIdle(core: *const Core) Error!void {
+            return shape.requireTransactionIdle(SchemaT, bindings, &core.components);
         }
 
         fn restoreTransactionStates(core: *Core, states: TransactionStates) void {
@@ -622,6 +628,8 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
             if (core.transaction_active) {
                 @panic("VirtualStaticDatabase.deinit called with an active transaction");
             }
+            requireTransactionIdle(core) catch
+                @panic("VirtualStaticDatabase.deinit called with an active value editor");
             deinitCore(core);
             self.* = undefined;
         }

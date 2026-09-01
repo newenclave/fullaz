@@ -67,5 +67,23 @@ pub fn CatalogIdIndex(comptime CacheT: type, comptime ManagerT: type) type {
             try tree.free(component_id);
             return true;
         }
+
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: CacheT.Pid,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanInodeRefs(page_id, page, visitor);
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: CacheT.Pid,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanLeafRefs(page_id, page, visitor);
+        }
     };
 }

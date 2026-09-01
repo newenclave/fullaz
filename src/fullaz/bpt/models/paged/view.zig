@@ -264,6 +264,24 @@ pub fn View(comptime PageIdT: type, comptime IndexT: type, comptime Endian: std.
             const slot_buffer = try slot_dir.get(pos);
             return try keyValueFromBuffer(slot_buffer);
         }
+
+        pub fn valueMut(self: *Self, pos: usize) ErrorSet![]u8 {
+            if (read_only) {
+                @compileError("Cannot get a mutable value from a read-only page");
+            }
+            var slot_dir = try self.slotsDirMut();
+            const slot_buffer = try slot_dir.getMut(pos);
+            if (slot_buffer.len < @sizeOf(SlotHeaderType)) {
+                return ErrorSet.BadData;
+            }
+            const slot: *const SlotHeaderType = @ptrCast(&slot_buffer[0]);
+            const key_size = @as(usize, slot.key_size.get());
+            const value_offset = @sizeOf(SlotHeaderType) + key_size;
+            if (value_offset > slot_buffer.len) {
+                return ErrorSet.BadData;
+            }
+            return slot_buffer[value_offset..];
+        }
     };
 
     const InodeSubheaderType = BptPage.InodeSubheader;

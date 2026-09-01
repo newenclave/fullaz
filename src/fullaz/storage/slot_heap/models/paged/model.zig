@@ -7,6 +7,7 @@ const slots = @import("../../../../slots/slots.zig");
 const interfaces = @import("../interfaces.zig");
 const view_mod = @import("view.zig");
 const scanner = @import("../../scanner.zig");
+const StructuralMutationCoordinator = @import("../../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 const requiresErrorDeclaration = contract_interfaces.requiresErrorDeclaration;
 const requiresFnSignature = contract_interfaces.requiresFnSignature;
@@ -80,6 +81,7 @@ pub fn Paged(
         StorageManagerT.Error ||
         FsmT.Error ||
         MutableView.Error ||
+        @import("../../../../core/core.zig").structural_mutation.Error ||
         error{
             BadKeyLength,
             ComparatorMismatch,
@@ -484,6 +486,84 @@ pub fn Paged(
         pub const Error = ErrorSet;
 
         ctx: Context,
+        coordinator: StructuralMutationCoordinator = .{},
+
+        const ValueEditorImpl = struct {
+            const EditorSelf = @This();
+
+            pub const Error = ErrorSet;
+            pub const ValueMutType = []u8;
+
+            layout_lock: ?PageHandle.LayoutLock,
+            snapshot: ?PageHandle,
+            position: usize,
+            value_len: usize,
+            coordinator: *StructuralMutationCoordinator,
+            open: bool = true,
+
+            pub fn valueMut(self: *EditorSelf) ErrorSet![]u8 {
+                try self.ensureOpen();
+                if (self.layout_lock) |*layout_lock| {
+                    var view = MutableView.Leaf.init(try layout_lock.dataMut());
+                    const value = try view.getValueMut(self.position);
+                    if (value.len != self.value_len) {
+                        return error.EditorInvalidated;
+                    }
+                    return value;
+                }
+                return error.EditorInvalidated;
+            }
+
+            pub fn finish(self: *EditorSelf) ErrorSet!void {
+                try self.ensureOpen();
+                self.close();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                if (!self.open) {
+                    return;
+                }
+                self.restore() catch @panic("SlotHeap value editor rollback failed");
+                self.close();
+            }
+
+            fn ensureOpen(self: *const EditorSelf) ErrorSet!void {
+                if (!self.open) {
+                    return error.EditorInvalidated;
+                }
+            }
+
+            fn restore(self: *EditorSelf) ErrorSet!void {
+                if (self.layout_lock) |*layout_lock| {
+                    if (self.snapshot) |*snapshot| {
+                        const snapshot_bytes = try snapshot.data();
+                        var view = MutableView.Leaf.init(try layout_lock.dataMut());
+                        const value = try view.getValueMut(self.position);
+                        if (value.len != self.value_len) {
+                            return error.EditorInvalidated;
+                        }
+                        @memcpy(value, snapshot_bytes[0..self.value_len]);
+                        return;
+                    }
+                }
+                return error.EditorInvalidated;
+            }
+
+            fn close(self: *EditorSelf) void {
+                if (self.layout_lock) |*layout_lock| {
+                    layout_lock.deinit();
+                    self.layout_lock = null;
+                }
+                if (self.snapshot) |*snapshot| {
+                    snapshot.deinit();
+                    self.snapshot = null;
+                }
+                self.coordinator.finishValueEditor();
+                self.open = false;
+            }
+        };
+
+        pub const ValueEditorType = ValueEditorImpl;
 
         fn init(
             cache: *PageCacheT,
@@ -498,7 +578,7 @@ pub fn Paged(
                 .fsm = fsm,
                 .compare_context = compare_context,
                 .settings = settings,
-            } };
+            }, .coordinator = .{} };
         }
 
         pub fn getRoot(self: *const Self) ?NodeId {
@@ -705,6 +785,27 @@ pub fn Paged(
             try self.ctx.fsm.remove(page_id);
         }
 
+        pub fn openValueEditor(self: *Self, leaf: *LeafImpl, index: usize) Error!ValueEditorType {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+
+            const value = try leaf.getValue(index);
+            var snapshot = try self.ctx.cache.getTemporaryPage();
+            errdefer snapshot.deinit();
+            const snapshot_bytes = try snapshot.dataMut();
+            @memcpy(snapshot_bytes[0..value.len], value);
+
+            var layout_lock = try leaf.handle.lockLayout();
+            errdefer layout_lock.deinit();
+            return .{
+                .layout_lock = layout_lock,
+                .snapshot = snapshot,
+                .position = index,
+                .value_len = value.len,
+                .coordinator = &self.coordinator,
+            };
+        }
+
         fn pageKind(handle: *const PageHandle) Error!u16 {
             const header = HeaderView.init(try handle.data());
             try header.validateTyped();
@@ -727,6 +828,7 @@ pub fn Paged(
         pub const LeafType = LeafImpl;
         pub const InodeType = InodeImpl;
         pub const AccessorType = AccessorImpl;
+        pub const ValueEditorType = AccessorType.ValueEditorType;
         pub const Error = ErrorSet;
 
         accessor_state: AccessorType,
@@ -838,6 +940,10 @@ pub fn Paged(
 
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
+        }
+
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.accessor_state.coordinator;
         }
 
         pub fn compareKeys(

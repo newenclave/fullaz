@@ -11,6 +11,43 @@ const PagedModel = wbpt.models.paged.PagedModel;
 
 const String = std.ArrayList(u8);
 
+test "WBpt paged: iterator editor finishes, rolls back, and blocks structural mutation" {
+    const Device = dev.MemoryBlock(u32);
+    const Cache = PageCacheT(Device);
+    const Model = PagedModel(Cache, NoneStorageManager, u32, void);
+    const Tree = wbpt.WeightedBpt(Model);
+
+    var device = try Device.init(std.testing.allocator, 1024);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var manager = NoneStorageManager{};
+    var model = Model.init(&cache, &manager, .{});
+    defer model.deinit();
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+    _ = try tree.insert(0, "abc");
+
+    var iterator = try tree.iterator();
+    defer iterator.deinit();
+    var editor = (try iterator.editValue()).?;
+    (try editor.valueMut())[0] = 'A';
+    try std.testing.expectError(error.ValueEditorActive, tree.insert(0, "x"));
+    try editor.finish();
+
+    var rollback_iterator = try tree.iterator();
+    defer rollback_iterator.deinit();
+    var rollback = (try rollback_iterator.editValue()).?;
+    (try rollback.valueMut())[1] = 'Z';
+    rollback.deinit();
+
+    var committed_iterator = try tree.iterator();
+    defer committed_iterator.deinit();
+    var value = try committed_iterator.get();
+    defer value.deinit();
+    try std.testing.expectEqualStrings("Abc", try value.get());
+}
+
 const NoneStorageManager = struct {
     pub const Self = @This();
     pub const PageId = u32;

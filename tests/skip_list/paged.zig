@@ -606,6 +606,47 @@ test "SkipList paged: iterator remove test" {
     //    try std.testing.expectEqual(count, half);
 }
 
+test "SkipList paged: iterator value editor locks layout, rolls back, and finishes" {
+    const allocator = std.testing.allocator;
+    const Device = device.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+
+    var dev = try Device.init(allocator, 4096);
+    defer dev.deinit();
+    var cache = try PageCache.init(&dev, allocator, 16);
+    defer cache.deinit();
+    var mgr = NoneStorageManager{};
+    var fsm_mem = try FsmMem.init(allocator);
+    defer fsm_mem.deinit();
+    var fsm_inst = Fsm.init(&fsm_mem);
+    defer fsm_inst.deinit();
+    var prng: std.Random.DefaultPrng = .init(2);
+    var model = Model.init(&cache, &mgr, &fsm_inst, .{
+        .max_level = 4,
+        .key_len = 4,
+        .value_len = 4,
+    }, {}, prng.random(), allocator);
+    defer model.deinit();
+    const SL = SkipList(Model);
+    var sl = SL.init(&model);
+
+    try sl.insert("key1", "old!");
+    var it = try sl.find("key1");
+    defer it.deinit();
+    var editor = (try it.editValue()).?;
+    @memcpy(try editor.valueMut(), "temp");
+    try std.testing.expectError(error.ValueEditorActive, sl.insert("key2", "next"));
+    editor.deinit();
+    try std.testing.expect(std.mem.eql(u8, try it.value(), "old!"));
+
+    var finished = (try it.editValue()).?;
+    @memcpy(try finished.valueMut(), "done");
+    try finished.finish();
+    try std.testing.expectError(error.EditorInvalidated, finished.valueMut());
+    try std.testing.expect(std.mem.eql(u8, try it.value(), "done"));
+}
+
 fn keyCmpU32(_: anytype, k1: u32, k2: u32) std.math.Order {
     return std.math.order(k1, k2);
 }

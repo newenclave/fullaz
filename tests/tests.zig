@@ -3,6 +3,7 @@ const std = @import("std");
 test {
     _ = @import("page_cache/persistent_reclaiming_cache.zig");
     _ = @import("fullaz-db/component/contracts.zig");
+    _ = @import("fullaz-db/component/gc.zig");
     _ = @import("fullaz-db/component/schema.zig");
     _ = @import("fullaz-db/component/fingerprint.zig");
     _ = @import("fullaz-db/components/bpt.zig");
@@ -29,6 +30,8 @@ test {
     _ = @import("fullaz-db/file/metadata/component.zig");
     _ = @import("fullaz-db/file/metadata/page.zig");
     _ = @import("fullaz-db/file/metadata/io.zig");
+    _ = @import("fullaz-db/value_envelope.zig");
+    _ = @import("fullaz-db/hierarchy.zig");
     _ = @import("core/wordt.zig");
     _ = @import("core/bitset.zig");
     _ = @import("gc/interfaces.zig");

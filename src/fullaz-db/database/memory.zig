@@ -144,12 +144,14 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
 
             pub fn commit(self: *TransactionSelf) Error!void {
                 const core_ptr = try self.activeCore();
+                try requireTransactionIdle(core_ptr);
                 try core_ptr.transaction_cache_batch.commit();
                 core_ptr.transaction_active = false;
             }
 
             pub fn rollback(self: *TransactionSelf) Error!void {
                 const core_ptr = try self.activeCore();
+                try requireTransactionIdle(core_ptr);
                 try core_ptr.transaction_cache_batch.discard();
                 restoreTransactionStates(core_ptr, core_ptr.transaction_component_states);
                 core_ptr.transaction_active = false;
@@ -214,6 +216,10 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
                     @field(states, field.name),
                 );
             }
+        }
+
+        fn requireTransactionIdle(core: *const Core) Error!void {
+            return shape.requireTransactionIdle(SchemaT, bindings, &core.components);
         }
 
         pub fn init(allocator: std.mem.Allocator, options: InitOptions) Error!Self {
@@ -315,6 +321,8 @@ pub fn MemoryDatabase(comptime SchemaT: type) type {
             if (core_ptr.transaction_active) {
                 @panic("MemoryDatabase.deinit called with an active transaction");
             }
+            requireTransactionIdle(core_ptr) catch
+                @panic("MemoryDatabase.deinit called with an active value editor");
             const allocator = core_ptr.allocator;
             deinitComponentPrefix(core_ptr, SchemaT.fields.len);
             core_ptr.cache.deinit();

@@ -255,6 +255,28 @@ test "RadixTree paged: model create tree" {
     try suite.tree.dumpTree(StdOut{});
 }
 
+test "RadixTree paged: value editor locks layout, rolls back, and finishes" {
+    const TestSuiteType = TestSuite(u32, NoneStorageManager, u64, [8]u8);
+    var suite = TestSuiteType{};
+    try suite.initInPlace();
+    defer suite.deinit();
+
+    try suite.tree.set(7, "original");
+    var editor = (try suite.tree.openValueEditor(7)).?;
+    const value = try editor.valueMut();
+    @memcpy(value, "changed!");
+    try std.testing.expectError(error.ValueEditorActive, suite.tree.free(7));
+    try std.testing.expectError(error.ValueEditorActive, suite.tree.openValueEditor(7));
+    editor.deinit();
+    try std.testing.expect(std.mem.eql(u8, (try suite.tree.get(7)).?, "original"));
+
+    var finished = (try suite.tree.openValueEditor(7)).?;
+    @memcpy(try finished.valueMut(), "finished");
+    try finished.finish();
+    try std.testing.expectError(error.EditorInvalidated, finished.valueMut());
+    try std.testing.expect(std.mem.eql(u8, (try suite.tree.get(7)).?, "finished"));
+}
+
 test "RadixTree paged: a leaf root reports level zero" {
     const TestSuiteType = TestSuite(u32, NoneStorageManager, u64, [8]u8);
     var suite = TestSuiteType{};

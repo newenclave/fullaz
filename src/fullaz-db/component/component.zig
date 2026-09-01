@@ -120,6 +120,7 @@ pub fn descriptor(comptime TraitT: type) Descriptor {
 ///         _ = options;
 ///     }
 ///     pub fn deinitRuntime(_: *Runtime) void {}
+///     pub fn requireTransactionIdle(_: *const Runtime) Error!void {}
 ///     pub fn captureTransactionState(_: *const Runtime) TransactionState {}
 ///     pub fn restoreTransactionState(_: *Runtime, _: TransactionState) void {}
 ///     pub fn proxy(runtime: *Runtime) Proxy { return runtime.*; }
@@ -162,6 +163,11 @@ pub fn assertBinding(comptime BindingT: type, comptime BackendT: type) void {
     interfaces.requiresFnSignature(BindingT, "deinitRuntime", fn (*Runtime) void);
     interfaces.requiresFnSignature(
         BindingT,
+        "requireTransactionIdle",
+        fn (*const Runtime) Error!void,
+    );
+    interfaces.requiresFnSignature(
+        BindingT,
         "captureTransactionState",
         fn (*const Runtime) TransactionState,
     );
@@ -183,6 +189,67 @@ pub fn assertReclamation(comptime BindingT: type) void {
         BindingT,
         "reclaimPersistent",
         fn (*BindingT.Runtime) BindingT.Error!void,
+    );
+}
+
+/// Verifies the optional GC capability generated for one concrete collector.
+///
+/// ```zig
+/// const Capability = Binding.Gc(Collector);
+/// comptime assertGc(Binding, Collector);
+/// // Capability.appendRoots(runtime, allocator, &roots);
+/// // try Capability.registerScanners(runtime, collector);
+/// ```
+///
+/// The capability owns no collector state. Its roots are the binding's
+/// canonical persistent roots, and its scanners must describe the page kinds
+/// assigned to that runtime.
+pub fn assertGc(comptime BindingT: type, comptime CollectorT: type) void {
+    interfaces.requiresTypeDeclaration(BindingT, "Runtime");
+    interfaces.requiresTypeDeclaration(CollectorT, "PageId");
+    interfaces.requiresTypeDeclaration(CollectorT, "ScannerVersion");
+    interfaces.requiresTypeDeclaration(CollectorT, "Scanner");
+    interfaces.requiresTypeDeclaration(CollectorT, "ValueScanner");
+    interfaces.requiresErrorDeclaration(CollectorT, "Error");
+    if (@typeInfo(CollectorT.Error).error_set == null) {
+        @compileError("fullaz-db GC collector Error cannot be anyerror");
+    }
+    if (!@hasDecl(BindingT, "Gc")) {
+        @compileError("fullaz-db component binding GC capability must declare Gc(comptime CollectorT: type) type");
+    }
+    const CapabilityT = BindingT.Gc(CollectorT);
+    if (@TypeOf(CapabilityT) != type) {
+        @compileError("fullaz-db component binding Gc must return a type");
+    }
+    interfaces.requiresErrorDeclaration(CapabilityT, "RootsError");
+    interfaces.requiresErrorDeclaration(CapabilityT, "RegisterError");
+    if (CapabilityT.RootsError != std.mem.Allocator.Error) {
+        @compileError("fullaz-db component GC RootsError must be std.mem.Allocator.Error");
+    }
+    if (CapabilityT.RegisterError != CollectorT.Error) {
+        @compileError("fullaz-db component GC RegisterError must match the collector Error");
+    }
+    interfaces.requiresFnSignature(
+        CollectorT,
+        "registerForCycle",
+        fn (
+            *CollectorT,
+            PageKind,
+            CollectorT.ScannerVersion,
+            ?*const anyopaque,
+            CollectorT.Scanner,
+            ?CollectorT.ValueScanner,
+        ) CollectorT.Error!void,
+    );
+    interfaces.requiresFnSignature(
+        CapabilityT,
+        "appendRoots",
+        fn (*const BindingT.Runtime, std.mem.Allocator, *std.ArrayList(CollectorT.PageId)) CapabilityT.RootsError!void,
+    );
+    interfaces.requiresFnSignature(
+        CapabilityT,
+        "registerScanners",
+        fn (*const BindingT.Runtime, *CollectorT) CapabilityT.RegisterError!void,
     );
 }
 

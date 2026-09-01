@@ -8,6 +8,37 @@ const MemoryModel = wbpt.models.memory.Model;
 
 const String = std.ArrayList(u8);
 
+test "WBpt memory: iterator editor finishes, rolls back, and blocks structural mutation" {
+    const Model = MemoryModel(u8, 4);
+    const Tree = wbpt.WeightedBpt(Model);
+
+    var model = try Model.init(std.testing.allocator);
+    defer model.deinit();
+    var tree = Tree.init(&model, .neighbor_share);
+    defer tree.deinit();
+    _ = try tree.insert(0, "abc");
+
+    var iterator = try tree.iterator();
+    defer iterator.deinit();
+    var editor = (try iterator.editValue()).?;
+    (try editor.valueMut())[0] = 'A';
+    try std.testing.expectError(error.ValueEditorActive, tree.insert(0, "x"));
+    try editor.finish();
+    try std.testing.expectError(error.EditorInvalidated, editor.valueMut());
+
+    var rollback_iterator = try tree.iterator();
+    defer rollback_iterator.deinit();
+    var rollback = (try rollback_iterator.editValue()).?;
+    (try rollback.valueMut())[1] = 'Z';
+    rollback.deinit();
+
+    var committed_iterator = try tree.iterator();
+    defer committed_iterator.deinit();
+    var value = try committed_iterator.get();
+    defer value.deinit();
+    try std.testing.expectEqualStrings("Abc", try value.get());
+}
+
 test "WBpt: Create with Memory model" {
     const Model = MemoryModel(u8, 16);
     const Tree = wbpt.WeightedBpt(Model);

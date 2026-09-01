@@ -103,6 +103,8 @@ fn CountTrait(comptime CoordT: type, comptime dims: usize, comptime ValueT: type
         pub fn onRemove(storage: *Storage, _: Box, _: Value) Error!void {
             storage.count.set(storage.count.get() - 1);
         }
+
+        pub fn onUpdate(_: *Storage, _: Box, _: Value, _: Value) Error!void {}
     };
 }
 
@@ -241,14 +243,60 @@ test "OrthTree paged model: inserts, queries, and removes byte values" {
     try std.testing.expect(collector.seen_first);
     try std.testing.expect(collector.seen_second);
 
+    const Editor = struct {
+        edited: bool = false,
+
+        fn edit(self: *@This(), hit: anytype) !void {
+            if (self.edited) {
+                return;
+            }
+            var editor = try hit.editValue();
+            defer editor.deinit();
+            const value = try editor.valueMut();
+            value[0] = 'F';
+            try editor.finish();
+            self.edited = true;
+        }
+    };
+    var edit_context = Editor{};
+    try tree.queryEditable(Box.create(.{ 0, 0 }, .{ 10, 10 }), Editor.edit, &edit_context);
+    const EditedCollector = struct {
+        seen_first: bool = false,
+
+        fn collect(self: *@This(), _: Box, value: []const u8) !void {
+            self.seen_first = self.seen_first or std.mem.eql(u8, value, "First");
+        }
+    };
+    var edited = EditedCollector{};
+    try tree.query(Box.create(.{ 0, 0 }, .{ 10, 10 }), EditedCollector.collect, &edited);
+    try std.testing.expect(edited.seen_first);
+
+    const Rollback = struct {
+        rolled_back: bool = false,
+
+        fn edit(self: *@This(), hit: anytype) !void {
+            if (self.rolled_back) {
+                return;
+            }
+            var editor = try hit.editValue();
+            defer editor.deinit();
+            (try editor.valueMut())[0] = 'X';
+            self.rolled_back = true;
+        }
+    };
+    var rollback = Rollback{};
+    try tree.queryEditable(Box.create(.{ 0, 0 }, .{ 10, 10 }), Rollback.edit, &rollback);
+    edited = .{};
+    try tree.query(Box.create(.{ 0, 0 }, .{ 10, 10 }), EditedCollector.collect, &edited);
+    try std.testing.expect(edited.seen_first);
+
     var matcher = MatchSecond{};
     try std.testing.expect(try tree.remove(Box.create(.{ 0, 0 }, .{ 10, 10 }), MatchSecond.call, &matcher));
     try std.testing.expectEqual(@as(usize, 1), try model.getEntriesCount());
 
-    collector = .{};
-    try tree.query(Box.create(.{ 0, 0 }, .{ 10, 10 }), Collector.collect, &collector);
-    try std.testing.expect(collector.seen_first);
-    try std.testing.expect(!collector.seen_second);
+    edited = .{};
+    try tree.query(Box.create(.{ 0, 0 }, .{ 10, 10 }), EditedCollector.collect, &edited);
+    try std.testing.expect(edited.seen_first);
 }
 
 test "OrthTree paged model: removeIf updates traits and compacts entries" {

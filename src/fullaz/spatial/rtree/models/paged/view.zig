@@ -165,6 +165,15 @@ pub fn View(
             return buffer[leaf_header_size..];
         }
 
+        pub fn getValueMut(self: *Self, pos: usize) ErrorSet![]u8 {
+            var slots_dir = try self.slotsDirMut();
+            const buffer = try slots_dir.getMut(pos);
+            if (buffer.len < leaf_header_size) {
+                return ErrorSet.BadData;
+            }
+            return buffer[leaf_header_size..];
+        }
+
         pub fn nodeMbr(self: *const Self) ErrorSet!Key {
             const sd = try self.slotsDir();
             const n = sd.size();

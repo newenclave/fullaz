@@ -32,7 +32,7 @@ test "GC: scanner registry is stable and frozen during a cycle" {
     var gc = Collector.init(&model);
     defer gc.deinit();
 
-    try gc.register(9, 1, null, ScannerFixture.scan, null);
+    try gc.registerForCycle(9, 1, null, ScannerFixture.scan, null);
     try gc.register(3, 2, null, ScannerFixture.scan, null);
     const digest = gc.registryDigest();
     try std.testing.expectEqual(digest, gc.registryDigest());
@@ -41,4 +41,6 @@ test "GC: scanner registry is stable and frozen during a cycle" {
 
     model.cycle_active = true;
     try std.testing.expectError(error.RegistryFrozen, gc.register(11, 1, null, ScannerFixture.scan, null));
+    try gc.registerForCycle(11, 1, null, ScannerFixture.scan, null);
+    try std.testing.expectEqual(@as(u32, 11), gc.findScanner(11).?.page_kind);
 }

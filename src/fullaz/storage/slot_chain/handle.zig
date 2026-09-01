@@ -3,6 +3,8 @@ const view = @import("view.zig");
 const page_chain = @import("../page_chain/page_chain.zig");
 const errors = @import("../../core/errors.zig");
 const scanner = @import("scanner.zig");
+const structural_mutation = @import("../../core/core.zig").structural_mutation;
+const StructuralMutationCoordinator = structural_mutation.StructuralMutationCoordinator;
 
 pub const Settings = page_chain.Settings;
 
@@ -159,6 +161,7 @@ fn HandleDirectionalImpl(
         page_chain: PageChainHandle = undefined,
         fsm: ?*FsmT = null,
         settings: Settings = .{},
+        coordinator: StructuralMutationCoordinator = .{},
     };
 
     const ChunkHandle = struct {
@@ -230,7 +233,8 @@ fn HandleDirectionalImpl(
         pub const Error = ChunkHandle.Error ||
             PageChainHandle.Error ||
             errors.IteratorError ||
-            FsmError;
+            FsmError ||
+            structural_mutation.Error;
 
         page_id: CachePageId,
         slot_id: usize,
@@ -239,6 +243,7 @@ fn HandleDirectionalImpl(
         last_chunk: *?ChunkHandle,
         fsm: ?*FsmT,
         manager: *StorageManagerT,
+        coordinator: *StructuralMutationCoordinator,
 
         pub fn value(self: *const Self) Error![]const u8 {
             if (self.page) |*p| {
@@ -249,6 +254,8 @@ fn HandleDirectionalImpl(
         }
 
         pub fn clean(self: *Self) Error!bool {
+            var mutation = try self.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
             if (self.page) |*p| {
                 var sd = try SlotsDir.init(try p.dataMut());
                 if (self.slot_id >= sd.size()) {
@@ -341,9 +348,148 @@ fn HandleDirectionalImpl(
         }
     };
 
+    const ValueEditorImpl = struct {
+        const EditorSelf = @This();
+
+        pub const Error = PageCacheT.Error ||
+            ViewType.Error ||
+            structural_mutation.Error ||
+            error{InvalidReference};
+
+        layout_lock: ?PageCacheT.Handle.LayoutLock,
+        snapshot: ?PageCacheT.Handle,
+        position: usize,
+        value_len: usize,
+        coordinator: *StructuralMutationCoordinator,
+        open: bool = true,
+
+        fn init(
+            layout_lock: PageCacheT.Handle.LayoutLock,
+            snapshot: PageCacheT.Handle,
+            position: usize,
+            value_len: usize,
+            coordinator: *StructuralMutationCoordinator,
+        ) EditorSelf {
+            return .{
+                .layout_lock = layout_lock,
+                .snapshot = snapshot,
+                .position = position,
+                .value_len = value_len,
+                .coordinator = coordinator,
+            };
+        }
+
+        pub fn valueMut(self: *EditorSelf) Error![]u8 {
+            try self.ensureOpen();
+            if (self.layout_lock) |*layout_lock| {
+                var chunk = ChunkView.init(try layout_lock.dataMut());
+                var slots_dir = try chunk.slotsDirMut();
+                const value = try slots_dir.getMut(self.position);
+                if (value.len != self.value_len) {
+                    return error.EditorInvalidated;
+                }
+                return value;
+            }
+            return error.EditorInvalidated;
+        }
+
+        pub fn originalValue(self: *const EditorSelf) Error![]const u8 {
+            try self.ensureOpen();
+            if (self.snapshot) |*snapshot| {
+                return (try snapshot.data())[0..self.value_len];
+            }
+            return error.EditorInvalidated;
+        }
+
+        pub fn finish(self: *EditorSelf) Error!void {
+            try self.ensureOpen();
+            self.close();
+        }
+
+        pub fn deinit(self: *EditorSelf) void {
+            if (!self.open) {
+                return;
+            }
+            self.restore() catch @panic("slot chain value editor rollback failed");
+            self.close();
+        }
+
+        fn ensureOpen(self: *const EditorSelf) Error!void {
+            if (!self.open) {
+                return error.EditorInvalidated;
+            }
+        }
+
+        fn restore(self: *EditorSelf) Error!void {
+            if (self.layout_lock) |*layout_lock| {
+                if (self.snapshot) |*snapshot| {
+                    const snapshot_bytes = try snapshot.data();
+                    var chunk = ChunkView.init(try layout_lock.dataMut());
+                    var slots_dir = try chunk.slotsDirMut();
+                    const value = try slots_dir.getMut(self.position);
+                    if (value.len != self.value_len) {
+                        return error.EditorInvalidated;
+                    }
+                    @memcpy(value, snapshot_bytes[0..self.value_len]);
+                    return;
+                }
+            }
+            return error.EditorInvalidated;
+        }
+
+        fn close(self: *EditorSelf) void {
+            if (self.layout_lock) |*layout_lock| {
+                layout_lock.deinit();
+                self.layout_lock = null;
+            }
+            if (self.snapshot) |*snapshot| {
+                snapshot.deinit();
+                self.snapshot = null;
+            }
+            self.coordinator.finishValueEditor();
+            self.open = false;
+        }
+    };
+
+    const ValueEditorOpener = struct {
+        fn open(
+            coordinator: *StructuralMutationCoordinator,
+            page: *ChunkHandle,
+            position: usize,
+            cache: *PageCacheT,
+        ) ValueEditorImpl.Error!ValueEditorImpl {
+            try coordinator.beginValueEditor();
+            errdefer coordinator.finishValueEditor();
+
+            const slots_dir = try page.slotsDir();
+            if (position >= slots_dir.size() or try page.isTombstone(@intCast(position))) {
+                return error.InvalidReference;
+            }
+            const value = try slots_dir.get(position);
+
+            var snapshot = try cache.getTemporaryPage();
+            errdefer snapshot.deinit();
+            const snapshot_bytes = try snapshot.dataMut();
+            @memcpy(snapshot_bytes[0..value.len], value);
+
+            var layout_lock = try page.ph.ph.lockLayout();
+            errdefer layout_lock.deinit();
+            return ValueEditorImpl.init(
+                layout_lock,
+                snapshot,
+                position,
+                value.len,
+                coordinator,
+            );
+        }
+    };
+
     const BidirectionalIteratorImpl = struct {
         const Self = @This();
-        pub const Error = ChunkHandle.Error || PageChainHandle.Error;
+        pub const Error = ChunkHandle.Error ||
+            PageChainHandle.Error ||
+            structural_mutation.Error ||
+            error{InvalidReference};
 
         const Cursor = union(enum) {
             before_first,
@@ -363,6 +509,8 @@ fn HandleDirectionalImpl(
         last_chunk: *?ChunkHandle,
         fsm: ?*FsmT,
         manager: *StorageManagerT,
+        coordinator: *StructuralMutationCoordinator,
+        structural_generation: u64,
 
         fn init(
             page_itr: PageChainHandle.Iterator,
@@ -371,6 +519,7 @@ fn HandleDirectionalImpl(
             last_chunk: *?ChunkHandle,
             fsm: ?*FsmT,
             manager: *StorageManagerT,
+            coordinator: *StructuralMutationCoordinator,
         ) Self {
             return .{
                 .page_itr = page_itr,
@@ -379,6 +528,8 @@ fn HandleDirectionalImpl(
                 .last_chunk = last_chunk,
                 .fsm = fsm,
                 .manager = manager,
+                .coordinator = coordinator,
+                .structural_generation = coordinator.generation(),
             };
         }
 
@@ -435,6 +586,8 @@ fn HandleDirectionalImpl(
         }
 
         pub fn markForRemoval(self: *Self) Error!PendingRemovalImpl {
+            var mutation = try self.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
             const slot_id = switch (self.cursor) {
                 .on => |index| index,
                 else => return Error.InvalidIterator,
@@ -452,11 +605,32 @@ fn HandleDirectionalImpl(
                 .last_chunk = self.last_chunk,
                 .fsm = self.fsm,
                 .manager = self.manager,
+                .coordinator = self.coordinator,
             };
         }
 
         pub fn markTombstone(self: *Self) Error!void {
+            var mutation = try self.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
             return TombstoneMarker.forIterator(Self).markTombstone(self);
+        }
+
+        pub fn editValue(self: *Self) Error!?ValueEditorImpl {
+            try self.coordinator.checkGeneration(self.structural_generation);
+            const position = switch (self.cursor) {
+                .on => |value| value,
+                else => return null,
+            };
+            var page = ChunkHandle{
+                .ph = (try self.page_itr.cloneChunk()) orelse return null,
+            };
+            defer page.deinit();
+            return try ValueEditorOpener.open(
+                self.coordinator,
+                &page,
+                position,
+                self.page_chain.cacheMut(),
+            );
         }
 
         fn findNext(self: *Self, start: usize) Error!bool {
@@ -506,7 +680,10 @@ fn HandleDirectionalImpl(
 
     const ForwardIteratorImpl = struct {
         const Self = @This();
-        pub const Error = ChunkHandle.Error || PageChainHandle.Error;
+        pub const Error = ChunkHandle.Error ||
+            PageChainHandle.Error ||
+            structural_mutation.Error ||
+            error{InvalidReference};
 
         const Cursor = union(enum) {
             before_first,
@@ -526,6 +703,8 @@ fn HandleDirectionalImpl(
         last_chunk: *?ChunkHandle,
         fsm: ?*FsmT,
         manager: *StorageManagerT,
+        coordinator: *StructuralMutationCoordinator,
+        structural_generation: u64,
 
         fn init(
             page_itr: PageChainHandle.Iterator,
@@ -534,6 +713,7 @@ fn HandleDirectionalImpl(
             last_chunk: *?ChunkHandle,
             fsm: ?*FsmT,
             manager: *StorageManagerT,
+            coordinator: *StructuralMutationCoordinator,
         ) Self {
             return .{
                 .page_itr = page_itr,
@@ -542,6 +722,8 @@ fn HandleDirectionalImpl(
                 .last_chunk = last_chunk,
                 .fsm = fsm,
                 .manager = manager,
+                .coordinator = coordinator,
+                .structural_generation = coordinator.generation(),
             };
         }
 
@@ -580,6 +762,8 @@ fn HandleDirectionalImpl(
         }
 
         pub fn markForRemoval(self: *Self) Error!PendingRemovalImpl {
+            var mutation = try self.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
             const slot_id = switch (self.cursor) {
                 .on => |index| index,
                 else => return Error.InvalidIterator,
@@ -597,11 +781,32 @@ fn HandleDirectionalImpl(
                 .last_chunk = self.last_chunk,
                 .fsm = self.fsm,
                 .manager = self.manager,
+                .coordinator = self.coordinator,
             };
         }
 
         pub fn markTombstone(self: *Self) Error!void {
+            var mutation = try self.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
             return TombstoneMarker.forIterator(Self).markTombstone(self);
+        }
+
+        pub fn editValue(self: *Self) Error!?ValueEditorImpl {
+            try self.coordinator.checkGeneration(self.structural_generation);
+            const position = switch (self.cursor) {
+                .on => |value| value,
+                else => return null,
+            };
+            var page = ChunkHandle{
+                .ph = (try self.page_itr.cloneChunk()) orelse return null,
+            };
+            defer page.deinit();
+            return try ValueEditorOpener.open(
+                self.coordinator,
+                &page,
+                position,
+                self.page_chain.cacheMut(),
+            );
         }
 
         fn findNext(self: *Self, start: usize) Error!bool {
@@ -629,12 +834,15 @@ fn HandleDirectionalImpl(
         pub const View = ViewType;
         pub const Iterator = if (forward_only) ForwardIteratorImpl else BidirectionalIteratorImpl;
         pub const PendingRemoval = PendingRemovalImpl;
+        pub const ValueEditor = ValueEditorImpl;
         pub const Error = PageChainHandle.Error ||
             PageCacheT.Error ||
             ViewType.Error ||
             StorageManagerT.Error ||
-            FsmError;
-        pub const ReferenceError = Error || error{InvalidReference};
+            FsmError ||
+            structural_mutation.Error ||
+            error{InvalidReference};
+        pub const ReferenceError = Error;
         pub const ValueIn = []const u8;
         pub const ValueOut = []const u8;
         pub const SlotRef = struct {
@@ -803,6 +1011,8 @@ fn HandleDirectionalImpl(
         }
 
         pub fn insertUnordered(self: *Self, val: ValueIn) Error!void {
+            var mutation = try self.ctx.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
             if (try self.findFreeSlot(val.len)) |page_id| {
                 var page = try self.loadPage(page_id);
                 defer page.deinit();
@@ -816,7 +1026,7 @@ fn HandleDirectionalImpl(
                     },
                     .not_enough => {
                         try self.updatePageInFsm(page_id, sd.availableSpace());
-                        _ = try self.append(val);
+                        _ = try self.appendRefInner(val);
                         return;
                     },
                 }
@@ -826,7 +1036,7 @@ fn HandleDirectionalImpl(
                 try self.ctx.page_chain.managerMut().setTotalSize(total + 1);
                 try self.updatePageInFsm(page_id, sd.availableSpace());
             } else {
-                _ = try self.append(val);
+                _ = try self.appendRefInner(val);
             }
         }
 
@@ -837,6 +1047,12 @@ fn HandleDirectionalImpl(
         /// Appends an entry and returns its stable directory position. Callers
         /// that retain this reference must not use physical slot removal APIs.
         pub fn appendRef(self: *Self, val: ValueIn) Error!SlotRef {
+            var mutation = try self.ctx.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
+            return self.appendRefInner(val);
+        }
+
+        fn appendRefInner(self: *Self, val: ValueIn) Error!SlotRef {
             try self.hydrateLastChunk();
             if (self.last_chunk) |*last_c| {
                 const total = try self.ctx.page_chain.manager().getTotalSize();
@@ -846,7 +1062,7 @@ fn HandleDirectionalImpl(
                         try self.compactPage(last_c);
                     },
                     .not_enough => {
-                        var next = try self.createPage();
+                        var next = try self.createPageInner();
                         errdefer next.deinit();
 
                         const next_id = try next.id();
@@ -872,7 +1088,7 @@ fn HandleDirectionalImpl(
                     .slot_id = slot_id,
                 };
             } else {
-                var page = try self.createPage();
+                var page = try self.createPageInner();
                 errdefer page.deinit();
 
                 const page_id = try page.id();
@@ -901,6 +1117,18 @@ fn HandleDirectionalImpl(
                 .page = page,
                 .slot_id = ref.slot_id,
             };
+        }
+
+        /// Opens an exact-length mutable editor for the live slot referenced by `ref`.
+        pub fn openValueEditor(self: *Self, ref: SlotRef) Error!ValueEditor {
+            var page = try self.loadPage(ref.page_id);
+            defer page.deinit();
+            return try ValueEditorOpener.open(
+                &self.ctx.coordinator,
+                &page,
+                ref.slot_id,
+                self.ctx.page_chain.cacheMut(),
+            );
         }
 
         fn hydrateLastChunk(self: *Self) Error!void {
@@ -949,6 +1177,7 @@ fn HandleDirectionalImpl(
                 &self.last_chunk,
                 self.ctx.fsm,
                 self.ctx.page_chain.managerMut(),
+                &self.ctx.coordinator,
             );
         }
 
@@ -968,19 +1197,22 @@ fn HandleDirectionalImpl(
                 &self.last_chunk,
                 self.ctx.fsm,
                 self.ctx.page_chain.managerMut(),
+                &self.ctx.coordinator,
             );
         }
 
         /// Marks live slots selected by `predicate` without changing page size or FSM state.
         /// `value` is borrowed for the duration of the predicate call.
         pub fn markTombstonesIf(self: *Self, context: anytype, comptime predicate: anytype) Error!usize {
+            var mutation = try self.ctx.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
             var chain_iterator = (try self.iterator()) orelse return 0;
             defer chain_iterator.deinit();
 
             var marked: usize = 0;
             while (try chain_iterator.next()) |result| {
                 if (try predicate(context, result.page_id, result.pos, result.value)) {
-                    try chain_iterator.markTombstone();
+                    try TombstoneMarker.forIterator(Iterator).markTombstone(&chain_iterator);
                     marked += 1;
                 }
             }
@@ -989,6 +1221,8 @@ fn HandleDirectionalImpl(
 
         /// Physically removes all tombstoned slots and returns their count.
         pub fn removeTombstones(self: *Self) Error!usize {
+            var mutation = try self.ctx.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
             var chain_iterator = try self.ctx.page_chain.iterator();
             defer chain_iterator.deinit();
 
@@ -1014,6 +1248,8 @@ fn HandleDirectionalImpl(
 
         /// Physically removes tombstoned slots from one page and returns their count.
         pub fn removePageTombstones(self: *Self, page_id: PageId) Error!usize {
+            var mutation = try self.ctx.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
             var page = try self.loadPage(page_id);
             const removed_slots = try page.removeTombstones();
             const remaining_slots = try page.size();
@@ -1027,6 +1263,8 @@ fn HandleDirectionalImpl(
         /// Physically removes live slots selected by `predicate` and returns their count.
         /// `value` is borrowed for the duration of the predicate call.
         pub fn removeIf(self: *Self, context: anytype, comptime predicate: anytype) Error!usize {
+            var mutation = try self.ctx.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
             const PredicateContext = struct {
                 const CallbackContext = @TypeOf(context);
 
@@ -1081,6 +1319,7 @@ fn HandleDirectionalImpl(
             pending.page_chain = &self.ctx.page_chain;
             pending.last_chunk = &self.last_chunk;
             pending.manager = self.ctx.page_chain.managerMut();
+            pending.coordinator = &self.ctx.coordinator;
         }
 
         pub fn insertPageToFsm(self: *Self, page_id: PageId, free_size: usize) Error!void {
@@ -1107,6 +1346,12 @@ fn HandleDirectionalImpl(
         }
 
         pub fn createPage(self: *Self) Error!ChunkHandle {
+            var mutation = try self.ctx.coordinator.beginStructuralMutation();
+            defer mutation.deinit();
+            return self.createPageInner();
+        }
+
+        fn createPageInner(self: *Self) Error!ChunkHandle {
             var ch: ChunkHandle = .{
                 .ph = try self.ctx.page_chain.createChunk(),
             };

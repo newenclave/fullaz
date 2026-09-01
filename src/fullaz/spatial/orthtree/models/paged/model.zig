@@ -8,6 +8,7 @@ const orthtree_interfaces = @import("../interfaces.zig");
 const slot_chain = @import("../../../../storage/slot_chain/slot_chain.zig");
 const traits = @import("../traits.zig");
 const view_mod = @import("view.zig");
+const StructuralMutationCoordinator = @import("../../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 const requiresErrorDeclaration = contract_interfaces.requiresErrorDeclaration;
 const requiresFnSignature = contract_interfaces.requiresFnSignature;
@@ -135,6 +136,7 @@ pub fn PagedModelImpl(
         requiresFnSignature(TraitPolicy, "onGrow", fn (*TraitStorage, *const TraitStorage) TraitPolicy.Error!void);
         requiresFnSignature(TraitPolicy, "onAdopt", fn (*TraitStorage, BoxT, Value) TraitPolicy.Error!void);
         requiresFnSignature(TraitPolicy, "onRemove", fn (*TraitStorage, BoxT, Value) TraitPolicy.Error!void);
+        requiresFnSignature(TraitPolicy, "onUpdate", fn (*TraitStorage, BoxT, Value, Value) TraitPolicy.Error!void);
     }
 
     const ErrorSet = errors.PageError ||
@@ -145,7 +147,8 @@ pub fn PagedModelImpl(
         FsmT.Error ||
         MutableNodePage.Error ||
         TraitPolicy.Error ||
-        error{ AlreadyInitialized, InvalidSettings, ValueTooLarge };
+        @import("../../../../core/structural_mutation.zig").Error ||
+        error{ AlreadyInitialized, InvalidReference, InvalidSettings, ValueTooLarge };
 
     const EntryImpl = struct {
         pub const Box = BoxT;
@@ -652,6 +655,62 @@ pub fn PagedModelImpl(
     };
 
     const BorrowT = ValueBorrowType(NodeImpl);
+    const ChainHandle = EntryChainHandle(NodeImpl);
+
+    const ValueEditorImpl = struct {
+        const Self = @This();
+
+        pub const Error = ErrorSet;
+        pub const ValueMut = []u8;
+
+        editor: ChainHandle.ValueEditor,
+        coordinator: *StructuralMutationCoordinator,
+        open: bool = true,
+
+        pub fn valueMut(self: *Self) Error![]u8 {
+            try self.ensureOpen();
+            const entry_bytes = try self.editor.valueMut();
+            if (entry_bytes.len < entry_slot_header_size) {
+                return error.EditorInvalidated;
+            }
+            return entry_bytes[entry_slot_header_size..];
+        }
+
+        pub fn originalValue(self: *const Self) Error![]const u8 {
+            try self.ensureOpen();
+            const entry_bytes = try self.editor.originalValue();
+            if (entry_bytes.len < entry_slot_header_size) {
+                return error.EditorInvalidated;
+            }
+            return entry_bytes[entry_slot_header_size..];
+        }
+
+        pub fn value(self: *Self) Error![]const u8 {
+            return self.valueMut();
+        }
+
+        pub fn finish(self: *Self) Error!void {
+            try self.ensureOpen();
+            try self.editor.finish();
+            self.coordinator.finishValueEditor();
+            self.open = false;
+        }
+
+        pub fn deinit(self: *Self) void {
+            if (!self.open) {
+                return;
+            }
+            self.editor.deinit();
+            self.coordinator.finishValueEditor();
+            self.open = false;
+        }
+
+        fn ensureOpen(self: *const Self) Error!void {
+            if (!self.open) {
+                return error.EditorInvalidated;
+            }
+        }
+    };
 
     const AccessorImpl = struct {
         const Self = @This();
@@ -765,11 +824,13 @@ pub fn PagedModelImpl(
         pub const ValueIn = Value;
         pub const ValueOut = Value;
         pub const ValueBorrow = BorrowT;
+        pub const ValueEditorType = ValueEditorImpl;
         pub const Trait = TraitStorage;
         pub const Error = ErrorSet;
         pub const Settings = SettingsT;
 
         accessor_state: AccessorType,
+        coordinator: StructuralMutationCoordinator = .{},
 
         pub fn init(cache: *PageCacheT, storage_manager: *StorageManagerT, fsm: *FsmT, settings: SettingsT) Error!Self {
             var trait_template: Trait = undefined;
@@ -805,6 +866,7 @@ pub fn PagedModelImpl(
             }
             return .{
                 .accessor_state = AccessorType.init(cache, storage_manager, fsm, settings, trait_template),
+                .coordinator = .{},
             };
         }
 
@@ -892,6 +954,28 @@ pub fn PagedModelImpl(
             return &self.accessor_state;
         }
 
+        pub fn structuralMutationCoordinator(self: *Self) *StructuralMutationCoordinator {
+            return &self.coordinator;
+        }
+
+        pub fn openValueEditor(
+            self: *Self,
+            _: *Node,
+            _: *Node.EntriesMut,
+            cursor: *Node.EntriesMut.Cursor,
+        ) Error!ValueEditorType {
+            try self.coordinator.beginValueEditor();
+            errdefer self.coordinator.finishValueEditor();
+            const raw_editor = if (cursor.iterator) |*iterator|
+                (try iterator.editValue()) orelse return Error.OutOfBounds
+            else
+                return Error.OutOfBounds;
+            return .{
+                .editor = raw_editor,
+                .coordinator = &self.coordinator,
+            };
+        }
+
         pub fn incrementEntriesCount(self: *Self) Error!void {
             const count = try self.accessor_state.storage_manager.getEntriesCount();
             const next = std.math.add(usize, count, 1) catch return Error.BadData;
@@ -955,6 +1039,17 @@ pub fn PagedModelImpl(
         pub fn onRemove(self: *Self, node: *Node, bounds: Box, value: ValueIn) Error!void {
             _ = self;
             try TraitPolicy.onRemove(try node.traitMut(), bounds, value);
+        }
+
+        pub fn onUpdate(
+            self: *Self,
+            node: *Node,
+            bounds: Box,
+            old_value: ValueIn,
+            new_value: ValueIn,
+        ) Error!void {
+            _ = self;
+            try TraitPolicy.onUpdate(try node.traitMut(), bounds, old_value, new_value);
         }
     };
 }

@@ -242,7 +242,7 @@ test "GC: memory BPT leaf value scanner retains an embedded root" {
     while (gc_model.phase() != .sweeping) {
         _ = try collector.step(1);
     }
-    try std.testing.expect(gc_model.isMarked(target_root));
+    try std.testing.expect(try gc_model.isMarked(target_root));
     while (try collector.step(1) != .complete) {}
 
     for (target_pages, 0..) |was_in_graph, page_id| {

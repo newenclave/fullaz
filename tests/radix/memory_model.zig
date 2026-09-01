@@ -75,3 +75,30 @@ test "RadixTree memory: reuses slots from partial leaves" {
     try tree.free(3);
     try std.testing.expectEqual(@as(?u32, null), try tree.takeFree(1));
 }
+
+test "RadixTree memory: value editor finishes or rolls back and blocks mutations" {
+    const M = Model(u32, u32);
+    const Tree = radix_tree.Tree(M);
+
+    var model = try M.init(std.testing.allocator, .{
+        .leaf_base = 4,
+        .inode_base = 4,
+    });
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    defer tree.deinit();
+
+    try tree.set(1, 10);
+    var editor = (try tree.openValueEditor(1)).?;
+    (try editor.valueMut()).* = 20;
+    try std.testing.expectError(error.ValueEditorActive, tree.set(2, 2));
+    try std.testing.expectError(error.ValueEditorActive, tree.openValueEditor(1));
+    editor.deinit();
+    try std.testing.expectEqual(@as(?u32, 10), try tree.get(1));
+
+    var finished = (try tree.openValueEditor(1)).?;
+    (try finished.valueMut()).* = 30;
+    try finished.finish();
+    try std.testing.expectError(error.EditorInvalidated, finished.valueMut());
+    try std.testing.expectEqual(@as(?u32, 30), try tree.get(1));
+}

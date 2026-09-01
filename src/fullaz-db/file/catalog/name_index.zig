@@ -74,6 +74,24 @@ pub fn CatalogNameIndex(comptime CacheT: type, comptime ManagerT: type) type {
             return tree.remove(name);
         }
 
+        pub fn scanInodeRefs(
+            self: *const Self,
+            page_id: CacheT.Pid,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanInodeRefs(page_id, page, visitor);
+        }
+
+        pub fn scanLeafRefs(
+            self: *const Self,
+            page_id: CacheT.Pid,
+            page: []const u8,
+            visitor: anytype,
+        ) !void {
+            return self.model.scanLeafRefs(page_id, page, visitor);
+        }
+
         fn validateName(name: []const u8) Error!void {
             if (name.len == 0 or name.len > 255 or
                 !std.unicode.utf8ValidateSlice(name) or

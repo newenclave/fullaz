@@ -238,6 +238,61 @@ test "fullaz-db: R-tree memory database commits and restores its root" {
     );
     try std.testing.expectEqual(@as(usize, 1), collector.count);
     try std.testing.expectEqual(@as(u32, 7), collector.sum);
+
+    try std.testing.expect(!@hasDecl(Binding.ConstProxy, "openValueEditor"));
+    try std.testing.expect(!@hasDecl(Binding.ConstProxy, "searchEditable"));
+    {
+        var transaction = try database.begin();
+        const tree = transaction.get("spatial");
+        const matches = MatchesValue{ .value = 7 };
+        var editor = (try tree.openValueEditor(
+            Box.initWith(.{ 2, 2 }, .{ 4, 4 }),
+            &matches,
+            MatchesValue.callback,
+        )).?;
+        var replacement: [4]u8 = undefined;
+        std.mem.writeInt(u32, &replacement, 9, .little);
+        @memcpy(try editor.valueMut(), &replacement);
+        try std.testing.expectError(error.ValueEditorActive, transaction.rollback());
+        try editor.finish();
+        try transaction.commit();
+    }
+    var updated = Collector{};
+    try database.getConst("spatial").search(
+        Box.initWith(.{ 0, 0 }, .{ 10, 10 }),
+        &updated,
+        Collector.callback,
+    );
+    try std.testing.expectEqual(@as(u32, 9), updated.sum);
+
+    const Editable = struct {
+        fn callback(
+            _: void,
+            _: Box,
+            editor: *Binding.Proxy.SearchValueEditor,
+        ) Binding.Proxy.Error!void {
+            var replacement: [4]u8 = undefined;
+            std.mem.writeInt(u32, &replacement, 10, .little);
+            @memcpy(try editor.valueMut(), &replacement);
+            try editor.finish();
+        }
+    };
+    {
+        var transaction = try database.begin();
+        try transaction.get("spatial").searchEditable(
+            Box.initWith(.{ 0, 0 }, .{ 10, 10 }),
+            {},
+            Editable.callback,
+        );
+        try transaction.commit();
+    }
+    var edited = Collector{};
+    try database.getConst("spatial").search(
+        Box.initWith(.{ 0, 0 }, .{ 10, 10 }),
+        &edited,
+        Collector.callback,
+    );
+    try std.testing.expectEqual(@as(u32, 10), edited.sum);
 }
 
 test "fullaz-db: R-tree commits extreme integer boxes after a split" {

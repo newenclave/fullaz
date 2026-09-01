@@ -4,6 +4,7 @@ const component = @import("../component/component.zig");
 const FingerprintWriter = @import("../component/fingerprint.zig").Writer;
 const ChainStoreManager = @import("../component/managers/managers.zig").ChainStoreManager;
 const low_level_chain_store = @import("fullaz").storage.chain_store;
+const gc = @import("fullaz").gc;
 const dynamic_metadata = @import("../file/metadata/dynamic.zig");
 const tagged = @import("../file/tagged_fields.zig");
 
@@ -121,6 +122,7 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                 pub const Error = BindingError;
 
                 pub const Runtime = struct {
+                    page_kinds: component.PageKindRange,
                     cache: *CacheT,
                     manager: ManagerT,
                     blob: BlobT,
@@ -228,6 +230,41 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                     }
                 };
 
+                pub fn Gc(comptime CollectorT: type) type {
+                    if (CollectorT.PageId != CacheT.Pid) {
+                        @compileError("fullaz-db ChainStore GC collector PageId must match CacheType.Pid");
+                    }
+                    return struct {
+                        pub const RootsError = std.mem.Allocator.Error;
+                        pub const RegisterError = CollectorT.Error;
+                        const chunk_scanner_version: CollectorT.ScannerVersion = 1;
+
+                        pub fn appendRoots(
+                            runtime: *const Runtime,
+                            allocator: std.mem.Allocator,
+                            roots: *std.ArrayList(CollectorT.PageId),
+                        ) RootsError!void {
+                            if (runtime.manager.getState().first) |first| {
+                                try roots.append(allocator, first);
+                            }
+                        }
+
+                        pub fn registerScanners(
+                            runtime: *const Runtime,
+                            collector: *CollectorT,
+                        ) RegisterError!void {
+                            const chunk_page_kind = runtime.page_kinds.kindAt(0) orelse unreachable;
+                            try collector.registerForCycle(
+                                chunk_page_kind,
+                                chunk_scanner_version,
+                                &runtime.blob,
+                                gc.scanners.method(CollectorT, BlobT, BlobT.scanChunkRefs),
+                                null,
+                            );
+                        }
+                    };
+                }
+
                 pub fn initRuntime(
                     runtime: *Runtime,
                     backend: *BackendT,
@@ -238,6 +275,7 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                         return BindingError.InvalidPageKinds;
                     }
                     const chunk_page_kind = page_kinds.kindAt(0) orelse return BindingError.InvalidPageKinds;
+                    runtime.page_kinds = page_kinds;
                     runtime.cache = backend.cache();
                     runtime.manager = ManagerT.init(backend);
                     runtime.blob = BlobT.init(
@@ -254,6 +292,8 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                     runtime.blob.deinit();
                     runtime.* = undefined;
                 }
+
+                pub fn requireTransactionIdle(_: *const Runtime) BindingError!void {}
 
                 pub fn reclaimPersistent(runtime: *Runtime) BindingError!void {
                     try runtime.blob.clear();

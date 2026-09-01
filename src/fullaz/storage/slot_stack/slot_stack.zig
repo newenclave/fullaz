@@ -17,6 +17,7 @@ pub fn SlotStack(
         pub const Error = Chain.Error || errors.SetError;
         pub const ValueIn = Chain.ValueIn;
         pub const PageId = Chain.PageId;
+        pub const ValueEditor = Chain.ValueEditor;
 
         /// Owns the iterator that keeps the peeked value borrowed from the stack.
         pub const Peek = struct {
@@ -28,6 +29,11 @@ pub fn SlotStack(
             pub fn value(self: *const PeekSelf) Error![]const u8 {
                 const result = (try self.iterator.get()) orelse return Error.InvalidIterator;
                 return result.value;
+            }
+
+            /// Opens an exact-length mutable editor for the peeked top value.
+            pub fn editValue(self: *PeekSelf) Error!ValueEditor {
+                return (try self.iterator.editValue()) orelse Error.InvalidIterator;
             }
 
             pub fn deinit(self: *PeekSelf) void {
@@ -44,6 +50,11 @@ pub fn SlotStack(
             pub fn next(self: *IteratorSelf) Error!?[]const u8 {
                 const result = (try self.iterator.next()) orelse return null;
                 return result.value;
+            }
+
+            /// Opens an exact-length mutable editor for the current iterator value.
+            pub fn editValue(self: *IteratorSelf) Error!?ValueEditor {
+                return self.iterator.editValue();
             }
 
             pub fn deinit(self: *IteratorSelf) void {
@@ -97,10 +108,13 @@ pub fn SlotStack(
 
         pub fn pop(self: *Self) Error!void {
             var chain_iterator = (try self.chain.iteratorFromEnd()) orelse return Error.EmptySet;
-            defer chain_iterator.deinit();
+            errdefer chain_iterator.deinit();
             _ = (try chain_iterator.prev()) orelse return Error.EmptySet;
 
             var pending = try chain_iterator.markForRemoval();
+            // `clean` can remove the final slot and free its chunk page.
+            // Release the reverse iterator's pin before doing that.
+            chain_iterator.deinit();
             defer pending.deinit();
             if (!try pending.clean()) {
                 return Error.InvalidIterator;

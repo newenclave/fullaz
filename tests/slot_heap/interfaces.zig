@@ -3,6 +3,7 @@ const fullaz = @import("fullaz");
 
 const interfaces = fullaz.storage.slot_heap.models.interfaces;
 const WinnerChange = interfaces.WinnerChange;
+const StructuralMutationCoordinator = fullaz.core.structural_mutation.StructuralMutationCoordinator;
 
 const MockError = error{Example};
 const Location = struct {
@@ -146,6 +147,20 @@ const Accessor = struct {
     pub fn addLeafSpace(_: *Accessor, _: u32, _: u16) Error!void {}
     pub fn updateLeafSpace(_: *Accessor, _: u32, _: u16) Error!void {}
     pub fn removeLeafSpace(_: *Accessor, _: u32) Error!void {}
+    pub fn openValueEditor(_: *Accessor, _: *Leaf, _: usize) Error!ValueEditor {
+        return .{};
+    }
+};
+
+const ValueEditor = struct {
+    pub const Error = MockError;
+    pub const ValueMutType = []u8;
+
+    pub fn valueMut(_: *ValueEditor) Error![]u8 {
+        return &.{};
+    }
+    pub fn finish(_: *ValueEditor) Error!void {}
+    pub fn deinit(_: *ValueEditor) void {}
 };
 
 const Model = struct {
@@ -161,12 +176,17 @@ const Model = struct {
     pub const LeafType = Leaf;
     pub const InodeType = Inode;
     pub const AccessorType = Accessor;
+    pub const ValueEditorType = ValueEditor;
     pub const Error = MockError;
 
     accessor_state: Accessor = .{},
+    structural_mutation: StructuralMutationCoordinator = .{},
 
     pub fn accessor(self: *Model) *Accessor {
         return &self.accessor_state;
+    }
+    pub fn structuralMutationCoordinator(self: *Model) *StructuralMutationCoordinator {
+        return &self.structural_mutation;
     }
     pub fn compareKeys(_: *const Model, _: []const u8, _: []const u8) Error!std.math.Order {
         return .eq;

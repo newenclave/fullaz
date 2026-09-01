@@ -54,6 +54,8 @@ fn TestBinding(comptime BackendT: type) type {
             runtime.proxy_value.value = 0;
         }
 
+        pub fn requireTransactionIdle(_: *const Runtime) Error!void {}
+
         pub fn captureTransactionState(runtime: *const Runtime) TransactionState {
             return runtime.proxy_value;
         }

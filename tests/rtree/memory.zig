@@ -8,6 +8,7 @@ const testing = std.testing;
 // CoordT=i64, dims=2, ValueT=u64, max_entries=4
 const Model = rtree.models.Memory(i64, 2, u64, 4);
 const Key = Model.KeyType;
+const Tree = rtree.RTree(Model);
 
 fn box(x0: i64, y0: i64, x1: i64, y1: i64) Key {
     return Key.initWith(.{ x0, y0 }, .{ x1, y1 });
@@ -117,4 +118,54 @@ test "rtree memory model: load kind mismatch is null, isLeafId, destroy, root" {
 
     try acc.destroy(leaf_id);
     try testing.expect((try acc.loadLeaf(leaf_id)) == null); // destroyed slot
+}
+
+const MatchValue = struct {
+    value: u64,
+
+    fn call(self: *const MatchValue, _: Key, value: u64) bool {
+        return value == self.value;
+    }
+};
+
+const EditValue = struct {
+    value: u64,
+
+    fn call(self: *EditValue, _: Key, editor: *Tree.ValueEditor) !void {
+        (try editor.valueMut()).* = self.value;
+        try editor.finish();
+    }
+};
+
+test "RTree memory: value editor selects duplicates, commits, rolls back, and blocks mutation" {
+    var model = try Model.init(testing.allocator);
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    const entry_box = box(1, 1, 2, 2);
+    try tree.insert(entry_box, 7);
+    try tree.insert(entry_box, 7);
+
+    const match_first = MatchValue{ .value = 7 };
+    var editor = (try tree.openValueEditor(entry_box, &match_first, MatchValue.call)).?;
+    (try editor.valueMut()).* = 9;
+    try testing.expectError(
+        error.ValueEditorActive,
+        tree.openValueEditor(entry_box, &match_first, MatchValue.call),
+    );
+    try testing.expectError(error.ValueEditorActive, tree.insert(box(3, 3, 4, 4), 10));
+    try testing.expectError(error.ValueEditorActive, tree.remove(entry_box, &match_first, MatchValue.call));
+    try editor.finish();
+    try testing.expectError(error.EditorInvalidated, editor.valueMut());
+    editor.deinit();
+
+    var rollback = (try tree.openValueEditor(entry_box, &match_first, MatchValue.call)).?;
+    (try rollback.valueMut()).* = 11;
+    rollback.deinit();
+
+    var changed = EditValue{ .value = 12 };
+    try tree.searchEditable(entry_box, &changed, EditValue.call);
+
+    const match_changed = MatchValue{ .value = 12 };
+    try testing.expect(try tree.remove(entry_box, &match_changed, MatchValue.call));
+    try testing.expect(try tree.remove(entry_box, &match_changed, MatchValue.call));
 }

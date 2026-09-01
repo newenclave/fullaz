@@ -62,14 +62,18 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         };
 
         accessor: *AccessorType,
+        model: *Model,
         leaf: ?Leaf = null,
         cur: Cursor,
+        structural_generation: u64,
 
-        fn init(acc: *AccessorType, leaf: Leaf, on: usize) !Self {
+        fn init(model: *Model, leaf: Leaf, on: usize) !Self {
             var res = Self{
-                .accessor = acc,
+                .accessor = model.accessor(),
+                .model = model,
                 .leaf = leaf,
                 .cur = .{ .on = on },
+                .structural_generation = model.structuralMutationCoordinator().generation(),
             };
 
             if (try leaf.size() <= on) {
@@ -135,6 +139,22 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             self.leaf = null;
         }
 
+        /// Opens a mutable lease for the iterator's current value.
+        pub fn editValue(self: *Self) Error!?Model.ValueEditorType {
+            try self.model.structuralMutationCoordinator().checkGeneration(
+                self.structural_generation,
+            );
+            try self.check();
+            const position = switch (self.cur) {
+                .on => |value| value,
+                else => return null,
+            };
+            if (position >= try self.leaf.?.size()) {
+                return null;
+            }
+            return try self.accessor.openValueEditor(&self.leaf.?, position);
+        }
+
         fn moveToNext(self: *Self) Error!void {
             try self.check();
             if (try self.leaf.?.getNext()) |next_pid| {
@@ -182,6 +202,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             iterator: Iterator,
             intra_weight: Weight,
         };
+        pub const ValueEditor = Model.ValueEditorType;
 
         model: *Model,
         rebalance_policy: RebalancePolicy = .neighbor_share,
@@ -218,12 +239,14 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             const root = try acc.getRoot();
             if (root) |root_pid| {
                 const leaf = try self.getLeftmostLeaf(root_pid);
-                return try Iterator.init(acc, leaf, 0);
+                return try Iterator.init(self.model, leaf, 0);
             } else {
                 return Iterator{
                     .accessor = acc,
+                    .model = self.model,
                     .leaf = null,
                     .cur = .after_end,
+                    .structural_generation = self.model.structuralMutationCoordinator().generation(),
                 };
             }
         }
@@ -241,7 +264,7 @@ pub fn WeightedBpt(comptime ModelT: type) type {
             }
             return .{
                 .iterator = try Iterator.init(
-                    acc,
+                    self.model,
                     find_result.leaf,
                     find_result.node_pos.pos,
                 ),
@@ -268,6 +291,8 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         pub fn insert(self: *Self, where: Weight, value: Value) Error!bool {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             var acc = self.accessor();
             const root = try acc.getRoot();
             if (root) |rpid| {
@@ -298,6 +323,8 @@ pub fn WeightedBpt(comptime ModelT: type) type {
         }
 
         pub fn removeEntry(self: *Self, where: Weight) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             var acc = self.accessor();
             if (try acc.getRoot()) |root| {
                 var find_result = try self.findLeafForWeight(root, where);

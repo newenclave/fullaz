@@ -128,4 +128,21 @@ test "fullaz-db: SlotHeap memory database commits and rolls back" {
         try transaction.commit();
     }
     try std.testing.expectEqual(@as(u64, 2), try database.getConst("heap").count());
+
+    const Binding = Schema.trait("heap").Binding(Db.BackendType);
+    try std.testing.expect(@hasDecl(Binding.Proxy.MutablePeek, "editValue"));
+    try std.testing.expect(!@hasDecl(Binding.ConstProxy.ConstPeek, "editValue"));
+    try std.testing.expect(!@hasDecl(Binding.ConstProxy, "openValueEditor"));
+    {
+        var transaction = try database.begin();
+        const heap = transaction.get("heap");
+        var editor = try heap.openValueEditor();
+        @memcpy(try editor.valueMut(), "ONE");
+        try std.testing.expectError(error.ValueEditorActive, transaction.commit());
+        try editor.finish();
+        try transaction.commit();
+    }
+    var top = try database.getConst("heap").top();
+    defer top.deinit();
+    try std.testing.expectEqualSlices(u8, "ONE", try top.value());
 }

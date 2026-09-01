@@ -1,6 +1,8 @@
 const std = @import("std");
 const errors = @import("../core/errors.zig");
 const interfaces = @import("./models/interfaces.zig");
+const StructuralMutationCoordinator = @import("../core/core.zig").structural_mutation.StructuralMutationCoordinator;
+const StructuralMutationError = @import("../core/core.zig").structural_mutation.Error;
 
 pub fn List(comptime ModelT: type) type {
     comptime {
@@ -24,9 +26,29 @@ pub fn List(comptime ModelT: type) type {
         pub const PageId = Model.PageId;
         const Path = Model.Path;
 
-        pub const Error = Model.Error || errors.IteratorError;
+        pub const Error = Model.Error ||
+            errors.IteratorError ||
+            StructuralMutationError;
 
         model: *ModelT = undefined,
+
+        pub const ValueEditor = struct {
+            const EditorSelf = @This();
+
+            editor: Model.ValueEditorType,
+
+            pub fn valueMut(self: *EditorSelf) Model.ValueEditorType.Error!Model.ValueEditorType.ValueMutType {
+                return self.editor.valueMut();
+            }
+
+            pub fn finish(self: *EditorSelf) Model.ValueEditorType.Error!void {
+                return self.editor.finish();
+            }
+
+            pub fn deinit(self: *EditorSelf) void {
+                self.editor.deinit();
+            }
+        };
 
         pub const Iterator = struct {
             const Cursor = union(enum) {
@@ -35,13 +57,15 @@ pub fn List(comptime ModelT: type) type {
                 after_last,
             };
 
-            list: *const Self,
+            list: *Self,
             cursor: Cursor,
+            structural_generation: u64,
 
-            fn init(list: *const Self, cursor: Cursor) Iterator {
+            fn init(list: *Self, cursor: Cursor) Iterator {
                 return .{
                     .list = list,
                     .cursor = cursor,
+                    .structural_generation = list.model.structuralMutationCoordinator().generation(),
                 };
             }
 
@@ -56,6 +80,7 @@ pub fn List(comptime ModelT: type) type {
             }
 
             pub fn key(self: *const Iterator) Error!KeyOut {
+                try self.ensureCurrent();
                 return switch (self.cursor) {
                     .before_first, .after_last => return Error.InvalidIterator,
                     .on => |*node| try node.getKey(),
@@ -63,6 +88,7 @@ pub fn List(comptime ModelT: type) type {
             }
 
             pub fn value(self: *const Iterator) Error!ValueOut {
+                try self.ensureCurrent();
                 return switch (self.cursor) {
                     .before_first, .after_last => return Error.InvalidIterator,
                     .on => |*node| try node.getValue(),
@@ -70,6 +96,11 @@ pub fn List(comptime ModelT: type) type {
             }
 
             pub fn clone(self: *const Iterator) Error!Iterator {
+                try self.ensureCurrent();
+                return self.cloneUnchecked();
+            }
+
+            fn cloneUnchecked(self: *const Iterator) Error!Iterator {
                 return .{
                     .list = self.list,
                     .cursor = switch (self.cursor) {
@@ -81,10 +112,16 @@ pub fn List(comptime ModelT: type) type {
                             break :brk .{ .on = new_node };
                         },
                     },
+                    .structural_generation = self.structural_generation,
                 };
             }
 
             pub fn next(self: *Iterator) Error!bool {
+                try self.ensureCurrent();
+                return self.nextUnchecked();
+            }
+
+            fn nextUnchecked(self: *Iterator) Error!bool {
                 var acc = self.list.accessor();
                 switch (self.cursor) {
                     .before_first => {
@@ -120,6 +157,22 @@ pub fn List(comptime ModelT: type) type {
                     .after_last => true,
                 };
             }
+
+            /// Opens a mutable editor for this exact current duplicate instance.
+            /// The iterator remains usable while the editor is open.
+            pub fn editValue(self: *Iterator) Error!?ValueEditor {
+                try self.ensureCurrent();
+                switch (self.cursor) {
+                    .before_first, .after_last => return null,
+                    .on => |*node| {
+                        return .{ .editor = try self.list.accessor().openValueEditor(node) };
+                    },
+                }
+            }
+
+            fn ensureCurrent(self: *const Iterator) Error!void {
+                try self.list.model.structuralMutationCoordinator().checkGeneration(self.structural_generation);
+            }
         };
 
         pub fn init(model: *ModelT) Self {
@@ -139,7 +192,7 @@ pub fn List(comptime ModelT: type) type {
             return self.model.scanPageRefs(page_id, page, visitor);
         }
 
-        pub fn begin(self: *const Self) Error!Iterator {
+        pub fn begin(self: *Self) Error!Iterator {
             var acc = self.accessor();
             if (try acc.getRoot(0)) |root_pid| {
                 const node = try acc.loadNode(root_pid);
@@ -188,6 +241,8 @@ pub fn List(comptime ModelT: type) type {
         }
 
         pub fn insert(self: *Self, key: KeyIn, value: ValueIn) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const acc = self.accessor();
             var new_node = try acc.createNode(key, value);
 
@@ -223,6 +278,8 @@ pub fn List(comptime ModelT: type) type {
         }
 
         pub fn remove(self: *Self, key: KeyIn) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
             const acc = self.accessor();
             var path = try self.createPath(key);
             defer acc.deinitPath(&path);
@@ -250,16 +307,20 @@ pub fn List(comptime ModelT: type) type {
         }
 
         pub fn removeItr(self: *Self, it: Iterator) Error!Iterator {
+            try it.ensureCurrent();
             var acc = self.accessor();
 
-            var next = try it.clone();
-            _ = next.next() catch {
+            var next = try it.cloneUnchecked();
+            _ = next.nextUnchecked() catch {
                 next.deinit();
                 var consumed = it;
                 consumed.deinit();
                 return Iterator.init(self, .after_last);
             };
             errdefer next.deinit();
+
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
 
             switch (it.cursor) {
                 .before_first, .after_last => return Error.InvalidIterator,
@@ -269,6 +330,7 @@ pub fn List(comptime ModelT: type) type {
                     try self.removeImpl(&mutNode);
                     acc.deinitNode(&mutNode);
                     acc.destroy(pid);
+                    next.structural_generation = self.model.structuralMutationCoordinator().generation();
                     return next;
                 },
             }
@@ -301,7 +363,7 @@ pub fn List(comptime ModelT: type) type {
             }
         }
 
-        pub fn find(self: *const Self, key: KeyIn) Error!Iterator {
+        pub fn find(self: *Self, key: KeyIn) Error!Iterator {
             const acc = self.accessor();
             const default_iterator = Iterator.init(self, .after_last);
             const pid = try self.findElement(null, key, 0) orelse return default_iterator;

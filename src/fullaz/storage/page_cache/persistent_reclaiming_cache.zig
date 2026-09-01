@@ -213,7 +213,8 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             return head;
         }
 
-        fn isFree(self: *Self, page_id: PageId) Error!bool {
+        /// Reports whether a PID currently belongs to the durable free list.
+        pub fn isFree(self: *Self, page_id: PageId) Error!bool {
             var current = self.store.getRoot();
             var steps: usize = 0;
             const max_steps = self.store.pageCount();

@@ -6,13 +6,14 @@ const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresFnReturnsError = interfaces.requiresFnReturnsAnyError;
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
+const StructuralMutationCoordinator = @import("../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 pub const requiresStorageManager = contracts.storage_manager.requiresStorageManager;
 pub const requiresPageCache = contracts.page_cache.requiresPageCache;
 
 pub fn assertModelAccessor(comptime Model: type) void {
     const A = Model.AccessorType;
-    assertAccessor(A);
+    assertAccessor(Model);
 
     requiresErrorDeclaration(Model, "Error");
 
@@ -25,9 +26,11 @@ pub fn assertModelAccessor(comptime Model: type) void {
     requiresTypeDeclaration(Model, "KeyOut");
     requiresTypeDeclaration(Model, "ValueOut");
     requiresTypeDeclaration(Model, "Path");
+    requiresTypeDeclaration(Model, "ValueEditorType");
 
     requiresFnSignature(Model, "getMaxLevel", fn (*const Model) Error!usize);
     requiresFnSignature(Model, "accessor", fn (*Model) *A);
+    requiresFnSignature(Model, "structuralMutationCoordinator", fn (*Model) *StructuralMutationCoordinator);
 
     const KeyIn = Model.KeyIn;
     requiresFnSignature(Model, "keysCompare", fn (*const Model, KeyIn, KeyIn) std.math.Order);
@@ -38,9 +41,11 @@ pub fn assertModelAccessor(comptime Model: type) void {
     const ValueOut = Model.ValueOut;
     const ValueIn = Model.ValueIn;
     requiresFnSignature(Model, "valueOutAsIn", fn (*const Model, ValueOut) ValueIn);
+    assertValueEditor(Model);
 }
 
-pub fn assertAccessor(comptime Accessor: type) void {
+pub fn assertAccessor(comptime Model: type) void {
+    const Accessor = Model.AccessorType;
     const Error = Accessor.Error;
 
     requiresErrorDeclaration(Accessor, "Error");
@@ -71,6 +76,22 @@ pub fn assertAccessor(comptime Accessor: type) void {
     requiresFnSignature(Accessor, "generateLevel", fn (*const Accessor, usize) Error!usize);
     requiresFnSignature(Accessor, "createPath", fn (*Accessor) Error!Path);
     requiresFnSignature(Accessor, "deinitPath", fn (*Accessor, *Path) void);
+    requiresFnSignature(Accessor, "openValueEditor", fn (*Accessor, *Node) Error!Model.ValueEditorType);
+}
+
+/// A value editor owns mutable access to one node value until finish or deinit.
+///
+/// A model exposes `ValueEditorType` with `ValueMutType`, `valueMut()`,
+/// `finish()`, and `deinit()`; call `assertValueEditor(Model)`.
+pub fn assertValueEditor(comptime Model: type) void {
+    const Editor = Model.ValueEditorType;
+    const Error = Editor.Error;
+
+    requiresErrorDeclaration(Editor, "Error");
+    requiresTypeDeclaration(Editor, "ValueMutType");
+    requiresFnSignature(Editor, "valueMut", fn (*Editor) Error!Editor.ValueMutType);
+    requiresFnSignature(Editor, "finish", fn (*Editor) Error!void);
+    requiresFnSignature(Editor, "deinit", fn (*Editor) void);
 }
 
 pub fn assertNode(comptime Node: type) void {
