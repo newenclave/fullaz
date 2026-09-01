@@ -4,7 +4,7 @@ const fullaz_db = @import("fullaz-db");
 const lab = @import("db_lab");
 
 const allocator = std.heap.wasm_allocator;
-const page_size = 512;
+const page_size = 1024;
 const Device32 = fullaz.device.MemoryBlock(u32);
 const Log32 = fullaz.device.MemoryLog(u32);
 const MemoryDatabase = fullaz_db.MemoryDatabase(lab.Schema);
@@ -31,11 +31,11 @@ var last_error: []const u8 = "";
 
 const static_options: StaticDatabase.InitOptions = .{
     .image_id = [_]u8{0x53} ** 16,
-    .components = .{ .tables = .{}, .values = .{} },
+    .components = .{ .catalog = .{ .owner_0 = .{} } },
 };
 const virtual_options: VirtualDatabase.InitOptions = .{
     .image_id = [_]u8{0x56} ** 16,
-    .components = .{ .tables = .{}, .values = .{} },
+    .components = .{ .catalog = .{ .owner_0 = .{} } },
 };
 
 fn fail(err: anyerror) u32 {
@@ -90,6 +90,7 @@ export fn format(kind: u32) u32 {
         0 => database = .{ .memory = MemoryDatabase.init(allocator, .{
             .page_size = page_size,
             .cache_frames = 32,
+            .components = .{ .catalog = .{ .owner_0 = .{} } },
         }) catch |err| return fail(err) },
         1 => {
             var device = Device32.init(allocator, page_size) catch |err| return fail(err);
@@ -177,6 +178,10 @@ fn removeAction(value: anytype, table: []const u8, key: []const u8, _: []const u
     }
 }
 
+fn generateExamplesAction(value: anytype, _: []const u8, _: []const u8, _: []const u8) !void {
+    return lab.generateExamples(value);
+}
+
 export fn createTable(ptr: usize, len: usize) u32 {
     return mutate(createTableAction, input(ptr, len), &.{}, &.{});
 }
@@ -192,6 +197,10 @@ export fn put(table_ptr: usize, table_len: usize, key_ptr: usize, key_len: usize
 
 export fn remove(table_ptr: usize, table_len: usize, key_ptr: usize, key_len: usize) u32 {
     return mutate(removeAction, input(table_ptr, table_len), input(key_ptr, key_len), &.{});
+}
+
+export fn generateExamples() u32 {
+    return mutate(generateExamplesAction, &.{}, &.{}, &.{});
 }
 
 export fn snapshotRows() u32 {

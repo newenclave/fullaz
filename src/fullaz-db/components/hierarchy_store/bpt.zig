@@ -205,6 +205,30 @@ pub fn hierarchyBpt(
                 }
             };
 
+            const ConstInlineRootManager = struct {
+                pub const Error = error{ReadOnly};
+                pub const PageId = PageIdT;
+
+                root: *const PackedRoot,
+
+                fn init(root: *const PackedRoot) @This() {
+                    return .{ .root = root };
+                }
+
+                pub fn getRoot(self: *const @This()) ?PageIdT {
+                    const root = self.root.get();
+                    return if (root == 0) null else root;
+                }
+
+                pub fn setRoot(_: *@This(), _: ?PageIdT) Error!void {
+                    return error.ReadOnly;
+                }
+
+                pub fn destroyPage(_: *@This(), _: PageIdT) Error!void {
+                    return error.ReadOnly;
+                }
+            };
+
             const InlineChainStorePayload = extern struct {
                 first: PackedRoot,
                 last: PackedRoot,
@@ -433,12 +457,227 @@ pub fn hierarchyBpt(
                 }
             };
 
+            const ConstRuntime = struct {
+                parent: *const ParentBinding.Runtime,
+                backend: *BackendT,
+                type_page_kinds: component.PageKindRange,
+
+                fn childPageKinds(self: *const @This(), comptime index: usize) component.PageKindRange {
+                    return .{
+                        .base = @intCast(@as(u32, self.type_page_kinds.base) +
+                            childPageKindOffset(HierarchyT, index)),
+                        .count = HierarchyT.types[index].descriptor.Trait.page_kind_count,
+                    };
+                }
+            };
+
+            const ConstProxyImpl = struct {
+                const Self = @This();
+
+                pub const Error = ParentBinding.ConstProxy.Error ||
+                    ChildError ||
+                    value_envelope.Error ||
+                    ConstInlineRootManager.Error ||
+                    std.mem.Allocator.Error;
+                pub const Iterator = ParentBinding.ConstProxy.Iterator;
+                pub const ConstIterator = Iterator;
+
+                runtime: *const ConstRuntime,
+
+                fn init(runtime: *const ConstRuntime) Self {
+                    return .{ .runtime = runtime };
+                }
+
+                fn parent(self: *const Self) *const ParentBinding.ConstProxy {
+                    return ParentBinding.proxyConst(self.runtime.parent);
+                }
+
+                pub fn iterator(self: *const Self) ParentBinding.ConstProxy.Error!?Iterator {
+                    return self.parent().iterator();
+                }
+
+                pub fn iteratorFromEnd(self: *const Self) ParentBinding.ConstProxy.Error!?Iterator {
+                    return self.parent().iteratorFromEnd();
+                }
+
+                pub fn find(self: *const Self, key: []const u8) ParentBinding.ConstProxy.Error!?Iterator {
+                    return self.parent().find(key);
+                }
+
+                pub fn lowerBound(self: *const Self, key: []const u8) ParentBinding.ConstProxy.Error!?Iterator {
+                    return self.parent().lowerBound(key);
+                }
+
+                /// A read-only BPT facade that pins its parent embedded value.
+                /// Deinitialize all iterators before this reader.
+                pub fn EmbeddedBptReader(comptime tag: []const u8) type {
+                    if (comptime childKind(HierarchyT, HierarchyT.indexOfTag(tag)) != .bpt) {
+                        @compileError("openEmbeddedBpt requires a registered BPT child type");
+                    }
+                    const ChildTrait = HierarchyT.entryByTag(tag).descriptor.Trait;
+                    const ChildModel = low_level_bpt.models.PagedModel(
+                        CacheT,
+                        ConstInlineRootManager,
+                        ChildTrait.compare,
+                        ChildTrait.CompareContext,
+                    );
+                    const ChildTree = low_level_bpt.Bpt(ChildModel);
+
+                    return struct {
+                        const ReaderSelf = @This();
+
+                        const State = struct {
+                            manager: ConstInlineRootManager,
+                            model: ChildModel,
+                            tree: ChildTree,
+                        };
+
+                        pub const Error = ChildTree.Error ||
+                            value_envelope.Error ||
+                            std.mem.Allocator.Error;
+                        pub const Iterator = struct {
+                            const IteratorSelf = @This();
+
+                            inner: ChildTree.Iterator,
+
+                            pub fn get(self: *const IteratorSelf) @TypeOf(self.inner.get()) {
+                                return self.inner.get();
+                            }
+
+                            pub fn next(self: *IteratorSelf) @TypeOf(self.inner.next()) {
+                                return self.inner.next();
+                            }
+
+                            pub fn prev(self: *IteratorSelf) @TypeOf(self.inner.prev()) {
+                                return self.inner.prev();
+                            }
+
+                            pub fn deinit(self: *IteratorSelf) void {
+                                self.inner.deinit();
+                                self.* = undefined;
+                            }
+                        };
+
+                        parent_iterator: ParentBinding.ConstProxy.Iterator,
+                        state: *State,
+                        allocator: std.mem.Allocator,
+
+                        fn init(
+                            allocator: std.mem.Allocator,
+                            cache: *CacheT,
+                            page_kinds: component.PageKindRange,
+                            payload: []const u8,
+                            parent_iterator: ParentBinding.ConstProxy.Iterator,
+                        ) ReaderSelf.Error!ReaderSelf {
+                            if (payload.len != @sizeOf(PackedRoot)) {
+                                return error.BadPayloadLength;
+                            }
+                            const root: *const PackedRoot = @ptrCast(payload.ptr);
+                            const state = try allocator.create(State);
+                            errdefer allocator.destroy(state);
+                            state.manager = ConstInlineRootManager.init(root);
+                            state.model = try ChildModel.init(
+                                cache,
+                                &state.manager,
+                                .{
+                                    .maximum_key_size = ChildTrait.maximum_key_size,
+                                    .maximum_value_size = ChildTrait.maximum_value_size,
+                                    .fixed_value_size = ChildTrait.fixed_value_size,
+                                    .leaf_page_kind = page_kinds.kindAt(0).?,
+                                    .inode_page_kind = page_kinds.kindAt(1).?,
+                                },
+                                {},
+                            );
+                            errdefer state.model.deinit();
+                            state.tree = .init(&state.model, ChildTrait.rebalance_policy);
+                            return .{
+                                .parent_iterator = parent_iterator,
+                                .state = state,
+                                .allocator = allocator,
+                            };
+                        }
+
+                        pub fn iterator(self: *const ReaderSelf) ReaderSelf.Error!?ReaderSelf.Iterator {
+                            if (try self.state.tree.iterator()) |inner| {
+                                return .{ .inner = inner };
+                            }
+                            return null;
+                        }
+
+                        pub fn iteratorFromEnd(self: *const ReaderSelf) ReaderSelf.Error!?ReaderSelf.Iterator {
+                            if (try self.state.tree.iteratorFromEnd()) |inner| {
+                                return .{ .inner = inner };
+                            }
+                            return null;
+                        }
+
+                        pub fn find(
+                            self: *const ReaderSelf,
+                            key: []const u8,
+                        ) ReaderSelf.Error!?ReaderSelf.Iterator {
+                            if (try self.state.tree.find(key)) |inner| {
+                                return .{ .inner = inner };
+                            }
+                            return null;
+                        }
+
+                        pub fn lowerBound(
+                            self: *const ReaderSelf,
+                            key: []const u8,
+                        ) ReaderSelf.Error!?ReaderSelf.Iterator {
+                            if (try self.state.tree.lowerBound(key)) |inner| {
+                                return .{ .inner = inner };
+                            }
+                            return null;
+                        }
+
+                        pub fn deinit(self: *ReaderSelf) void {
+                            self.state.tree.deinit();
+                            self.state.model.deinit();
+                            self.allocator.destroy(self.state);
+                            self.parent_iterator.deinit();
+                            self.* = undefined;
+                        }
+                    };
+                }
+
+                /// Opens an exact embedded BPT and retains its parent value pin.
+                pub fn openEmbeddedBpt(
+                    self: *const Self,
+                    key: []const u8,
+                    comptime tag: []const u8,
+                ) Error!?EmbeddedBptReader(tag) {
+                    const Reader = EmbeddedBptReader(tag);
+                    var parent_iterator = (try self.find(key)) orelse return null;
+                    var transferred = false;
+                    errdefer if (!transferred) {
+                        parent_iterator.deinit();
+                    };
+                    const entry = (try parent_iterator.get()) orelse return null;
+                    const value = try value_envelope.readEmbedded(
+                        entry.value,
+                        HierarchyT.entryByTag(tag).type_identity,
+                    );
+                    const reader = try Reader.init(
+                        self.runtime.backend.allocator(),
+                        self.runtime.backend.cache(),
+                        self.runtime.childPageKinds(HierarchyT.indexOfTag(tag)),
+                        value.payload,
+                        parent_iterator,
+                    );
+                    transferred = true;
+                    return reader;
+                }
+            };
+
             const RuntimeImpl = struct {
                 const RuntimeSelf = @This();
                 parent: ParentBinding.Runtime,
                 backend: *BackendT,
                 page_kinds: component.PageKindRange,
                 type_page_kinds: component.PageKindRange,
+                const_runtime: ConstRuntime,
+                const_proxy: ConstProxyImpl,
                 active_editor: bool = false,
                 next_instance_id: u64 = 1,
 
@@ -2524,7 +2763,7 @@ pub fn hierarchyBpt(
             const BindingT = struct {
                 pub const Runtime = RuntimeImpl;
                 pub const Proxy = ProxyImpl;
-                pub const ConstProxy = ParentBinding.ConstProxy;
+                pub const ConstProxy = ConstProxyImpl;
                 pub const InitOptions = ParentBinding.InitOptions;
                 pub const TransactionState = struct {
                     parent: ParentBinding.TransactionState,
@@ -2590,6 +2829,12 @@ pub fn hierarchyBpt(
                     runtime.active_editor = false;
                     runtime.next_instance_id = 1;
                     try ParentBinding.initRuntime(&runtime.parent, backend, runtime.parentPageKinds(), options);
+                    runtime.const_runtime = .{
+                        .parent = &runtime.parent,
+                        .backend = backend,
+                        .type_page_kinds = runtime.type_page_kinds,
+                    };
+                    runtime.const_proxy = ConstProxy.init(&runtime.const_runtime);
                 }
 
                 /// Initializes this envelope core with owner and nominal-type
@@ -2612,6 +2857,12 @@ pub fn hierarchyBpt(
                     runtime.active_editor = false;
                     runtime.next_instance_id = 1;
                     try ParentBinding.initRuntime(&runtime.parent, backend, owner_page_kinds, options);
+                    runtime.const_runtime = .{
+                        .parent = &runtime.parent,
+                        .backend = backend,
+                        .type_page_kinds = runtime.type_page_kinds,
+                    };
+                    runtime.const_proxy = ConstProxy.init(&runtime.const_runtime);
                 }
 
                 /// Initializes only the shared envelope state. Aggregate owners
@@ -2667,7 +2918,7 @@ pub fn hierarchyBpt(
                 }
 
                 pub fn proxyConst(runtime: *const RuntimeImpl) *const ConstProxy {
-                    return ParentBinding.proxyConst(&runtime.parent);
+                    return &runtime.const_proxy;
                 }
 
                 pub fn reclaimPersistent(runtime: *RuntimeImpl) Error!void {

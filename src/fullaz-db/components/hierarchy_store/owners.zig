@@ -233,10 +233,9 @@ fn ownerDescriptor(
                 pub const Runtime = struct {
                     parent: Parent.Runtime,
                     envelope: Core.Runtime,
-                    const_proxy: Parent.ConstProxy,
                 };
                 pub const Proxy = ProxyImpl;
-                pub const ConstProxy = Parent.ConstProxy;
+                pub const ConstProxy = if (kind == .bpt) Core.ConstProxy else Parent.ConstProxy;
                 pub const InitOptions = Parent.InitOptions;
                 pub const TransactionState = struct { parent: Parent.TransactionState, envelope: Core.TransactionState };
                 pub const Error = ProxyImpl.Error || error{InvalidPageKinds};
@@ -282,10 +281,6 @@ fn ownerDescriptor(
                     } else {
                         try Core.initAggregateEnvelopeRuntime(&runtime.envelope, backend, owner_kinds, type_kinds);
                     }
-                    runtime.const_proxy = if (comptime kind == .bpt)
-                        Parent.proxyConst(&runtime.envelope.parent).*
-                    else
-                        Parent.proxyConst(&runtime.parent).*;
                 }
                 pub fn deinitRuntime(runtime: *Runtime) void {
                     if (comptime kind == .bpt) {
@@ -332,7 +327,10 @@ fn ownerDescriptor(
                         Parent.proxy(&runtime.parent), .envelope = Core.proxy(&runtime.envelope) };
                 }
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
-                    return &runtime.const_proxy;
+                    if (comptime kind == .bpt) {
+                        return Core.proxyConst(&runtime.envelope);
+                    }
+                    return Parent.proxyConst(&runtime.parent);
                 }
                 pub fn reclaimPersistent(runtime: *Runtime) Error!void {
                     try requireTransactionIdle(runtime);

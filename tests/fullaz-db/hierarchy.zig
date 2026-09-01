@@ -306,6 +306,76 @@ test "fullaz-db hierarchyStore: BPT owner edits recursive embedded envelopes" {
     try nested.finish();
     try root.finish();
     try transaction.commit();
+
+    const files_const = database.getConst("store").owner("files");
+    try std.testing.expect(!@hasDecl(@TypeOf(files_const.*), "insert"));
+    try std.testing.expectError(
+        error.IncorrectKind,
+        files_const.openEmbeddedBpt("raw", "folder"),
+    );
+    try std.testing.expectEqual(null, try files_const.openEmbeddedBpt("missing", "folder"));
+    var reader = (try files_const.openEmbeddedBpt("root", "folder")).?;
+    defer reader.deinit();
+    try std.testing.expect(!@hasDecl(@TypeOf(reader), "insert"));
+    try std.testing.expect(!@hasDecl(@TypeOf(reader).Iterator, "editValue"));
+    var child = (try reader.find("child")).?;
+    defer child.deinit();
+    const value = try fullaz_db.value_envelope.readRaw(
+        (try child.get()).?.value,
+        Types.typeIdentityByTag("folder"),
+    );
+    try std.testing.expectEqualStrings("value", value.payload);
+}
+
+test "fullaz-db hierarchyBpt: const proxy opens an embedded BPT reader" {
+    const Bpt = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 22,
+        .maximum_key_size = 32,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    });
+    const Types = fullaz_db.Hierarchy(.{ .registry_id = 0x77ab, .types = &.{.{
+        .tag = "folder",
+        .type_id = 1,
+        .type_version = 1,
+        .metadata_format_version = 1,
+        .descriptor = Bpt,
+        .allowed_child_type_ids = &.{},
+    }} });
+    const Tree = fullaz_db.hierarchyBpt(Types, Bpt);
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Tree);
+    const Database = fullaz_db.MemoryDatabase(Schema);
+    var database = try Database.init(std.testing.allocator, .{
+        .page_size = 1024,
+        .components = .{ .tree = .{} },
+    });
+    defer database.deinit();
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        var tree = transaction.get("tree");
+        try std.testing.expect(try tree.insert("root", tree.embed("folder")));
+        var editor = (try tree.openEmbeddedForEdit("root", "folder")).?;
+        defer editor.deinit();
+        try std.testing.expect(try editor.insert("child", editor.raw("folder", "value")));
+        try editor.finish();
+        try transaction.commit();
+    }
+
+    const tree_const = database.getConst("tree");
+    try std.testing.expect(!@hasDecl(@TypeOf(tree_const.*), "insert"));
+    var reader = (try tree_const.openEmbeddedBpt("root", "folder")).?;
+    defer reader.deinit();
+    var child = (try reader.find("child")).?;
+    defer child.deinit();
+    const value = try fullaz_db.value_envelope.readRaw(
+        (try child.get()).?.value,
+        Types.typeIdentityByTag("folder"),
+    );
+    try std.testing.expectEqualStrings("value", value.payload);
 }
 
 test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
