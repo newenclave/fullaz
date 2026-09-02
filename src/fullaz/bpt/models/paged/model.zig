@@ -57,6 +57,7 @@ pub fn PagedModel(
     const ValueType = []const u8;
 
     const StateImpl = State(CachePageId);
+    const StateAccessor = core.storage_manager.StateAccessor(StateLeaseT, StateImpl);
 
     const ErrorSet = HeaderPageView.Error ||
         errors.PageError ||
@@ -80,28 +81,12 @@ pub fn PagedModel(
         cts: CtxT = undefined,
         settings: Settings = undefined,
 
-        fn stateCast(_: *const ContextSelf, lease: *const StateLeaseT) ErrorSet!*const StateImpl {
-            const data = try lease.data();
-            if (data.len != @sizeOf(StateImpl)) {
-                return ErrorSet.BadData;
-            }
-            return @ptrCast(data.ptr);
-        }
-
-        fn stateCastMut(_: *ContextSelf, lease: *StateLeaseT) ErrorSet!*StateImpl {
-            const data = try lease.dataMut();
-            if (data.len != @sizeOf(StateImpl)) {
-                return ErrorSet.BadData;
-            }
-            return @ptrCast(data.ptr);
-        }
-
         fn setRoot(self: *ContextSelf, pid: ?CachePageId) ErrorSet!void {
             const target = if (pid) |p| p else PackedPid.max;
 
             var lease = try self.storage_mgr.state();
             defer lease.deinit();
-            const state = try self.stateCastMut(&lease);
+            const state = try StateAccessor.viewMut(&lease);
             state.root.set(target);
             lease.finish();
         }
@@ -109,7 +94,7 @@ pub fn PagedModel(
         fn getRoot(self: *const ContextSelf) ErrorSet!?CachePageId {
             var lease = try self.storage_mgr.state();
             defer lease.deinit();
-            const state = try self.stateCast(&lease);
+            const state = try StateAccessor.view(&lease);
             const root = state.root.get();
             if (root == PackedPid.max) {
                 return null;

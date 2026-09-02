@@ -180,6 +180,90 @@ pub fn assertBinding(comptime BindingT: type, comptime BackendT: type) void {
     interfaces.requiresFnSignature(BindingT, "proxyConst", fn (*const Runtime) *const ConstProxy);
 }
 
+/// Resolves and verifies a stateful component runtime over caller-owned state.
+///
+/// The ordinary binding owns its metadata state. A storage binding instead
+/// receives a `StorageManager` whose lease supplies that same state from an
+/// enclosing record, such as a hierarchy value envelope.
+pub fn storageBindingFor(
+    comptime BindingT: type,
+    comptime BackendT: type,
+    comptime StorageManagerT: type,
+) type {
+    if (!@hasDecl(BindingT, "State")) {
+        @compileError("fullaz-db stateful component binding must declare State");
+    }
+    const StateT = BindingT.State;
+    if (@typeInfo(StateT) != .@"struct" or @typeInfo(StateT).@"struct".layout != .@"extern") {
+        @compileError("fullaz-db stateful component binding State must be an extern struct");
+    }
+    if (@alignOf(StateT) != 1 or @sizeOf(StateT) == 0) {
+        @compileError("fullaz-db stateful component binding State must be non-empty and byte-aligned");
+    }
+    if (!@hasDecl(BindingT, "StorageBinding")) {
+        @compileError("fullaz-db stateful component binding must declare StorageBinding(comptime StorageManagerT: type) type");
+    }
+    const StorageBindingT = BindingT.StorageBinding(StorageManagerT);
+    if (@TypeOf(StorageBindingT) != type) {
+        @compileError("fullaz-db component StorageBinding must return a type");
+    }
+    assertStorageBinding(StorageBindingT, BackendT, StorageManagerT, StateT);
+    return StorageBindingT;
+}
+
+/// Verifies the concrete externally-backed runtime produced by `StorageBinding`.
+pub fn assertStorageBinding(
+    comptime StorageBindingT: type,
+    comptime BackendT: type,
+    comptime StorageManagerT: type,
+    comptime StateT: type,
+) void {
+    interfaces.requiresTypeDeclaration(StorageBindingT, "Runtime");
+    interfaces.requiresTypeDeclaration(StorageBindingT, "Proxy");
+    interfaces.requiresTypeDeclaration(StorageBindingT, "ConstProxy");
+    interfaces.requiresTypeDeclaration(StorageBindingT, "InitOptions");
+    interfaces.requiresErrorDeclaration(StorageBindingT, "Error");
+    if (@typeInfo(StorageBindingT.Error).error_set == null) {
+        @compileError("fullaz-db storage binding Error cannot be anyerror");
+    }
+    interfaces.requiresFnSignature(
+        StorageBindingT,
+        "emptyState",
+        fn () StateT,
+    );
+    interfaces.requiresFnSignature(
+        StorageBindingT,
+        "initRuntime",
+        fn (
+            *StorageBindingT.Runtime,
+            *BackendT,
+            *StorageManagerT,
+            PageKindRange,
+            StorageBindingT.InitOptions,
+        ) StorageBindingT.Error!void,
+    );
+    interfaces.requiresFnSignature(
+        StorageBindingT,
+        "deinitRuntime",
+        fn (*StorageBindingT.Runtime) void,
+    );
+    interfaces.requiresFnSignature(
+        StorageBindingT,
+        "requireTransactionIdle",
+        fn (*const StorageBindingT.Runtime) StorageBindingT.Error!void,
+    );
+    interfaces.requiresFnSignature(
+        StorageBindingT,
+        "proxy",
+        fn (*StorageBindingT.Runtime) StorageBindingT.Proxy,
+    );
+    interfaces.requiresFnSignature(
+        StorageBindingT,
+        "proxyConst",
+        fn (*const StorageBindingT.Runtime) *const StorageBindingT.ConstProxy,
+    );
+}
+
 /// Verifies the optional persistent cleanup capability of a component binding.
 ///
 /// Bindings without this capability remain valid, but raw dynamic reclamation

@@ -359,6 +359,7 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                 pub const Model = ModelT;
                 pub const Heap = HeapT;
                 pub const State = StateT;
+                pub const value_capacity = configured_maximum_value_size;
                 pub const Proxy = MutableProxy;
                 pub const ConstProxy = ReadProxy;
                 pub const InitOptions = if (CompareContextT == void) struct {
@@ -567,6 +568,329 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                 }
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
                     return &runtime.const_proxy;
+                }
+
+                pub fn StorageBinding(comptime StorageManagerT: type) type {
+                    const StorageStateAdapterT = low_level_slot_heap.models.paged.StateAdapter(
+                        StorageManagerT,
+                        StateT,
+                        CacheT.Pid,
+                        u16,
+                        configured_maximum_level,
+                        class_count,
+                    );
+                    const StorageFsmModelT = fsm.models.paged.slab.Model(
+                        CacheT,
+                        StorageStateAdapterT,
+                        PolicyT,
+                        LocationAccessor,
+                    );
+                    const StorageFsmT = fsm.Fsm(StorageFsmModelT);
+                    const StorageModelT = low_level_slot_heap.models.Paged(
+                        CacheT,
+                        StorageStateAdapterT,
+                        StorageFsmT,
+                        options.compare,
+                        CompareContextT,
+                    );
+                    const StorageHeapT = low_level_slot_heap.Heap(StorageModelT);
+
+                    const StorageBindingT = struct {
+                        const BindingSelf = @This();
+
+                        const StorageMutableProxy = struct {
+                            const ProxySelf = @This();
+
+                            pub const Error = StorageHeapT.Error || CacheT.Error;
+
+                            pub const ValueEditor = struct {
+                                const EditorSelf = @This();
+
+                                editor: StorageHeapT.ValueEditor,
+                                cache: *CacheT,
+                                active_editor: *bool,
+                                transaction_generation: ?u64,
+
+                                fn requireTransaction(self: *const EditorSelf) StorageMutableProxy.Error!void {
+                                    if (self.transaction_generation == null or
+                                        self.cache.transactionGeneration() != self.transaction_generation)
+                                    {
+                                        return StorageMutableProxy.Error.TransactionInactive;
+                                    }
+                                }
+
+                                pub fn valueMut(self: *EditorSelf) StorageMutableProxy.Error![]u8 {
+                                    try self.requireTransaction();
+                                    return self.editor.valueMut();
+                                }
+
+                                pub fn finish(self: *EditorSelf) StorageMutableProxy.Error!void {
+                                    try self.requireTransaction();
+                                    self.editor.finish() catch |err| {
+                                        switch (err) {
+                                            error.ValueEditorActive,
+                                            error.StructuralMutationActive,
+                                            error.StaleIterator,
+                                            error.EditorInvalidated,
+                                            => return err,
+                                            else => self.cache.markTransactionFailed(),
+                                        }
+                                        return err;
+                                    };
+                                    self.active_editor.* = false;
+                                }
+
+                                pub fn deinit(self: *EditorSelf) void {
+                                    self.editor.deinit();
+                                    self.active_editor.* = false;
+                                }
+                            };
+
+                            pub const MutablePeek = struct {
+                                const PeekSelf = @This();
+
+                                inner: StorageHeapT.MutablePeek,
+                                cache: *CacheT,
+                                active_editor: *bool,
+                                transaction_generation: ?u64,
+
+                                fn requireTransaction(self: *const PeekSelf) StorageMutableProxy.Error!void {
+                                    if (self.transaction_generation == null or
+                                        self.cache.transactionGeneration() != self.transaction_generation)
+                                    {
+                                        return StorageMutableProxy.Error.TransactionInactive;
+                                    }
+                                }
+
+                                pub fn key(self: *const PeekSelf) StorageMutableProxy.Error!StorageModelT.KeyOutType {
+                                    try self.requireTransaction();
+                                    return self.inner.key();
+                                }
+
+                                pub fn value(self: *const PeekSelf) StorageMutableProxy.Error!StorageModelT.ValueOutType {
+                                    try self.requireTransaction();
+                                    return self.inner.value();
+                                }
+
+                                pub fn editValue(self: *PeekSelf) StorageMutableProxy.Error!ValueEditor {
+                                    try self.requireTransaction();
+                                    if (self.active_editor.*) {
+                                        return error.ValueEditorActive;
+                                    }
+                                    const editor = try self.inner.editValue();
+                                    self.active_editor.* = true;
+                                    return .{
+                                        .editor = editor,
+                                        .cache = self.cache,
+                                        .active_editor = self.active_editor,
+                                        .transaction_generation = self.transaction_generation,
+                                    };
+                                }
+
+                                pub fn deinit(self: *PeekSelf) void {
+                                    self.inner.deinit();
+                                }
+                            };
+
+                            pub const Peek = MutablePeek;
+
+                            heap: *StorageHeapT,
+                            cache: *CacheT,
+                            transaction_generation: ?u64,
+                            active_editor: *bool,
+
+                            fn requireTransaction(self: *const ProxySelf) ProxySelf.Error!void {
+                                if (self.transaction_generation == null or
+                                    self.cache.transactionGeneration() != self.transaction_generation)
+                                {
+                                    return ProxySelf.Error.TransactionInactive;
+                                }
+                            }
+
+                            pub fn push(self: *const ProxySelf, key: []const u8, value: []const u8) ProxySelf.Error!void {
+                                try self.requireTransaction();
+                                self.heap.push(key, value) catch |err| {
+                                    self.cache.markTransactionFailed();
+                                    return err;
+                                };
+                            }
+
+                            pub fn pop(self: *const ProxySelf) ProxySelf.Error!void {
+                                try self.requireTransaction();
+                                self.heap.pop() catch |err| {
+                                    self.cache.markTransactionFailed();
+                                    return err;
+                                };
+                            }
+
+                            /// Returned key/value slices borrow a pinned leaf until MutablePeek.deinit().
+                            pub fn top(self: *const ProxySelf) ProxySelf.Error!MutablePeek {
+                                try self.requireTransaction();
+                                return .{
+                                    .inner = try self.heap.mutableTop(),
+                                    .cache = self.cache,
+                                    .active_editor = self.active_editor,
+                                    .transaction_generation = self.transaction_generation,
+                                };
+                            }
+
+                            pub fn openValueEditor(self: *const ProxySelf) ProxySelf.Error!ValueEditor {
+                                try self.requireTransaction();
+                                if (self.active_editor.*) {
+                                    return error.ValueEditorActive;
+                                }
+                                const editor = try self.heap.openValueEditor();
+                                self.active_editor.* = true;
+                                return .{
+                                    .editor = editor,
+                                    .cache = self.cache,
+                                    .active_editor = self.active_editor,
+                                    .transaction_generation = self.transaction_generation,
+                                };
+                            }
+
+                            pub fn count(self: *const ProxySelf) ProxySelf.Error!u64 {
+                                return self.heap.count();
+                            }
+
+                            pub fn isEmpty(self: *const ProxySelf) ProxySelf.Error!bool {
+                                return self.heap.isEmpty();
+                            }
+                        };
+                        const StorageReadProxy = struct {
+                            pub const Error = StorageHeapT.Error;
+                            pub const ConstPeek = StorageHeapT.Peek;
+                            pub const Peek = ConstPeek;
+
+                            heap: *StorageHeapT,
+
+                            pub fn count(self: *const @This()) @This().Error!u64 {
+                                return self.heap.count();
+                            }
+
+                            pub fn isEmpty(self: *const @This()) @This().Error!bool {
+                                return self.heap.isEmpty();
+                            }
+
+                            /// Returned key/value slices borrow a pinned leaf until Peek.deinit().
+                            pub fn top(self: *const @This()) @This().Error!ConstPeek {
+                                return self.heap.top();
+                            }
+                        };
+
+                        pub const State = StateT;
+                        pub const StateManager = StorageManagerT;
+                        pub const StateAdapter = StorageStateAdapterT;
+                        pub const FsmModel = StorageFsmModelT;
+                        pub const Model = StorageModelT;
+                        pub const Heap = StorageHeapT;
+                        pub const Proxy = StorageMutableProxy;
+                        pub const ConstProxy = StorageReadProxy;
+                        const StorageInitOptions = if (CompareContextT == void) struct {
+                            compare_context: void = {},
+                        } else struct {
+                            compare_context: CompareContextT,
+                        };
+                        const StorageError = StorageHeapT.Error || error{InvalidPageKinds};
+                        pub const InitOptions = StorageInitOptions;
+                        pub const Error = StorageError;
+                        const StorageRuntime = struct {
+                            page_kinds: component.PageKindRange,
+                            cache: *CacheT,
+                            storage_manager: *StorageManagerT,
+                            state_adapter: StorageStateAdapterT,
+                            fsm_model: StorageFsmModelT,
+                            fsm: StorageFsmT,
+                            model: StorageModelT,
+                            heap: StorageHeapT,
+                            const_proxy: StorageReadProxy,
+                            active_editor: bool = false,
+                        };
+
+                        pub const Runtime = StorageRuntime;
+                        pub const value_capacity = configured_maximum_value_size;
+
+                        pub fn emptyState() StateT {
+                            return .{};
+                        }
+
+                        pub fn initRuntime(
+                            runtime: *StorageRuntime,
+                            backend: *BackendT,
+                            storage_manager: *StorageManagerT,
+                            page_kinds: component.PageKindRange,
+                            init_options: StorageInitOptions,
+                        ) StorageError!void {
+                            if (page_kinds.count != page_kind_count) {
+                                return StorageError.InvalidPageKinds;
+                            }
+
+                            const leaf_kind = page_kinds.kindAt(0) orelse return StorageError.InvalidPageKinds;
+                            const inode_kind = page_kinds.kindAt(1) orelse return StorageError.InvalidPageKinds;
+                            const slab_kind = page_kinds.kindAt(2) orelse return StorageError.InvalidPageKinds;
+
+                            runtime.page_kinds = page_kinds;
+                            runtime.cache = backend.cache();
+                            runtime.storage_manager = storage_manager;
+                            runtime.state_adapter = StorageStateAdapterT.init(storage_manager);
+                            runtime.fsm_model = StorageFsmModelT.init(
+                                backend.cache(),
+                                &runtime.state_adapter,
+                                policy,
+                                .{ .page_kind = slab_kind },
+                            );
+                            runtime.fsm = StorageFsmT.init(&runtime.fsm_model);
+                            runtime.model = try StorageModelT.init(
+                                backend.cache(),
+                                &runtime.state_adapter,
+                                &runtime.fsm,
+                                .{
+                                    .key_size = configured_maximum_key_size,
+                                    .maximum_value_size = configured_maximum_value_size,
+                                    .comparator_id = configured_comparator_id,
+                                    .leaf_page_kind = leaf_kind,
+                                    .inode_page_kind = inode_kind,
+                                    .maximum_level = configured_maximum_level,
+                                },
+                                init_options.compare_context,
+                            );
+                            runtime.heap = StorageHeapT.init(&runtime.model);
+                            runtime.active_editor = false;
+                            runtime.const_proxy = .{ .heap = &runtime.heap };
+                        }
+
+                        pub fn deinitRuntime(runtime: *StorageRuntime) void {
+                            BindingSelf.requireTransactionIdle(runtime) catch
+                                @panic("SlotHeap storage runtime deinitialized with an active value editor");
+                            runtime.* = undefined;
+                        }
+
+                        pub fn requireTransactionIdle(runtime: *const StorageRuntime) StorageError!void {
+                            if (runtime.active_editor) {
+                                return error.ValueEditorActive;
+                            }
+                        }
+
+                        pub fn proxy(runtime: *StorageRuntime) StorageMutableProxy {
+                            return .{
+                                .heap = &runtime.heap,
+                                .cache = runtime.cache,
+                                .transaction_generation = runtime.cache.transactionGeneration(),
+                                .active_editor = &runtime.active_editor,
+                            };
+                        }
+
+                        pub fn proxyConst(runtime: *const StorageRuntime) *const StorageReadProxy {
+                            return &runtime.const_proxy;
+                        }
+                    };
+                    comptime component.assertStorageBinding(
+                        StorageBindingT,
+                        BackendT,
+                        StorageManagerT,
+                        StateT,
+                    );
+                    return StorageBindingT;
                 }
             };
             comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);

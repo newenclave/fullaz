@@ -9,6 +9,7 @@ const view_mod = @import("view.zig");
 const scanner = @import("../../scanner.zig");
 const StructuralMutationCoordinator = @import("../../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 const PackedInt = @import("../../../../core/packed_int.zig").PackedInt;
+const StateAccessor = @import("../../../../core/storage_manager.zig").StateAccessor;
 
 const requiresErrorDeclaration = contract_interfaces.requiresErrorDeclaration;
 const requiresFnSignature = contract_interfaces.requiresFnSignature;
@@ -55,6 +56,7 @@ pub fn StateAdapter(
 ) type {
     const ExpectedState = State(PageIdT, SlotIdT, maximum_level, size_class_count);
     const StateLeaseT = StateManagerT.StateLeaseType;
+    const StateView = StateAccessor(StateLeaseT, StateT);
     const PackedPageId = PackedInt(PageIdT, .little);
 
     comptime {
@@ -83,33 +85,17 @@ pub fn StateAdapter(
             return .{ .state_manager = state_manager };
         }
 
-        fn stateCast(_: *const Self, lease: *const StateLeaseT) Error!*const StateT {
-            const bytes = try lease.data();
-            if (bytes.len != @sizeOf(StateT)) {
-                return error.BadData;
-            }
-            return @ptrCast(bytes.ptr);
-        }
-
-        fn stateCastMut(_: *Self, lease: *StateLeaseT) Error!*StateT {
-            const bytes = try lease.dataMut();
-            if (bytes.len != @sizeOf(StateT)) {
-                return error.BadData;
-            }
-            return @ptrCast(bytes.ptr);
-        }
-
         pub fn getRoot(self: *const Self) Error!?PageId {
             var lease = try self.state_manager.state();
             defer lease.deinit();
-            const state = try self.stateCast(&lease);
+            const state = try StateView.view(&lease);
             return if (state.root.isMax()) null else state.root.get();
         }
 
         pub fn setRoot(self: *Self, root: ?PageId) Error!void {
             var lease = try self.state_manager.state();
             defer lease.deinit();
-            const state = try self.stateCastMut(&lease);
+            const state = try StateView.viewMut(&lease);
             state.root.set(root orelse PackedPageId.max);
             lease.finish();
         }
@@ -117,7 +103,7 @@ pub fn StateAdapter(
         pub fn getCachedTop(self: *const Self) Error!?view_mod.View(PageId, SlotIdT, .little, false).LocationType {
             var lease = try self.state_manager.state();
             defer lease.deinit();
-            const state = try self.stateCast(&lease);
+            const state = try StateView.view(&lease);
             if (state.cached_top_page.isMax()) {
                 return null;
             }
@@ -133,7 +119,7 @@ pub fn StateAdapter(
         ) Error!void {
             var lease = try self.state_manager.state();
             defer lease.deinit();
-            const state = try self.stateCastMut(&lease);
+            const state = try StateView.viewMut(&lease);
             if (top) |location| {
                 state.cached_top_page.set(location.page_id);
                 state.cached_top_slot.set(location.slot_id);
@@ -147,13 +133,13 @@ pub fn StateAdapter(
         pub fn getEntriesCount(self: *const Self) Error!CountType {
             var lease = try self.state_manager.state();
             defer lease.deinit();
-            return (try self.stateCast(&lease)).entries_count.get();
+            return (try StateView.view(&lease)).entries_count.get();
         }
 
         pub fn setEntriesCount(self: *Self, count: CountType) Error!void {
             var lease = try self.state_manager.state();
             defer lease.deinit();
-            const state = try self.stateCastMut(&lease);
+            const state = try StateView.viewMut(&lease);
             state.entries_count.set(count);
             lease.finish();
         }
@@ -164,7 +150,7 @@ pub fn StateAdapter(
             }
             var lease = try self.state_manager.state();
             defer lease.deinit();
-            const head = (try self.stateCast(&lease)).available_inode_heads[level];
+            const head = (try StateView.view(&lease)).available_inode_heads[level];
             return if (head.isMax()) null else head.get();
         }
 
@@ -174,7 +160,7 @@ pub fn StateAdapter(
             }
             var lease = try self.state_manager.state();
             defer lease.deinit();
-            const state = try self.stateCastMut(&lease);
+            const state = try StateView.viewMut(&lease);
             state.available_inode_heads[level].set(inode orelse PackedPageId.max);
             lease.finish();
         }
@@ -186,7 +172,7 @@ pub fn StateAdapter(
             }
             var lease = try self.state_manager.state();
             defer lease.deinit();
-            const root = (try self.stateCast(&lease)).fsm_class_roots[index];
+            const root = (try StateView.view(&lease)).fsm_class_roots[index];
             return if (root.isMax()) null else root.get();
         }
 
@@ -197,7 +183,7 @@ pub fn StateAdapter(
             }
             var lease = try self.state_manager.state();
             defer lease.deinit();
-            const state = try self.stateCastMut(&lease);
+            const state = try StateView.viewMut(&lease);
             state.fsm_class_roots[index].set(root orelse PackedPageId.max);
             lease.finish();
         }

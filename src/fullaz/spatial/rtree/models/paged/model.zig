@@ -6,6 +6,7 @@ const page_rtree = @import("../../../../page/rtree.zig");
 const errors = @import("../../../../core/errors.zig");
 const StructuralMutationCoordinator = @import("../../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 const PackedInt = @import("../../../../core/packed_int.zig").PackedInt;
+const StateAccessor = @import("../../../../core/storage_manager.zig").StateAccessor;
 
 pub const Settings = struct {
     leaf_page_kind: u16 = 0,
@@ -41,6 +42,7 @@ pub fn PagedModel(
     const CachePageId = PageCacheT.Pid;
     const StateImpl = State(CachePageId);
     const StateLeaseT = StorageManagerT.StateLeaseType;
+    const StateView = StateAccessor(StateLeaseT, StateImpl);
     const StateError = PageCacheT.Error ||
         StorageManagerT.Error ||
         StateLeaseT.Error ||
@@ -66,26 +68,10 @@ pub fn PagedModel(
         storage_mgr: *StorageManagerT,
         settings: Settings,
 
-        fn stateCast(_: *const ContextSelf, lease: *const StateLeaseT) StateError!*const StateImpl {
-            const data = try lease.data();
-            if (data.len != @sizeOf(StateImpl)) {
-                return error.BadData;
-            }
-            return @ptrCast(data.ptr);
-        }
-
-        fn stateCastMut(_: *ContextSelf, lease: *StateLeaseT) StateError!*StateImpl {
-            const data = try lease.dataMut();
-            if (data.len != @sizeOf(StateImpl)) {
-                return error.BadData;
-            }
-            return @ptrCast(data.ptr);
-        }
-
         fn getRoot(self: *const ContextSelf) StateError!?CachePageId {
             var lease = try self.storage_mgr.state();
             defer lease.deinit();
-            const state = try self.stateCast(&lease);
+            const state = try StateView.view(&lease);
             const root = state.root.get();
             return if (root == std.math.maxInt(CachePageId)) null else root;
         }
@@ -93,7 +79,7 @@ pub fn PagedModel(
         fn setRoot(self: *ContextSelf, root: ?CachePageId) StateError!void {
             var lease = try self.storage_mgr.state();
             defer lease.deinit();
-            const state = try self.stateCastMut(&lease);
+            const state = try StateView.viewMut(&lease);
             state.root.set(root orelse std.math.maxInt(CachePageId));
             lease.finish();
         }

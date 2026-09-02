@@ -5,6 +5,7 @@ const page_header = @import("../../page/header.zig");
 const interfaces = @import("../../contracts/contracts.zig");
 const errors = @import("../../core/errors.zig");
 const PackedInt = @import("../../core/packed_int.zig").PackedInt;
+const StateAccessor = @import("../../core/storage_manager.zig").StateAccessor;
 const requiresStorageManager = @import("interfaces.zig").requiresStorageManager;
 const requiresStorageManagerIndexRoot = @import("interfaces.zig").requiresStorageManagerIndexRoot;
 const weighted_index = @import("weighted_index.zig");
@@ -75,6 +76,7 @@ pub fn Indexed(
     const CachePageId = PageCacheT.Pid;
     const StateImpl = State(CachePageId, PosType, Endian);
     const StateLeaseT = StorageManagerT.StateLeaseType;
+    const StateView = StateAccessor(StateLeaseT, StateImpl);
 
     const CommonPageViewConst = page_header.View(CachePageId, Index, Endian, true);
     const ViewTypes = chain_view.View(CachePageId, Index, PosType, Endian, false);
@@ -94,26 +96,10 @@ pub fn Indexed(
 
         storage_mgr: *StorageManagerT,
 
-        fn stateCast(_: *const Self, lease: *const StateLeaseT) Error!*const StateImpl {
-            const data = try lease.data();
-            if (data.len != @sizeOf(StateImpl)) {
-                return Error.BadData;
-            }
-            return @ptrCast(data.ptr);
-        }
-
-        fn stateCastMut(_: *Self, lease: *StateLeaseT) Error!*StateImpl {
-            const data = try lease.dataMut();
-            if (data.len != @sizeOf(StateImpl)) {
-                return Error.BadData;
-            }
-            return @ptrCast(data.ptr);
-        }
-
         fn getFirst(self: *const Self) Error!?CachePageId {
             var lease = try self.storage_mgr.state();
             defer lease.deinit();
-            const state = try self.stateCast(&lease);
+            const state = try StateView.view(&lease);
             const first = state.first.get();
             return if (first == PackedInt(CachePageId, Endian).max) null else first;
         }
@@ -121,7 +107,7 @@ pub fn Indexed(
         fn getLast(self: *const Self) Error!?CachePageId {
             var lease = try self.storage_mgr.state();
             defer lease.deinit();
-            const state = try self.stateCast(&lease);
+            const state = try StateView.view(&lease);
             const last = state.last.get();
             return if (last == PackedInt(CachePageId, Endian).max) null else last;
         }
@@ -129,14 +115,14 @@ pub fn Indexed(
         fn getTotalSize(self: *const Self) Error!PosType {
             var lease = try self.storage_mgr.state();
             defer lease.deinit();
-            const state = try self.stateCast(&lease);
+            const state = try StateView.view(&lease);
             return state.total_size.get();
         }
 
         fn setFirst(self: *Self, page_id: ?CachePageId) Error!void {
             var lease = try self.storage_mgr.state();
             defer lease.deinit();
-            const state = try self.stateCastMut(&lease);
+            const state = try StateView.viewMut(&lease);
             state.first.set(page_id orelse PackedInt(CachePageId, Endian).max);
             lease.finish();
         }
@@ -144,7 +130,7 @@ pub fn Indexed(
         fn setLast(self: *Self, page_id: ?CachePageId) Error!void {
             var lease = try self.storage_mgr.state();
             defer lease.deinit();
-            const state = try self.stateCastMut(&lease);
+            const state = try StateView.viewMut(&lease);
             state.last.set(page_id orelse PackedInt(CachePageId, Endian).max);
             lease.finish();
         }
@@ -152,7 +138,7 @@ pub fn Indexed(
         fn setTotalSize(self: *Self, size: PosType) Error!void {
             var lease = try self.storage_mgr.state();
             defer lease.deinit();
-            const state = try self.stateCastMut(&lease);
+            const state = try StateView.viewMut(&lease);
             state.total_size.set(size);
             lease.finish();
         }

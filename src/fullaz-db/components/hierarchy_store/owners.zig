@@ -5,6 +5,7 @@ const hierarchy = @import("../../hierarchy.zig");
 const value_envelope = @import("../../value_envelope.zig");
 const bpt_descriptor = @import("../bpt.zig");
 const core = @import("bpt.zig");
+const embedded = @import("embedded.zig");
 const PackedInt = fullaz.core.packed_int.PackedInt;
 const gc = fullaz.gc;
 
@@ -25,7 +26,7 @@ fn allows(comptime HierarchyT: type, comptime allowed_ids: []const hierarchy.Typ
 // The envelope machinery needs a BPT parent model only to own its generic
 // child editors. Aggregate R-tree and SlotHeap owners never allocate through it.
 fn envelopeCoreDescriptor(comptime HierarchyT: type) component.Descriptor {
-    return core.hierarchyBpt(HierarchyT, bpt_descriptor.bpt(.{
+    return core.hierarchyCore(HierarchyT, bpt_descriptor.bpt(.{
         .compare = coreCompare,
         .CompareContext = void,
         .comparator_id = 0xffff_fffe,
@@ -40,7 +41,7 @@ pub fn bptOwner(
     comptime parent_descriptor: component.Descriptor,
     comptime allowed_ids: []const hierarchy.TypeId,
 ) component.Descriptor {
-    const CoreDescriptor = core.hierarchyBpt(HierarchyT, parent_descriptor);
+    const CoreDescriptor = core.hierarchyCore(HierarchyT, parent_descriptor);
     const ParentTrait = parent_descriptor.Trait;
     return ownerDescriptor(HierarchyT, ParentTrait, CoreDescriptor, allowed_ids, .bpt);
 }
@@ -98,6 +99,13 @@ fn ownerDescriptor(
                 parent: Parent.Proxy,
                 envelope: Core.Proxy,
 
+                fn ChildBindingForTag(comptime tag: []const u8) type {
+                    return component.bindingFor(
+                        HierarchyT.entryByTag(tag).descriptor,
+                        BackendT,
+                    );
+                }
+
                 pub fn raw(self: *const Self, comptime tag: []const u8, payload: []const u8) error{TypeNotAllowed}!Value {
                     if (comptime !allows(HierarchyT, allowed_ids, tag)) {
                         return error.TypeNotAllowed;
@@ -105,11 +113,51 @@ fn ownerDescriptor(
                     return self.envelope.raw(tag, payload);
                 }
 
+                pub fn encodedRaw(
+                    self: *const Self,
+                    comptime tag: []const u8,
+                    payload: []const u8,
+                ) Error!embedded.EncodedValue(ParentTrait.maximum_value_size) {
+                    if (comptime !allows(HierarchyT, allowed_ids, tag)) {
+                        return error.TypeNotAllowed;
+                    }
+                    return embedded.EncodedValue(ParentTrait.maximum_value_size).formatRaw(
+                        self.nextMetadata(tag),
+                        payload,
+                    );
+                }
+
                 pub fn embed(self: *const Self, comptime tag: []const u8) error{TypeNotAllowed}!Value {
                     if (comptime !allows(HierarchyT, allowed_ids, tag)) {
                         return error.TypeNotAllowed;
                     }
                     return self.envelope.embed(tag);
+                }
+
+                pub fn encodedEmbedded(
+                    self: *const Self,
+                    comptime tag: []const u8,
+                ) Error!embedded.EncodedValue(ParentTrait.maximum_value_size) {
+                    if (comptime !allows(HierarchyT, allowed_ids, tag)) {
+                        return error.TypeNotAllowed;
+                    }
+                    const ChildBinding = ChildBindingForTag(tag);
+                    var state: ChildBinding.State = .{};
+                    return embedded.EncodedValue(ParentTrait.maximum_value_size).formatEmbedded(
+                        self.nextMetadata(tag),
+                        std.mem.asBytes(&state),
+                    );
+                }
+
+                pub fn proxy(self: *const Self) Parent.Proxy {
+                    return self.parent;
+                }
+
+                pub fn nextMetadata(
+                    self: *const Self,
+                    comptime tag: []const u8,
+                ) value_envelope.Metadata {
+                    return self.envelope.nextMetadata(tag);
                 }
 
                 pub fn insert(self: *const Self, first: anytype, value: Value) Error!switch (kind) {
@@ -183,6 +231,30 @@ fn ownerDescriptor(
                     @compileError("R-tree hierarchy owner needs query, context, predicate, and type tag");
                 }
 
+                pub fn openEmbeddedStorageForEdit(
+                    self: *const Self,
+                    key: []const u8,
+                    comptime tag: []const u8,
+                ) @TypeOf(self.envelope.openEmbeddedStorageForEdit(key, tag)) {
+                    if (comptime kind != .bpt) {
+                        @compileError("openEmbeddedStorageForEdit currently requires a hierarchy BPT owner");
+                    }
+                    return self.envelope.openEmbeddedStorageForEdit(key, tag);
+                }
+
+                /// Transfers a native owner value editor into a generic embedded
+                /// child handle. The native proxy chooses the parent value.
+                pub fn openChild(
+                    self: *const Self,
+                    parent_editor: anytype,
+                    comptime tag: []const u8,
+                ) Error!@typeInfo(@TypeOf(self.envelope.openChild(parent_editor, tag))).error_union.payload {
+                    if (comptime !allows(HierarchyT, allowed_ids, tag)) {
+                        return error.TypeNotAllowed;
+                    }
+                    return self.envelope.openChild(parent_editor, tag);
+                }
+
                 pub fn openEmbeddedHitForEdit(
                     self: *const Self,
                     query: Parent.Proxy.BoundingBox,
@@ -229,13 +301,47 @@ fn ownerDescriptor(
                 }
             };
 
+            const ConstProxyImpl = if (kind == .bpt) struct {
+                const Self = @This();
+
+                inner: *const Core.ConstProxy,
+
+                pub const Error = Core.ConstProxy.Error;
+                pub const Iterator = Core.ConstProxy.Iterator;
+
+                pub fn iterator(self: *const Self) Error!?Iterator {
+                    return self.inner.iterator();
+                }
+
+                pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
+                    return self.inner.iteratorFromEnd();
+                }
+
+                pub fn find(self: *const Self, key: []const u8) Error!?Iterator {
+                    return self.inner.find(key);
+                }
+
+                pub fn lowerBound(self: *const Self, key: []const u8) Error!?Iterator {
+                    return self.inner.lowerBound(key);
+                }
+
+                pub fn openEmbedded(
+                    self: *const Self,
+                    key: []const u8,
+                    comptime tag: []const u8,
+                ) @TypeOf(self.inner.openEmbedded(key, tag)) {
+                    return self.inner.openEmbedded(key, tag);
+                }
+            } else Parent.ConstProxy;
+
             return struct {
                 pub const Runtime = struct {
                     parent: Parent.Runtime,
                     envelope: Core.Runtime,
+                    const_proxy: if (kind == .bpt) ConstProxy else void,
                 };
                 pub const Proxy = ProxyImpl;
-                pub const ConstProxy = if (kind == .bpt) Core.ConstProxy else Parent.ConstProxy;
+                pub const ConstProxy = ConstProxyImpl;
                 pub const InitOptions = Parent.InitOptions;
                 pub const TransactionState = struct { parent: Parent.TransactionState, envelope: Core.TransactionState };
                 pub const Error = ProxyImpl.Error || error{InvalidPageKinds};
@@ -270,7 +376,14 @@ fn ownerDescriptor(
                 };
                 pub const DynamicMetadata = Parent.DynamicMetadata;
 
-                pub fn initAggregateRuntime(runtime: *Runtime, backend: *BackendT, owner_kinds: component.PageKindRange, type_kinds: component.PageKindRange, options: InitOptions) Error!void {
+                pub fn initAggregateRuntime(
+                    runtime: *Runtime,
+                    backend: *BackendT,
+                    owner_kinds: component.PageKindRange,
+                    type_kinds: component.PageKindRange,
+                    options: InitOptions,
+                    aggregate_next_instance_id: *u64,
+                ) Error!void {
                     if (owner_kinds.count != page_kind_count) return error.InvalidPageKinds;
                     if (comptime kind != .bpt) {
                         try Parent.initRuntime(&runtime.parent, backend, owner_kinds, options);
@@ -278,9 +391,11 @@ fn ownerDescriptor(
                     }
                     if (comptime kind == .bpt) {
                         try Core.initAggregateRuntime(&runtime.envelope, backend, owner_kinds, type_kinds, .{});
+                        runtime.const_proxy = .{ .inner = Core.proxyConst(&runtime.envelope) };
                     } else {
                         try Core.initAggregateEnvelopeRuntime(&runtime.envelope, backend, owner_kinds, type_kinds);
                     }
+                    runtime.envelope.aggregate_next_instance_id = aggregate_next_instance_id;
                 }
                 pub fn deinitRuntime(runtime: *Runtime) void {
                     if (comptime kind == .bpt) {
@@ -328,7 +443,7 @@ fn ownerDescriptor(
                 }
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
                     if (comptime kind == .bpt) {
-                        return Core.proxyConst(&runtime.envelope);
+                        return &runtime.const_proxy;
                     }
                     return Parent.proxyConst(&runtime.parent);
                 }

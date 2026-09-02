@@ -88,7 +88,8 @@ fn validateTableAndKey(table: []const u8, key: []const u8) !void {
 }
 
 fn insertTable(owner: anytype, name: []const u8) !void {
-    if (!try owner.insert(name, try owner.embed("table"))) {
+    const value = try owner.encodedEmbedded("table");
+    if (!try owner.proxy().insert(name, value.data())) {
         return error.TableAlreadyExists;
     }
 }
@@ -112,10 +113,13 @@ pub fn put(database: anytype, table: []const u8, key: []const u8, value: []const
     var transaction = try database.begin();
     defer transaction.deinit();
     const owner = transaction.get("catalog").owner("tables");
-    var child = (try owner.openEmbeddedForEdit(table, "table")) orelse return error.TableNotFound;
+    const editor = (try owner.proxy().openValueEditor(table)) orelse return error.TableNotFound;
+    var child = try owner.openChild(editor, "table");
     defer child.deinit();
-    if (!try child.update(key, child.raw("table", value))) {
-        if (!try child.insert(key, child.raw("table", value))) {
+    const row = try child.encodedRaw("table", value);
+    const proxy = child.proxy();
+    if (!try proxy.update(key, row.data())) {
+        if (!try proxy.insert(key, row.data())) {
             return error.ValueAlreadyExists;
         }
     }
@@ -128,9 +132,10 @@ pub fn remove(database: anytype, table: []const u8, key: []const u8) !bool {
     var transaction = try database.begin();
     defer transaction.deinit();
     const owner = transaction.get("catalog").owner("tables");
-    var child = (try owner.openEmbeddedForEdit(table, "table")) orelse return error.TableNotFound;
+    const editor = (try owner.proxy().openValueEditor(table)) orelse return error.TableNotFound;
+    var child = try owner.openChild(editor, "table");
     defer child.deinit();
-    const removed = try child.remove(key);
+    const removed = try child.proxy().remove(key);
     try child.finish();
     try transaction.commit();
     return removed;
@@ -143,10 +148,12 @@ pub fn generateExamples(database: anytype) !void {
 
     inline for (examples) |table| {
         try insertTable(owner, table.name);
-        var child = (try owner.openEmbeddedForEdit(table.name, "table")) orelse unreachable;
+        const editor = (try owner.proxy().openValueEditor(table.name)) orelse unreachable;
+        var child = try owner.openChild(editor, "table");
         defer child.deinit();
         inline for (table.rows) |row| {
-            if (!try child.insert(row.key, child.raw("table", row.value))) {
+            const value = try child.encodedRaw("table", row.value);
+            if (!try child.proxy().insert(row.key, value.data())) {
                 return error.ValueAlreadyExists;
             }
         }
@@ -167,9 +174,9 @@ pub fn snapshot(database: anytype, allocator: std.mem.Allocator) !std.ArrayList(
             if (table_entry.key.len > 32) {
                 return error.InvalidStoredKey;
             }
-            var child = (try owner.openEmbeddedBpt(table_entry.key, "table")) orelse return error.InvalidStoredKey;
+            var child = (try owner.openEmbedded(table_entry.key, "table")) orelse return error.InvalidStoredKey;
             defer child.deinit();
-            var values = try child.iterator();
+            var values = try child.proxy().iterator();
             if (values) |*value_iterator| {
                 defer value_iterator.deinit();
                 while (try value_iterator.next()) |value_entry| {

@@ -154,398 +154,413 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
             const StateT = low_level_bpt.models.paged.State(CacheT.Pid);
             const ManagerT = managers.StateManager(BackendT, StateT);
             comptime low_level_bpt.models.interfaces.requiresStorageManager(ManagerT, CacheT.Pid);
-            const ModelT = low_level_bpt.models.PagedModel(
+            const PagedModelT = low_level_bpt.models.PagedModel(
                 CacheT,
                 ManagerT,
                 configured_compare,
                 CompareContextT,
             );
-            const TreeT = low_level_bpt.Bpt(ModelT);
-            const ReadIteratorT = struct {
-                const Self = @This();
-                const Inner = TreeT.Iterator;
-                const GetReturn = @typeInfo(@TypeOf(Inner.get)).@"fn".return_type.?;
-                const NextReturn = @typeInfo(@TypeOf(Inner.next)).@"fn".return_type.?;
-                const PrevReturn = @typeInfo(@TypeOf(Inner.prev)).@"fn".return_type.?;
+            const BptT = low_level_bpt.Bpt(PagedModelT);
+            const ProxyFactory = struct {
+                fn get(comptime ProxyModelT: type, comptime ProxyTreeT: type) type {
+                    const ModelT = ProxyModelT;
+                    const TreeT = ProxyTreeT;
+                    const ReadIteratorT = struct {
+                        const Self = @This();
+                        const Inner = TreeT.Iterator;
+                        const GetReturn = @typeInfo(@TypeOf(Inner.get)).@"fn".return_type.?;
+                        const NextReturn = @typeInfo(@TypeOf(Inner.next)).@"fn".return_type.?;
+                        const PrevReturn = @typeInfo(@TypeOf(Inner.prev)).@"fn".return_type.?;
 
-                iterator_ptr: *align(@alignOf(Inner)) anyopaque,
-                allocator_value: std.mem.Allocator,
-
-                fn wrap(
-                    allocator_value: std.mem.Allocator,
-                    inner_optional: ?Inner,
-                ) std.mem.Allocator.Error!?Self {
-                    if (inner_optional) |inner_value| {
-                        var owned = inner_value;
-                        const ptr = allocator_value.create(Inner) catch |err| {
-                            owned.deinit();
-                            return err;
-                        };
-                        ptr.* = owned;
-                        return .{
-                            .iterator_ptr = ptr,
-                            .allocator_value = allocator_value,
-                        };
-                    }
-                    return null;
-                }
-
-                fn inner(self: *const Self) *Inner {
-                    return @ptrCast(self.iterator_ptr);
-                }
-
-                pub fn get(self: *const Self) GetReturn {
-                    return self.inner().get();
-                }
-
-                pub fn next(self: *Self) NextReturn {
-                    return self.inner().next();
-                }
-
-                pub fn prev(self: *Self) PrevReturn {
-                    return self.inner().prev();
-                }
-
-                pub fn deinit(self: *Self) void {
-                    const ptr = self.inner();
-                    ptr.deinit();
-                    self.allocator_value.destroy(ptr);
-                    self.* = undefined;
-                }
-            };
-            const MutableProxyT = struct {
-                const Self = @This();
-
-                pub const Error = TreeT.Error || CacheT.Error;
-                pub const ConstIterator = ReadIteratorT;
-
-                pub const ValueEditor = struct {
-                    const EditorSelf = @This();
-
-                    editor: TreeT.ValueEditor,
-                    cache_ptr: *align(@alignOf(CacheT)) anyopaque,
-                    active_editor: *bool,
-                    transaction_generation: ?u64,
-
-                    fn cache(self: *const EditorSelf) *CacheT {
-                        return @ptrCast(self.cache_ptr);
-                    }
-
-                    fn requireTransaction(self: *const EditorSelf) Error!void {
-                        if (self.transaction_generation == null or
-                            self.cache().transactionGeneration() != self.transaction_generation)
-                        {
-                            return Error.TransactionInactive;
-                        }
-                    }
-
-                    pub fn valueMut(self: *EditorSelf) Error![]u8 {
-                        try self.requireTransaction();
-                        return self.editor.valueMut();
-                    }
-
-                    pub fn finish(self: *EditorSelf) Error!void {
-                        try self.requireTransaction();
-                        self.editor.finish() catch |err| {
-                            switch (err) {
-                                error.ValueEditorActive,
-                                error.StructuralMutationActive,
-                                error.StaleIterator,
-                                error.EditorInvalidated,
-                                => return err,
-                                else => self.cache().markTransactionFailed(),
-                            }
-                            return err;
-                        };
-                        self.active_editor.* = false;
-                    }
-
-                    pub fn deinit(self: *EditorSelf) void {
-                        self.editor.deinit();
-                        self.active_editor.* = false;
-                    }
-                };
-
-                pub const MutableIterator = struct {
-                    const IteratorSelf = @This();
-                    const GetPayload = @typeInfo(ReadIteratorT.GetReturn).error_union.payload;
-
-                    inner_value: ReadIteratorT,
-                    cache_ptr: *align(@alignOf(CacheT)) anyopaque,
-                    active_editor: *bool,
-                    transaction_generation: ?u64,
-
-                    fn cache(self: *const IteratorSelf) *CacheT {
-                        return @ptrCast(self.cache_ptr);
-                    }
-
-                    fn requireTransaction(self: *const IteratorSelf) Error!void {
-                        if (self.transaction_generation == null or
-                            self.cache().transactionGeneration() != self.transaction_generation)
-                        {
-                            return Error.TransactionInactive;
-                        }
-                    }
-
-                    fn wrap(
+                        iterator_ptr: *align(@alignOf(Inner)) anyopaque,
                         allocator_value: std.mem.Allocator,
-                        inner_optional: ?TreeT.Iterator,
-                        cache_ptr: *align(@alignOf(CacheT)) anyopaque,
-                        active_editor: *bool,
-                        transaction_generation: ?u64,
-                    ) std.mem.Allocator.Error!?IteratorSelf {
-                        const inner_value = try ReadIteratorT.wrap(allocator_value, inner_optional);
-                        if (inner_value) |iterator_value| {
-                            return .{
-                                .inner_value = iterator_value,
-                                .cache_ptr = cache_ptr,
-                                .active_editor = active_editor,
-                                .transaction_generation = transaction_generation,
-                            };
+
+                        fn wrap(
+                            allocator_value: std.mem.Allocator,
+                            inner_optional: ?Inner,
+                        ) std.mem.Allocator.Error!?Self {
+                            if (inner_optional) |inner_value| {
+                                var owned = inner_value;
+                                const ptr = allocator_value.create(Inner) catch |err| {
+                                    owned.deinit();
+                                    return err;
+                                };
+                                ptr.* = owned;
+                                return .{
+                                    .iterator_ptr = ptr,
+                                    .allocator_value = allocator_value,
+                                };
+                            }
+                            return null;
                         }
-                        return null;
-                    }
 
-                    pub fn get(self: *const IteratorSelf) Error!GetPayload {
-                        try self.requireTransaction();
-                        return self.inner_value.get();
-                    }
-
-                    pub fn next(self: *IteratorSelf) Error!GetPayload {
-                        try self.requireTransaction();
-                        return self.inner_value.next();
-                    }
-
-                    pub fn prev(self: *IteratorSelf) Error!GetPayload {
-                        try self.requireTransaction();
-                        return self.inner_value.prev();
-                    }
-
-                    pub fn editValue(self: *IteratorSelf) Error!?ValueEditor {
-                        try self.requireTransaction();
-                        if (self.active_editor.*) {
-                            return error.ValueEditorActive;
+                        fn inner(self: *const Self) *Inner {
+                            return @ptrCast(self.iterator_ptr);
                         }
-                        const inner_editor = try self.inner_value.inner().editValue();
-                        if (inner_editor) |editor| {
-                            self.active_editor.* = true;
-                            return .{
-                                .editor = editor,
-                                .cache_ptr = self.cache_ptr,
-                                .active_editor = self.active_editor,
-                                .transaction_generation = self.transaction_generation,
-                            };
+
+                        pub fn get(self: *const Self) GetReturn {
+                            return self.inner().get();
                         }
-                        return null;
-                    }
 
-                    pub fn deinit(self: *IteratorSelf) void {
-                        self.inner_value.deinit();
-                    }
-                };
+                        pub fn next(self: *Self) NextReturn {
+                            return self.inner().next();
+                        }
 
-                pub const Iterator = MutableIterator;
+                        pub fn prev(self: *Self) PrevReturn {
+                            return self.inner().prev();
+                        }
 
-                tree_ptr: *align(@alignOf(TreeT)) anyopaque,
-                cache_ptr: *align(@alignOf(CacheT)) anyopaque,
-                allocator_value: std.mem.Allocator,
-                transaction_generation: ?u64,
-                active_editor: *bool,
-
-                fn init(
-                    tree_value: *TreeT,
-                    cache_value: *CacheT,
-                    allocator_value: std.mem.Allocator,
-                    active_editor: *bool,
-                ) Self {
-                    return .{
-                        .tree_ptr = tree_value,
-                        .cache_ptr = cache_value,
-                        .allocator_value = allocator_value,
-                        .transaction_generation = cache_value.transactionGeneration(),
-                        .active_editor = active_editor,
+                        pub fn deinit(self: *Self) void {
+                            const ptr = self.inner();
+                            ptr.deinit();
+                            self.allocator_value.destroy(ptr);
+                            self.* = undefined;
+                        }
                     };
-                }
+                    const MutableProxyT = struct {
+                        const Self = @This();
 
-                fn tree(self: *const Self) *TreeT {
-                    return @ptrCast(self.tree_ptr);
-                }
+                        pub const Error = TreeT.Error || CacheT.Error;
+                        pub const ConstIterator = ReadIteratorT;
 
-                fn cache(self: *const Self) *CacheT {
-                    return @ptrCast(self.cache_ptr);
-                }
+                        pub const ValueEditor = struct {
+                            const EditorSelf = @This();
 
-                fn requireTransaction(self: *const Self) Error!void {
-                    if (self.transaction_generation == null or
-                        self.cache().transactionGeneration() != self.transaction_generation)
-                    {
-                        return Error.TransactionInactive;
-                    }
-                }
+                            editor: TreeT.ValueEditor,
+                            cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                            active_editor: *bool,
+                            transaction_generation: ?u64,
 
-                pub fn iterator(self: *const Self) Error!?Iterator {
-                    try self.requireTransaction();
-                    return MutableIterator.wrap(
-                        self.allocator_value,
-                        try self.tree().iterator(),
-                        self.cache_ptr,
-                        self.active_editor,
-                        self.transaction_generation,
-                    );
-                }
+                            fn cache(self: *const EditorSelf) *CacheT {
+                                return @ptrCast(self.cache_ptr);
+                            }
 
-                pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
-                    try self.requireTransaction();
-                    return MutableIterator.wrap(
-                        self.allocator_value,
-                        try self.tree().iteratorFromEnd(),
-                        self.cache_ptr,
-                        self.active_editor,
-                        self.transaction_generation,
-                    );
-                }
+                            fn requireTransaction(self: *const EditorSelf) Error!void {
+                                if (self.transaction_generation == null or
+                                    self.cache().transactionGeneration() != self.transaction_generation)
+                                {
+                                    return Error.TransactionInactive;
+                                }
+                            }
 
-                pub fn find(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
-                    try self.requireTransaction();
-                    return MutableIterator.wrap(
-                        self.allocator_value,
-                        try self.tree().find(key),
-                        self.cache_ptr,
-                        self.active_editor,
-                        self.transaction_generation,
-                    );
-                }
+                            pub fn valueMut(self: *EditorSelf) Error![]u8 {
+                                try self.requireTransaction();
+                                return self.editor.valueMut();
+                            }
 
-                pub fn lowerBound(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
-                    try self.requireTransaction();
-                    return MutableIterator.wrap(
-                        self.allocator_value,
-                        try self.tree().lowerBound(key),
-                        self.cache_ptr,
-                        self.active_editor,
-                        self.transaction_generation,
-                    );
-                }
+                            pub fn finish(self: *EditorSelf) Error!void {
+                                try self.requireTransaction();
+                                self.editor.finish() catch |err| {
+                                    switch (err) {
+                                        error.ValueEditorActive,
+                                        error.StructuralMutationActive,
+                                        error.StaleIterator,
+                                        error.EditorInvalidated,
+                                        => return err,
+                                        else => self.cache().markTransactionFailed(),
+                                    }
+                                    return err;
+                                };
+                                self.active_editor.* = false;
+                            }
 
-                pub fn openValueEditor(
-                    self: *const Self,
-                    key: ModelT.KeyLikeType,
-                ) Error!?ValueEditor {
-                    try self.requireTransaction();
-                    if (self.active_editor.*) {
-                        return error.ValueEditorActive;
-                    }
-                    const inner_editor = try self.tree().openValueEditor(key);
-                    if (inner_editor) |editor| {
-                        self.active_editor.* = true;
-                        return .{
-                            .editor = editor,
-                            .cache_ptr = self.cache_ptr,
-                            .active_editor = self.active_editor,
-                            .transaction_generation = self.transaction_generation,
+                            pub fn deinit(self: *EditorSelf) void {
+                                self.editor.deinit();
+                                self.active_editor.* = false;
+                            }
                         };
-                    }
-                    return null;
-                }
 
-                pub fn insert(
-                    self: *const Self,
-                    key: ModelT.KeyLikeType,
-                    value: ModelT.ValueInType,
-                ) Error!bool {
-                    try self.requireTransaction();
-                    return self.tree().insert(key, value) catch |err| {
-                        self.cache().markTransactionFailed();
-                        return err;
+                        pub const MutableIterator = struct {
+                            const IteratorSelf = @This();
+                            const GetPayload = @typeInfo(ReadIteratorT.GetReturn).error_union.payload;
+
+                            inner_value: ReadIteratorT,
+                            cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                            active_editor: *bool,
+                            transaction_generation: ?u64,
+
+                            fn cache(self: *const IteratorSelf) *CacheT {
+                                return @ptrCast(self.cache_ptr);
+                            }
+
+                            fn requireTransaction(self: *const IteratorSelf) Error!void {
+                                if (self.transaction_generation == null or
+                                    self.cache().transactionGeneration() != self.transaction_generation)
+                                {
+                                    return Error.TransactionInactive;
+                                }
+                            }
+
+                            fn wrap(
+                                allocator_value: std.mem.Allocator,
+                                inner_optional: ?TreeT.Iterator,
+                                cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                                active_editor: *bool,
+                                transaction_generation: ?u64,
+                            ) std.mem.Allocator.Error!?IteratorSelf {
+                                const inner_value = try ReadIteratorT.wrap(allocator_value, inner_optional);
+                                if (inner_value) |iterator_value| {
+                                    return .{
+                                        .inner_value = iterator_value,
+                                        .cache_ptr = cache_ptr,
+                                        .active_editor = active_editor,
+                                        .transaction_generation = transaction_generation,
+                                    };
+                                }
+                                return null;
+                            }
+
+                            pub fn get(self: *const IteratorSelf) Error!GetPayload {
+                                try self.requireTransaction();
+                                return self.inner_value.get();
+                            }
+
+                            pub fn next(self: *IteratorSelf) Error!GetPayload {
+                                try self.requireTransaction();
+                                return self.inner_value.next();
+                            }
+
+                            pub fn prev(self: *IteratorSelf) Error!GetPayload {
+                                try self.requireTransaction();
+                                return self.inner_value.prev();
+                            }
+
+                            pub fn editValue(self: *IteratorSelf) Error!?ValueEditor {
+                                try self.requireTransaction();
+                                if (self.active_editor.*) {
+                                    return error.ValueEditorActive;
+                                }
+                                const inner_editor = try self.inner_value.inner().editValue();
+                                if (inner_editor) |editor| {
+                                    self.active_editor.* = true;
+                                    return .{
+                                        .editor = editor,
+                                        .cache_ptr = self.cache_ptr,
+                                        .active_editor = self.active_editor,
+                                        .transaction_generation = self.transaction_generation,
+                                    };
+                                }
+                                return null;
+                            }
+
+                            pub fn deinit(self: *IteratorSelf) void {
+                                self.inner_value.deinit();
+                            }
+                        };
+
+                        pub const Iterator = MutableIterator;
+
+                        tree_ptr: *align(@alignOf(TreeT)) anyopaque,
+                        cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                        allocator_value: std.mem.Allocator,
+                        transaction_generation: ?u64,
+                        active_editor: *bool,
+
+                        fn init(
+                            tree_value: *TreeT,
+                            cache_value: *CacheT,
+                            allocator_value: std.mem.Allocator,
+                            active_editor: *bool,
+                        ) Self {
+                            return .{
+                                .tree_ptr = tree_value,
+                                .cache_ptr = cache_value,
+                                .allocator_value = allocator_value,
+                                .transaction_generation = cache_value.transactionGeneration(),
+                                .active_editor = active_editor,
+                            };
+                        }
+
+                        fn tree(self: *const Self) *TreeT {
+                            return @ptrCast(self.tree_ptr);
+                        }
+
+                        fn cache(self: *const Self) *CacheT {
+                            return @ptrCast(self.cache_ptr);
+                        }
+
+                        fn requireTransaction(self: *const Self) Error!void {
+                            if (self.transaction_generation == null or
+                                self.cache().transactionGeneration() != self.transaction_generation)
+                            {
+                                return Error.TransactionInactive;
+                            }
+                        }
+
+                        pub fn iterator(self: *const Self) Error!?Iterator {
+                            try self.requireTransaction();
+                            return MutableIterator.wrap(
+                                self.allocator_value,
+                                try self.tree().iterator(),
+                                self.cache_ptr,
+                                self.active_editor,
+                                self.transaction_generation,
+                            );
+                        }
+
+                        pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
+                            try self.requireTransaction();
+                            return MutableIterator.wrap(
+                                self.allocator_value,
+                                try self.tree().iteratorFromEnd(),
+                                self.cache_ptr,
+                                self.active_editor,
+                                self.transaction_generation,
+                            );
+                        }
+
+                        pub fn find(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
+                            try self.requireTransaction();
+                            return MutableIterator.wrap(
+                                self.allocator_value,
+                                try self.tree().find(key),
+                                self.cache_ptr,
+                                self.active_editor,
+                                self.transaction_generation,
+                            );
+                        }
+
+                        pub fn lowerBound(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
+                            try self.requireTransaction();
+                            return MutableIterator.wrap(
+                                self.allocator_value,
+                                try self.tree().lowerBound(key),
+                                self.cache_ptr,
+                                self.active_editor,
+                                self.transaction_generation,
+                            );
+                        }
+
+                        pub fn openValueEditor(
+                            self: *const Self,
+                            key: ModelT.KeyLikeType,
+                        ) Error!?ValueEditor {
+                            try self.requireTransaction();
+                            if (self.active_editor.*) {
+                                return error.ValueEditorActive;
+                            }
+                            const inner_editor = try self.tree().openValueEditor(key);
+                            if (inner_editor) |editor| {
+                                self.active_editor.* = true;
+                                return .{
+                                    .editor = editor,
+                                    .cache_ptr = self.cache_ptr,
+                                    .active_editor = self.active_editor,
+                                    .transaction_generation = self.transaction_generation,
+                                };
+                            }
+                            return null;
+                        }
+
+                        pub fn insert(
+                            self: *const Self,
+                            key: ModelT.KeyLikeType,
+                            value: ModelT.ValueInType,
+                        ) Error!bool {
+                            try self.requireTransaction();
+                            return self.tree().insert(key, value) catch |err| {
+                                self.cache().markTransactionFailed();
+                                return err;
+                            };
+                        }
+
+                        pub fn update(
+                            self: *const Self,
+                            key: ModelT.KeyLikeType,
+                            value: ModelT.ValueInType,
+                        ) Error!bool {
+                            try self.requireTransaction();
+                            return self.tree().update(key, value) catch |err| {
+                                self.cache().markTransactionFailed();
+                                return err;
+                            };
+                        }
+
+                        pub fn remove(self: *const Self, key: ModelT.KeyLikeType) Error!bool {
+                            try self.requireTransaction();
+                            return self.tree().remove(key) catch |err| {
+                                self.cache().markTransactionFailed();
+                                return err;
+                            };
+                        }
                     };
-                }
+                    const ConstProxyT = struct {
+                        const Self = @This();
 
-                pub fn update(
-                    self: *const Self,
-                    key: ModelT.KeyLikeType,
-                    value: ModelT.ValueInType,
-                ) Error!bool {
-                    try self.requireTransaction();
-                    return self.tree().update(key, value) catch |err| {
-                        self.cache().markTransactionFailed();
-                        return err;
+                        pub const Error = TreeT.Error;
+                        pub const ConstIterator = ReadIteratorT;
+                        pub const Iterator = ConstIterator;
+
+                        tree_ptr: *align(@alignOf(TreeT)) const anyopaque,
+                        allocator_value: std.mem.Allocator,
+
+                        fn init(
+                            tree_value: *const TreeT,
+                            allocator_value: std.mem.Allocator,
+                        ) Self {
+                            return .{
+                                .tree_ptr = tree_value,
+                                .allocator_value = allocator_value,
+                            };
+                        }
+
+                        fn tree(self: *const Self) *const TreeT {
+                            return @ptrCast(self.tree_ptr);
+                        }
+
+                        pub fn iterator(self: *const Self) Error!?Iterator {
+                            return ReadIteratorT.wrap(
+                                self.allocator_value,
+                                try self.tree().iterator(),
+                            );
+                        }
+
+                        pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
+                            return ReadIteratorT.wrap(
+                                self.allocator_value,
+                                try self.tree().iteratorFromEnd(),
+                            );
+                        }
+
+                        pub fn find(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
+                            return ReadIteratorT.wrap(
+                                self.allocator_value,
+                                try self.tree().find(key),
+                            );
+                        }
+
+                        pub fn lowerBound(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
+                            return ReadIteratorT.wrap(
+                                self.allocator_value,
+                                try self.tree().lowerBound(key),
+                            );
+                        }
                     };
-                }
 
-                pub fn remove(self: *const Self, key: ModelT.KeyLikeType) Error!bool {
-                    try self.requireTransaction();
-                    return self.tree().remove(key) catch |err| {
-                        self.cache().markTransactionFailed();
-                        return err;
+                    return struct {
+                        pub const Mutable = MutableProxyT;
+                        pub const Const = ConstProxyT;
                     };
                 }
             };
-            const ConstProxyT = struct {
-                const Self = @This();
-
-                pub const Error = TreeT.Error;
-                pub const ConstIterator = ReadIteratorT;
-                pub const Iterator = ConstIterator;
-
-                tree_ptr: *align(@alignOf(TreeT)) const anyopaque,
-                allocator_value: std.mem.Allocator,
-
-                fn init(
-                    tree_value: *const TreeT,
-                    allocator_value: std.mem.Allocator,
-                ) Self {
-                    return .{
-                        .tree_ptr = tree_value,
-                        .allocator_value = allocator_value,
-                    };
-                }
-
-                fn tree(self: *const Self) *const TreeT {
-                    return @ptrCast(self.tree_ptr);
-                }
-
-                pub fn iterator(self: *const Self) Error!?Iterator {
-                    return ReadIteratorT.wrap(
-                        self.allocator_value,
-                        try self.tree().iterator(),
-                    );
-                }
-
-                pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
-                    return ReadIteratorT.wrap(
-                        self.allocator_value,
-                        try self.tree().iteratorFromEnd(),
-                    );
-                }
-
-                pub fn find(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
-                    return ReadIteratorT.wrap(
-                        self.allocator_value,
-                        try self.tree().find(key),
-                    );
-                }
-
-                pub fn lowerBound(self: *const Self, key: ModelT.KeyLikeType) Error!?Iterator {
-                    return ReadIteratorT.wrap(
-                        self.allocator_value,
-                        try self.tree().lowerBound(key),
-                    );
-                }
-            };
+            const ProxyTypesT = ProxyFactory.get(PagedModelT, BptT);
+            const MutableProxyT = ProxyTypesT.Mutable;
+            const ConstProxyT = ProxyTypesT.Const;
 
             const BindingT = struct {
                 pub const Manager = ManagerT;
                 pub const State = StateT;
-                pub const Model = ModelT;
-                pub const Tree = TreeT;
+                pub const value_capacity = configured_fixed_value_size;
+                pub const Model = PagedModelT;
+                pub const Tree = BptT;
                 pub const Proxy = MutableProxyT;
                 pub const ConstProxy = ConstProxyT;
                 pub const Runtime = struct {
                     page_kinds: component.PageKindRange,
                     state: StateT,
                     manager: ManagerT,
-                    model: ModelT,
-                    tree: TreeT,
+                    model: PagedModelT,
+                    tree: BptT,
                     const_proxy: ConstProxy,
                     allocator_value: std.mem.Allocator,
                     active_editor: bool = false,
@@ -650,14 +665,14 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                                 leaf_page_kind,
                                 leaf_scanner_version,
                                 &runtime.tree,
-                                gc.scanners.method(CollectorT, TreeT, TreeT.scanLeafRefs),
+                                gc.scanners.method(CollectorT, BptT, BptT.scanLeafRefs),
                                 null,
                             );
                             try collector.registerForCycle(
                                 inode_page_kind,
                                 inode_scanner_version,
                                 &runtime.tree,
-                                gc.scanners.method(CollectorT, TreeT, TreeT.scanInodeRefs),
+                                gc.scanners.method(CollectorT, BptT, BptT.scanInodeRefs),
                                 null,
                             );
                         }
@@ -681,7 +696,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     runtime.page_kinds = page_kinds;
                     runtime.state = .{};
                     runtime.manager = ManagerT.init(backend, &runtime.state);
-                    runtime.model = try ModelT.init(
+                    runtime.model = try PagedModelT.init(
                         backend.cache(),
                         &runtime.manager,
                         .{
@@ -693,7 +708,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                         },
                         init_options.compare_context,
                     );
-                    runtime.tree = TreeT.init(&runtime.model, configured_rebalance_policy);
+                    runtime.tree = BptT.init(&runtime.model, configured_rebalance_policy);
                     runtime.allocator_value = backend.allocator();
                     runtime.active_editor = false;
                     runtime.const_proxy = ConstProxy.init(
@@ -741,10 +756,138 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
                     return &runtime.const_proxy;
                 }
+
+                pub fn StorageBinding(comptime StorageManagerT: type) type {
+                    comptime low_level_bpt.models.interfaces.requiresStorageManager(
+                        StorageManagerT,
+                        CacheT.Pid,
+                    );
+                    const StorageModelT = low_level_bpt.models.PagedModel(
+                        CacheT,
+                        StorageManagerT,
+                        configured_compare,
+                        CompareContextT,
+                    );
+                    const StorageTreeT = low_level_bpt.Bpt(StorageModelT);
+                    const StorageProxyTypesT = ProxyFactory.get(StorageModelT, StorageTreeT);
+                    const StorageProxyT = StorageProxyTypesT.Mutable;
+                    const StorageConstProxyT = StorageProxyTypesT.Const;
+                    const StorageInitOptions = if (CompareContextT == void)
+                        struct { compare_context: void = {} }
+                    else
+                        struct { compare_context: CompareContextT };
+                    const StorageError = StorageProxyT.Error || error{InvalidPageKinds};
+                    const StorageRuntimeT = struct {
+                        page_kinds: component.PageKindRange,
+                        cache: *CacheT,
+                        storage_manager: *StorageManagerT,
+                        model: StorageModelT,
+                        tree: StorageTreeT,
+                        const_proxy: StorageConstProxyT,
+                        allocator_value: std.mem.Allocator,
+                        active_editor: bool = false,
+                    };
+
+                    const StorageBindingT = struct {
+                        pub const Proxy = StorageProxyT;
+                        pub const ConstProxy = StorageConstProxyT;
+                        pub const InitOptions = StorageInitOptions;
+                        pub const Error = StorageError;
+                        pub const Runtime = StorageRuntimeT;
+                        pub const value_capacity = configured_fixed_value_size;
+
+                        pub fn emptyState() StateT {
+                            return .{};
+                        }
+
+                        pub fn initRuntime(
+                            runtime: *StorageRuntimeT,
+                            backend: *BackendT,
+                            storage_manager: *StorageManagerT,
+                            page_kinds: component.PageKindRange,
+                            init_options: StorageInitOptions,
+                        ) StorageError!void {
+                            if (page_kinds.count != page_kind_count) {
+                                return StorageError.InvalidPageKinds;
+                            }
+                            const leaf_page_kind = page_kinds.kindAt(0) orelse
+                                return StorageError.InvalidPageKinds;
+                            const inode_page_kind = page_kinds.kindAt(1) orelse
+                                return StorageError.InvalidPageKinds;
+
+                            runtime.page_kinds = page_kinds;
+                            runtime.cache = backend.cache();
+                            runtime.storage_manager = storage_manager;
+                            runtime.model = try StorageModelT.init(
+                                runtime.cache,
+                                runtime.storage_manager,
+                                .{
+                                    .maximum_key_size = configured_maximum_key_size,
+                                    .maximum_value_size = configured_maximum_value_size,
+                                    .fixed_value_size = configured_fixed_value_size,
+                                    .leaf_page_kind = leaf_page_kind,
+                                    .inode_page_kind = inode_page_kind,
+                                },
+                                init_options.compare_context,
+                            );
+                            runtime.tree = StorageTreeT.init(
+                                &runtime.model,
+                                configured_rebalance_policy,
+                            );
+                            runtime.allocator_value = backend.allocator();
+                            runtime.active_editor = false;
+                            runtime.const_proxy = StorageConstProxyT.init(
+                                &runtime.tree,
+                                runtime.allocator_value,
+                            );
+                        }
+
+                        pub fn deinitRuntime(runtime: *StorageRuntimeT) void {
+                            if (runtime.active_editor) {
+                                @panic("BPT storage runtime deinitialized with an active value editor");
+                            }
+                            runtime.tree.deinit();
+                            runtime.model.deinit();
+                            runtime.* = undefined;
+                        }
+
+                        pub fn requireTransactionIdle(runtime: *const StorageRuntimeT) StorageError!void {
+                            if (runtime.active_editor) {
+                                return error.ValueEditorActive;
+                            }
+                        }
+
+                        pub fn proxy(runtime: *StorageRuntimeT) StorageProxyT {
+                            return StorageProxyT.init(
+                                &runtime.tree,
+                                runtime.cache,
+                                runtime.allocator_value,
+                                &runtime.active_editor,
+                            );
+                        }
+
+                        pub fn proxyConst(runtime: *const StorageRuntimeT) *const StorageConstProxyT {
+                            return &runtime.const_proxy;
+                        }
+                    };
+                    comptime component.assertStorageBinding(
+                        StorageBindingT,
+                        BackendT,
+                        StorageManagerT,
+                        StateT,
+                    );
+                    return StorageBindingT;
+                }
             };
             comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);
             comptime component.assertBinding(BindingT, BackendT);
             comptime component.assertReclamation(BindingT);
+            comptime component.assertStorageBinding(
+                BindingT.StorageBinding(ManagerT),
+                BackendT,
+                ManagerT,
+                StateT,
+            );
             return BindingT;
         }
     };

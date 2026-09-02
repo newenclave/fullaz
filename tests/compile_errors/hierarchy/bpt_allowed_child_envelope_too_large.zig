@@ -37,15 +37,21 @@ const Hierarchy = fullaz_db.Hierarchy(.{
     },
 });
 
-const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+const OwnerBpt = fullaz_db.bpt(.{
     .compare = compare,
     .CompareContext = void,
     .comparator_id = 1,
     .maximum_key_size = 32,
     .maximum_value_size = 96,
     .fixed_value_size = 96,
-}));
-const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
+});
+const Store = fullaz_db.hierarchyStore(Hierarchy, .{ .owners = &.{.{
+    .tag = "files",
+    .owner_id = 1,
+    .descriptor = OwnerBpt,
+    .allowed_type_ids = &.{1},
+}} });
+const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Store);
 const Database = fullaz_db.DynamicSchemaDatabase(Schema, fullaz.device.MemoryBlock(u32));
 
 comptime {

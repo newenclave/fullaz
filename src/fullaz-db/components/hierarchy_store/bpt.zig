@@ -5,6 +5,7 @@ const dynamic_metadata = @import("../../file/metadata/dynamic.zig");
 const tagged = @import("../../file/tagged_fields.zig");
 const hierarchy = @import("../../hierarchy.zig");
 const value_envelope = @import("../../value_envelope.zig");
+const embedded = @import("embedded.zig");
 const PackedInt = fullaz.core.packed_int.PackedInt;
 const low_level_bpt = fullaz.bpt;
 const low_level_rtree = fullaz.spatial.rtree;
@@ -132,7 +133,7 @@ fn rtreeFiniteCallbackError(comptime CallbackT: type) type {
 /// `parent_descriptor` and every `HierarchyT` type must be descriptors returned
 /// by `bpt`. The parent must configure `fixed_value_size`; that complete value
 /// is the durable inline envelope for every entry.
-pub fn hierarchyBpt(
+pub fn hierarchyCore(
     comptime HierarchyT: type,
     comptime parent_descriptor: component.Descriptor,
 ) component.Descriptor {
@@ -165,7 +166,7 @@ pub fn hierarchyBpt(
                 if (ParentTrait.fixed_value_size.? < value_envelope.envelope_byte_size +
                     maximumChildPayloadSize(HierarchyT, PageIdT))
                 {
-                    @compileError("fullaz-db hierarchyBpt parent fixed_value_size cannot hold an embedded child envelope");
+                    @compileError("fullaz-db hierarchyStore parent fixed_value_size cannot hold an embedded child envelope");
                 }
                 validateBptChildEnvelopeCapacities(HierarchyT, PageIdT);
             }
@@ -214,46 +215,6 @@ pub fn hierarchyBpt(
 
                 pub fn destroyPage(self: *Self, page_id: PageIdT) Error!void {
                     return self.cache.free(page_id);
-                }
-            };
-
-            const ConstInlineRootManager = struct {
-                const Self = @This();
-
-                pub const Error = error{ReadOnly};
-                pub const PageId = PageIdT;
-                pub const StateLeaseType = struct {
-                    const LeaseSelf = @This();
-
-                    pub const Error = error{ReadOnly};
-
-                    root: *const PackedRoot,
-
-                    pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
-                        return std.mem.asBytes(self.root);
-                    }
-
-                    pub fn dataMut(_: *LeaseSelf) LeaseSelf.Error![]u8 {
-                        return error.ReadOnly;
-                    }
-
-                    pub fn finish(_: *LeaseSelf) void {}
-
-                    pub fn deinit(_: *LeaseSelf) void {}
-                };
-
-                root: *const PackedRoot,
-
-                fn init(root: *const PackedRoot) Self {
-                    return .{ .root = root };
-                }
-
-                pub fn state(self: *Self) Error!StateLeaseType {
-                    return .{ .root = self.root };
-                }
-
-                pub fn destroyPage(_: *Self, _: PageIdT) Error!void {
-                    return error.ReadOnly;
                 }
             };
 
@@ -424,6 +385,64 @@ pub fn hierarchyBpt(
                 }
             };
 
+            // Builds a temporary native child runtime for page scanning. The
+            // neutral state is sufficient because scanners only inspect the
+            // supplied page; embedded payload state is not consulted here.
+            const ChildRuntimeFactory = struct {
+                pub fn get(comptime index: usize) type {
+                    @setEvalBranchQuota(10_000);
+                    const ChildBinding = component.bindingFor(
+                        HierarchyT.types[index].descriptor,
+                        BackendT,
+                    );
+                    const StateT = ChildBinding.State;
+                    const StorageManagerT = embedded.MutablePayloadStorageManager(
+                        CacheT,
+                        StateT,
+                    );
+                    const StorageBindingT = component.storageBindingFor(
+                        ChildBinding,
+                        BackendT,
+                        StorageManagerT,
+                    );
+
+                    return struct {
+                        const Self = @This();
+
+                        pub const State = StateT;
+                        pub const Error = StorageManagerT.Error || StorageBindingT.Error;
+
+                        state: StateT,
+                        manager: StorageManagerT,
+                        runtime: StorageBindingT.Runtime,
+
+                        pub fn init(
+                            self: *Self,
+                            backend: *BackendT,
+                            page_kinds: component.PageKindRange,
+                        ) Error!void {
+                            self.state = StorageBindingT.emptyState();
+                            self.manager = try StorageManagerT.init(
+                                backend.cache(),
+                                std.mem.asBytes(&self.state),
+                            );
+                            try StorageBindingT.initRuntime(
+                                &self.runtime,
+                                backend,
+                                &self.manager,
+                                page_kinds,
+                                .{},
+                            );
+                        }
+
+                        pub fn deinit(self: *Self) void {
+                            StorageBindingT.deinitRuntime(&self.runtime);
+                            self.* = undefined;
+                        }
+                    };
+                }
+            };
+
             const ConstRuntime = struct {
                 parent: *const ParentBinding.Runtime,
                 backend: *BackendT,
@@ -444,12 +463,19 @@ pub fn hierarchyBpt(
                 pub const Error = ParentBinding.ConstProxy.Error ||
                     ChildError ||
                     value_envelope.Error ||
-                    ConstInlineRootManager.Error ||
-                    std.mem.Allocator.Error;
+                    std.mem.Allocator.Error ||
+                    error{ReadOnly};
                 pub const Iterator = ParentBinding.ConstProxy.Iterator;
                 pub const ConstIterator = Iterator;
 
                 runtime: *const ConstRuntime,
+
+                fn ChildBindingForTag(comptime tag: []const u8) type {
+                    return component.bindingFor(
+                        HierarchyT.entryByTag(tag).descriptor,
+                        BackendT,
+                    );
+                }
 
                 fn init(runtime: *const ConstRuntime) Self {
                     return .{ .runtime = runtime };
@@ -475,146 +501,17 @@ pub fn hierarchyBpt(
                     return self.parent().lowerBound(key);
                 }
 
-                /// A read-only BPT facade that pins its parent embedded value.
-                /// Deinitialize all iterators before this reader.
-                pub fn EmbeddedBptReader(comptime tag: []const u8) type {
-                    if (comptime childKind(HierarchyT, HierarchyT.indexOfTag(tag)) != .bpt) {
-                        @compileError("openEmbeddedBpt requires a registered BPT child type");
-                    }
-                    const ChildTrait = HierarchyT.entryByTag(tag).descriptor.Trait;
-                    const ChildModel = low_level_bpt.models.PagedModel(
-                        CacheT,
-                        ConstInlineRootManager,
-                        ChildTrait.compare,
-                        ChildTrait.CompareContext,
-                    );
-                    const ChildTree = low_level_bpt.Bpt(ChildModel);
-
-                    return struct {
-                        const ReaderSelf = @This();
-
-                        const State = struct {
-                            manager: ConstInlineRootManager,
-                            model: ChildModel,
-                            tree: ChildTree,
-                        };
-
-                        pub const Error = ChildTree.Error ||
-                            value_envelope.Error ||
-                            std.mem.Allocator.Error;
-                        pub const Iterator = struct {
-                            const IteratorSelf = @This();
-
-                            inner: ChildTree.Iterator,
-
-                            pub fn get(self: *const IteratorSelf) @TypeOf(self.inner.get()) {
-                                return self.inner.get();
-                            }
-
-                            pub fn next(self: *IteratorSelf) @TypeOf(self.inner.next()) {
-                                return self.inner.next();
-                            }
-
-                            pub fn prev(self: *IteratorSelf) @TypeOf(self.inner.prev()) {
-                                return self.inner.prev();
-                            }
-
-                            pub fn deinit(self: *IteratorSelf) void {
-                                self.inner.deinit();
-                                self.* = undefined;
-                            }
-                        };
-
-                        parent_iterator: ParentBinding.ConstProxy.Iterator,
-                        state: *State,
-                        allocator: std.mem.Allocator,
-
-                        fn init(
-                            allocator: std.mem.Allocator,
-                            cache: *CacheT,
-                            page_kinds: component.PageKindRange,
-                            payload: []const u8,
-                            parent_iterator: ParentBinding.ConstProxy.Iterator,
-                        ) ReaderSelf.Error!ReaderSelf {
-                            if (payload.len != @sizeOf(PackedRoot)) {
-                                return error.BadPayloadLength;
-                            }
-                            const root: *const PackedRoot = @ptrCast(payload.ptr);
-                            const state = try allocator.create(State);
-                            errdefer allocator.destroy(state);
-                            state.manager = ConstInlineRootManager.init(root);
-                            state.model = try ChildModel.init(
-                                cache,
-                                &state.manager,
-                                .{
-                                    .maximum_key_size = ChildTrait.maximum_key_size,
-                                    .maximum_value_size = ChildTrait.maximum_value_size,
-                                    .fixed_value_size = ChildTrait.fixed_value_size,
-                                    .leaf_page_kind = page_kinds.kindAt(0).?,
-                                    .inode_page_kind = page_kinds.kindAt(1).?,
-                                },
-                                {},
-                            );
-                            errdefer state.model.deinit();
-                            state.tree = .init(&state.model, ChildTrait.rebalance_policy);
-                            return .{
-                                .parent_iterator = parent_iterator,
-                                .state = state,
-                                .allocator = allocator,
-                            };
-                        }
-
-                        pub fn iterator(self: *const ReaderSelf) ReaderSelf.Error!?ReaderSelf.Iterator {
-                            if (try self.state.tree.iterator()) |inner| {
-                                return .{ .inner = inner };
-                            }
-                            return null;
-                        }
-
-                        pub fn iteratorFromEnd(self: *const ReaderSelf) ReaderSelf.Error!?ReaderSelf.Iterator {
-                            if (try self.state.tree.iteratorFromEnd()) |inner| {
-                                return .{ .inner = inner };
-                            }
-                            return null;
-                        }
-
-                        pub fn find(
-                            self: *const ReaderSelf,
-                            key: []const u8,
-                        ) ReaderSelf.Error!?ReaderSelf.Iterator {
-                            if (try self.state.tree.find(key)) |inner| {
-                                return .{ .inner = inner };
-                            }
-                            return null;
-                        }
-
-                        pub fn lowerBound(
-                            self: *const ReaderSelf,
-                            key: []const u8,
-                        ) ReaderSelf.Error!?ReaderSelf.Iterator {
-                            if (try self.state.tree.lowerBound(key)) |inner| {
-                                return .{ .inner = inner };
-                            }
-                            return null;
-                        }
-
-                        pub fn deinit(self: *ReaderSelf) void {
-                            self.state.tree.deinit();
-                            self.state.model.deinit();
-                            self.allocator.destroy(self.state);
-                            self.parent_iterator.deinit();
-                            self.* = undefined;
-                        }
-                    };
-                }
-
-                /// Opens an exact embedded BPT and retains its parent value pin.
-                pub fn openEmbeddedBpt(
+                /// Opens an exact embedded child through its StorageBinding and
+                /// retains the parent iterator until the child closes.
+                pub fn openEmbedded(
                     self: *const Self,
                     key: []const u8,
                     comptime tag: []const u8,
-                ) Error!?EmbeddedBptReader(tag) {
-                    const Reader = EmbeddedBptReader(tag);
+                ) Error!?embedded.OwnedConstChild(
+                    BackendT,
+                    ChildBindingForTag(tag),
+                    ParentBinding.ConstProxy.Iterator,
+                ) {
                     var parent_iterator = (try self.find(key)) orelse return null;
                     var transferred = false;
                     errdefer if (!transferred) {
@@ -625,15 +522,21 @@ pub fn hierarchyBpt(
                         entry.value,
                         HierarchyT.entryByTag(tag).type_identity,
                     );
-                    const reader = try Reader.init(
-                        self.runtime.backend.allocator(),
-                        self.runtime.backend.cache(),
-                        self.runtime.childPageKinds(HierarchyT.indexOfTag(tag)),
+                    const ChildBinding = ChildBindingForTag(tag);
+                    const Child = embedded.OwnedConstChild(
+                        BackendT,
+                        ChildBinding,
+                        ParentBinding.ConstProxy.Iterator,
+                    );
+                    const child = try Child.init(
+                        self.runtime.backend,
                         value.payload,
                         parent_iterator,
+                        self.runtime.childPageKinds(HierarchyT.indexOfTag(tag)),
+                        .{},
                     );
                     transferred = true;
-                    return reader;
+                    return child;
                 }
             };
 
@@ -647,6 +550,7 @@ pub fn hierarchyBpt(
                 const_proxy: ConstProxyImpl,
                 active_editor: bool = false,
                 next_instance_id: u64 = 1,
+                aggregate_next_instance_id: ?*u64 = null,
 
                 fn parentPageKinds(self: *const @This()) component.PageKindRange {
                     return .{ .base = self.page_kinds.base, .count = ParentTrait.page_kind_count };
@@ -661,8 +565,9 @@ pub fn hierarchyBpt(
                 }
 
                 fn nextMetadata(self: *@This(), comptime tag: []const u8) value_envelope.Metadata {
-                    const instance_id = self.next_instance_id;
-                    self.next_instance_id = std.math.add(u64, instance_id, 1) catch
+                    const next_instance_id = self.aggregate_next_instance_id orelse &self.next_instance_id;
+                    const instance_id = next_instance_id.*;
+                    next_instance_id.* = std.math.add(u64, instance_id, 1) catch
                         @panic("fullaz-db hierarchy instance ID space exhausted");
                     return .{
                         .registry_id = HierarchyT.registry_id,
@@ -690,29 +595,29 @@ pub fn hierarchyBpt(
                     page: []const u8,
                     visitor: anytype,
                 ) !void {
-                    const ChildTrait = HierarchyT.types[index].descriptor.Trait;
-                    const ChildModel = low_level_bpt.models.PagedModel(
-                        CacheT,
-                        InlineRootManager,
-                        ChildTrait.compare,
-                        ChildTrait.CompareContext,
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
                     );
-                    var root = PackedRoot.init(PackedRoot.max);
-                    var manager = InlineRootManager.init(self.backend.cache(), &root);
-                    var model = try ChildModel.init(
-                        self.backend.cache(),
-                        &manager,
-                        .{
-                            .maximum_key_size = ChildTrait.maximum_key_size,
-                            .maximum_value_size = ChildTrait.maximum_value_size,
-                            .fixed_value_size = ChildTrait.fixed_value_size,
-                            .leaf_page_kind = self.childPageKinds(index).kindAt(0).?,
-                            .inode_page_kind = self.childPageKinds(index).kindAt(1).?,
-                        },
-                        {},
+                    defer child.deinit();
+                    return child.runtime.tree.scanLeafRefs(page_id, page, visitor);
+                }
+
+                fn scanBptChildInode(
+                    self: *const @This(),
+                    comptime index: usize,
+                    page_id: PageIdT,
+                    page: []const u8,
+                    visitor: anytype,
+                ) !void {
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
                     );
-                    defer model.deinit();
-                    return model.scanLeafRefs(page_id, page, visitor);
+                    defer child.deinit();
+                    return child.runtime.tree.scanInodeRefs(page_id, page, visitor);
                 }
 
                 fn scanWeightedSequenceChildLeaf(
@@ -722,34 +627,13 @@ pub fn hierarchyBpt(
                     page: []const u8,
                     visitor: anytype,
                 ) !void {
-                    const ChildTrait = HierarchyT.types[index].descriptor.Trait;
-                    const ChildModel = weighted_bpt.models.paged.PagedModel(
-                        CacheT,
-                        InlineRootManager,
-                        u64,
-                        void,
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
                     );
-                    const ChildTree = weighted_bpt.WeightedBpt(ChildModel);
-                    const Sequence = weighted_seq.WeightedSeq(
-                        ChildTree,
-                        ChildTrait.maximum_chunk_size,
-                    );
-                    var root = PackedRoot.init(PackedRoot.max);
-                    var manager = InlineRootManager.init(self.backend.cache(), &root);
-                    var model = ChildModel.init(
-                        self.backend.cache(),
-                        &manager,
-                        .{
-                            .maximum_value_size = ChildTrait.maximum_chunk_size,
-                            .leaf_page_kind = self.childPageKinds(index).kindAt(0).?,
-                            .inode_page_kind = self.childPageKinds(index).kindAt(1).?,
-                        },
-                    );
-                    defer model.deinit();
-                    var tree = ChildTree.init(&model, .neighbor_share);
-                    defer tree.deinit();
-                    var sequence = Sequence.init(&tree);
-                    return sequence.scanLeafRefs(page_id, page, visitor);
+                    defer child.deinit();
+                    return child.runtime.sequence.scanLeafRefs(page_id, page, visitor);
                 }
 
                 fn scanWeightedSequenceChildInode(
@@ -759,34 +643,13 @@ pub fn hierarchyBpt(
                     page: []const u8,
                     visitor: anytype,
                 ) !void {
-                    const ChildTrait = HierarchyT.types[index].descriptor.Trait;
-                    const ChildModel = weighted_bpt.models.paged.PagedModel(
-                        CacheT,
-                        InlineRootManager,
-                        u64,
-                        void,
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
                     );
-                    const ChildTree = weighted_bpt.WeightedBpt(ChildModel);
-                    const Sequence = weighted_seq.WeightedSeq(
-                        ChildTree,
-                        ChildTrait.maximum_chunk_size,
-                    );
-                    var root = PackedRoot.init(PackedRoot.max);
-                    var manager = InlineRootManager.init(self.backend.cache(), &root);
-                    var model = ChildModel.init(
-                        self.backend.cache(),
-                        &manager,
-                        .{
-                            .maximum_value_size = ChildTrait.maximum_chunk_size,
-                            .leaf_page_kind = self.childPageKinds(index).kindAt(0).?,
-                            .inode_page_kind = self.childPageKinds(index).kindAt(1).?,
-                        },
-                    );
-                    defer model.deinit();
-                    var tree = ChildTree.init(&model, .neighbor_share);
-                    defer tree.deinit();
-                    var sequence = Sequence.init(&tree);
-                    return sequence.scanInodeRefs(page_id, page, visitor);
+                    defer child.deinit();
+                    return child.runtime.sequence.scanInodeRefs(page_id, page, visitor);
                 }
 
                 fn scanChainStoreChild(
@@ -796,20 +659,13 @@ pub fn hierarchyBpt(
                     page: []const u8,
                     visitor: anytype,
                 ) !void {
-                    const ChainBlob = fullaz.storage.chain_store.Blob(
-                        CacheT,
-                        InlineChainStoreManager,
-                        .little,
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
                     );
-                    var payload: ChainStoreState = .{};
-                    var manager = InlineChainStoreManager.init(self.backend.cache(), &payload);
-                    var blob = ChainBlob.init(
-                        self.backend.cache(),
-                        &manager,
-                        .{ .chunk_page_kind = self.childPageKinds(index).kindAt(0).? },
-                    );
-                    defer blob.deinit();
-                    return blob.scanChunkRefs(page_id, page, visitor);
+                    defer child.deinit();
+                    return child.runtime.blob.scanChunkRefs(page_id, page, visitor);
                 }
 
                 fn scanRtreeChildLeaf(
@@ -819,28 +675,13 @@ pub fn hierarchyBpt(
                     page: []const u8,
                     visitor: anytype,
                 ) !void {
-                    const ChildTrait = HierarchyT.types[index].descriptor.Trait;
-                    const ChildModel = low_level_rtree.models.Paged(
-                        CacheT,
-                        InlineRootManager,
-                        ChildTrait.Coord,
-                        ChildTrait.dimensions,
-                        ChildTrait.maximum_entries,
-                        ChildTrait.maximum_value_size,
-                        .little,
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
                     );
-                    var root = PackedRoot.init(PackedRoot.max);
-                    var manager = InlineRootManager.init(self.backend.cache(), &root);
-                    var model = try ChildModel.init(
-                        self.backend.cache(),
-                        &manager,
-                        .{
-                            .leaf_page_kind = self.childPageKinds(index).kindAt(0).?,
-                            .inode_page_kind = self.childPageKinds(index).kindAt(1).?,
-                        },
-                    );
-                    defer model.deinit();
-                    return model.scanLeafRefs(page_id, page, visitor);
+                    defer child.deinit();
+                    return child.runtime.tree.scanLeafRefs(page_id, page, visitor);
                 }
 
                 fn scanRtreeChildInode(
@@ -850,28 +691,13 @@ pub fn hierarchyBpt(
                     page: []const u8,
                     visitor: anytype,
                 ) !void {
-                    const ChildTrait = HierarchyT.types[index].descriptor.Trait;
-                    const ChildModel = low_level_rtree.models.Paged(
-                        CacheT,
-                        InlineRootManager,
-                        ChildTrait.Coord,
-                        ChildTrait.dimensions,
-                        ChildTrait.maximum_entries,
-                        ChildTrait.maximum_value_size,
-                        .little,
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
                     );
-                    var root = PackedRoot.init(PackedRoot.max);
-                    var manager = InlineRootManager.init(self.backend.cache(), &root);
-                    var model = try ChildModel.init(
-                        self.backend.cache(),
-                        &manager,
-                        .{
-                            .leaf_page_kind = self.childPageKinds(index).kindAt(0).?,
-                            .inode_page_kind = self.childPageKinds(index).kindAt(1).?,
-                        },
-                    );
-                    defer model.deinit();
-                    return model.scanInodeRefs(page_id, page, visitor);
+                    defer child.deinit();
+                    return child.runtime.tree.scanInodeRefs(page_id, page, visitor);
                 }
 
                 fn scanSlotHeapChildLeaf(
@@ -881,36 +707,13 @@ pub fn hierarchyBpt(
                     page: []const u8,
                     visitor: anytype,
                 ) !void {
-                    const Child = SlotHeapChildFactory.get(index);
-                    var payload = Child.emptyPayload();
-                    var state_manager = Child.StateManager.init(self.backend.cache(), &payload);
-                    var state_adapter = Child.StateAdapterType.init(&state_manager);
-                    var fsm_model = Child.FsmModelType.init(
-                        self.backend.cache(),
-                        &state_adapter,
-                        HierarchyT.types[index].descriptor.Trait.size_class_policy,
-                        .{ .page_kind = self.childPageKinds(index).kindAt(2).? },
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
                     );
-                    defer fsm_model.deinit();
-                    var fsm_value = Child.FsmType.init(&fsm_model);
-                    defer fsm_value.deinit();
-                    var model = try Child.ModelType.init(
-                        self.backend.cache(),
-                        &state_adapter,
-                        &fsm_value,
-                        .{
-                            .key_size = HierarchyT.types[index].descriptor.Trait.maximum_key_size,
-                            .maximum_value_size = HierarchyT.types[index].descriptor.Trait.maximum_value_size,
-                            .comparator_id = HierarchyT.types[index].descriptor.Trait.comparator_id,
-                            .leaf_page_kind = self.childPageKinds(index).kindAt(0).?,
-                            .inode_page_kind = self.childPageKinds(index).kindAt(1).?,
-                            .maximum_level = HierarchyT.types[index].descriptor.Trait.maximum_level,
-                        },
-                        {},
-                    );
-                    defer model.deinit();
-                    var heap = Child.HeapType.init(&model);
-                    return heap.scanLeafRefs(page_id, page, visitor);
+                    defer child.deinit();
+                    return child.runtime.heap.scanLeafRefs(page_id, page, visitor);
                 }
 
                 fn scanSlotHeapChildInode(
@@ -920,36 +723,13 @@ pub fn hierarchyBpt(
                     page: []const u8,
                     visitor: anytype,
                 ) !void {
-                    const Child = SlotHeapChildFactory.get(index);
-                    var payload = Child.emptyPayload();
-                    var state_manager = Child.StateManager.init(self.backend.cache(), &payload);
-                    var state_adapter = Child.StateAdapterType.init(&state_manager);
-                    var fsm_model = Child.FsmModelType.init(
-                        self.backend.cache(),
-                        &state_adapter,
-                        HierarchyT.types[index].descriptor.Trait.size_class_policy,
-                        .{ .page_kind = self.childPageKinds(index).kindAt(2).? },
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
                     );
-                    defer fsm_model.deinit();
-                    var fsm_value = Child.FsmType.init(&fsm_model);
-                    defer fsm_value.deinit();
-                    var model = try Child.ModelType.init(
-                        self.backend.cache(),
-                        &state_adapter,
-                        &fsm_value,
-                        .{
-                            .key_size = HierarchyT.types[index].descriptor.Trait.maximum_key_size,
-                            .maximum_value_size = HierarchyT.types[index].descriptor.Trait.maximum_value_size,
-                            .comparator_id = HierarchyT.types[index].descriptor.Trait.comparator_id,
-                            .leaf_page_kind = self.childPageKinds(index).kindAt(0).?,
-                            .inode_page_kind = self.childPageKinds(index).kindAt(1).?,
-                            .maximum_level = HierarchyT.types[index].descriptor.Trait.maximum_level,
-                        },
-                        {},
-                    );
-                    defer model.deinit();
-                    var heap = Child.HeapType.init(&model);
-                    return heap.scanInodeRefs(page_id, page, visitor);
+                    defer child.deinit();
+                    return child.runtime.heap.scanInodeRefs(page_id, page, visitor);
                 }
 
                 fn scanSlotHeapChildFsmSlab(
@@ -959,20 +739,13 @@ pub fn hierarchyBpt(
                     page: []const u8,
                     visitor: anytype,
                 ) !void {
-                    const Child = SlotHeapChildFactory.get(index);
-                    var payload = Child.emptyPayload();
-                    var state_manager = Child.StateManager.init(self.backend.cache(), &payload);
-                    var state_adapter = Child.StateAdapterType.init(&state_manager);
-                    var fsm_model = Child.FsmModelType.init(
-                        self.backend.cache(),
-                        &state_adapter,
-                        HierarchyT.types[index].descriptor.Trait.size_class_policy,
-                        .{ .page_kind = self.childPageKinds(index).kindAt(2).? },
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
                     );
-                    defer fsm_model.deinit();
-                    var fsm_value = Child.FsmType.init(&fsm_model);
-                    defer fsm_value.deinit();
-                    return fsm_value.scanSlabRefs(page_id, page, visitor);
+                    defer child.deinit();
+                    return child.runtime.fsm.scanSlabRefs(page_id, page, visitor);
                 }
 
                 fn valueScanner(comptime CollectorT: type) CollectorT.ValueScanner {
@@ -1005,40 +778,28 @@ pub fn hierarchyBpt(
                                     value.metadata.type_version == identity.type_version and
                                     value.metadata.metadata_format_version == identity.metadata_format_version)
                                 {
+                                    const Child = ChildRuntimeFactory.get(index);
+                                    if (value.payload.len != @sizeOf(Child.State)) {
+                                        return error.InvalidPage;
+                                    }
+                                    const state: *const Child.State = @ptrCast(value.payload.ptr);
                                     if (comptime childKind(HierarchyT, index) == .slot_heap) {
-                                        const Child = SlotHeapChildFactory.get(index);
-                                        if (value.payload.len != @sizeOf(Child.PayloadType)) {
-                                            return error.InvalidPage;
+                                        if (!state.root.isMax()) {
+                                            try sink.visit(state.root.get());
                                         }
-                                        const payload: *const Child.PayloadType = @ptrCast(value.payload.ptr);
-                                        if (!payload.root.isMax()) {
-                                            try sink.visit(payload.root.get());
-                                        }
-                                        for (payload.fsm_class_roots) |fsm_root| {
+                                        for (state.fsm_class_roots) |fsm_root| {
                                             if (!fsm_root.isMax()) {
                                                 try sink.visit(fsm_root.get());
                                             }
                                         }
-                                    } else switch (childKind(HierarchyT, index)) {
-                                        .bpt, .rtree, .weighted_sequence => {
-                                            if (value.payload.len != @sizeOf(PackedRoot)) {
-                                                return error.InvalidPage;
-                                            }
-                                            const root: *const PackedRoot = @ptrCast(value.payload.ptr);
-                                            if (!root.isMax()) {
-                                                try sink.visit(root.get());
-                                            }
-                                        },
-                                        .chain_store => {
-                                            if (value.payload.len != @sizeOf(ChainStoreState)) {
-                                                return error.InvalidPage;
-                                            }
-                                            const payload: *const ChainStoreState = @ptrCast(value.payload.ptr);
-                                            if (!payload.first.isMax()) {
-                                                try sink.visit(payload.first.get());
-                                            }
-                                        },
-                                        .slot_heap => unreachable,
+                                    } else if (comptime childKind(HierarchyT, index) == .chain_store) {
+                                        if (!state.first.isMax()) {
+                                            try sink.visit(state.first.get());
+                                        }
+                                    } else {
+                                        if (!state.root.isMax()) {
+                                            try sink.visit(state.root.get());
+                                        }
                                     }
                                     return;
                                 }
@@ -1077,30 +838,8 @@ pub fn hierarchyBpt(
                             sink: CollectorT.ReferenceSink,
                         ) CollectorT.Error!void {
                             const runtime: *const RuntimeSelf = @ptrCast(@alignCast(context orelse return error.InvalidScannerContext));
-                            const ChildTrait = HierarchyT.types[index].descriptor.Trait;
-                            const ChildModel = low_level_bpt.models.PagedModel(
-                                CacheT,
-                                InlineRootManager,
-                                ChildTrait.compare,
-                                ChildTrait.CompareContext,
-                            );
-                            var root = PackedRoot.init(PackedRoot.max);
-                            var manager = InlineRootManager.init(runtime.backend.cache(), &root);
-                            var model = ChildModel.init(
-                                runtime.backend.cache(),
-                                &manager,
-                                .{
-                                    .maximum_key_size = ChildTrait.maximum_key_size,
-                                    .maximum_value_size = ChildTrait.maximum_value_size,
-                                    .fixed_value_size = ChildTrait.fixed_value_size,
-                                    .leaf_page_kind = runtime.childPageKinds(index).kindAt(0).?,
-                                    .inode_page_kind = runtime.childPageKinds(index).kindAt(1).?,
-                                },
-                                {},
-                            ) catch return error.InvalidPage;
-                            defer model.deinit();
                             var visitor = SinkVisitor(CollectorT){ .sink = sink };
-                            model.scanInodeRefs(page_id, page, &visitor) catch |err| {
+                            runtime.scanBptChildInode(index, page_id, page, &visitor) catch |err| {
                                 if (err == error.Abort) {
                                     return visitor.sink_error.?;
                                 }
@@ -2271,6 +2010,52 @@ pub fn hierarchyBpt(
                     runtime: *RuntimeImpl,
                     transaction_generation: ?u64,
 
+                    fn ChildBindingForTag(comptime tag: []const u8) type {
+                        return component.bindingFor(
+                            HierarchyT.entryByTag(tag).descriptor,
+                            BackendT,
+                        );
+                    }
+
+                    fn parentEditorError(comptime ParentEditorT: type) type {
+                        if (!@hasDecl(ParentEditorT, "valueMut")) {
+                            @compileError("embedded child parent editor must provide valueMut()");
+                        }
+                        const result = @typeInfo(@TypeOf(ParentEditorT.valueMut)).@"fn".return_type orelse
+                            @compileError("embedded child parent editor valueMut() must return an error union");
+                        return @typeInfo(result).error_union.error_set;
+                    }
+
+                    pub fn nextMetadata(
+                        self: *const Self,
+                        comptime tag: []const u8,
+                    ) value_envelope.Metadata {
+                        return self.runtime.nextMetadata(tag);
+                    }
+
+                    pub fn encodedRaw(
+                        self: *const Self,
+                        comptime tag: []const u8,
+                        payload: []const u8,
+                    ) Error!embedded.EncodedValue(ParentTrait.fixed_value_size.?) {
+                        return embedded.EncodedValue(ParentTrait.fixed_value_size.?).formatRaw(
+                            self.nextMetadata(tag),
+                            payload,
+                        );
+                    }
+
+                    pub fn encodedEmbedded(
+                        self: *const Self,
+                        comptime tag: []const u8,
+                    ) Error!embedded.EncodedValue(ParentTrait.fixed_value_size.?) {
+                        const ChildBinding = ChildBindingForTag(tag);
+                        var state: ChildBinding.State = .{};
+                        return embedded.EncodedValue(ParentTrait.fixed_value_size.?).formatEmbedded(
+                            self.nextMetadata(tag),
+                            std.mem.asBytes(&state),
+                        );
+                    }
+
                     fn requireTransaction(self: *const Self) Error!void {
                         if (self.transaction_generation == null or
                             self.runtime.backend.cache().transactionGeneration() != self.transaction_generation)
@@ -2382,6 +2167,176 @@ pub fn hierarchyBpt(
                                 null,
                             ),
                         };
+                    }
+
+                    fn ChildHandle(comptime parent_tag: []const u8, comptime ParentEditorT: type) type {
+                        @setEvalBranchQuota(10_000);
+                        const ParentBindingT = ChildBindingForTag(parent_tag);
+                        const StorageChild = embedded.OwnedMutableChild(
+                            BackendT,
+                            ParentBindingT,
+                            parentEditorError(ParentEditorT),
+                        );
+
+                        return struct {
+                            const HandleSelf = @This();
+
+                            pub const Error = StorageChild.Error || error{ChildTypeNotAllowed};
+                            pub const StorageBinding = StorageChild.StorageBinding;
+
+                            inner: StorageChild,
+                            owner: Self,
+
+                            pub fn proxy(self: *HandleSelf) StorageChild.StorageBinding.Proxy {
+                                return self.inner.proxy();
+                            }
+
+                            pub fn finish(self: *HandleSelf) HandleSelf.Error!void {
+                                return self.inner.finish();
+                            }
+
+                            pub fn deinit(self: *HandleSelf) void {
+                                self.inner.deinit();
+                            }
+
+                            pub fn encodedRaw(
+                                self: *const HandleSelf,
+                                comptime child_tag: []const u8,
+                                payload: []const u8,
+                            ) HandleSelf.Error!embedded.EncodedValue(ParentBindingT.value_capacity orelse
+                                @compileError("embedded parent component cannot store hierarchy values")) {
+                                return self.inner.formatRaw(
+                                    self.owner.nextMetadata(child_tag),
+                                    payload,
+                                );
+                            }
+
+                            pub fn encodedEmbedded(
+                                self: *const HandleSelf,
+                                comptime child_tag: []const u8,
+                            ) HandleSelf.Error!embedded.EncodedValue(ParentBindingT.value_capacity orelse
+                                @compileError("embedded parent component cannot store hierarchy values")) {
+                                const parent_type_id = HierarchyT.entryByTag(parent_tag).type_identity.type_id;
+                                const child_type_id = HierarchyT.entryByTag(child_tag).type_identity.type_id;
+                                if (comptime !HierarchyT.allowsChild(parent_type_id, child_type_id)) {
+                                    return error.ChildTypeNotAllowed;
+                                }
+                                const ChildBinding = ChildBindingForTag(child_tag);
+                                var state: ChildBinding.State = .{};
+                                return self.inner.formatEmbedded(
+                                    self.owner.nextMetadata(child_tag),
+                                    std.mem.asBytes(&state),
+                                );
+                            }
+
+                            /// Transfers a native value editor from this child's proxy
+                            /// into one of its registered children.
+                            pub fn openChild(
+                                self: *const HandleSelf,
+                                parent_editor: anytype,
+                                comptime child_tag: []const u8,
+                            ) @TypeOf(self.owner.openNestedChild(
+                                parent_tag,
+                                parent_editor,
+                                child_tag,
+                            )) {
+                                return self.owner.openNestedChild(
+                                    parent_tag,
+                                    parent_editor,
+                                    child_tag,
+                                );
+                            }
+                        };
+                    }
+
+                    fn openChildStorage(
+                        self: *const Self,
+                        parent_editor: anytype,
+                        comptime tag: []const u8,
+                    ) (Error || parentEditorError(@TypeOf(parent_editor)))!embedded.OwnedMutableChild(
+                        BackendT,
+                        ChildBindingForTag(tag),
+                        parentEditorError(@TypeOf(parent_editor)),
+                    ) {
+                        try self.requireTransaction();
+                        var owned_parent_editor = parent_editor;
+                        var transferred = false;
+                        errdefer if (!transferred) {
+                            owned_parent_editor.deinit();
+                        };
+                        var envelope_editor = try value_envelope.openEmbeddedMut(
+                            try owned_parent_editor.valueMut(),
+                            HierarchyT.entryByTag(tag).type_identity,
+                        );
+                        errdefer envelope_editor.invalidate();
+                        const ChildBinding = ChildBindingForTag(tag);
+                        const Child = embedded.OwnedMutableChild(
+                            BackendT,
+                            ChildBinding,
+                            parentEditorError(@TypeOf(parent_editor)),
+                        );
+                        const child = try Child.init(
+                            self.runtime.backend,
+                            try envelope_editor.payloadMut(),
+                            envelope_editor,
+                            owned_parent_editor,
+                            self.runtime.childPageKinds(HierarchyT.indexOfTag(tag)),
+                            .{},
+                        );
+                        transferred = true;
+                        return child;
+                    }
+
+                    /// Opens a registered root child through its component-owned
+                    /// StorageBinding. The returned handle exposes the native proxy
+                    /// and can open nested hierarchy children.
+                    pub fn openChild(
+                        self: *const Self,
+                        parent_editor: anytype,
+                        comptime tag: []const u8,
+                    ) (Error || parentEditorError(@TypeOf(parent_editor)))!ChildHandle(
+                        tag,
+                        @TypeOf(parent_editor),
+                    ) {
+                        return .{
+                            .inner = try self.openChildStorage(parent_editor, tag),
+                            .owner = self.*,
+                        };
+                    }
+
+                    fn openNestedChild(
+                        self: *const Self,
+                        comptime parent_tag: []const u8,
+                        parent_editor: anytype,
+                        comptime child_tag: []const u8,
+                    ) (Error || parentEditorError(@TypeOf(parent_editor)) || error{ChildTypeNotAllowed})!ChildHandle(
+                        child_tag,
+                        @TypeOf(parent_editor),
+                    ) {
+                        const parent_type_id = HierarchyT.entryByTag(parent_tag).type_identity.type_id;
+                        const child_type_id = HierarchyT.entryByTag(child_tag).type_identity.type_id;
+                        if (comptime !HierarchyT.allowsChild(parent_type_id, child_type_id)) {
+                            return error.ChildTypeNotAllowed;
+                        }
+                        return .{
+                            .inner = try self.openChildStorage(parent_editor, child_tag),
+                            .owner = self.*,
+                        };
+                    }
+
+                    /// Opens a BPT child by key for callers still using the
+                    /// pre-generic selection API.
+                    pub fn openEmbeddedStorageForEdit(
+                        self: *const Self,
+                        key: []const u8,
+                        comptime tag: []const u8,
+                    ) Error!?embedded.OwnedMutableChild(
+                        BackendT,
+                        ChildBindingForTag(tag),
+                        ParentBinding.Error || ChildError,
+                    ) {
+                        const parent_editor = (try self.runtime.parent.tree.openValueEditor(key)) orelse return null;
+                        return self.openChildStorage(parent_editor, tag);
                     }
 
                     pub fn EditorForTag(comptime tag: []const u8) type {
@@ -2797,6 +2752,7 @@ pub fn hierarchyBpt(
                     };
                     runtime.active_editor = false;
                     runtime.next_instance_id = 1;
+                    runtime.aggregate_next_instance_id = null;
                     try ParentBinding.initRuntime(&runtime.parent, backend, runtime.parentPageKinds(), options);
                     runtime.const_runtime = .{
                         .parent = &runtime.parent,
@@ -2825,6 +2781,7 @@ pub fn hierarchyBpt(
                     runtime.type_page_kinds = type_page_kinds;
                     runtime.active_editor = false;
                     runtime.next_instance_id = 1;
+                    runtime.aggregate_next_instance_id = null;
                     try ParentBinding.initRuntime(&runtime.parent, backend, owner_page_kinds, options);
                     runtime.const_runtime = .{
                         .parent = &runtime.parent,
@@ -2851,11 +2808,12 @@ pub fn hierarchyBpt(
                     runtime.type_page_kinds = type_page_kinds;
                     runtime.active_editor = false;
                     runtime.next_instance_id = 1;
+                    runtime.aggregate_next_instance_id = null;
                 }
 
                 pub fn deinitRuntime(runtime: *RuntimeImpl) void {
                     requireTransactionIdle(runtime) catch
-                        @panic("hierarchyBpt runtime deinitialized with an active value editor");
+                        @panic("hierarchyStore runtime deinitialized with an active value editor");
                     ParentBinding.deinitRuntime(&runtime.parent);
                     runtime.* = undefined;
                 }
@@ -3076,35 +3034,35 @@ fn SinkVisitor(comptime CollectorT: type) type {
 
 fn validate(comptime HierarchyT: type, comptime parent_descriptor: component.Descriptor) void {
     if (!@hasDecl(HierarchyT, "types") or !@hasDecl(HierarchyT, "entryByTag")) {
-        @compileError("fullaz-db hierarchyBpt requires a fullaz-db Hierarchy type");
+        @compileError("fullaz-db hierarchyStore requires a fullaz-db Hierarchy type");
     }
     if (!@hasDecl(parent_descriptor.Trait, "fixed_value_size") or parent_descriptor.Trait.fixed_value_size == null) {
-        @compileError("fullaz-db hierarchyBpt parent BPT requires fixed_value_size");
+        @compileError("fullaz-db hierarchyStore parent BPT requires fixed_value_size");
     }
     if (parent_descriptor.Trait.fixed_value_size.? < value_envelope.envelope_byte_size + 1) {
-        @compileError("fullaz-db hierarchyBpt parent fixed_value_size cannot hold an embedded child envelope");
+        @compileError("fullaz-db hierarchyStore parent fixed_value_size cannot hold an embedded child envelope");
     }
     inline for (HierarchyT.types) |entry| {
         const Trait = entry.descriptor.Trait;
         switch (childKindForTrait(Trait)) {
             .bpt => {
                 if (Trait.CompareContext != void) {
-                    @compileError("fullaz-db hierarchyBpt currently requires void BPT child compare contexts");
+                    @compileError("fullaz-db hierarchyStore currently requires void BPT child compare contexts");
                 }
             },
             .chain_store => {},
             .rtree => {},
             .weighted_sequence => {
                 if (@TypeOf(Trait.maximum_chunk_size) != usize) {
-                    @compileError("fullaz-db hierarchyBpt weightedSequence child maximum_chunk_size must be usize");
+                    @compileError("fullaz-db hierarchyStore weightedSequence child maximum_chunk_size must be usize");
                 }
                 if (Trait.maximum_chunk_size == 0) {
-                    @compileError("fullaz-db hierarchyBpt weightedSequence child maximum_chunk_size must be non-zero");
+                    @compileError("fullaz-db hierarchyStore weightedSequence child maximum_chunk_size must be non-zero");
                 }
             },
             .slot_heap => {
                 if (Trait.CompareContext != void) {
-                    @compileError("fullaz-db hierarchyBpt currently requires void SlotHeap child compare contexts");
+                    @compileError("fullaz-db hierarchyStore currently requires void SlotHeap child compare contexts");
                 }
             },
         }
@@ -3204,7 +3162,7 @@ fn childKindForTrait(comptime Trait: type) ChildKind {
     {
         return .slot_heap;
     }
-    @compileError("fullaz-db hierarchyBpt supports BPT, ChainStore, R-tree, WeightedSequence, and SlotHeap child types only");
+    @compileError("fullaz-db hierarchyStore supports BPT, ChainStore, R-tree, WeightedSequence, and SlotHeap child types only");
 }
 
 fn childPageKindCount(comptime HierarchyT: type) usize {

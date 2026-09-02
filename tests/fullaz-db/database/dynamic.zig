@@ -14,6 +14,19 @@ fn slotCompare(_: void, left: []const u8, right: []const u8) std.math.Order {
     return std.mem.order(u8, left, right);
 }
 
+fn embeddedState(
+    comptime StateT: type,
+    bytes: []const u8,
+    expected_type: fullaz_db.value_envelope.TypeIdentity,
+) !StateT {
+    const value = try fullaz_db.value_envelope.readEmbedded(bytes, expected_type);
+    if (value.payload.len != @sizeOf(StateT)) {
+        return error.BadState;
+    }
+    const state: *const StateT = @ptrCast(value.payload.ptr);
+    return state.*;
+}
+
 const ReclaimPageSnapshot = struct {
     page_id: u32,
     bytes: []u8,
@@ -62,9 +75,14 @@ fn collectComponentPages(
     const HeaderView = fullaz.page.header.View(u32, u16, .little, true);
     const end = page_kinds.endExclusive();
 
-    for (1..database.diagnostics().page_count) |index| {
+    for (1..database.cache().pageCount()) |index| {
         const page_id: u32 = @intCast(index);
-        var page = try database.rawCache().fetch(page_id);
+        var page = database.cache().fetch(page_id) catch |err| {
+            if (err == error.PageNotAllocated) {
+                continue;
+            }
+            return err;
+        };
         defer page.deinit();
         const header = HeaderView.init(try page.data());
         header.validateCommon() catch continue;
@@ -1740,21 +1758,27 @@ test "fullaz-db: dynamic schema embedded BPT hierarchy edits and collects child 
             },
         },
     });
-    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+    const OwnerDescriptor = fullaz_db.bpt(.{
         .compare = compare,
         .CompareContext = void,
         .comparator_id = 1,
         .maximum_key_size = 32,
         .maximum_value_size = 96,
         .fixed_value_size = 96,
-    }));
+    });
+    const Owner = fullaz_db.hierarchyStore(Hierarchy, .{ .owners = &.{.{
+        .tag = "nodes",
+        .owner_id = 1,
+        .descriptor = OwnerDescriptor,
+        .allowed_type_ids = &.{ 1, 2 },
+    }} });
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0xE1} ** 16, .components = .{ .tree = .{} } },
+        .{ .image_id = [_]u8{0xE1} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -1762,21 +1786,25 @@ test "fullaz-db: dynamic schema embedded BPT hierarchy edits and collects child 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("folder", tree.embed("folder")));
-        try std.testing.expect(try tree.insert("raw", tree.raw("folder", "plain")));
+        const owner = transaction.get("tree").owner("nodes");
+        const folder_value = try owner.encodedEmbedded("folder");
+        try std.testing.expect(try owner.proxy().insert("folder", folder_value.data()));
+        const raw_value = try owner.encodedRaw("folder", "plain");
+        try std.testing.expect(try owner.proxy().insert("raw", raw_value.data()));
         try std.testing.expectError(
             error.IncorrectKind,
-            tree.openEmbeddedForEdit("raw", "folder"),
+            owner.openChild((try owner.proxy().openValueEditor("raw")).?, "folder"),
         );
         try std.testing.expectError(
             error.IncorrectType,
-            tree.openEmbeddedForEdit("folder", "document"),
+            owner.openChild((try owner.proxy().openValueEditor("folder")).?, "document"),
         );
 
-        var editor = (try tree.openEmbeddedForEdit("folder", "folder")).?;
+        const folder_editor = (try owner.proxy().openValueEditor("folder")).?;
+        var editor = try owner.openChild(folder_editor, "folder");
         defer editor.deinit();
-        try std.testing.expectError(error.ValueEditorActive, tree.insert("blocked", tree.embed("folder")));
+        const blocked_value = try owner.encodedEmbedded("folder");
+        try std.testing.expectError(error.ValueEditorActive, owner.proxy().insert("blocked", blocked_value.data()));
         try editor.finish();
         try transaction.rollback();
     }
@@ -1784,18 +1812,20 @@ test "fullaz-db: dynamic schema embedded BPT hierarchy edits and collects child 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("folder", tree.embed("folder")));
-        var editor = (try tree.openEmbeddedForEdit("folder", "folder")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const folder_value = try owner.encodedEmbedded("folder");
+        try std.testing.expect(try owner.proxy().insert("folder", folder_value.data()));
+        const folder_editor = (try owner.proxy().openValueEditor("folder")).?;
+        var editor = try owner.openChild(folder_editor, "folder");
         defer editor.deinit();
-        try std.testing.expect(try editor.insert("child", editor.raw("folder", "value")));
-        child_root = editor.root().?;
-        var found = (try editor.find("child")).?;
-        const child_value = (try found.get()).?.value;
+        const child_value = try editor.encodedRaw("folder", "value");
+        try std.testing.expect(try editor.proxy().insert("child", child_value.data()));
+        var found = (try editor.proxy().find("child")).?;
+        const child_entry = (try found.get()).?.value;
         try std.testing.expectEqualStrings(
             "value",
             (try fullaz_db.value_envelope.readRaw(
-                child_value,
+                child_entry,
                 Hierarchy.typeIdentityByTag("folder"),
             )).payload,
         );
@@ -1805,10 +1835,22 @@ test "fullaz-db: dynamic schema embedded BPT hierarchy edits and collects child 
     }
 
     {
+        const owner = database.getConst("tree").owner("nodes");
+        var folder = (try owner.find("folder")).?;
+        defer folder.deinit();
+        const state = try embeddedState(
+            ChildDescriptor.Trait.Binding(Database.BackendType).State,
+            (try folder.get()).?.value,
+            Hierarchy.typeIdentityByTag("folder"),
+        );
+        child_root = state.root.get();
+    }
+
+    {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.remove("folder"));
+        const owner = transaction.get("tree").owner("nodes");
+        try std.testing.expect(try owner.proxy().remove("folder"));
         try transaction.commit();
     }
     try database.startGarbageCollection();
@@ -1855,21 +1897,27 @@ test "fullaz-db: dynamic schema recursive embedded BPT hierarchy retains nested 
             },
         },
     });
-    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+    const OwnerDescriptor = fullaz_db.bpt(.{
         .compare = compare,
         .CompareContext = void,
         .comparator_id = 1,
         .maximum_key_size = 32,
         .maximum_value_size = 96,
         .fixed_value_size = 96,
-    }));
+    });
+    const Owner = fullaz_db.hierarchyStore(Hierarchy, .{ .owners = &.{.{
+        .tag = "nodes",
+        .owner_id = 1,
+        .descriptor = OwnerDescriptor,
+        .allowed_type_ids = &.{ 1, 2, 3 },
+    }} });
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0xE9} ** 16, .components = .{ .tree = .{} } },
+        .{ .image_id = [_]u8{0xE9} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -1879,28 +1927,27 @@ test "fullaz-db: dynamic schema recursive embedded BPT hierarchy retains nested 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("root", tree.embed("folder")));
-        var folder = (try tree.openEmbeddedForEdit("root", "folder")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const root_value = try owner.encodedEmbedded("folder");
+        try std.testing.expect(try owner.proxy().insert("root", root_value.data()));
+        const root_editor = (try owner.proxy().openValueEditor("root")).?;
+        var folder = try owner.openChild(root_editor, "folder");
         defer folder.deinit();
-        try std.testing.expectError(error.ChildTypeNotAllowed, folder.embed("forbidden"));
-        try std.testing.expect(try folder.insert("raw", folder.raw("folder", "plain")));
-        try std.testing.expect(try folder.insert("sub", try folder.embed("folder")));
-        folder_root = folder.root().?;
-
-        var nested = (try folder.openEmbeddedForEdit("sub", "folder")).?;
+        try std.testing.expectError(error.ChildTypeNotAllowed, folder.encodedEmbedded("forbidden"));
+        const raw_value = try folder.encodedRaw("folder", "plain");
+        try std.testing.expect(try folder.proxy().insert("raw", raw_value.data()));
+        const sub_value = try folder.encodedEmbedded("folder");
+        try std.testing.expect(try folder.proxy().insert("sub", sub_value.data()));
+        const sub_editor = (try folder.proxy().openValueEditor("sub")).?;
+        var nested = try folder.openChild(sub_editor, "folder");
         defer nested.deinit();
-        try std.testing.expectError(
-            error.EditorActive,
-            folder.insert("blocked", folder.raw("folder", "blocked")),
-        );
-        try std.testing.expectError(error.ChildEditorActive, folder.finish());
-        try std.testing.expect(try nested.insert("raw", nested.raw("folder", "nested raw")));
-        try std.testing.expect(try nested.update("raw", nested.raw("folder", "updated nested raw")));
-        try std.testing.expect(try nested.insert("document", try nested.embed("document")));
-        nested_folder_root = nested.root().?;
-
-        var raw = (try nested.find("raw")).?;
+        const nested_raw_value = try nested.encodedRaw("folder", "nested raw");
+        try std.testing.expect(try nested.proxy().insert("raw", nested_raw_value.data()));
+        const updated_raw_value = try nested.encodedRaw("folder", "updated nested raw");
+        try std.testing.expect(try nested.proxy().update("raw", updated_raw_value.data()));
+        const document_value = try nested.encodedEmbedded("document");
+        try std.testing.expect(try nested.proxy().insert("document", document_value.data()));
+        var raw = (try nested.proxy().find("raw")).?;
         try std.testing.expectEqualStrings(
             "updated nested raw",
             (try fullaz_db.value_envelope.readRaw(
@@ -1910,14 +1957,67 @@ test "fullaz-db: dynamic schema recursive embedded BPT hierarchy retains nested 
         );
         raw.deinit();
 
-        var document = (try nested.openEmbeddedForEdit("document", "document")).?;
+        const document_editor = (try nested.proxy().openValueEditor("document")).?;
+        var document = try nested.openChild(document_editor, "document");
         defer document.deinit();
-        try document.append("recursive document");
-        document_chunk = (try document.first()).?;
+        try document.proxy().append("recursive document");
         try document.finish();
         try nested.finish();
         try folder.finish();
         try transaction.commit();
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const owner = transaction.get("tree").owner("nodes");
+        const root_editor = (try owner.proxy().openValueEditor("root")).?;
+        var folder = try owner.openChild(root_editor, "folder");
+        defer folder.deinit();
+        const sub_editor = (try folder.proxy().openValueEditor("sub")).?;
+        var nested = try folder.openChild(sub_editor, "folder");
+        defer nested.deinit();
+        const blocked_value = try folder.encodedRaw("folder", "blocked");
+        try std.testing.expectError(
+            error.ValueEditorActive,
+            folder.proxy().insert("blocked", blocked_value.data()),
+        );
+        try std.testing.expectError(error.ValueEditorActive, folder.finish());
+        nested.deinit();
+        folder.deinit();
+        try transaction.rollback();
+    }
+
+    {
+        const owner = database.getConst("tree").owner("nodes");
+        var root = (try owner.find("root")).?;
+        defer root.deinit();
+        const folder_state = try embeddedState(
+            FolderDescriptor.Trait.Binding(Database.BackendType).State,
+            (try root.get()).?.value,
+            Hierarchy.typeIdentityByTag("folder"),
+        );
+        folder_root = folder_state.root.get();
+
+        var folder = (try owner.openEmbedded("root", "folder")).?;
+        defer folder.deinit();
+        var nested = (try folder.proxy().find("sub")).?;
+        defer nested.deinit();
+        const nested_state = try embeddedState(
+            FolderDescriptor.Trait.Binding(Database.BackendType).State,
+            (try nested.get()).?.value,
+            Hierarchy.typeIdentityByTag("folder"),
+        );
+        nested_folder_root = nested_state.root.get();
+        const document_page_kinds: fullaz_db.PageKindRange = .{
+            .base = Schema.pageKinds("tree").base + @as(u16, @intCast(
+                Owner.Trait.type_page_kind_offset + FolderDescriptor.Trait.page_kind_count,
+            )),
+            .count = @intCast(ChainStoreDescriptor.Trait.page_kind_count),
+        };
+        var document_pages = try collectComponentPages(&database, document_page_kinds);
+        defer document_pages.deinit(std.testing.allocator);
+        document_chunk = document_pages.items[0];
     }
 
     try database.startGarbageCollection();
@@ -1930,8 +2030,8 @@ test "fullaz-db: dynamic schema recursive embedded BPT hierarchy retains nested 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.remove("root"));
+        const owner = transaction.get("tree").owner("nodes");
+        try std.testing.expect(try owner.proxy().remove("root"));
         try transaction.commit();
     }
     try database.startGarbageCollection();
@@ -1956,21 +2056,27 @@ test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and c
             },
         },
     });
-    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+    const OwnerDescriptor = fullaz_db.bpt(.{
         .compare = compare,
         .CompareContext = void,
         .comparator_id = 1,
         .maximum_key_size = 32,
         .maximum_value_size = 96,
         .fixed_value_size = 96,
-    }));
+    });
+    const Owner = fullaz_db.hierarchyStore(Hierarchy, .{ .owners = &.{.{
+        .tag = "nodes",
+        .owner_id = 1,
+        .descriptor = OwnerDescriptor,
+        .allowed_type_ids = &.{1},
+    }} });
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0xE4} ** 16, .components = .{ .tree = .{} } },
+        .{ .image_id = [_]u8{0xE4} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -1978,35 +2084,51 @@ test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and c
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("sequence", tree.embed("sequence")));
-        var editor = (try tree.openEmbeddedForEdit("sequence", "sequence")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const sequence_value = try owner.encodedEmbedded("sequence");
+        try std.testing.expect(try owner.proxy().insert("sequence", sequence_value.data()));
+        const sequence_editor = (try owner.proxy().openValueEditor("sequence")).?;
+        var editor = try owner.openChild(sequence_editor, "sequence");
         defer editor.deinit();
-        try std.testing.expectError(error.ValueEditorActive, tree.insert("blocked", tree.embed("sequence")));
+        const blocked_value = try owner.encodedEmbedded("sequence");
+        try std.testing.expectError(error.ValueEditorActive, owner.proxy().insert("blocked", blocked_value.data()));
         try editor.finish();
         try transaction.rollback();
     }
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("sequence", tree.embed("sequence")));
-        var editor = (try tree.openEmbeddedForEdit("sequence", "sequence")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const sequence_value = try owner.encodedEmbedded("sequence");
+        try std.testing.expect(try owner.proxy().insert("sequence", sequence_value.data()));
+        const sequence_editor = (try owner.proxy().openValueEditor("sequence")).?;
+        var editor = try owner.openChild(sequence_editor, "sequence");
         defer editor.deinit();
-        try editor.append("abcdef");
-        try editor.insert(3, "XYZ");
-        try editor.erase(3, 3);
-        try editor.replace(1, 4, "Q");
+        try editor.proxy().append("abcdef");
+        try editor.proxy().insert(3, "XYZ");
+        try editor.proxy().erase(3, 3);
+        try editor.proxy().replace(1, 4, "Q");
         var read: [3]u8 = undefined;
-        try std.testing.expectEqual(@as(usize, 3), try editor.readAt(0, &read));
+        try std.testing.expectEqual(@as(usize, 3), try editor.proxy().readAt(0, &read));
         try std.testing.expectEqualStrings("aQf", &read);
-        try editor.clear();
-        try std.testing.expectEqual(@as(u64, 0), try editor.size());
+        try editor.proxy().clear();
+        try std.testing.expectEqual(@as(u64, 0), try editor.proxy().size());
         var bytes = [_]u8{0xA5} ** 2048;
-        try editor.append(&bytes);
-        child_root = editor.root().?;
+        try editor.proxy().append(&bytes);
         try editor.finish();
         try transaction.commit();
+    }
+
+    {
+        const owner = database.getConst("tree").owner("nodes");
+        var sequence = (try owner.find("sequence")).?;
+        defer sequence.deinit();
+        const state = try embeddedState(
+            WeightedSequenceDescriptor.Trait.Binding(Database.BackendType).State,
+            (try sequence.get()).?.value,
+            Hierarchy.typeIdentityByTag("sequence"),
+        );
+        child_root = state.root.get();
     }
 
     try database.startGarbageCollection();
@@ -2016,11 +2138,12 @@ test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and c
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        var editor = (try tree.openEmbeddedForEdit("sequence", "sequence")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const sequence_editor = (try owner.proxy().openValueEditor("sequence")).?;
+        var editor = try owner.openChild(sequence_editor, "sequence");
         defer editor.deinit();
         var read: [1]u8 = undefined;
-        try std.testing.expectEqual(@as(usize, 1), try editor.readAt(0, &read));
+        try std.testing.expectEqual(@as(usize, 1), try editor.proxy().readAt(0, &read));
         try std.testing.expectEqual(@as(u8, 0xA5), read[0]);
         try editor.finish();
         try transaction.rollback();
@@ -2029,8 +2152,8 @@ test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and c
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.remove("sequence"));
+        const owner = transaction.get("tree").owner("nodes");
+        try std.testing.expect(try owner.proxy().remove("sequence"));
         try transaction.commit();
     }
     try database.startGarbageCollection();
@@ -2069,21 +2192,27 @@ test "fullaz-db: dynamic schema embedded ChainStore hierarchy traces and collect
             },
         },
     });
-    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+    const OwnerDescriptor = fullaz_db.bpt(.{
         .compare = compare,
         .CompareContext = void,
         .comparator_id = 1,
         .maximum_key_size = 32,
         .maximum_value_size = 96,
         .fixed_value_size = 96,
-    }));
+    });
+    const Owner = fullaz_db.hierarchyStore(Hierarchy, .{ .owners = &.{.{
+        .tag = "nodes",
+        .owner_id = 1,
+        .descriptor = OwnerDescriptor,
+        .allowed_type_ids = &.{ 1, 2 },
+    }} });
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0xE2} ** 16, .components = .{ .tree = .{} } },
+        .{ .image_id = [_]u8{0xE2} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -2091,31 +2220,46 @@ test "fullaz-db: dynamic schema embedded ChainStore hierarchy traces and collect
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("folder", tree.embed("folder")));
-        try std.testing.expect(try tree.insert("blob", tree.embed("blob")));
-        try std.testing.expect(try tree.insert("raw", tree.raw("blob", "plain")));
+        const owner = transaction.get("tree").owner("nodes");
+        const folder_value = try owner.encodedEmbedded("folder");
+        try std.testing.expect(try owner.proxy().insert("folder", folder_value.data()));
+        const blob_value = try owner.encodedEmbedded("blob");
+        try std.testing.expect(try owner.proxy().insert("blob", blob_value.data()));
+        const raw_value = try owner.encodedRaw("blob", "plain");
+        try std.testing.expect(try owner.proxy().insert("raw", raw_value.data()));
         try std.testing.expectError(
             error.IncorrectKind,
-            tree.openEmbeddedForEdit("raw", "blob"),
+            owner.openChild((try owner.proxy().openValueEditor("raw")).?, "blob"),
         );
         try std.testing.expectError(
             error.IncorrectType,
-            tree.openEmbeddedForEdit("folder", "blob"),
+            owner.openChild((try owner.proxy().openValueEditor("folder")).?, "blob"),
         );
 
-        var editor = (try tree.openEmbeddedForEdit("blob", "blob")).?;
+        const blob_editor = (try owner.proxy().openValueEditor("blob")).?;
+        var editor = try owner.openChild(blob_editor, "blob");
         defer editor.deinit();
-        try editor.append("hello");
+        try editor.proxy().append("hello");
         var extra = [_]u8{0xA5} ** 2048;
-        try editor.append(&extra);
-        try std.testing.expectEqual(@as(u64, 2053), try editor.size());
+        try editor.proxy().append(&extra);
+        try std.testing.expectEqual(@as(u64, 2053), try editor.proxy().size());
         var read: [5]u8 = undefined;
-        try std.testing.expectEqual(@as(usize, 5), try editor.readAt(0, &read));
+        try std.testing.expectEqual(@as(usize, 5), try editor.proxy().readAt(0, &read));
         try std.testing.expectEqualStrings("hello", &read);
-        first_chunk = (try editor.first()).?;
         try editor.finish();
         try transaction.commit();
+    }
+
+    {
+        const owner = database.getConst("tree").owner("nodes");
+        var blob = (try owner.find("blob")).?;
+        defer blob.deinit();
+        const state = try embeddedState(
+            ChainStoreDescriptor.Trait.Binding(Database.BackendType).State,
+            (try blob.get()).?.value,
+            Hierarchy.typeIdentityByTag("blob"),
+        );
+        first_chunk = state.first.get();
     }
 
     try database.startGarbageCollection();
@@ -2126,8 +2270,8 @@ test "fullaz-db: dynamic schema embedded ChainStore hierarchy traces and collect
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.remove("blob"));
+        const owner = transaction.get("tree").owner("nodes");
+        try std.testing.expect(try owner.proxy().remove("blob"));
         try transaction.commit();
     }
     try database.startGarbageCollection();
@@ -2158,32 +2302,41 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
             },
         },
     });
-    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+    const OwnerDescriptor = fullaz_db.bpt(.{
         .compare = compare,
         .CompareContext = void,
         .comparator_id = 1,
         .maximum_key_size = 32,
         .maximum_value_size = 320,
         .fixed_value_size = 320,
-    }));
+    });
+    const Owner = fullaz_db.hierarchyStore(Hierarchy, .{ .owners = &.{.{
+        .tag = "nodes",
+        .owner_id = 1,
+        .descriptor = OwnerDescriptor,
+        .allowed_type_ids = &.{1},
+    }} });
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 4096),
-        .{ .image_id = [_]u8{0xE8} ** 16, .components = .{ .tree = .{} } },
+        .{ .image_id = [_]u8{0xE8} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("queue", tree.embed("queue")));
-        var editor = (try tree.openEmbeddedForEdit("queue", "queue")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const queue_value = try owner.encodedEmbedded("queue");
+        try std.testing.expect(try owner.proxy().insert("queue", queue_value.data()));
+        const queue_editor = (try owner.proxy().openValueEditor("queue")).?;
+        var editor = try owner.openChild(queue_editor, "queue");
         defer editor.deinit();
-        try std.testing.expectError(error.ValueEditorActive, tree.insert("blocked", tree.embed("queue")));
+        const blocked_value = try owner.encodedEmbedded("queue");
+        try std.testing.expectError(error.ValueEditorActive, owner.proxy().insert("blocked", blocked_value.data()));
         try editor.finish();
         try transaction.rollback();
     }
@@ -2192,24 +2345,37 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("queue", tree.embed("queue")));
-        var editor = (try tree.openEmbeddedForEdit("queue", "queue")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const queue_value = try owner.encodedEmbedded("queue");
+        try std.testing.expect(try owner.proxy().insert("queue", queue_value.data()));
+        const queue_editor = (try owner.proxy().openValueEditor("queue")).?;
+        var editor = try owner.openChild(queue_editor, "queue");
         defer editor.deinit();
+        const queue = editor.proxy();
         var value = [_]u8{0xA5} ** 128;
         for (0..96) |index| {
             var key: [4]u8 = undefined;
             _ = try std.fmt.bufPrint(&key, "{d:0>4}", .{96 - index});
-            try editor.push(&key, &value);
+            try queue.push(&key, &value);
         }
-        var top = try editor.top();
+        var top = try queue.top();
         try std.testing.expectEqualSlices(u8, "0001", try top.key());
-        try std.testing.expectError(error.TopPinned, editor.pop());
+        try std.testing.expectEqual(@as(u64, 96), try queue.count());
         top.deinit();
-        try std.testing.expectEqual(@as(u64, 96), try editor.count());
-        child_root = (try editor.root()).?;
         try editor.finish();
         try transaction.commit();
+    }
+
+    {
+        const owner = database.getConst("tree").owner("nodes");
+        var queue = (try owner.find("queue")).?;
+        defer queue.deinit();
+        const state = try embeddedState(
+            SlotHeapDescriptor.Trait.Binding(Database.BackendType).State,
+            (try queue.get()).?.value,
+            Hierarchy.typeIdentityByTag("queue"),
+        );
+        child_root = state.root.get();
     }
 
     try database.startGarbageCollection();
@@ -2219,15 +2385,16 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
         retained.deinit();
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        var editor = (try tree.openEmbeddedForEdit("queue", "queue")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const queue_editor = (try owner.proxy().openValueEditor("queue")).?;
+        var editor = try owner.openChild(queue_editor, "queue");
         defer editor.deinit();
-        var top = try editor.top();
-        defer top.deinit();
+        const queue = editor.proxy();
+        var top = try queue.top();
         try std.testing.expectEqualSlices(u8, "0001", try top.key());
         top.deinit();
-        try editor.pop();
-        try editor.push("0000", "replacement");
+        try queue.pop();
+        try queue.push("0000", "replacement");
         try editor.finish();
         try transaction.rollback();
     }
@@ -2235,8 +2402,8 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.remove("queue"));
+        const owner = transaction.get("tree").owner("nodes");
+        try std.testing.expect(try owner.proxy().remove("queue"));
         try transaction.commit();
     }
     try database.startGarbageCollection();
@@ -2264,14 +2431,20 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
             },
         },
     });
-    const Owner = fullaz_db.hierarchyBpt(Hierarchy, fullaz_db.bpt(.{
+    const OwnerDescriptor = fullaz_db.bpt(.{
         .compare = compare,
         .CompareContext = void,
         .comparator_id = 1,
         .maximum_key_size = 32,
         .maximum_value_size = 96,
         .fixed_value_size = 96,
-    }));
+    });
+    const Owner = fullaz_db.hierarchyStore(Hierarchy, .{ .owners = &.{.{
+        .tag = "nodes",
+        .owner_id = 1,
+        .descriptor = OwnerDescriptor,
+        .allowed_type_ids = &.{1},
+    }} });
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Owner);
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
@@ -2286,7 +2459,7 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0xE3} ** 16, .components = .{ .tree = .{} } },
+        .{ .image_id = [_]u8{0xE3} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -2296,12 +2469,15 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("spatial", tree.embed("spatial")));
-        var editor = (try tree.openEmbeddedForEdit("spatial", "spatial")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const spatial_value = try owner.encodedEmbedded("spatial");
+        try std.testing.expect(try owner.proxy().insert("spatial", spatial_value.data()));
+        const spatial_editor = (try owner.proxy().openValueEditor("spatial")).?;
+        var editor = try owner.openChild(spatial_editor, "spatial");
         defer editor.deinit();
-        try editor.insert(point, "point");
-        try std.testing.expectError(error.ValueEditorActive, tree.insert("blocked", tree.embed("spatial")));
+        try editor.proxy().insert(point, "point");
+        const blocked_value = try owner.encodedEmbedded("spatial");
+        try std.testing.expectError(error.ValueEditorActive, owner.proxy().insert("blocked", blocked_value.data()));
         try editor.finish();
         try transaction.rollback();
     }
@@ -2309,13 +2485,15 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("spatial", tree.embed("spatial")));
-        var editor = (try tree.openEmbeddedForEdit("spatial", "spatial")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const spatial_value = try owner.encodedEmbedded("spatial");
+        try std.testing.expect(try owner.proxy().insert("spatial", spatial_value.data()));
+        const spatial_editor = (try owner.proxy().openValueEditor("spatial")).?;
+        var editor = try owner.openChild(spatial_editor, "spatial");
         defer editor.deinit();
         for (0..5) |index| {
             const coordinate: i32 = @intCast(index * 10);
-            try editor.insert(
+            try editor.proxy().insert(
                 BoundingBox.initWith(
                     .{ coordinate, coordinate },
                     .{ coordinate + 3, coordinate + 3 },
@@ -2323,12 +2501,23 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
                 "point",
             );
         }
-        child_root = editor.root().?;
         var hit_count: usize = 0;
-        try editor.search(query, &hit_count, SearchCounter.call);
+        try editor.proxy().search(query, &hit_count, SearchCounter.call);
         try std.testing.expectEqual(@as(usize, 5), hit_count);
         try editor.finish();
         try transaction.commit();
+    }
+
+    {
+        const owner = database.getConst("tree").owner("nodes");
+        var spatial = (try owner.find("spatial")).?;
+        defer spatial.deinit();
+        const state = try embeddedState(
+            RtreeDescriptor.Trait.Binding(Database.BackendType).State,
+            (try spatial.get()).?.value,
+            Hierarchy.typeIdentityByTag("spatial"),
+        );
+        child_root = state.root.get();
     }
 
     try database.startGarbageCollection();
@@ -2338,11 +2527,12 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        var editor = (try tree.openEmbeddedForEdit("spatial", "spatial")).?;
+        const owner = transaction.get("tree").owner("nodes");
+        const spatial_editor = (try owner.proxy().openValueEditor("spatial")).?;
+        var editor = try owner.openChild(spatial_editor, "spatial");
         defer editor.deinit();
         var hit_count: usize = 0;
-        try editor.search(query, &hit_count, SearchCounter.call);
+        try editor.proxy().search(query, &hit_count, SearchCounter.call);
         try std.testing.expectEqual(@as(usize, 5), hit_count);
         try editor.finish();
         try transaction.rollback();
@@ -2351,8 +2541,8 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.remove("spatial"));
+        const owner = transaction.get("tree").owner("nodes");
+        try std.testing.expect(try owner.proxy().remove("spatial"));
         try transaction.commit();
     }
     try database.startGarbageCollection();

@@ -136,6 +136,8 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                 };
 
                 pub const Manager = ManagerT;
+                pub const State = StateT;
+                pub const value_capacity: ?usize = null;
                 pub const Blob = BlobT;
                 pub const Proxy = MutableProxy;
                 pub const ConstProxy = ReadProxy;
@@ -305,10 +307,184 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
                     return &runtime.const_proxy;
                 }
+
+                pub fn StorageBinding(comptime StorageManagerT: type) type {
+                    if (!@hasDecl(StorageManagerT, "Size")) {
+                        @compileError("fullaz-db ChainStore storage manager must declare Size");
+                    }
+                    if (@TypeOf(StorageManagerT.Size) != type) {
+                        @compileError("fullaz-db ChainStore storage manager Size must be u64");
+                    }
+                    if (StorageManagerT.Size != u64) {
+                        @compileError("fullaz-db ChainStore storage manager Size must be u64");
+                    }
+
+                    const StorageBlobT = low_level_chain_store.Blob(
+                        CacheT,
+                        StorageManagerT,
+                        .little,
+                    );
+                    const StorageInitOptionsT = struct {};
+                    const StorageError = StorageBlobT.Error || error{InvalidPageKinds};
+
+                    const StorageProxyT = struct {
+                        const Self = @This();
+
+                        pub const Error = StorageBlobT.Error || CacheT.Error;
+
+                        blob: *StorageBlobT,
+                        cache: *CacheT,
+                        transaction_generation: ?u64,
+
+                        fn requireTransaction(self: *const Self) Self.Error!void {
+                            if (self.transaction_generation == null or
+                                self.cache.transactionGeneration() != self.transaction_generation)
+                            {
+                                return Self.Error.TransactionInactive;
+                            }
+                        }
+
+                        pub fn size(self: *const Self) Self.Error!u64 {
+                            return self.blob.size();
+                        }
+
+                        pub fn readAt(self: *const Self, offset: u64, out: []u8) Self.Error!usize {
+                            const position = std.math.cast(usize, offset) orelse return Self.Error.OutOfBounds;
+                            return self.blob.readAt(position, out);
+                        }
+
+                        pub fn writeAt(self: *const Self, offset: u64, bytes: []const u8) Self.Error!void {
+                            try self.requireTransaction();
+                            const position = std.math.cast(usize, offset) orelse return Self.Error.OutOfBounds;
+                            _ = self.blob.writeAt(position, bytes) catch |err| {
+                                self.cache.markTransactionFailed();
+                                return err;
+                            };
+                        }
+
+                        pub fn append(self: *const Self, bytes: []const u8) Self.Error!void {
+                            try self.requireTransaction();
+                            _ = self.blob.append(bytes) catch |err| {
+                                self.cache.markTransactionFailed();
+                                return err;
+                            };
+                        }
+
+                        pub fn truncate(self: *const Self, new_size: u64) Self.Error!void {
+                            try self.requireTransaction();
+                            const new_size_usize = std.math.cast(usize, new_size) orelse return Self.Error.OutOfBounds;
+                            self.blob.truncate(new_size_usize) catch |err| {
+                                self.cache.markTransactionFailed();
+                                return err;
+                            };
+                        }
+
+                        pub fn clear(self: *const Self) Self.Error!void {
+                            try self.requireTransaction();
+                            self.blob.clear() catch |err| {
+                                self.cache.markTransactionFailed();
+                                return err;
+                            };
+                        }
+                    };
+
+                    const StorageConstProxyT = struct {
+                        const Self = @This();
+
+                        pub const Error = StorageBlobT.Error;
+
+                        blob: *StorageBlobT,
+
+                        pub fn size(self: *const Self) Self.Error!u64 {
+                            return self.blob.size();
+                        }
+
+                        pub fn readAt(self: *const Self, offset: u64, out: []u8) Self.Error!usize {
+                            const position = std.math.cast(usize, offset) orelse return Self.Error.OutOfBounds;
+                            return self.blob.readAt(position, out);
+                        }
+                    };
+
+                    const StorageRuntimeT = struct {
+                        page_kinds: component.PageKindRange,
+                        cache: *CacheT,
+                        manager: *StorageManagerT,
+                        blob: StorageBlobT,
+                        const_proxy: StorageConstProxyT,
+                    };
+
+                    const StorageBindingT = struct {
+                        pub const Runtime = StorageRuntimeT;
+                        pub const Proxy = StorageProxyT;
+                        pub const ConstProxy = StorageConstProxyT;
+                        pub const InitOptions = StorageInitOptionsT;
+                        pub const Error = StorageError;
+                        pub const value_capacity: ?usize = null;
+
+                        pub fn emptyState() StateT {
+                            return .{};
+                        }
+
+                        pub fn initRuntime(
+                            runtime: *StorageRuntimeT,
+                            backend: *BackendT,
+                            manager: *StorageManagerT,
+                            page_kinds: component.PageKindRange,
+                            _: StorageInitOptionsT,
+                        ) StorageError!void {
+                            if (page_kinds.count != page_kind_count) {
+                                return error.InvalidPageKinds;
+                            }
+                            const chunk_page_kind = page_kinds.kindAt(0) orelse return error.InvalidPageKinds;
+
+                            runtime.page_kinds = page_kinds;
+                            runtime.cache = backend.cache();
+                            runtime.manager = manager;
+                            runtime.blob = StorageBlobT.init(
+                                runtime.cache,
+                                manager,
+                                .{ .chunk_page_kind = chunk_page_kind },
+                            );
+                            runtime.const_proxy = .{ .blob = &runtime.blob };
+                        }
+
+                        pub fn deinitRuntime(runtime: *StorageRuntimeT) void {
+                            runtime.blob.deinit();
+                            runtime.* = undefined;
+                        }
+
+                        pub fn requireTransactionIdle(_: *const StorageRuntimeT) StorageError!void {}
+
+                        pub fn proxy(runtime: *StorageRuntimeT) StorageProxyT {
+                            return .{
+                                .blob = &runtime.blob,
+                                .cache = runtime.cache,
+                                .transaction_generation = runtime.cache.transactionGeneration(),
+                            };
+                        }
+
+                        pub fn proxyConst(runtime: *const StorageRuntimeT) *const StorageConstProxyT {
+                            return &runtime.const_proxy;
+                        }
+                    };
+                    comptime component.assertStorageBinding(
+                        StorageBindingT,
+                        BackendT,
+                        StorageManagerT,
+                        StateT,
+                    );
+                    return StorageBindingT;
+                }
             };
             comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);
             comptime component.assertBinding(BindingT, BackendT);
             comptime component.assertReclamation(BindingT);
+            comptime component.assertStorageBinding(
+                BindingT.StorageBinding(ManagerT),
+                BackendT,
+                ManagerT,
+                StateT,
+            );
             return BindingT;
         }
     };

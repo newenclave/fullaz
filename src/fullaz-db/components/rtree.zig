@@ -208,417 +208,443 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
             const TreeT = low_level_rtree.RTree(ModelT);
             const is_float = @typeInfo(CoordT) == .float;
 
-            const isValidBoundingBox = struct {
-                fn call(mbr: ModelT.KeyType) bool {
-                    if (!mbr.valid()) {
-                        return false;
-                    }
-                    if (comptime is_float) {
-                        inline for (mbr.low, mbr.high) |low, high| {
-                            if (!std.math.isFinite(low) or !std.math.isFinite(high)) {
+            const ProxyFactory = struct {
+                fn Mutable(comptime ProxyModelT: type, comptime ProxyTreeT: type) type {
+                    const isValidBoundingBox = struct {
+                        fn call(mbr: ProxyModelT.KeyType) bool {
+                            if (!mbr.valid()) {
                                 return false;
                             }
-                        }
-                    }
-                    return true;
-                }
-            }.call;
-
-            const MutableProxyT = struct {
-                const Self = @This();
-
-                pub const BoundingBox = ModelT.KeyType;
-                pub const Error = TreeT.Error ||
-                    CacheT.Error ||
-                    error{InvalidBoundingBox};
-
-                pub const ValueEditor = struct {
-                    const EditorSelf = @This();
-
-                    editor: TreeT.ValueEditor,
-                    cache_ptr: *align(@alignOf(CacheT)) anyopaque,
-                    active_editor: *bool,
-                    transaction_generation: ?u64,
-
-                    fn cache(self: *const EditorSelf) *CacheT {
-                        return @ptrCast(self.cache_ptr);
-                    }
-
-                    fn requireTransaction(self: *const EditorSelf) Error!void {
-                        if (self.transaction_generation == null or
-                            self.cache().transactionGeneration() != self.transaction_generation)
-                        {
-                            return Error.TransactionInactive;
-                        }
-                    }
-
-                    pub fn valueMut(self: *EditorSelf) Error![]u8 {
-                        try self.requireTransaction();
-                        return self.editor.valueMut();
-                    }
-
-                    pub fn finish(self: *EditorSelf) Error!void {
-                        try self.requireTransaction();
-                        self.editor.finish() catch |err| {
-                            switch (err) {
-                                error.ValueEditorActive,
-                                error.StructuralMutationActive,
-                                error.StaleIterator,
-                                error.EditorInvalidated,
-                                => return err,
-                                else => self.cache().markTransactionFailed(),
+                            if (comptime is_float) {
+                                inline for (mbr.low, mbr.high) |low, high| {
+                                    if (!std.math.isFinite(low) or !std.math.isFinite(high)) {
+                                        return false;
+                                    }
+                                }
                             }
-                            return err;
-                        };
-                        self.active_editor.* = false;
-                    }
-
-                    pub fn deinit(self: *EditorSelf) void {
-                        self.editor.deinit();
-                        self.active_editor.* = false;
-                    }
-                };
-
-                pub const SearchValueEditor = struct {
-                    const EditorSelf = @This();
-
-                    editor: *TreeT.ValueEditor,
-                    cache_ptr: *align(@alignOf(CacheT)) anyopaque,
-                    active_editor: *bool,
-                    transaction_generation: ?u64,
-
-                    fn cache(self: *const EditorSelf) *CacheT {
-                        return @ptrCast(self.cache_ptr);
-                    }
-
-                    fn requireTransaction(self: *const EditorSelf) Error!void {
-                        if (self.transaction_generation == null or
-                            self.cache().transactionGeneration() != self.transaction_generation)
-                        {
-                            return Error.TransactionInactive;
+                            return true;
                         }
-                    }
+                    }.call;
 
-                    pub fn valueMut(self: *EditorSelf) Error![]u8 {
-                        try self.requireTransaction();
-                        return self.editor.valueMut();
-                    }
+                    return struct {
+                        const Self = @This();
 
-                    pub fn finish(self: *EditorSelf) Error!void {
-                        try self.requireTransaction();
-                        self.editor.finish() catch |err| {
-                            switch (err) {
-                                error.ValueEditorActive,
-                                error.StructuralMutationActive,
-                                error.StaleIterator,
-                                error.EditorInvalidated,
-                                => return err,
-                                else => self.cache().markTransactionFailed(),
+                        pub const BoundingBox = ProxyModelT.KeyType;
+                        pub const Error = ProxyTreeT.Error ||
+                            CacheT.Error ||
+                            error{InvalidBoundingBox};
+
+                        pub const ValueEditor = struct {
+                            const EditorSelf = @This();
+
+                            editor: ProxyTreeT.ValueEditor,
+                            cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                            active_editor: *bool,
+                            transaction_generation: ?u64,
+
+                            fn cache(self: *const EditorSelf) *CacheT {
+                                return @ptrCast(self.cache_ptr);
                             }
-                            return err;
+
+                            fn requireTransaction(self: *const EditorSelf) Error!void {
+                                if (self.transaction_generation == null or
+                                    self.cache().transactionGeneration() != self.transaction_generation)
+                                {
+                                    return Error.TransactionInactive;
+                                }
+                            }
+
+                            pub fn valueMut(self: *EditorSelf) Error![]u8 {
+                                try self.requireTransaction();
+                                return self.editor.valueMut();
+                            }
+
+                            pub fn finish(self: *EditorSelf) Error!void {
+                                try self.requireTransaction();
+                                self.editor.finish() catch |err| {
+                                    switch (err) {
+                                        error.ValueEditorActive,
+                                        error.StructuralMutationActive,
+                                        error.StaleIterator,
+                                        error.EditorInvalidated,
+                                        => return err,
+                                        else => self.cache().markTransactionFailed(),
+                                    }
+                                    return err;
+                                };
+                                self.active_editor.* = false;
+                            }
+
+                            pub fn deinit(self: *EditorSelf) void {
+                                self.editor.deinit();
+                                self.active_editor.* = false;
+                            }
                         };
-                        self.active_editor.* = false;
-                    }
 
-                    pub fn deinit(self: *EditorSelf) void {
-                        self.editor.deinit();
-                        self.active_editor.* = false;
-                    }
-                };
+                        pub const SearchValueEditor = struct {
+                            const EditorSelf = @This();
 
-                tree_ptr: *align(@alignOf(TreeT)) anyopaque,
-                cache_ptr: *align(@alignOf(CacheT)) anyopaque,
-                transaction_generation: ?u64,
-                active_editor: *bool,
+                            editor: *ProxyTreeT.ValueEditor,
+                            cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                            active_editor: *bool,
+                            transaction_generation: ?u64,
 
-                fn init(tree_value: *TreeT, cache_value: *CacheT, active_editor: *bool) Self {
-                    return .{
-                        .tree_ptr = tree_value,
-                        .cache_ptr = cache_value,
-                        .transaction_generation = cache_value.transactionGeneration(),
-                        .active_editor = active_editor,
-                    };
-                }
+                            fn cache(self: *const EditorSelf) *CacheT {
+                                return @ptrCast(self.cache_ptr);
+                            }
 
-                fn tree(self: *const Self) *TreeT {
-                    return @ptrCast(self.tree_ptr);
-                }
+                            fn requireTransaction(self: *const EditorSelf) Error!void {
+                                if (self.transaction_generation == null or
+                                    self.cache().transactionGeneration() != self.transaction_generation)
+                                {
+                                    return Error.TransactionInactive;
+                                }
+                            }
 
-                fn cache(self: *const Self) *CacheT {
-                    return @ptrCast(self.cache_ptr);
-                }
+                            pub fn valueMut(self: *EditorSelf) Error![]u8 {
+                                try self.requireTransaction();
+                                return self.editor.valueMut();
+                            }
 
-                fn requireTransaction(self: *const Self) Error!void {
-                    if (self.transaction_generation == null or
-                        self.cache().transactionGeneration() != self.transaction_generation)
-                    {
-                        return Error.TransactionInactive;
-                    }
-                }
+                            pub fn finish(self: *EditorSelf) Error!void {
+                                try self.requireTransaction();
+                                self.editor.finish() catch |err| {
+                                    switch (err) {
+                                        error.ValueEditorActive,
+                                        error.StructuralMutationActive,
+                                        error.StaleIterator,
+                                        error.EditorInvalidated,
+                                        => return err,
+                                        else => self.cache().markTransactionFailed(),
+                                    }
+                                    return err;
+                                };
+                                self.active_editor.* = false;
+                            }
 
-                fn requireValidMutationBox(self: *const Self, mbr: BoundingBox) Error!void {
-                    if (!isValidBoundingBox(mbr)) {
-                        self.cache().markTransactionFailed();
-                        return Error.InvalidBoundingBox;
-                    }
-                }
-
-                fn SearchError(comptime CallbackT: type) type {
-                    return TreeT.Error ||
-                        error{InvalidBoundingBox} ||
-                        finiteCallbackError(CallbackT);
-                }
-
-                fn EditableSearchError(comptime CallbackT: type) type {
-                    return Error || finiteCallbackError(CallbackT);
-                }
-
-                pub fn insert(self: *const Self, mbr: BoundingBox, value: []const u8) Error!void {
-                    try self.requireTransaction();
-                    try self.requireValidMutationBox(mbr);
-                    return self.tree().insert(mbr, value) catch |err| {
-                        self.cache().markTransactionFailed();
-                        return err;
-                    };
-                }
-
-                pub fn remove(
-                    self: *const Self,
-                    query: BoundingBox,
-                    context: anytype,
-                    matches: anytype,
-                ) Error!bool {
-                    try self.requireTransaction();
-                    try self.requireValidMutationBox(query);
-                    return self.tree().remove(query, context, matches) catch |err| {
-                        self.cache().markTransactionFailed();
-                        return err;
-                    };
-                }
-
-                /// Opens an editor for the first hit selected with remove()'s
-                /// predicate and closed-box intersection rules.
-                pub fn openValueEditor(
-                    self: *const Self,
-                    query: BoundingBox,
-                    context: anytype,
-                    matches: anytype,
-                ) Error!?ValueEditor {
-                    try self.requireTransaction();
-                    if (!isValidBoundingBox(query)) {
-                        return error.InvalidBoundingBox;
-                    }
-                    if (self.active_editor.*) {
-                        return error.ValueEditorActive;
-                    }
-                    const inner_editor = try self.tree().openValueEditor(query, context, matches);
-                    if (inner_editor) |editor| {
-                        self.active_editor.* = true;
-                        return .{
-                            .editor = editor,
-                            .cache_ptr = self.cache_ptr,
-                            .active_editor = self.active_editor,
-                            .transaction_generation = self.transaction_generation,
+                            pub fn deinit(self: *EditorSelf) void {
+                                self.editor.deinit();
+                                self.active_editor.* = false;
+                            }
                         };
-                    }
-                    return null;
-                }
 
-                pub fn searchEditable(
-                    self: *const Self,
-                    query: BoundingBox,
-                    context: anytype,
-                    callback: anytype,
-                ) EditableSearchError(@TypeOf(callback))!void {
-                    try self.requireTransaction();
-                    if (!isValidBoundingBox(query)) {
-                        return error.InvalidBoundingBox;
-                    }
-                    const Context = struct {
-                        proxy: *const Self,
-                        user_context: @TypeOf(context),
-                        user_callback: editableCallbackPointer(
-                            @TypeOf(context),
-                            BoundingBox,
-                            SearchValueEditor,
-                            @TypeOf(callback),
-                        ),
-                    };
-                    const Wrapper = struct {
-                        fn call(
-                            wrapped: *Context,
-                            mbr: BoundingBox,
-                            inner_editor: *TreeT.ValueEditor,
-                        ) EditableSearchError(@TypeOf(callback))!void {
-                            if (wrapped.proxy.active_editor.*) {
+                        tree_ptr: *align(@alignOf(ProxyTreeT)) anyopaque,
+                        cache_ptr: *align(@alignOf(CacheT)) anyopaque,
+                        transaction_generation: ?u64,
+                        active_editor: *bool,
+
+                        fn init(tree_value: *ProxyTreeT, cache_value: *CacheT, active_editor: *bool) Self {
+                            return .{
+                                .tree_ptr = tree_value,
+                                .cache_ptr = cache_value,
+                                .transaction_generation = cache_value.transactionGeneration(),
+                                .active_editor = active_editor,
+                            };
+                        }
+
+                        fn tree(self: *const Self) *ProxyTreeT {
+                            return @ptrCast(self.tree_ptr);
+                        }
+
+                        fn cache(self: *const Self) *CacheT {
+                            return @ptrCast(self.cache_ptr);
+                        }
+
+                        fn requireTransaction(self: *const Self) Error!void {
+                            if (self.transaction_generation == null or
+                                self.cache().transactionGeneration() != self.transaction_generation)
+                            {
+                                return Error.TransactionInactive;
+                            }
+                        }
+
+                        fn requireValidMutationBox(self: *const Self, mbr: BoundingBox) Error!void {
+                            if (!isValidBoundingBox(mbr)) {
+                                self.cache().markTransactionFailed();
+                                return Error.InvalidBoundingBox;
+                            }
+                        }
+
+                        fn SearchError(comptime CallbackT: type) type {
+                            return ProxyTreeT.Error ||
+                                error{InvalidBoundingBox} ||
+                                finiteCallbackError(CallbackT);
+                        }
+
+                        fn EditableSearchError(comptime CallbackT: type) type {
+                            return Error || finiteCallbackError(CallbackT);
+                        }
+
+                        pub fn insert(self: *const Self, mbr: BoundingBox, value: []const u8) Error!void {
+                            try self.requireTransaction();
+                            try self.requireValidMutationBox(mbr);
+                            return self.tree().insert(mbr, value) catch |err| {
+                                self.cache().markTransactionFailed();
+                                return err;
+                            };
+                        }
+
+                        pub fn remove(
+                            self: *const Self,
+                            query: BoundingBox,
+                            context: anytype,
+                            matches: anytype,
+                        ) Error!bool {
+                            try self.requireTransaction();
+                            try self.requireValidMutationBox(query);
+                            return self.tree().remove(query, context, matches) catch |err| {
+                                self.cache().markTransactionFailed();
+                                return err;
+                            };
+                        }
+
+                        /// Opens an editor for the first hit selected with remove()'s
+                        /// predicate and closed-box intersection rules.
+                        pub fn openValueEditor(
+                            self: *const Self,
+                            query: BoundingBox,
+                            context: anytype,
+                            matches: anytype,
+                        ) Error!?ValueEditor {
+                            try self.requireTransaction();
+                            if (!isValidBoundingBox(query)) {
+                                return error.InvalidBoundingBox;
+                            }
+                            if (self.active_editor.*) {
                                 return error.ValueEditorActive;
                             }
-                            wrapped.proxy.active_editor.* = true;
-                            var editor = SearchValueEditor{
-                                .editor = inner_editor,
-                                .cache_ptr = wrapped.proxy.cache_ptr,
-                                .active_editor = wrapped.proxy.active_editor,
-                                .transaction_generation = wrapped.proxy.transaction_generation,
-                            };
-                            defer editor.deinit();
-                            const ReturnT = callbackInfo(@TypeOf(callback)).return_type.?;
-                            switch (@typeInfo(ReturnT)) {
-                                .void => wrapped.user_callback(
-                                    wrapped.user_context,
-                                    mbr,
-                                    &editor,
-                                ),
-                                .error_union => try wrapped.user_callback(
-                                    wrapped.user_context,
-                                    mbr,
-                                    &editor,
-                                ),
-                                else => unreachable,
+                            const inner_editor = try self.tree().openValueEditor(query, context, matches);
+                            if (inner_editor) |editor| {
+                                self.active_editor.* = true;
+                                return .{
+                                    .editor = editor,
+                                    .cache_ptr = self.cache_ptr,
+                                    .active_editor = self.active_editor,
+                                    .transaction_generation = self.transaction_generation,
+                                };
                             }
+                            return null;
                         }
-                    };
-                    var wrapped = Context{
-                        .proxy = self,
-                        .user_context = context,
-                        .user_callback = callback,
-                    };
-                    return self.tree().searchEditable(query, &wrapped, Wrapper.call);
-                }
 
-                pub fn searchIntersectingEditable(
-                    self: *const Self,
-                    query: BoundingBox,
-                    context: anytype,
-                    callback: anytype,
-                ) EditableSearchError(@TypeOf(callback))!void {
-                    try self.requireTransaction();
-                    if (!isValidBoundingBox(query)) {
-                        return error.InvalidBoundingBox;
-                    }
-                    const Context = struct {
-                        proxy: *const Self,
-                        user_context: @TypeOf(context),
-                        user_callback: editableCallbackPointer(
-                            @TypeOf(context),
-                            BoundingBox,
-                            SearchValueEditor,
-                            @TypeOf(callback),
-                        ),
-                    };
-                    const Wrapper = struct {
-                        fn call(
-                            wrapped: *Context,
-                            mbr: BoundingBox,
-                            inner_editor: *TreeT.ValueEditor,
+                        pub fn searchEditable(
+                            self: *const Self,
+                            query: BoundingBox,
+                            context: anytype,
+                            callback: anytype,
                         ) EditableSearchError(@TypeOf(callback))!void {
-                            if (wrapped.proxy.active_editor.*) {
-                                return error.ValueEditorActive;
+                            try self.requireTransaction();
+                            if (!isValidBoundingBox(query)) {
+                                return error.InvalidBoundingBox;
                             }
-                            wrapped.proxy.active_editor.* = true;
-                            var editor = SearchValueEditor{
-                                .editor = inner_editor,
-                                .cache_ptr = wrapped.proxy.cache_ptr,
-                                .active_editor = wrapped.proxy.active_editor,
-                                .transaction_generation = wrapped.proxy.transaction_generation,
-                            };
-                            defer editor.deinit();
-                            const ReturnT = callbackInfo(@TypeOf(callback)).return_type.?;
-                            switch (@typeInfo(ReturnT)) {
-                                .void => wrapped.user_callback(wrapped.user_context, mbr, &editor),
-                                .error_union => try wrapped.user_callback(
-                                    wrapped.user_context,
-                                    mbr,
-                                    &editor,
+                            const Context = struct {
+                                proxy: *const Self,
+                                user_context: @TypeOf(context),
+                                user_callback: editableCallbackPointer(
+                                    @TypeOf(context),
+                                    BoundingBox,
+                                    SearchValueEditor,
+                                    @TypeOf(callback),
                                 ),
-                                else => unreachable,
+                            };
+                            const Wrapper = struct {
+                                fn call(
+                                    wrapped: *Context,
+                                    mbr: BoundingBox,
+                                    inner_editor: *ProxyTreeT.ValueEditor,
+                                ) EditableSearchError(@TypeOf(callback))!void {
+                                    if (wrapped.proxy.active_editor.*) {
+                                        return error.ValueEditorActive;
+                                    }
+                                    wrapped.proxy.active_editor.* = true;
+                                    var editor = SearchValueEditor{
+                                        .editor = inner_editor,
+                                        .cache_ptr = wrapped.proxy.cache_ptr,
+                                        .active_editor = wrapped.proxy.active_editor,
+                                        .transaction_generation = wrapped.proxy.transaction_generation,
+                                    };
+                                    defer editor.deinit();
+                                    const ReturnT = callbackInfo(@TypeOf(callback)).return_type.?;
+                                    switch (@typeInfo(ReturnT)) {
+                                        .void => wrapped.user_callback(
+                                            wrapped.user_context,
+                                            mbr,
+                                            &editor,
+                                        ),
+                                        .error_union => try wrapped.user_callback(
+                                            wrapped.user_context,
+                                            mbr,
+                                            &editor,
+                                        ),
+                                        else => unreachable,
+                                    }
+                                }
+                            };
+                            var wrapped = Context{
+                                .proxy = self,
+                                .user_context = context,
+                                .user_callback = callback,
+                            };
+                            return self.tree().searchEditable(query, &wrapped, Wrapper.call);
+                        }
+
+                        pub fn searchIntersectingEditable(
+                            self: *const Self,
+                            query: BoundingBox,
+                            context: anytype,
+                            callback: anytype,
+                        ) EditableSearchError(@TypeOf(callback))!void {
+                            try self.requireTransaction();
+                            if (!isValidBoundingBox(query)) {
+                                return error.InvalidBoundingBox;
                             }
+                            const Context = struct {
+                                proxy: *const Self,
+                                user_context: @TypeOf(context),
+                                user_callback: editableCallbackPointer(
+                                    @TypeOf(context),
+                                    BoundingBox,
+                                    SearchValueEditor,
+                                    @TypeOf(callback),
+                                ),
+                            };
+                            const Wrapper = struct {
+                                fn call(
+                                    wrapped: *Context,
+                                    mbr: BoundingBox,
+                                    inner_editor: *ProxyTreeT.ValueEditor,
+                                ) EditableSearchError(@TypeOf(callback))!void {
+                                    if (wrapped.proxy.active_editor.*) {
+                                        return error.ValueEditorActive;
+                                    }
+                                    wrapped.proxy.active_editor.* = true;
+                                    var editor = SearchValueEditor{
+                                        .editor = inner_editor,
+                                        .cache_ptr = wrapped.proxy.cache_ptr,
+                                        .active_editor = wrapped.proxy.active_editor,
+                                        .transaction_generation = wrapped.proxy.transaction_generation,
+                                    };
+                                    defer editor.deinit();
+                                    const ReturnT = callbackInfo(@TypeOf(callback)).return_type.?;
+                                    switch (@typeInfo(ReturnT)) {
+                                        .void => wrapped.user_callback(wrapped.user_context, mbr, &editor),
+                                        .error_union => try wrapped.user_callback(
+                                            wrapped.user_context,
+                                            mbr,
+                                            &editor,
+                                        ),
+                                        else => unreachable,
+                                    }
+                                }
+                            };
+                            var wrapped = Context{
+                                .proxy = self,
+                                .user_context = context,
+                                .user_callback = callback,
+                            };
+                            return self.tree().searchIntersectingEditable(query, &wrapped, Wrapper.call);
+                        }
+
+                        pub fn search(
+                            self: *const Self,
+                            query: BoundingBox,
+                            context: anytype,
+                            callback: anytype,
+                        ) SearchError(@TypeOf(callback))!void {
+                            // Values borrow a pinned leaf page and expire when callback returns.
+                            if (!isValidBoundingBox(query)) {
+                                return error.InvalidBoundingBox;
+                            }
+                            return self.tree().search(query, context, callback);
+                        }
+
+                        pub fn searchIntersecting(
+                            self: *const Self,
+                            query: BoundingBox,
+                            context: anytype,
+                            callback: anytype,
+                        ) SearchError(@TypeOf(callback))!void {
+                            if (!isValidBoundingBox(query)) {
+                                return error.InvalidBoundingBox;
+                            }
+                            return self.tree().searchIntersecting(query, context, callback);
                         }
                     };
-                    var wrapped = Context{
-                        .proxy = self,
-                        .user_context = context,
-                        .user_callback = callback,
+                }
+
+                fn Const(comptime ProxyModelT: type, comptime ProxyTreeT: type) type {
+                    const isValidBoundingBox = struct {
+                        fn call(mbr: ProxyModelT.KeyType) bool {
+                            if (!mbr.valid()) {
+                                return false;
+                            }
+                            if (comptime is_float) {
+                                inline for (mbr.low, mbr.high) |low, high| {
+                                    if (!std.math.isFinite(low) or !std.math.isFinite(high)) {
+                                        return false;
+                                    }
+                                }
+                            }
+                            return true;
+                        }
+                    }.call;
+
+                    return struct {
+                        const Self = @This();
+
+                        pub const BoundingBox = ProxyModelT.KeyType;
+                        pub const Error = ProxyTreeT.Error || error{InvalidBoundingBox};
+
+                        tree_ptr: *align(@alignOf(ProxyTreeT)) const anyopaque,
+
+                        fn init(tree_value: *const ProxyTreeT) Self {
+                            return .{ .tree_ptr = tree_value };
+                        }
+
+                        fn tree(self: *const Self) *const ProxyTreeT {
+                            return @ptrCast(self.tree_ptr);
+                        }
+
+                        fn SearchError(comptime CallbackT: type) type {
+                            return ProxyTreeT.Error ||
+                                error{InvalidBoundingBox} ||
+                                finiteCallbackError(CallbackT);
+                        }
+
+                        pub fn search(
+                            self: *const Self,
+                            query: BoundingBox,
+                            context: anytype,
+                            callback: anytype,
+                        ) SearchError(@TypeOf(callback))!void {
+                            // Values borrow a pinned leaf page and expire when callback returns.
+                            if (!isValidBoundingBox(query)) {
+                                return error.InvalidBoundingBox;
+                            }
+                            return self.tree().search(query, context, callback);
+                        }
+
+                        pub fn searchIntersecting(
+                            self: *const Self,
+                            query: BoundingBox,
+                            context: anytype,
+                            callback: anytype,
+                        ) SearchError(@TypeOf(callback))!void {
+                            if (!isValidBoundingBox(query)) {
+                                return error.InvalidBoundingBox;
+                            }
+                            return self.tree().searchIntersecting(query, context, callback);
+                        }
                     };
-                    return self.tree().searchIntersectingEditable(query, &wrapped, Wrapper.call);
-                }
-
-                pub fn search(
-                    self: *const Self,
-                    query: BoundingBox,
-                    context: anytype,
-                    callback: anytype,
-                ) SearchError(@TypeOf(callback))!void {
-                    // Values borrow a pinned leaf page and expire when callback returns.
-                    if (!isValidBoundingBox(query)) {
-                        return error.InvalidBoundingBox;
-                    }
-                    return self.tree().search(query, context, callback);
-                }
-
-                pub fn searchIntersecting(
-                    self: *const Self,
-                    query: BoundingBox,
-                    context: anytype,
-                    callback: anytype,
-                ) SearchError(@TypeOf(callback))!void {
-                    if (!isValidBoundingBox(query)) {
-                        return error.InvalidBoundingBox;
-                    }
-                    return self.tree().searchIntersecting(query, context, callback);
                 }
             };
 
-            const ConstProxyT = struct {
-                const Self = @This();
-
-                pub const BoundingBox = ModelT.KeyType;
-                pub const Error = TreeT.Error || error{InvalidBoundingBox};
-
-                tree_ptr: *align(@alignOf(TreeT)) const anyopaque,
-
-                fn init(tree_value: *const TreeT) Self {
-                    return .{ .tree_ptr = tree_value };
-                }
-
-                fn tree(self: *const Self) *const TreeT {
-                    return @ptrCast(self.tree_ptr);
-                }
-
-                fn SearchError(comptime CallbackT: type) type {
-                    return TreeT.Error ||
-                        error{InvalidBoundingBox} ||
-                        finiteCallbackError(CallbackT);
-                }
-
-                pub fn search(
-                    self: *const Self,
-                    query: BoundingBox,
-                    context: anytype,
-                    callback: anytype,
-                ) SearchError(@TypeOf(callback))!void {
-                    // Values borrow a pinned leaf page and expire when callback returns.
-                    if (!isValidBoundingBox(query)) {
-                        return error.InvalidBoundingBox;
-                    }
-                    return self.tree().search(query, context, callback);
-                }
-
-                pub fn searchIntersecting(
-                    self: *const Self,
-                    query: BoundingBox,
-                    context: anytype,
-                    callback: anytype,
-                ) SearchError(@TypeOf(callback))!void {
-                    if (!isValidBoundingBox(query)) {
-                        return error.InvalidBoundingBox;
-                    }
-                    return self.tree().searchIntersecting(query, context, callback);
-                }
-            };
+            const MutableProxyT = ProxyFactory.Mutable(ModelT, TreeT);
+            const ConstProxyT = ProxyFactory.Const(ModelT, TreeT);
 
             const BindingT = struct {
                 pub const Manager = ManagerT;
                 pub const State = StateT;
+                pub const value_capacity = configured_maximum_value_size;
                 pub const Model = ModelT;
                 pub const Tree = TreeT;
                 pub const Proxy = MutableProxyT;
@@ -798,6 +824,110 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
 
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
                     return &runtime.const_proxy;
+                }
+
+                pub fn StorageBinding(comptime StorageManagerT: type) type {
+                    comptime low_level_rtree.models.interfaces.requiresStorageManager(
+                        StorageManagerT,
+                        CacheT.Pid,
+                    );
+                    const StorageModelT = low_level_rtree.models.Paged(
+                        CacheT,
+                        StorageManagerT,
+                        CoordT,
+                        configured_dimensions,
+                        configured_maximum_entries,
+                        configured_maximum_value_size,
+                        .little,
+                    );
+                    const StorageTreeT = low_level_rtree.RTree(StorageModelT);
+                    const StorageProxyT = ProxyFactory.Mutable(StorageModelT, StorageTreeT);
+                    const StorageConstProxyT = ProxyFactory.Const(StorageModelT, StorageTreeT);
+                    const StorageInitOptionsT = struct {};
+                    const StorageError = StorageProxyT.Error || error{InvalidPageKinds};
+                    const StorageRuntimeT = struct {
+                        page_kinds: component.PageKindRange,
+                        cache: *CacheT,
+                        storage_manager: *StorageManagerT,
+                        model: StorageModelT,
+                        tree: StorageTreeT,
+                        const_proxy: StorageConstProxyT,
+                        active_editor: bool = false,
+                    };
+
+                    return struct {
+                        pub const State = StateT;
+                        pub const StorageManager = StorageManagerT;
+                        pub const Model = StorageModelT;
+                        pub const Tree = StorageTreeT;
+                        pub const Proxy = StorageProxyT;
+                        pub const ConstProxy = StorageConstProxyT;
+                        pub const InitOptions = StorageInitOptionsT;
+                        pub const Error = StorageError;
+                        pub const Runtime = StorageRuntimeT;
+                        pub const value_capacity = configured_maximum_value_size;
+
+                        pub fn emptyState() StateT {
+                            return .{};
+                        }
+
+                        pub fn initRuntime(
+                            runtime: *StorageRuntimeT,
+                            backend: *BackendT,
+                            storage_manager: *StorageManagerT,
+                            page_kinds: component.PageKindRange,
+                            _: StorageInitOptionsT,
+                        ) StorageError!void {
+                            if (page_kinds.count != page_kind_count) {
+                                return StorageError.InvalidPageKinds;
+                            }
+                            const leaf_page_kind = page_kinds.kindAt(0) orelse
+                                return StorageError.InvalidPageKinds;
+                            const inode_page_kind = page_kinds.kindAt(1) orelse
+                                return StorageError.InvalidPageKinds;
+
+                            runtime.page_kinds = page_kinds;
+                            runtime.cache = backend.cache();
+                            runtime.storage_manager = storage_manager;
+                            runtime.model = try StorageModelT.init(
+                                runtime.cache,
+                                runtime.storage_manager,
+                                .{
+                                    .leaf_page_kind = leaf_page_kind,
+                                    .inode_page_kind = inode_page_kind,
+                                },
+                            );
+                            runtime.tree = StorageTreeT.init(&runtime.model);
+                            runtime.active_editor = false;
+                            runtime.const_proxy = StorageConstProxyT.init(&runtime.tree);
+                        }
+
+                        pub fn deinitRuntime(runtime: *StorageRuntimeT) void {
+                            if (runtime.active_editor) {
+                                @panic("R-tree storage runtime deinitialized with an active value editor");
+                            }
+                            runtime.model.deinit();
+                            runtime.* = undefined;
+                        }
+
+                        pub fn requireTransactionIdle(runtime: *const StorageRuntimeT) StorageError!void {
+                            if (runtime.active_editor) {
+                                return error.ValueEditorActive;
+                            }
+                        }
+
+                        pub fn proxy(runtime: *StorageRuntimeT) StorageProxyT {
+                            return StorageProxyT.init(
+                                &runtime.tree,
+                                runtime.cache,
+                                &runtime.active_editor,
+                            );
+                        }
+
+                        pub fn proxyConst(runtime: *const StorageRuntimeT) *const StorageConstProxyT {
+                            return &runtime.const_proxy;
+                        }
+                    };
                 }
             };
             comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);

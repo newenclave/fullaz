@@ -16,14 +16,14 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
 
     const Trait = struct {
         pub const kind_name: []const u8 = "fullaz.hierarchy-store";
-        pub const format_version: u32 = 3;
+        pub const format_version: u32 = 4;
         pub const page_kind_count: usize = total_page_kinds;
         pub const page_roles: [page_kind_count][]const u8 = buildPageRoles(HierarchyT, options);
         pub const owner_count = options.owners.len;
         pub const type_page_kind_offset = owner_page_kinds;
 
         pub fn fingerprint(writer: *hierarchy.FingerprintWriter) void {
-            writer.writeBytes("fullaz.hierarchy-store.v3");
+            writer.writeBytes("fullaz.hierarchy-store.v4");
             writer.writeInt(u32, @intCast(options.owners.len));
             inline for (options.owners) |owner| {
                 writer.writeBytes(owner.tag);
@@ -121,7 +121,7 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
                 };
 
                 pub const DynamicMetadata = struct {
-                    pub const format_version: u32 = 3;
+                    pub const format_version: u32 = 4;
                     pub const known_tags: []const u16 = &OwnerTags;
                     pub const repeated_tags: []const u16 = &.{};
                     pub const Error = dynamic_metadata.Error;
@@ -179,6 +179,7 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
                             ownerRange(HierarchyT, page_kinds, options, index) orelse return error.InvalidPageKinds,
                             typeRange(HierarchyT, page_kinds, options) orelse return error.InvalidPageKinds,
                             @field(init_options, ownerField(index)),
+                            &runtime.next_instance_id,
                         );
                         runtime.initialized = index + 1;
                     }

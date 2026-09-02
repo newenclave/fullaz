@@ -241,14 +241,19 @@ test "fullaz-db hierarchyStore: composes BPT, R-tree, and SlotHeap owners" {
     var transaction = try database.begin();
     defer transaction.deinit();
     var store = transaction.get("store");
-    var names = store.owner("names");
-    try std.testing.expect(try names.insert("one", try names.raw("node", "value")));
+    const names = store.owner("names");
+    const name_value = try names.encodedRaw("node", "value");
+    try std.testing.expect(try names.proxy().insert("one", name_value.data()));
     const Box = fullaz.spatial.BoundingBox(i32, 2);
-    try store.owner("places").insert(
+    const places = store.owner("places");
+    const place_value = try places.encodedRaw("node", "place");
+    try places.proxy().insert(
         Box.initWith(.{ 1, 1 }, .{ 2, 2 }),
-        try store.owner("places").raw("node", "place"),
+        place_value.data(),
     );
-    try store.owner("queue").push("queue-key-000001", try store.owner("queue").raw("node", "value"));
+    const queue = store.owner("queue");
+    const queue_value = try queue.encodedRaw("node", "value");
+    try queue.proxy().push("queue-key-000001", queue_value.data());
     try transaction.commit();
 }
 
@@ -292,17 +297,24 @@ test "fullaz-db hierarchyStore: BPT owner edits recursive embedded envelopes" {
     defer transaction.deinit();
     var store = transaction.get("store");
     var files = store.owner("files");
-    try std.testing.expect(try files.insert("raw", try files.raw("folder", "plain")));
-    try std.testing.expect(try files.insert("root", try files.embed("folder")));
+    const raw_value = try files.encodedRaw("folder", "plain");
+    try std.testing.expect(try files.proxy().insert("raw", raw_value.data()));
+    const root_value = try files.encodedEmbedded("folder");
+    try std.testing.expect(try files.proxy().insert("root", root_value.data()));
 
-    var root = (try files.openEmbeddedForEdit("root", "folder")).?;
+    const root_value_editor = (try files.proxy().openValueEditor("root")).?;
+    var root = try files.openChild(root_value_editor, "folder");
     defer root.deinit();
-    try std.testing.expect(try root.insert("child", root.raw("folder", "value")));
-    try std.testing.expect(try root.insert("nested", try root.embed("folder")));
+    const child_value = try root.encodedRaw("folder", "value");
+    try std.testing.expect(try root.proxy().insert("child", child_value.data()));
+    const nested_value = try root.encodedEmbedded("folder");
+    try std.testing.expect(try root.proxy().insert("nested", nested_value.data()));
 
-    var nested = (try root.openEmbeddedForEdit("nested", "folder")).?;
+    const nested_value_editor = (try root.proxy().openValueEditor("nested")).?;
+    var nested = try root.openChild(nested_value_editor, "folder");
     defer nested.deinit();
-    try std.testing.expect(try nested.insert("leaf", nested.raw("folder", "nested value")));
+    const leaf_value = try nested.encodedRaw("folder", "nested value");
+    try std.testing.expect(try nested.proxy().insert("leaf", leaf_value.data()));
     try nested.finish();
     try root.finish();
     try transaction.commit();
@@ -311,13 +323,14 @@ test "fullaz-db hierarchyStore: BPT owner edits recursive embedded envelopes" {
     try std.testing.expect(!@hasDecl(@TypeOf(files_const.*), "insert"));
     try std.testing.expectError(
         error.IncorrectKind,
-        files_const.openEmbeddedBpt("raw", "folder"),
+        files_const.openEmbedded("raw", "folder"),
     );
-    try std.testing.expectEqual(null, try files_const.openEmbeddedBpt("missing", "folder"));
-    var reader = (try files_const.openEmbeddedBpt("root", "folder")).?;
-    defer reader.deinit();
-    try std.testing.expect(!@hasDecl(@TypeOf(reader), "insert"));
-    try std.testing.expect(!@hasDecl(@TypeOf(reader).Iterator, "editValue"));
+    try std.testing.expectEqual(null, try files_const.openEmbedded("missing", "folder"));
+    var child_handle = (try files_const.openEmbedded("root", "folder")).?;
+    defer child_handle.deinit();
+    var reader = child_handle.proxy();
+    try std.testing.expect(!@hasDecl(@TypeOf(reader.*), "insert"));
+    try std.testing.expect(!@hasDecl(@TypeOf(reader.*).Iterator, "editValue"));
     var child = (try reader.find("child")).?;
     defer child.deinit();
     const value = try fullaz_db.value_envelope.readRaw(
@@ -327,7 +340,7 @@ test "fullaz-db hierarchyStore: BPT owner edits recursive embedded envelopes" {
     try std.testing.expectEqualStrings("value", value.payload);
 }
 
-test "fullaz-db hierarchyBpt: const proxy opens an embedded BPT reader" {
+test "fullaz-db hierarchyStore: const proxy opens an embedded BPT handle" {
     const Bpt = fullaz_db.bpt(.{
         .compare = compare,
         .CompareContext = void,
@@ -344,31 +357,40 @@ test "fullaz-db hierarchyBpt: const proxy opens an embedded BPT reader" {
         .descriptor = Bpt,
         .allowed_child_type_ids = &.{},
     }} });
-    const Tree = fullaz_db.hierarchyBpt(Types, Bpt);
-    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Tree);
+    const Store = fullaz_db.hierarchyStore(Types, .{ .owners = &.{.{
+        .tag = "files",
+        .owner_id = 1,
+        .descriptor = Bpt,
+        .allowed_type_ids = &.{1},
+    }} });
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Store);
     const Database = fullaz_db.MemoryDatabase(Schema);
     var database = try Database.init(std.testing.allocator, .{
         .page_size = 1024,
-        .components = .{ .tree = .{} },
+        .components = .{ .tree = .{ .owner_0 = .{} } },
     });
     defer database.deinit();
 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        var tree = transaction.get("tree");
-        try std.testing.expect(try tree.insert("root", tree.embed("folder")));
-        var editor = (try tree.openEmbeddedForEdit("root", "folder")).?;
+        const tree = transaction.get("tree").owner("files");
+        const root_value = try tree.encodedEmbedded("folder");
+        try std.testing.expect(try tree.proxy().insert("root", root_value.data()));
+        const root_value_editor = (try tree.proxy().openValueEditor("root")).?;
+        var editor = try tree.openChild(root_value_editor, "folder");
         defer editor.deinit();
-        try std.testing.expect(try editor.insert("child", editor.raw("folder", "value")));
+        const child_value = try editor.encodedRaw("folder", "value");
+        try std.testing.expect(try editor.proxy().insert("child", child_value.data()));
         try editor.finish();
         try transaction.commit();
     }
 
-    const tree_const = database.getConst("tree");
+    const tree_const = database.getConst("tree").owner("files");
     try std.testing.expect(!@hasDecl(@TypeOf(tree_const.*), "insert"));
-    var reader = (try tree_const.openEmbeddedBpt("root", "folder")).?;
-    defer reader.deinit();
+    var child_handle = (try tree_const.openEmbedded("root", "folder")).?;
+    defer child_handle.deinit();
+    var reader = child_handle.proxy();
     var child = (try reader.find("child")).?;
     defer child.deinit();
     const value = try fullaz_db.value_envelope.readRaw(
@@ -438,18 +460,24 @@ test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
         var transaction = try database.begin();
         defer transaction.deinit();
         var store = transaction.get("store");
-        var places = store.owner("places");
-        try places.insert(point, try places.embed("rtree"));
-        var top_rtree = (try places.openEmbeddedHitForEdit(point, {}, struct {
+        const places = store.owner("places");
+        const rtree_value = try places.encodedEmbedded("rtree");
+        try places.proxy().insert(point, rtree_value.data());
+        const rtree_value_editor = (try places.proxy().openValueEditor(point, {}, struct {
             fn matches(_: void, _: Box, _: []const u8) bool {
                 return true;
             }
-        }.matches, "rtree")).?;
+        }.matches)).?;
+        var top_rtree = try places.openChild(rtree_value_editor, "rtree");
         defer top_rtree.deinit();
         try top_rtree.finish();
-        var queue = store.owner("queue");
-        try queue.push("queue-key-000001", try queue.embed("heap"));
-        var top_heap = (try queue.openEmbeddedForEdit({}, "heap")).?;
+        const queue = store.owner("queue");
+        const heap_value = try queue.encodedEmbedded("heap");
+        try queue.proxy().push("queue-key-000001", heap_value.data());
+        var top = try queue.proxy().top();
+        const heap_value_editor = try top.editValue();
+        top.deinit();
+        var top_heap = try queue.openChild(heap_value_editor, "heap");
         defer top_heap.deinit();
         try top_heap.finish();
         var files = store.owner("files");
