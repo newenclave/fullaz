@@ -24,6 +24,8 @@ fn TestStateManager(comptime StateLength: usize) type {
                 return self.bytes;
             }
 
+            pub fn finish(_: *@This()) void {}
+
             pub fn deinit(_: *@This()) void {}
         };
 

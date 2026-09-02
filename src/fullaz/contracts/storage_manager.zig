@@ -23,6 +23,7 @@ pub fn requiresStorageManager(comptime T: type) void {
 ///     pub fn data(_: *const StateLease) Error![]const u8 { return &.{}; }
 ///     pub fn dataMut(_: *StateLease) Error![]u8 { return &.{}; }
 ///     pub fn deinit(_: *StateLease) void {}
+///     pub fn finish(_: *StateLease) void {}
 /// };
 /// comptime assertStateLease(StateLease);
 /// ```
@@ -32,6 +33,7 @@ pub fn assertStateLease(comptime StateLeaseT: type) void {
     requiresFnSignature(StateLeaseT, "data", fn (*const StateLeaseT) Error![]const u8);
     requiresFnSignature(StateLeaseT, "dataMut", fn (*StateLeaseT) Error![]u8);
     requiresFnSignature(StateLeaseT, "deinit", fn (*StateLeaseT) void);
+    requiresFnSignature(StateLeaseT, "finish", fn (*StateLeaseT) void);
 }
 
 /// A paged storage manager owns external state storage and page-release policy.

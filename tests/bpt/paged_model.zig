@@ -39,15 +39,50 @@ const NoneStorageManager = struct {
     pub const Self = @This();
     pub const PageId = u32;
     pub const Error = error{};
-    root_block_id: ?u32 = null,
+    root_block_id: ?PageId = null,
+    buffer: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
 
-    pub fn getRoot(self: *const @This()) ?u32 {
+    pub const StateLeaseType = struct {
+        const LeaseSelf = @This();
+        pub const Error = NoneStorageManager.Error;
+        manager: *Self,
+
+        pub fn init(manager: *Self) LeaseSelf {
+            return LeaseSelf{
+                .manager = manager,
+            };
+        }
+
+        pub fn deinit(self: *LeaseSelf) void {
+            _ = self;
+        }
+
+        pub fn finish(self: *LeaseSelf) void {
+            const page_id = std.mem.readInt(PageId, &self.manager.buffer, .little);
+            self.manager.root_block_id = if (page_id == std.math.maxInt(PageId)) null else page_id;
+        }
+
+        pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+            return &self.manager.buffer;
+        }
+
+        pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+            return &self.manager.buffer;
+        }
+    };
+
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        std.mem.writeInt(PageId, &self.buffer, self.root_block_id orelse std.math.maxInt(PageId), .little);
+        return StateLeaseType.init(self);
+    }
+
+    pub fn getRoot(self: *const @This()) ?PageId {
         return self.root_block_id;
     }
 
-    pub fn setRoot(self: *@This(), root: ?u32) Error!void {
+    pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
         self.root_block_id = root;
-        // Persist to disk header, etc.
+        std.mem.writeInt(PageId, &self.buffer, root orelse std.math.maxInt(PageId), .little);
     }
 
     pub fn destroyPage(_: *@This(), id: PageId) Error!void {
@@ -65,9 +100,40 @@ fn DestroyTrackingStorageManager(comptime CacheT: type) type {
 
         cache: *CacheT,
         root: ?PageId = null,
+        state_bytes: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
         destroyed_pages: usize = 0,
         last_pinned_page: ?PageId = null,
         last_pinned_ref_count: usize = 0,
+
+        pub const StateLeaseType = struct {
+            const LeaseSelf = @This();
+            pub const Error = Self.Error;
+            manager: *Self,
+
+            pub fn init(manager: *Self) LeaseSelf {
+                return .{ .manager = manager };
+            }
+
+            pub fn deinit(_: *LeaseSelf) void {}
+
+            pub fn finish(self: *LeaseSelf) void {
+                const page_id = std.mem.readInt(PageId, &self.manager.state_bytes, .little);
+                self.manager.root = if (page_id == std.math.maxInt(PageId)) null else page_id;
+            }
+
+            pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                return &self.manager.state_bytes;
+            }
+
+            pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                return &self.manager.state_bytes;
+            }
+        };
+
+        pub fn state(self: *Self) Error!StateLeaseType {
+            std.mem.writeInt(PageId, &self.state_bytes, self.root orelse std.math.maxInt(PageId), .little);
+            return StateLeaseType.init(self);
+        }
 
         pub fn getRoot(self: *const Self) ?PageId {
             return self.root;
@@ -75,6 +141,7 @@ fn DestroyTrackingStorageManager(comptime CacheT: type) type {
 
         pub fn setRoot(self: *Self, root: ?PageId) Error!void {
             self.root = root;
+            std.mem.writeInt(PageId, &self.state_bytes, root orelse std.math.maxInt(PageId), .little);
         }
 
         pub fn destroyPage(self: *Self, page_id: PageId) Error!void {

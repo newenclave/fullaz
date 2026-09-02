@@ -365,7 +365,7 @@ pub fn Model(
             self.values.deinit(self.ctx.allocator);
         }
 
-        pub fn getRoot(self: *const Self) ?Pid {
+        pub fn getRoot(self: *const Self) Error!?Pid {
             return self.root;
         }
 

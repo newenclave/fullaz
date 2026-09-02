@@ -40,12 +40,42 @@ const NoneStorageManager = struct {
     pub const Error = error{};
 
     root_block_id: ?u32 = null,
+    state_bytes: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
+
+    pub const StateLeaseType = struct {
+        const LeaseSelf = @This();
+
+        pub const Error = NoneStorageManager.Error;
+
+        manager: *NoneStorageManager,
+
+        pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+            return &self.manager.state_bytes;
+        }
+
+        pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+            return &self.manager.state_bytes;
+        }
+
+        pub fn finish(self: *LeaseSelf) void {
+            const root = std.mem.readInt(PageId, &self.manager.state_bytes, .little);
+            self.manager.root_block_id = if (root == std.math.maxInt(PageId)) null else root;
+        }
+
+        pub fn deinit(_: *LeaseSelf) void {}
+    };
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        std.mem.writeInt(PageId, &self.state_bytes, self.root_block_id orelse std.math.maxInt(PageId), .little);
+        return .{ .manager = self };
+    }
 
     pub fn getRoot(self: *const @This()) ?u32 {
         return self.root_block_id;
     }
     pub fn setRoot(self: *@This(), root: ?u32) Error!void {
         self.root_block_id = root;
+        std.mem.writeInt(PageId, &self.state_bytes, root orelse std.math.maxInt(PageId), .little);
     }
     pub fn destroyPage(_: *@This(), id: PageId) Error!void {
         _ = id;
@@ -201,29 +231,54 @@ const FullSM = struct {
     pub const PageId = u32;
     pub const Size = u32;
     pub const Error = error{};
+    const State = chain_store.State(PageId, Size, .little);
 
-    first: ?u32 = null,
-    last: ?u32 = null,
-    total: u32 = 0,
+    state_data: State = .{},
     index_root: ?u32 = null,
 
+    pub const StateLeaseType = struct {
+        const LeaseSelf = @This();
+
+        pub const Error = FullSM.Error;
+
+        manager: *FullSM,
+
+        pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+            return std.mem.asBytes(&self.manager.state_data);
+        }
+
+        pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+            return std.mem.asBytes(&self.manager.state_data);
+        }
+
+        pub fn finish(_: *LeaseSelf) void {}
+
+        pub fn deinit(_: *LeaseSelf) void {}
+    };
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .manager = self };
+    }
+
     pub fn getTotalSize(self: *const Self) Error!Size {
-        return self.total;
+        return self.state_data.total_size.get();
     }
     pub fn setTotalSize(self: *Self, size: Size) Error!void {
-        self.total = size;
+        self.state_data.total_size.set(size);
     }
     pub fn getFirst(self: *const Self) Error!?PageId {
-        return self.first;
+        const first = self.state_data.first.get();
+        return if (first == std.math.maxInt(PageId)) null else first;
     }
     pub fn getLast(self: *const Self) Error!?PageId {
-        return self.last;
+        const last = self.state_data.last.get();
+        return if (last == std.math.maxInt(PageId)) null else last;
     }
     pub fn setFirst(self: *Self, id: ?PageId) Error!void {
-        self.first = id;
+        self.state_data.first.set(id orelse std.math.maxInt(PageId));
     }
     pub fn setLast(self: *Self, id: ?PageId) Error!void {
-        self.last = id;
+        self.state_data.last.set(id orelse std.math.maxInt(PageId));
     }
     pub fn destroyPage(self: *Self, id: PageId) Error!void {
         _ = self;

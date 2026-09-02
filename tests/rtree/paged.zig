@@ -9,9 +9,33 @@ const testing = std.testing;
 const Device = dev.MemoryBlock(u32);
 const PageCache = PageCacheT(Device);
 
+const RootStateLease = struct {
+    pub const Error = error{};
+
+    root: *?u32,
+    bytes: [4]u8 = undefined,
+
+    pub fn data(self: *const @This()) Error![]const u8 {
+        return self.bytes[0..];
+    }
+
+    pub fn dataMut(self: *@This()) Error![]u8 {
+        return self.bytes[0..];
+    }
+
+    pub fn finish(self: *@This()) void {
+        const root = std.mem.readInt(u32, &self.bytes, .little);
+        self.root.* = if (root == std.math.maxInt(u32)) null else root;
+    }
+
+    pub fn deinit(_: *@This()) void {}
+};
+
 const NoneStorageManager = struct {
     pub const PageId = u32;
     pub const Error = error{};
+    pub const StateLeaseType = RootStateLease;
+
     root: ?u32 = null,
 
     pub fn getRoot(self: *const @This()) ?u32 {
@@ -20,12 +44,20 @@ const NoneStorageManager = struct {
     pub fn setRoot(self: *@This(), r: ?u32) Error!void {
         self.root = r;
     }
+
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        var lease = StateLeaseType{ .root = &self.root };
+        std.mem.writeInt(u32, &lease.bytes, self.root orelse std.math.maxInt(u32), .little);
+        return lease;
+    }
+
     pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
 };
 
 const TrackingStorageManager = struct {
     pub const PageId = u32;
     pub const Error = error{};
+    pub const StateLeaseType = RootStateLease;
 
     root: ?PageId = null,
     destroyed: [16]PageId = undefined,
@@ -37,6 +69,12 @@ const TrackingStorageManager = struct {
 
     pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
         self.root = root;
+    }
+
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        var lease = StateLeaseType{ .root = &self.root };
+        std.mem.writeInt(u32, &lease.bytes, self.root orelse std.math.maxInt(u32), .little);
+        return lease;
     }
 
     pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
@@ -558,7 +596,7 @@ fn keyEq(a: Key, b: Key) bool {
 const PagedInvariant = struct {
     fn checkAll(model: *Model) !void {
         const acc = model.accessor();
-        if (acc.getRoot()) |root| {
+        if (try acc.getRoot()) |root| {
             _ = try check(acc, root);
         }
     }

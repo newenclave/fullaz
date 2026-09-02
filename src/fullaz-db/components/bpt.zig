@@ -2,7 +2,6 @@ const std = @import("std");
 const component = @import("../component/component.zig");
 const managers = @import("../component/managers/managers.zig");
 const interfaces = @import("fullaz").contracts.interfaces;
-const PackedInt = @import("fullaz").core.packed_int.PackedInt;
 const dynamic_metadata = @import("../file/metadata/dynamic.zig");
 const tagged = @import("../file/tagged_fields.zig");
 const low_level_bpt = @import("fullaz").bpt;
@@ -107,7 +106,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
             "fullaz-db.bpt format_version must fit u32",
         )
     else
-        1;
+        2;
 
     if (configured_format_version == 0) {
         @compileError("fullaz-db.bpt format_version cannot be zero");
@@ -151,9 +150,10 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 "allocator",
                 fn (*const BackendT) std.mem.Allocator,
             );
-            const ManagerT = managers.SingleRootManager(BackendT);
-            comptime low_level_bpt.models.interfaces.requiresStorageManager(ManagerT);
             const CacheT = BackendT.CacheType;
+            const StateT = low_level_bpt.models.paged.State(CacheT.Pid);
+            const ManagerT = managers.StateManager(BackendT, StateT);
+            comptime low_level_bpt.models.interfaces.requiresStorageManager(ManagerT, CacheT.Pid);
             const ModelT = low_level_bpt.models.PagedModel(
                 CacheT,
                 ManagerT,
@@ -535,12 +535,14 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
 
             const BindingT = struct {
                 pub const Manager = ManagerT;
+                pub const State = StateT;
                 pub const Model = ModelT;
                 pub const Tree = TreeT;
                 pub const Proxy = MutableProxyT;
                 pub const ConstProxy = ConstProxyT;
                 pub const Runtime = struct {
                     page_kinds: component.PageKindRange,
+                    state: StateT,
                     manager: ManagerT,
                     model: ModelT,
                     tree: TreeT,
@@ -552,31 +554,25 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                     struct { compare_context: void = {} }
                 else
                     struct { compare_context: CompareContextT };
-                pub const TransactionState = ?ManagerT.PageId;
+                pub const TransactionState = StateT;
                 pub const Error = Proxy.Error || error{InvalidPageKinds};
                 pub const StaticMetadata = struct {
-                    const PackedPageId = PackedInt(CacheT.Pid, .little);
-
-                    pub const Storage = extern struct {
-                        // Page zero is reserved for the database superblock, so zero denotes no root.
-                        root: PackedPageId,
-                    };
+                    pub const Storage = StateT;
                     pub const Error = error{BadMetadata};
 
                     pub fn capture(runtime: *const Runtime) Storage {
-                        return .{ .root = PackedPageId.init(runtime.manager.getRoot() orelse 0) };
+                        return runtime.state;
                     }
 
                     pub fn restore(runtime: *Runtime, storage: *const Storage) void {
-                        const root = storage.root.get();
-                        runtime.manager.restoreRoot(if (root == 0) null else root);
+                        runtime.state = storage.*;
                     }
 
                     pub fn validate(storage: *const Storage, page_count: usize) @This().Error!void {
-                        const root = storage.root.get();
-                        if (root == 0) {
+                        if (storage.root.isMax()) {
                             return;
                         }
+                        const root = storage.root.get();
                         const root_index = std.math.cast(usize, root) orelse return error.BadMetadata;
                         if (root_index >= page_count) {
                             return error.BadMetadata;
@@ -585,7 +581,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 };
 
                 pub const DynamicMetadata = struct {
-                    pub const format_version: u32 = 1;
+                    pub const format_version: u32 = 2;
                     pub const known_tags: []const u16 = &.{0x0100};
                     pub const repeated_tags: []const u16 = &.{};
                     pub const Error = dynamic_metadata.Error;
@@ -596,32 +592,31 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                         page_count: usize,
                     ) @This().Error!void {
                         try tagged.validateKnownFields(payload, known_tags);
-                        var root: ?CacheT.Pid = null;
-                        var found_root = false;
+                        var state: StateT = undefined;
+                        var found_state = false;
                         var reader = tagged.Reader.init(payload);
                         while (try reader.next()) |field| {
                             if (field.tag != known_tags[0]) {
                                 continue;
                             }
-                            root = try dynamic_metadata.decodeOptionalPageId(
-                                CacheT.Pid,
-                                try dynamic_metadata.readU64(field),
-                                page_count,
-                            );
-                            found_root = true;
+                            if (field.flags != 0 or field.value.len != @sizeOf(StateT)) {
+                                return error.BadMetadata;
+                            }
+                            @memcpy(std.mem.asBytes(&state), field.value);
+                            found_state = true;
                         }
-                        if (!found_root) {
+                        if (!found_state) {
                             return error.BadMetadata;
                         }
-                        runtime.manager.restoreRoot(root);
+                        try StaticMetadata.validate(&state, page_count);
+                        runtime.state = state;
                     }
 
                     pub fn encodeKnown(
                         runtime: *const Runtime,
                         writer: *tagged.Writer,
                     ) @This().Error!void {
-                        const root = runtime.manager.getRoot() orelse 0;
-                        try dynamic_metadata.appendU64(writer, known_tags[0], root);
+                        try writer.append(known_tags[0], 0, std.mem.asBytes(&runtime.state));
                     }
                 };
 
@@ -640,8 +635,8 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                             allocator: std.mem.Allocator,
                             roots: *std.ArrayList(CollectorT.PageId),
                         ) RootsError!void {
-                            if (runtime.manager.getRoot()) |root| {
-                                try roots.append(allocator, root);
+                            if (!runtime.state.root.isMax()) {
+                                try roots.append(allocator, runtime.state.root.get());
                             }
                         }
 
@@ -684,7 +679,8 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                         return Error.InvalidPageKinds;
 
                     runtime.page_kinds = page_kinds;
-                    runtime.manager = ManagerT.init(backend);
+                    runtime.state = .{};
+                    runtime.manager = ManagerT.init(backend, &runtime.state);
                     runtime.model = try ModelT.init(
                         backend.cache(),
                         &runtime.manager,
@@ -726,11 +722,11 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                 }
 
                 pub fn captureTransactionState(runtime: *const Runtime) TransactionState {
-                    return runtime.manager.getRoot();
+                    return runtime.state;
                 }
 
                 pub fn restoreTransactionState(runtime: *Runtime, state: TransactionState) void {
-                    runtime.manager.restoreRoot(state);
+                    runtime.state = state;
                 }
 
                 pub fn proxy(runtime: *Runtime) Proxy {

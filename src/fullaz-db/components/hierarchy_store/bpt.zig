@@ -10,6 +10,7 @@ const low_level_bpt = fullaz.bpt;
 const low_level_rtree = fullaz.spatial.rtree;
 const weighted_bpt = fullaz.weighted_bpt;
 const weighted_seq = fullaz.storage.weighted_seq;
+const chain_store = fullaz.storage.chain_store;
 const slot_heap_page = fullaz.page.slot_heap;
 const fsm = fullaz.storage.fsm;
 const low_level_slot_heap = fullaz.storage.slot_heap;
@@ -87,16 +88,6 @@ pub fn ParentValueLease(comptime LeaseError: type) type {
     };
 }
 
-/// Releases the parent editor's child-active state without exposing its owner.
-pub const ChildActiveLease = struct {
-    context: *anyopaque,
-    release_fn: *const fn (*anyopaque) void,
-
-    pub fn release(self: *const @This()) void {
-        self.release_fn(self.context);
-    }
-};
-
 const ChildKind = enum {
     bpt,
     chain_store,
@@ -152,7 +143,7 @@ pub fn hierarchyBpt(
 
     const Trait = struct {
         pub const kind_name: []const u8 = "fullaz.bpt.embedded-hierarchy";
-        pub const format_version: u32 = 1;
+        pub const format_version: u32 = 2;
         pub const page_kind_count: usize = hierarchy_page_kind_count;
         pub const page_roles: [page_kind_count][]const u8 = hierarchy_page_roles;
 
@@ -168,7 +159,6 @@ pub fn hierarchyBpt(
             const CacheT = BackendT.CacheType;
             const PageIdT = CacheT.Pid;
             const PackedRoot = PackedInt(PageIdT, .little);
-            const PackedSize = PackedInt(u64, .little);
             const ChildError = childErrors(HierarchyT, BackendT, 0);
 
             comptime {
@@ -181,70 +171,93 @@ pub fn hierarchyBpt(
             }
 
             const InlineRootManager = struct {
+                const Self = @This();
+
                 pub const Error = CacheT.Error;
                 pub const PageId = CacheT.Pid;
+                pub const StateLeaseType = struct {
+                    const LeaseSelf = @This();
+
+                    pub const Error = CacheT.Error;
+
+                    root: *PackedRoot,
+
+                    pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                        return std.mem.asBytes(self.root);
+                    }
+
+                    pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                        return std.mem.asBytes(self.root);
+                    }
+
+                    pub fn finish(_: *LeaseSelf) void {}
+
+                    pub fn deinit(_: *LeaseSelf) void {}
+                };
 
                 cache: *CacheT,
                 root: *PackedRoot,
 
-                fn init(cache: *CacheT, root: *PackedRoot) @This() {
+                fn init(cache: *CacheT, root: *PackedRoot) Self {
                     return .{ .cache = cache, .root = root };
                 }
 
-                pub fn getRoot(self: *const @This()) ?PageIdT {
-                    const root = self.root.get();
-                    return if (root == 0) null else root;
+                pub fn state(self: *Self) Error!StateLeaseType {
+                    return .{
+                        .root = self.root,
+                    };
                 }
 
-                pub fn setRoot(self: *@This(), root: ?PageIdT) Error!void {
-                    self.root.set(root orelse 0);
+                pub fn getRoot(self: *const Self) ?PageIdT {
+                    return if (self.root.isMax()) null else self.root.get();
                 }
 
-                pub fn destroyPage(self: *@This(), page_id: PageIdT) Error!void {
+                pub fn destroyPage(self: *Self, page_id: PageIdT) Error!void {
                     return self.cache.free(page_id);
                 }
             };
 
             const ConstInlineRootManager = struct {
+                const Self = @This();
+
                 pub const Error = error{ReadOnly};
                 pub const PageId = PageIdT;
+                pub const StateLeaseType = struct {
+                    const LeaseSelf = @This();
+
+                    pub const Error = error{ReadOnly};
+
+                    root: *const PackedRoot,
+
+                    pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                        return std.mem.asBytes(self.root);
+                    }
+
+                    pub fn dataMut(_: *LeaseSelf) LeaseSelf.Error![]u8 {
+                        return error.ReadOnly;
+                    }
+
+                    pub fn finish(_: *LeaseSelf) void {}
+
+                    pub fn deinit(_: *LeaseSelf) void {}
+                };
 
                 root: *const PackedRoot,
 
-                fn init(root: *const PackedRoot) @This() {
+                fn init(root: *const PackedRoot) Self {
                     return .{ .root = root };
                 }
 
-                pub fn getRoot(self: *const @This()) ?PageIdT {
-                    const root = self.root.get();
-                    return if (root == 0) null else root;
+                pub fn state(self: *Self) Error!StateLeaseType {
+                    return .{ .root = self.root };
                 }
 
-                pub fn setRoot(_: *@This(), _: ?PageIdT) Error!void {
-                    return error.ReadOnly;
-                }
-
-                pub fn destroyPage(_: *@This(), _: PageIdT) Error!void {
+                pub fn destroyPage(_: *Self, _: PageIdT) Error!void {
                     return error.ReadOnly;
                 }
             };
 
-            const InlineChainStorePayload = extern struct {
-                first: PackedRoot,
-                last: PackedRoot,
-                total_size: PackedSize,
-            };
-
-            comptime {
-                if (@alignOf(InlineChainStorePayload) != 1 or
-                    @sizeOf(InlineChainStorePayload) != 2 * @sizeOf(PackedRoot) + @sizeOf(PackedSize) or
-                    @offsetOf(InlineChainStorePayload, "first") != 0 or
-                    @offsetOf(InlineChainStorePayload, "last") != @sizeOf(PackedRoot) or
-                    @offsetOf(InlineChainStorePayload, "total_size") != 2 * @sizeOf(PackedRoot))
-                {
-                    @compileError("inline ChainStore payload layout changed");
-                }
-            }
+            const ChainStoreState = chain_store.State(PageIdT, u64, .little);
 
             const InlineChainStoreManager = struct {
                 const Self = @This();
@@ -252,12 +265,35 @@ pub fn hierarchyBpt(
                 pub const Error = CacheT.Error;
                 pub const PageId = PageIdT;
                 pub const Size = u64;
+                pub const StateLeaseType = struct {
+                    const LeaseSelf = @This();
+
+                    pub const Error = CacheT.Error;
+
+                    payload: *ChainStoreState,
+
+                    pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                        return std.mem.asBytes(self.payload);
+                    }
+
+                    pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                        return std.mem.asBytes(self.payload);
+                    }
+
+                    pub fn finish(_: *LeaseSelf) void {}
+
+                    pub fn deinit(_: *LeaseSelf) void {}
+                };
 
                 cache: *CacheT,
-                payload: *InlineChainStorePayload,
+                payload: *ChainStoreState,
 
-                fn init(cache: *CacheT, payload: *InlineChainStorePayload) Self {
+                fn init(cache: *CacheT, payload: *ChainStoreState) Self {
                     return .{ .cache = cache, .payload = payload };
+                }
+
+                pub fn state(self: *Self) Error!StateLeaseType {
+                    return .{ .payload = self.payload };
                 }
 
                 pub fn getTotalSize(self: *const Self) Error!Size {
@@ -269,21 +305,27 @@ pub fn hierarchyBpt(
                 }
 
                 pub fn getFirst(self: *const Self) Error!?PageId {
-                    const first = self.payload.first.get();
-                    return if (first == 0) null else first;
+                    return if (self.payload.first.isMax()) null else self.payload.first.get();
                 }
 
                 pub fn setFirst(self: *Self, first: ?PageId) Error!void {
-                    self.payload.first.set(first orelse 0);
+                    if (first) |page_id| {
+                        self.payload.first.set(page_id);
+                    } else {
+                        self.payload.first.setMax();
+                    }
                 }
 
                 pub fn getLast(self: *const Self) Error!?PageId {
-                    const last = self.payload.last.get();
-                    return if (last == 0) null else last;
+                    return if (self.payload.last.isMax()) null else self.payload.last.get();
                 }
 
                 pub fn setLast(self: *Self, last: ?PageId) Error!void {
-                    self.payload.last.set(last orelse 0);
+                    if (last) |page_id| {
+                        self.payload.last.set(page_id);
+                    } else {
+                        self.payload.last.setMax();
+                    }
                 }
 
                 pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
@@ -294,43 +336,37 @@ pub fn hierarchyBpt(
             const SlotHeapChildFactory = struct {
                 pub fn get(comptime index: usize) type {
                     const ChildTrait = HierarchyT.types[index].descriptor.Trait;
-                    const Format = slot_heap_page.SlotHeap(PageIdT, u16, .little);
                     const LocationAccessor = slot_heap_page.LeafPageLocationAccessor(PageIdT, u16, .little);
-                    const PackedSlot = PackedInt(u16, .little);
-                    const PackedLocation = extern struct {
-                        page_id: PackedRoot,
-                        slot_id: PackedSlot,
-                    };
-                    const Payload = extern struct {
-                        root: PackedRoot,
-                        cached_top: PackedLocation,
-                        entries_count: PackedSize,
-                        available_inode_heads: [ChildTrait.maximum_level + 1]PackedRoot,
-                        fsm_class_roots: [ChildTrait.size_class_count]PackedRoot,
-                    };
+                    const Payload = low_level_slot_heap.models.paged.State(
+                        PageIdT,
+                        u16,
+                        ChildTrait.maximum_level,
+                        ChildTrait.size_class_count,
+                    );
 
-                    comptime {
-                        if (@alignOf(PackedLocation) != 1 or
-                            @sizeOf(PackedLocation) != @sizeOf(PackedRoot) + @sizeOf(PackedSlot) or
-                            @alignOf(Payload) != 1 or
-                            @sizeOf(Payload) != 2 * @sizeOf(PackedRoot) + @sizeOf(PackedSlot) + @sizeOf(PackedSize) +
-                                (ChildTrait.maximum_level + 1 + ChildTrait.size_class_count) * @sizeOf(PackedRoot) or
-                            @offsetOf(Payload, "root") != 0 or
-                            @offsetOf(Payload, "cached_top") != @sizeOf(PackedRoot) or
-                            @offsetOf(Payload, "entries_count") != @sizeOf(PackedRoot) + @sizeOf(PackedLocation))
-                        {
-                            @compileError("inline SlotHeap payload layout changed");
-                        }
-                    }
-
-                    const InlineManager = struct {
+                    const InlineStateManager = struct {
                         const Self = @This();
 
                         pub const PageId = PageIdT;
-                        pub const CountType = u64;
-                        pub const Error = CacheT.Error || error{
-                            InvalidSizeClass,
-                            MaxDepth,
+                        pub const Error = CacheT.Error;
+                        pub const StateLeaseType = struct {
+                            const LeaseSelf = @This();
+
+                            pub const Error = CacheT.Error;
+
+                            payload: *Payload,
+
+                            pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                                return std.mem.asBytes(@as(*const Payload, self.payload));
+                            }
+
+                            pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                                return std.mem.asBytes(self.payload);
+                            }
+
+                            pub fn finish(_: *LeaseSelf) void {}
+
+                            pub fn deinit(_: *LeaseSelf) void {}
                         };
 
                         cache: *CacheT,
@@ -340,91 +376,32 @@ pub fn hierarchyBpt(
                             return .{ .cache = cache, .payload = payload };
                         }
 
-                        pub fn getRoot(self: *const Self) ?PageId {
-                            const root = self.payload.root.get();
-                            return if (root == 0) null else root;
-                        }
-
-                        pub fn setRoot(self: *Self, root: ?PageId) Error!void {
-                            self.payload.root.set(root orelse 0);
-                        }
-
-                        pub fn getCachedTop(self: *const Self) ?Format.Location {
-                            const page_is_null = self.payload.cached_top.page_id.isMax();
-                            const slot_is_null = self.payload.cached_top.slot_id.isMax();
-                            if (page_is_null or slot_is_null) {
-                                return null;
-                            }
-                            return .{
-                                .page_id = self.payload.cached_top.page_id.get(),
-                                .slot_id = self.payload.cached_top.slot_id.get(),
-                            };
-                        }
-
-                        pub fn setCachedTop(self: *Self, top: ?Format.Location) Error!void {
-                            if (top) |location| {
-                                self.payload.cached_top.page_id.set(location.page_id);
-                                self.payload.cached_top.slot_id.set(location.slot_id);
-                            } else {
-                                self.payload.cached_top.page_id.setMax();
-                                self.payload.cached_top.slot_id.setMax();
-                            }
-                        }
-
-                        pub fn getEntriesCount(self: *const Self) Error!CountType {
-                            return self.payload.entries_count.get();
-                        }
-
-                        pub fn setEntriesCount(self: *Self, count: CountType) Error!void {
-                            self.payload.entries_count.set(count);
-                        }
-
-                        pub fn getAvailableInode(self: *const Self, level: usize) Error!?PageId {
-                            if (level == 0 or level > ChildTrait.maximum_level) {
-                                return Error.MaxDepth;
-                            }
-                            const page_id = self.payload.available_inode_heads[level].get();
-                            return if (page_id == 0) null else page_id;
-                        }
-
-                        pub fn setAvailableInode(self: *Self, level: usize, inode: ?PageId) Error!void {
-                            if (level == 0 or level > ChildTrait.maximum_level) {
-                                return Error.MaxDepth;
-                            }
-                            self.payload.available_inode_heads[level].set(inode orelse 0);
-                        }
-
-                        pub fn getSizeClassRoot(self: *const Self, class: u16) Error!?PageId {
-                            const index_: usize = class;
-                            if (index_ >= ChildTrait.size_class_count) {
-                                return Error.InvalidSizeClass;
-                            }
-                            const page_id = self.payload.fsm_class_roots[index_].get();
-                            return if (page_id == 0) null else page_id;
-                        }
-
-                        pub fn setSizeClassRoot(self: *Self, class: u16, root: ?PageId) Error!void {
-                            const index_: usize = class;
-                            if (index_ >= ChildTrait.size_class_count) {
-                                return Error.InvalidSizeClass;
-                            }
-                            self.payload.fsm_class_roots[index_].set(root orelse 0);
+                        pub fn state(self: *Self) Error!StateLeaseType {
+                            return .{ .payload = self.payload };
                         }
 
                         pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
                             return self.cache.free(page_id);
                         }
                     };
+                    const StateAdapter = low_level_slot_heap.models.paged.StateAdapter(
+                        InlineStateManager,
+                        Payload,
+                        PageIdT,
+                        u16,
+                        ChildTrait.maximum_level,
+                        ChildTrait.size_class_count,
+                    );
                     const FsmModel = fsm.models.paged.slab.Model(
                         CacheT,
-                        InlineManager,
+                        StateAdapter,
                         ChildTrait.SizeClassPolicy,
                         LocationAccessor,
                     );
                     const Fsm = fsm.Fsm(FsmModel);
                     const Model = low_level_slot_heap.models.Paged(
                         CacheT,
-                        InlineManager,
+                        StateAdapter,
                         Fsm,
                         ChildTrait.compare,
                         ChildTrait.CompareContext,
@@ -433,25 +410,15 @@ pub fn hierarchyBpt(
 
                     return struct {
                         pub const PayloadType = Payload;
-                        pub const Manager = InlineManager;
+                        pub const StateManager = InlineStateManager;
+                        pub const StateAdapterType = StateAdapter;
                         pub const FsmModelType = FsmModel;
                         pub const FsmType = Fsm;
                         pub const ModelType = Model;
                         pub const HeapType = Heap;
 
                         pub fn emptyPayload() Payload {
-                            var payload: Payload = undefined;
-                            payload.root = PackedRoot.init(0);
-                            payload.cached_top.page_id.setMax();
-                            payload.cached_top.slot_id.setMax();
-                            payload.entries_count = PackedSize.init(0);
-                            inline for (&payload.available_inode_heads) |*head| {
-                                head.* = PackedRoot.init(0);
-                            }
-                            inline for (&payload.fsm_class_roots) |*root| {
-                                root.* = PackedRoot.init(0);
-                            }
-                            return payload;
+                            return .{};
                         }
                     };
                 }
@@ -730,7 +697,7 @@ pub fn hierarchyBpt(
                         ChildTrait.compare,
                         ChildTrait.CompareContext,
                     );
-                    var root = PackedRoot.init(0);
+                    var root = PackedRoot.init(PackedRoot.max);
                     var manager = InlineRootManager.init(self.backend.cache(), &root);
                     var model = try ChildModel.init(
                         self.backend.cache(),
@@ -767,7 +734,7 @@ pub fn hierarchyBpt(
                         ChildTree,
                         ChildTrait.maximum_chunk_size,
                     );
-                    var root = PackedRoot.init(0);
+                    var root = PackedRoot.init(PackedRoot.max);
                     var manager = InlineRootManager.init(self.backend.cache(), &root);
                     var model = ChildModel.init(
                         self.backend.cache(),
@@ -804,7 +771,7 @@ pub fn hierarchyBpt(
                         ChildTree,
                         ChildTrait.maximum_chunk_size,
                     );
-                    var root = PackedRoot.init(0);
+                    var root = PackedRoot.init(PackedRoot.max);
                     var manager = InlineRootManager.init(self.backend.cache(), &root);
                     var model = ChildModel.init(
                         self.backend.cache(),
@@ -834,7 +801,7 @@ pub fn hierarchyBpt(
                         InlineChainStoreManager,
                         .little,
                     );
-                    var payload: InlineChainStorePayload = undefined;
+                    var payload: ChainStoreState = .{};
                     var manager = InlineChainStoreManager.init(self.backend.cache(), &payload);
                     var blob = ChainBlob.init(
                         self.backend.cache(),
@@ -862,7 +829,7 @@ pub fn hierarchyBpt(
                         ChildTrait.maximum_value_size,
                         .little,
                     );
-                    var root = PackedRoot.init(0);
+                    var root = PackedRoot.init(PackedRoot.max);
                     var manager = InlineRootManager.init(self.backend.cache(), &root);
                     var model = try ChildModel.init(
                         self.backend.cache(),
@@ -893,7 +860,7 @@ pub fn hierarchyBpt(
                         ChildTrait.maximum_value_size,
                         .little,
                     );
-                    var root = PackedRoot.init(0);
+                    var root = PackedRoot.init(PackedRoot.max);
                     var manager = InlineRootManager.init(self.backend.cache(), &root);
                     var model = try ChildModel.init(
                         self.backend.cache(),
@@ -916,10 +883,11 @@ pub fn hierarchyBpt(
                 ) !void {
                     const Child = SlotHeapChildFactory.get(index);
                     var payload = Child.emptyPayload();
-                    var manager = Child.Manager.init(self.backend.cache(), &payload);
+                    var state_manager = Child.StateManager.init(self.backend.cache(), &payload);
+                    var state_adapter = Child.StateAdapterType.init(&state_manager);
                     var fsm_model = Child.FsmModelType.init(
                         self.backend.cache(),
-                        &manager,
+                        &state_adapter,
                         HierarchyT.types[index].descriptor.Trait.size_class_policy,
                         .{ .page_kind = self.childPageKinds(index).kindAt(2).? },
                     );
@@ -928,7 +896,7 @@ pub fn hierarchyBpt(
                     defer fsm_value.deinit();
                     var model = try Child.ModelType.init(
                         self.backend.cache(),
-                        &manager,
+                        &state_adapter,
                         &fsm_value,
                         .{
                             .key_size = HierarchyT.types[index].descriptor.Trait.maximum_key_size,
@@ -954,10 +922,11 @@ pub fn hierarchyBpt(
                 ) !void {
                     const Child = SlotHeapChildFactory.get(index);
                     var payload = Child.emptyPayload();
-                    var manager = Child.Manager.init(self.backend.cache(), &payload);
+                    var state_manager = Child.StateManager.init(self.backend.cache(), &payload);
+                    var state_adapter = Child.StateAdapterType.init(&state_manager);
                     var fsm_model = Child.FsmModelType.init(
                         self.backend.cache(),
-                        &manager,
+                        &state_adapter,
                         HierarchyT.types[index].descriptor.Trait.size_class_policy,
                         .{ .page_kind = self.childPageKinds(index).kindAt(2).? },
                     );
@@ -966,7 +935,7 @@ pub fn hierarchyBpt(
                     defer fsm_value.deinit();
                     var model = try Child.ModelType.init(
                         self.backend.cache(),
-                        &manager,
+                        &state_adapter,
                         &fsm_value,
                         .{
                             .key_size = HierarchyT.types[index].descriptor.Trait.maximum_key_size,
@@ -992,10 +961,11 @@ pub fn hierarchyBpt(
                 ) !void {
                     const Child = SlotHeapChildFactory.get(index);
                     var payload = Child.emptyPayload();
-                    var manager = Child.Manager.init(self.backend.cache(), &payload);
+                    var state_manager = Child.StateManager.init(self.backend.cache(), &payload);
+                    var state_adapter = Child.StateAdapterType.init(&state_manager);
                     var fsm_model = Child.FsmModelType.init(
                         self.backend.cache(),
-                        &manager,
+                        &state_adapter,
                         HierarchyT.types[index].descriptor.Trait.size_class_policy,
                         .{ .page_kind = self.childPageKinds(index).kindAt(2).? },
                     );
@@ -1041,14 +1011,12 @@ pub fn hierarchyBpt(
                                             return error.InvalidPage;
                                         }
                                         const payload: *const Child.PayloadType = @ptrCast(value.payload.ptr);
-                                        const root = payload.root.get();
-                                        if (root != 0) {
-                                            try sink.visit(root);
+                                        if (!payload.root.isMax()) {
+                                            try sink.visit(payload.root.get());
                                         }
                                         for (payload.fsm_class_roots) |fsm_root| {
-                                            const page_id = fsm_root.get();
-                                            if (page_id != 0) {
-                                                try sink.visit(page_id);
+                                            if (!fsm_root.isMax()) {
+                                                try sink.visit(fsm_root.get());
                                             }
                                         }
                                     } else switch (childKind(HierarchyT, index)) {
@@ -1057,18 +1025,17 @@ pub fn hierarchyBpt(
                                                 return error.InvalidPage;
                                             }
                                             const root: *const PackedRoot = @ptrCast(value.payload.ptr);
-                                            if (root.get() != 0) {
+                                            if (!root.isMax()) {
                                                 try sink.visit(root.get());
                                             }
                                         },
                                         .chain_store => {
-                                            if (value.payload.len != @sizeOf(InlineChainStorePayload)) {
+                                            if (value.payload.len != @sizeOf(ChainStoreState)) {
                                                 return error.InvalidPage;
                                             }
-                                            const payload: *const InlineChainStorePayload = @ptrCast(value.payload.ptr);
-                                            const first = payload.first.get();
-                                            if (first != 0) {
-                                                try sink.visit(first);
+                                            const payload: *const ChainStoreState = @ptrCast(value.payload.ptr);
+                                            if (!payload.first.isMax()) {
+                                                try sink.visit(payload.first.get());
                                             }
                                         },
                                         .slot_heap => unreachable,
@@ -1117,7 +1084,7 @@ pub fn hierarchyBpt(
                                 ChildTrait.compare,
                                 ChildTrait.CompareContext,
                             );
-                            var root = PackedRoot.init(0);
+                            var root = PackedRoot.init(PackedRoot.max);
                             var manager = InlineRootManager.init(runtime.backend.cache(), &root);
                             var model = ChildModel.init(
                                 runtime.backend.cache(),
@@ -2106,7 +2073,8 @@ pub fn hierarchyBpt(
 
                             parent_editor: ValueEditorOwner,
                             envelope_editor: value_envelope.EmbeddedEditor,
-                            manager: *Child.Manager,
+                            state_manager: *Child.StateManager,
+                            state_adapter: *Child.StateAdapterType,
                             fsm_model: *Child.FsmModelType,
                             fsm_value: *Child.FsmType,
                             model: *Child.ModelType,
@@ -2254,8 +2222,8 @@ pub fn hierarchyBpt(
                             }
 
                             /// Returns the canonical inline root of this SlotHeap.
-                            pub fn root(self: *const Self) ?PageIdT {
-                                return self.manager.getRoot();
+                            pub fn root(self: *const Self) Error!?PageIdT {
+                                return self.state_adapter.getRoot();
                             }
 
                             pub fn finish(self: *Self) Error!void {
@@ -2282,7 +2250,8 @@ pub fn hierarchyBpt(
                                 self.runtime.backend.allocator().destroy(self.fsm_value);
                                 self.fsm_model.deinit();
                                 self.runtime.backend.allocator().destroy(self.fsm_model);
-                                self.runtime.backend.allocator().destroy(self.manager);
+                                self.runtime.backend.allocator().destroy(self.state_adapter);
+                                self.runtime.backend.allocator().destroy(self.state_manager);
                                 self.parent_editor.rollback();
                                 self.parent_editor.deinit();
                                 self.runtime.backend.allocator().destroy(self.state);
@@ -2509,10 +2478,10 @@ pub fn hierarchyBpt(
                         comptime tag: []const u8,
                         parent_state: ?*BptEditorState,
                     ) Error!ChainStoreEditorFactory.get(tag) {
-                        if (payload.len != @sizeOf(InlineChainStorePayload)) {
+                        if (payload.len != @sizeOf(ChainStoreState)) {
                             return error.BadPayloadLength;
                         }
-                        const chain_payload: *InlineChainStorePayload = @ptrCast(payload.ptr);
+                        const chain_payload: *ChainStoreState = @ptrCast(payload.ptr);
                         const manager = try self.runtime.backend.allocator().create(InlineChainStoreManager);
                         errdefer self.runtime.backend.allocator().destroy(manager);
                         manager.* = InlineChainStoreManager.init(self.runtime.backend.cache(), chain_payload);
@@ -2657,14 +2626,17 @@ pub fn hierarchyBpt(
                             return error.BadPayloadLength;
                         }
                         const storage: *Child.PayloadType = @ptrCast(payload.ptr);
-                        const manager = try self.runtime.backend.allocator().create(Child.Manager);
-                        errdefer self.runtime.backend.allocator().destroy(manager);
-                        manager.* = Child.Manager.init(self.runtime.backend.cache(), storage);
+                        const state_manager = try self.runtime.backend.allocator().create(Child.StateManager);
+                        errdefer self.runtime.backend.allocator().destroy(state_manager);
+                        state_manager.* = Child.StateManager.init(self.runtime.backend.cache(), storage);
+                        const state_adapter = try self.runtime.backend.allocator().create(Child.StateAdapterType);
+                        errdefer self.runtime.backend.allocator().destroy(state_adapter);
+                        state_adapter.* = Child.StateAdapterType.init(state_manager);
                         const fsm_model = try self.runtime.backend.allocator().create(Child.FsmModelType);
                         errdefer self.runtime.backend.allocator().destroy(fsm_model);
                         fsm_model.* = Child.FsmModelType.init(
                             self.runtime.backend.cache(),
-                            manager,
+                            state_adapter,
                             ChildTrait.size_class_policy,
                             .{ .page_kind = self.runtime.childPageKinds(index).kindAt(2).? },
                         );
@@ -2675,7 +2647,7 @@ pub fn hierarchyBpt(
                         errdefer self.runtime.backend.allocator().destroy(model);
                         model.* = try Child.ModelType.init(
                             self.runtime.backend.cache(),
-                            manager,
+                            state_adapter,
                             fsm_value,
                             .{
                                 .key_size = ChildTrait.maximum_key_size,
@@ -2695,7 +2667,8 @@ pub fn hierarchyBpt(
                         return .{
                             .parent_editor = parent_editor,
                             .envelope_editor = envelope_editor,
-                            .manager = manager,
+                            .state_manager = state_manager,
+                            .state_adapter = state_adapter,
                             .fsm_model = fsm_model,
                             .fsm_value = fsm_value,
                             .model = model,
@@ -2724,12 +2697,8 @@ pub fn hierarchyBpt(
                                 );
                             },
                             .embedded => |embedded_value| {
-                                var root = PackedRoot.init(0);
-                                var chain_payload = InlineChainStorePayload{
-                                    .first = PackedRoot.init(0),
-                                    .last = PackedRoot.init(0),
-                                    .total_size = PackedSize.init(0),
-                                };
+                                var root = PackedRoot.init(PackedRoot.max);
+                                var chain_payload: ChainStoreState = .{};
                                 inline for (HierarchyT.types, 0..) |entry, index| {
                                     const identity = entry.type_identity;
                                     if (embedded_value.metadata.registry_id == identity.registry_id and
@@ -2966,8 +2935,8 @@ pub fn hierarchyBpt(
                             allocator: std.mem.Allocator,
                             roots: *std.ArrayList(CollectorT.PageId),
                         ) RootsError!void {
-                            if (runtime.parent.manager.getRoot()) |root| {
-                                try roots.append(allocator, root);
+                            if (!runtime.parent.state.root.isMax()) {
+                                try roots.append(allocator, runtime.parent.state.root.get());
                             }
                         }
 
@@ -3274,18 +3243,4 @@ fn childErrors(comptime HierarchyT: type, comptime BackendT: type, comptime inde
     }
     return HierarchyT.types[index].descriptor.Trait.Binding(BackendT).Error ||
         childErrors(HierarchyT, BackendT, index + 1);
-}
-
-fn indexForIdentity(comptime HierarchyT: type, metadata: value_envelope.Metadata) ?usize {
-    inline for (HierarchyT.types, 0..) |entry, index| {
-        const identity = entry.type_identity;
-        if (metadata.registry_id == identity.registry_id and
-            metadata.type_id == identity.type_id and
-            metadata.type_version == identity.type_version and
-            metadata.metadata_format_version == identity.metadata_format_version)
-        {
-            return index;
-        }
-    }
-    return null;
 }

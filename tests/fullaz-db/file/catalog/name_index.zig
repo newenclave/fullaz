@@ -5,8 +5,40 @@ const fullaz_db = @import("fullaz-db");
 const Manager = struct {
     pub const PageId = u32;
     pub const Error = error{};
+    pub const StateLeaseType = struct {
+        const Self = @This();
+
+        pub const Error = Manager.Error;
+
+        manager: *Manager,
+        bytes: [@sizeOf(PageId)]u8,
+
+        pub fn data(self: *const Self) error{}![]const u8 {
+            return &self.bytes;
+        }
+
+        pub fn dataMut(self: *Self) error{}![]u8 {
+            return &self.bytes;
+        }
+
+        pub fn finish(self: *Self) void {
+            const root = std.mem.readInt(PageId, &self.bytes, .little);
+            self.manager.root = if (root == std.math.maxInt(PageId)) null else root;
+        }
+
+        pub fn deinit(_: *Self) void {}
+    };
 
     root: ?PageId = null,
+
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        var lease: StateLeaseType = .{
+            .manager = self,
+            .bytes = undefined,
+        };
+        std.mem.writeInt(PageId, &lease.bytes, self.root orelse std.math.maxInt(PageId), .little);
+        return lease;
+    }
 
     pub fn getRoot(self: *const @This()) ?PageId {
         return self.root;

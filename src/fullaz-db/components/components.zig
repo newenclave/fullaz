@@ -10,4 +10,3 @@ pub const weightedSequence = @import("weighted_sequence.zig").weightedSequence;
 pub const SizeClasses = @import("slot_heap.zig").SizeClasses;
 pub const SingleRootManager = managers.SingleRootManager;
 pub const ChainStoreManager = managers.ChainStoreManager;
-pub const SlotHeapManager = managers.SlotHeapManager;

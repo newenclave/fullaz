@@ -131,37 +131,34 @@ test "fullaz-db: built-in binding GC capabilities collect roots and register str
     var bpt_runtime: BptBinding.Runtime = undefined;
     try BptBinding.initRuntime(&bpt_runtime, &backend, .{ .base = 0x0100, .count = 2 }, .{});
     defer BptBinding.deinitRuntime(&bpt_runtime);
-    bpt_runtime.manager.restoreRoot(10);
+    bpt_runtime.state.root.set(10);
 
     var rtree_runtime: RtreeBinding.Runtime = undefined;
     try RtreeBinding.initRuntime(&rtree_runtime, &backend, .{ .base = 0x0102, .count = 2 }, .{});
     defer RtreeBinding.deinitRuntime(&rtree_runtime);
-    rtree_runtime.manager.restoreRoot(20);
+    rtree_runtime.state.root.set(20);
 
     var chain_runtime: ChainBinding.Runtime = undefined;
     try ChainBinding.initRuntime(&chain_runtime, &backend, .{ .base = 0x0104, .count = 1 }, .{});
     defer ChainBinding.deinitRuntime(&chain_runtime);
-    chain_runtime.manager.restoreState(.{
-        .first = 30,
-        .last = 31,
-        .total_size = 100,
-    });
+    chain_runtime.state.first.set(30);
+    chain_runtime.state.last.set(31);
+    chain_runtime.state.total_size.set(100);
 
     var sequence_runtime: SequenceBinding.Runtime = undefined;
     try SequenceBinding.initRuntime(&sequence_runtime, &backend, .{ .base = 0x0105, .count = 2 }, .{});
     defer SequenceBinding.deinitRuntime(&sequence_runtime);
-    sequence_runtime.manager.restoreRoot(40);
+    sequence_runtime.state.root.set(40);
 
     var slot_heap_runtime: SlotHeapBinding.Runtime = undefined;
     try SlotHeapBinding.initRuntime(&slot_heap_runtime, &backend, .{ .base = 0x0107, .count = 3 }, .{});
     defer SlotHeapBinding.deinitRuntime(&slot_heap_runtime);
-    var slot_heap_state: SlotHeapBinding.Manager.State = .{};
-    slot_heap_state.root = 50;
-    slot_heap_state.cached_top = .{ .page_id = 53, .slot_id = 0 };
-    slot_heap_state.available_inode_heads[1] = 54;
-    slot_heap_state.fsm_class_roots[0] = 51;
-    slot_heap_state.fsm_class_roots[1] = 52;
-    slot_heap_runtime.manager.restoreState(slot_heap_state);
+    slot_heap_runtime.state.root.set(50);
+    slot_heap_runtime.state.cached_top_page.set(53);
+    slot_heap_runtime.state.cached_top_slot.set(0);
+    slot_heap_runtime.state.available_inode_heads[1].set(54);
+    slot_heap_runtime.state.fsm_class_roots[0].set(51);
+    slot_heap_runtime.state.fsm_class_roots[1].set(52);
 
     var roots: std.ArrayList(u32) = .empty;
     defer roots.deinit(std.testing.allocator);
@@ -200,4 +197,72 @@ test "fullaz-db: built-in binding GC capabilities collect roots and register str
         try std.testing.expectEqual(@as(TestCollector.ScannerVersion, 1), scanner.version);
         try std.testing.expect(scanner.value_scan == null);
     }
+}
+
+test "fullaz-db: hierarchy envelope GC retains child root page zero" {
+    const Bpt = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 3,
+        .maximum_key_size = 16,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    });
+    const Hierarchy = fullaz_db.Hierarchy(.{ .registry_id = 0x1234, .types = &.{.{
+        .tag = "child",
+        .type_id = 1,
+        .type_version = 1,
+        .metadata_format_version = 1,
+        .descriptor = Bpt,
+        .allowed_child_type_ids = &.{},
+    }} });
+    const Owner = fullaz_db.hierarchyBpt(Hierarchy, Bpt);
+    const Binding = Owner.Trait.Binding(Backend);
+    const RootCollector = struct {
+        pub const PageId = u32;
+        pub const Error = std.mem.Allocator.Error || error{
+            InvalidPage,
+            InvalidScannerContext,
+        };
+        pub const ReferenceSink = struct {
+            roots: *std.ArrayList(PageId),
+
+            pub fn visit(self: @This(), page_id: PageId) Error!void {
+                try self.roots.append(std.testing.allocator, page_id);
+            }
+
+            pub fn hasValueScanner(_: @This()) bool {
+                return false;
+            }
+
+            pub fn visitValue(_: @This(), _: []const u8) Error!void {}
+        };
+        pub const ValueScanner = *const fn (
+            context: ?*const anyopaque,
+            value: []const u8,
+            sink: ReferenceSink,
+        ) Error!void;
+    };
+    const PackedRoot = fullaz.core.packed_int.PackedInt(u32, .little);
+
+    var root = PackedRoot.init(0);
+    var bytes: [96]u8 = undefined;
+    try fullaz_db.value_envelope.formatEmbedded(
+        &bytes,
+        .{
+            .registry_id = Hierarchy.registry_id,
+            .type_id = Hierarchy.typeIdentityByTag("child").type_id,
+            .type_version = Hierarchy.typeIdentityByTag("child").type_version,
+            .metadata_format_version = Hierarchy.typeIdentityByTag("child").metadata_format_version,
+            .instance_id = 1,
+            .revision = 0,
+        },
+        std.mem.asBytes(&root),
+    );
+    var roots: std.ArrayList(u32) = .empty;
+    defer roots.deinit(std.testing.allocator);
+    var runtime: Binding.Runtime = undefined;
+    const scanner = Binding.hierarchyValueScanner(RootCollector);
+    try scanner(&runtime, &bytes, .{ .roots = &roots });
+    try std.testing.expectEqualSlices(u32, &.{0}, roots.items);
 }

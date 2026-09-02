@@ -111,11 +111,11 @@ const Inode = struct {
 const Accessor = struct {
     pub const Error = MockError;
 
-    pub fn getRoot(_: *const Accessor) ?u32 {
+    pub fn getRoot(_: *const Accessor) Error!?u32 {
         return null;
     }
     pub fn setRoot(_: *Accessor, _: ?u32) Error!void {}
-    pub fn getCachedTop(_: *const Accessor) ?Location {
+    pub fn getCachedTop(_: *const Accessor) Error!?Location {
         return null;
     }
     pub fn setCachedTop(_: *Accessor, _: ?Location) Error!void {}
@@ -212,11 +212,11 @@ const StorageManager = struct {
     pub const CountType = u64;
     pub const Error = MockError;
 
-    pub fn getRoot(_: *const StorageManager) ?PageId {
+    pub fn getRoot(_: *const StorageManager) Error!?PageId {
         return null;
     }
     pub fn setRoot(_: *StorageManager, _: ?PageId) Error!void {}
-    pub fn getCachedTop(_: *const StorageManager) ?Location {
+    pub fn getCachedTop(_: *const StorageManager) Error!?Location {
         return null;
     }
     pub fn setCachedTop(_: *StorageManager, _: ?Location) Error!void {}
@@ -228,6 +228,10 @@ const StorageManager = struct {
         return null;
     }
     pub fn setAvailableInode(_: *StorageManager, _: usize, _: ?PageId) Error!void {}
+    pub fn getSizeClassRoot(_: *const StorageManager, _: u16) Error!?PageId {
+        return null;
+    }
+    pub fn setSizeClassRoot(_: *StorageManager, _: u16, _: ?PageId) Error!void {}
     pub fn destroyPage(_: *StorageManager, _: PageId) Error!void {}
 };
 
@@ -235,6 +239,6 @@ test "SlotHeap model contract accepts a conforming model" {
     comptime interfaces.assertModel(Model);
 }
 
-test "SlotHeap storage manager contract accepts persistent metadata" {
-    comptime interfaces.assertPagedStorageManager(StorageManager, Location);
+test "SlotHeap state adapter contract accepts persistent metadata" {
+    comptime interfaces.assertPagedStateAdapter(StorageManager, Location);
 }

@@ -10,6 +10,14 @@ pub const Settings = struct {
     inode_page_kind: u16 = 1,
 };
 
+/// Durable state required to reopen one paged weighted B+ tree.
+pub fn State(comptime PageIdT: type) type {
+    const PackedPageId = core.packed_int.PackedInt(PageIdT, .little);
+    return extern struct {
+        root: PackedPageId = PackedPageId.init(PackedPageId.max),
+    };
+}
+
 pub fn PagedModel(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
@@ -17,12 +25,18 @@ pub fn PagedModel(
     comptime ValuePolicyT: type,
 ) type {
     comptime {
-        contracts.storage_manager.requiresStorageManager(StorageManagerT);
+        contracts.storage_manager.assertPagedStorageManager(StorageManagerT, PageCacheT.Pid);
         contracts.page_cache.requiresPageCache(PageCacheT);
     }
 
     const PageHandle = PageCacheT.Handle;
     const CachePageId = PageCacheT.Pid;
+    const StateImpl = State(CachePageId);
+    const StateLeaseT = StorageManagerT.StateLeaseType;
+    const StateError = PageCacheT.Error ||
+        StorageManagerT.Error ||
+        StateLeaseT.Error ||
+        error{BadData};
     const Weight = WeightT;
     const Index = u16;
 
@@ -38,9 +52,43 @@ pub fn PagedModel(
     };
 
     const Context = struct {
+        const ContextSelf = @This();
+
         cache: *PageCacheT = undefined,
         storage_mgr: *StorageManagerT = undefined,
         settings: Settings = undefined,
+
+        fn stateCast(_: *const ContextSelf, lease: *const StateLeaseT) StateError!*const StateImpl {
+            const data = try lease.data();
+            if (data.len != @sizeOf(StateImpl)) {
+                return error.BadData;
+            }
+            return @ptrCast(data.ptr);
+        }
+
+        fn stateCastMut(_: *ContextSelf, lease: *StateLeaseT) StateError!*StateImpl {
+            const data = try lease.dataMut();
+            if (data.len != @sizeOf(StateImpl)) {
+                return error.BadData;
+            }
+            return @ptrCast(data.ptr);
+        }
+
+        fn getRoot(self: *const ContextSelf) StateError!?CachePageId {
+            var lease = try self.storage_mgr.state();
+            defer lease.deinit();
+            const state = try self.stateCast(&lease);
+            const root = state.root.get();
+            return if (root == std.math.maxInt(CachePageId)) null else root;
+        }
+
+        fn setRoot(self: *ContextSelf, root: ?CachePageId) StateError!void {
+            var lease = try self.storage_mgr.state();
+            defer lease.deinit();
+            const state = try self.stateCastMut(&lease);
+            state.root.set(root orelse std.math.maxInt(CachePageId));
+            lease.finish();
+        }
     };
 
     const ValuePolicyImplDefault = struct {
@@ -151,6 +199,8 @@ pub fn PagedModel(
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
         PageCacheT.Error ||
+        StorageManagerT.Error ||
+        StateLeaseT.Error ||
         errors.OrderError ||
         errors.BptError ||
         core.structural_mutation.Error;
@@ -764,11 +814,11 @@ pub fn PagedModel(
         }
 
         pub fn getRoot(self: *const Self) Error!?Pid {
-            return self.ctx.storage_mgr.getRoot();
+            return self.ctx.getRoot();
         }
 
         pub fn setRoot(self: *Self, root: ?Pid) Error!void {
-            try self.ctx.storage_mgr.setRoot(root);
+            try self.ctx.setRoot(root);
         }
 
         pub fn destroy(self: *Self, id: Pid) Error!void {
@@ -866,6 +916,8 @@ pub fn PagedModel(
 
         pub const NodeIdType = CachePageId;
         pub const PageId = CachePageId;
+        pub const State = StateImpl;
+        pub const state_size = @sizeOf(StateImpl);
 
         accessor_state: AccessorType,
 

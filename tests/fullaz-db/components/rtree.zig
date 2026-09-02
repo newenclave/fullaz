@@ -59,7 +59,7 @@ test "fullaz-db: paged R-tree descriptor preserves validated options" {
     }).Trait;
 
     try std.testing.expectEqualStrings("fullaz.rtree.paged", Trait.kind_name);
-    try std.testing.expectEqual(@as(u32, 1), Trait.format_version);
+    try std.testing.expectEqual(@as(u32, 2), Trait.format_version);
     try std.testing.expectEqual(@as(usize, 2), Trait.page_kind_count);
     try std.testing.expectEqualSlices([]const u8, &.{ "leaf", "inode" }, &Trait.page_roles);
     try std.testing.expect(Trait.Coord == i64);

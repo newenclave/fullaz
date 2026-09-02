@@ -67,6 +67,8 @@ fn PagedStateManager(comptime CacheT: type) type {
                 return self.handle.dataMut();
             }
 
+            pub fn finish(_: *@This()) void {}
+
             pub fn deinit(self: *@This()) void {
                 self.handle.deinit();
                 self.manager.active_state_leases -= 1;
@@ -675,18 +677,48 @@ const NoneStorageManager = struct {
     pub const Self = @This();
     pub const PageId = u32;
     pub const Error = error{};
-    root_block_id: ?u32 = null,
+    pub const StateLeaseType = StateLease;
 
-    pub fn getRoot(self: *const @This()) ?u32 {
+    pub const StateLease = struct {
+        pub const Error = NoneStorageManager.Error;
+
+        manager: *Self,
+
+        pub fn data(self: *const @This()) NoneStorageManager.Error![]const u8 {
+            return &self.manager.state_bytes;
+        }
+
+        pub fn dataMut(self: *@This()) NoneStorageManager.Error![]u8 {
+            return &self.manager.state_bytes;
+        }
+
+        pub fn finish(self: *@This()) void {
+            const page_id = std.mem.readInt(PageId, &self.manager.state_bytes, .little);
+            self.manager.root_block_id = if (page_id == std.math.maxInt(PageId)) null else page_id;
+        }
+
+        pub fn deinit(_: *@This()) void {}
+    };
+
+    root_block_id: ?u32 = null,
+    state_bytes: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
+
+    pub fn getRoot(self: *const Self) ?u32 {
         return self.root_block_id;
     }
 
-    pub fn setRoot(self: *@This(), root: ?u32) Error!void {
+    pub fn setRoot(self: *Self, root: ?u32) Error!void {
         self.root_block_id = root;
+        std.mem.writeInt(PageId, &self.state_bytes, root orelse std.math.maxInt(PageId), .little);
         // Persist to disk header, etc.
     }
 
-    pub fn destroyPage(_: *@This(), id: PageId) Error!void {
+    pub fn state(self: *Self) Error!StateLease {
+        std.mem.writeInt(PageId, &self.state_bytes, self.root_block_id orelse std.math.maxInt(PageId), .little);
+        return .{ .manager = self };
+    }
+
+    pub fn destroyPage(_: *Self, id: PageId) Error!void {
         _ = id;
         // Implement page destruction logic, e.g., add to free list
     }

@@ -72,6 +72,8 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
                 return self.handle.dataMut();
             }
 
+            pub fn finish(_: *@This()) void {}
+
             pub fn deinit(self: *@This()) void {
                 self.handle.deinit();
             }

@@ -2207,7 +2207,7 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
         try std.testing.expectError(error.TopPinned, editor.pop());
         top.deinit();
         try std.testing.expectEqual(@as(u64, 96), try editor.count());
-        child_root = editor.root().?;
+        child_root = (try editor.root()).?;
         try editor.finish();
         try transaction.commit();
     }

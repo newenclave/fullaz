@@ -70,10 +70,10 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
             return Key.initWith(.{ lx, ly }, .{ hx, hy });
         }
 
-        fn wire(gpa: std.mem.Allocator, cache: *PageCacheType, root: ?PageCacheType.Pid) !struct { s: *Storage, m: *Model } {
+        fn wire(gpa: std.mem.Allocator, cache: *PageCacheType) !struct { s: *Storage, m: *Model } {
             const s = try gpa.create(Storage);
             errdefer gpa.destroy(s);
-            s.* = Storage.init(cache, root);
+            s.* = Storage.init(cache);
             const m = try gpa.create(Model);
             errdefer gpa.destroy(m);
             m.* = try Model.init(cache, s, .{});
@@ -99,7 +99,7 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
             sb.setPlayer(spawn_x, spawn_y);
             try cache.flush(constants.superblock_pid);
 
-            const wired = try wire(gpa, cache, null);
+            const wired = try wire(gpa, cache);
             var self = Self{
                 .gpa = gpa,
                 .cache = cache,
@@ -127,7 +127,6 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
                 const p = sb.getPlayer();
                 const v = sb.view();
                 break :blk .{
-                    .root = sb.getRoot(),
                     .seed = sb.getSeed(),
                     .px = p[0],
                     .py = p[1],
@@ -138,7 +137,7 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
                 };
             };
 
-            const wired = try wire(gpa, cache, root.root);
+            const wired = try wire(gpa, cache);
             return Self{
                 .gpa = gpa,
                 .cache = cache,

@@ -4,6 +4,7 @@ const scanner = @import("scanner.zig");
 const page_header = @import("../../page/header.zig");
 const interfaces = @import("../../contracts/contracts.zig");
 const errors = @import("../../core/errors.zig");
+const PackedInt = @import("../../core/packed_int.zig").PackedInt;
 const requiresStorageManager = @import("interfaces.zig").requiresStorageManager;
 const requiresStorageManagerIndexRoot = @import("interfaces.zig").requiresStorageManagerIndexRoot;
 const weighted_index = @import("weighted_index.zig");
@@ -13,6 +14,22 @@ pub const Settings = struct {
     index_leaf_page_kind: u16 = 0,
     index_inode_page_kind: u16 = 1,
 };
+
+/// Durable state required to reopen one chain store.
+pub fn State(
+    comptime PageIdT: type,
+    comptime SizeT: type,
+    comptime Endian: std.builtin.Endian,
+) type {
+    const PackedPageId = PackedInt(PageIdT, Endian);
+    const PackedSize = PackedInt(SizeT, Endian);
+
+    return extern struct {
+        first: PackedPageId = PackedPageId.init(PackedPageId.max),
+        last: PackedPageId = PackedPageId.init(PackedPageId.max),
+        total_size: PackedSize = PackedSize.init(0),
+    };
+}
 
 pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type, comptime Endian: std.builtin.Endian) type {
     const PosType = StorageManagerT.Size;
@@ -27,6 +44,7 @@ pub fn HandleWeighted(
     comptime StorageManagerT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
+    comptime requiresStorageManagerIndexRoot(StorageManagerT);
     const IndexImpl = weighted_index.WeightedIndex(
         PageCacheT,
         StorageManagerT,
@@ -48,16 +66,15 @@ pub fn Indexed(
 ) type {
     comptime {
         interfaces.page_cache.requiresPageCache(PageCacheT);
-        requiresStorageManager(StorageManagerT);
-        if (@hasDecl(IndexT, "requires_root")) {
-            requiresStorageManagerIndexRoot(StorageManagerT);
-        }
+        requiresStorageManager(StorageManagerT, PageCacheT.Pid);
     }
 
     const PosType = StorageManagerT.Size;
     const Index = u16;
     const PageHandle = PageCacheT.Handle;
     const CachePageId = PageCacheT.Pid;
+    const StateImpl = State(CachePageId, PosType, Endian);
+    const StateLeaseT = StorageManagerT.StateLeaseType;
 
     const CommonPageViewConst = page_header.View(CachePageId, Index, Endian, true);
     const ViewTypes = chain_view.View(CachePageId, Index, PosType, Endian, false);
@@ -65,11 +82,89 @@ pub fn Indexed(
 
     const CommonErrors = PageCacheT.Error ||
         StorageManagerT.Error ||
+        StateLeaseT.Error ||
+        error{BadData} ||
         errors.HandleError;
+
+    const StateAdapter = struct {
+        const Self = @This();
+        const Error = StorageManagerT.Error ||
+            StateLeaseT.Error ||
+            error{BadData};
+
+        storage_mgr: *StorageManagerT,
+
+        fn stateCast(_: *const Self, lease: *const StateLeaseT) Error!*const StateImpl {
+            const data = try lease.data();
+            if (data.len != @sizeOf(StateImpl)) {
+                return Error.BadData;
+            }
+            return @ptrCast(data.ptr);
+        }
+
+        fn stateCastMut(_: *Self, lease: *StateLeaseT) Error!*StateImpl {
+            const data = try lease.dataMut();
+            if (data.len != @sizeOf(StateImpl)) {
+                return Error.BadData;
+            }
+            return @ptrCast(data.ptr);
+        }
+
+        fn getFirst(self: *const Self) Error!?CachePageId {
+            var lease = try self.storage_mgr.state();
+            defer lease.deinit();
+            const state = try self.stateCast(&lease);
+            const first = state.first.get();
+            return if (first == PackedInt(CachePageId, Endian).max) null else first;
+        }
+
+        fn getLast(self: *const Self) Error!?CachePageId {
+            var lease = try self.storage_mgr.state();
+            defer lease.deinit();
+            const state = try self.stateCast(&lease);
+            const last = state.last.get();
+            return if (last == PackedInt(CachePageId, Endian).max) null else last;
+        }
+
+        fn getTotalSize(self: *const Self) Error!PosType {
+            var lease = try self.storage_mgr.state();
+            defer lease.deinit();
+            const state = try self.stateCast(&lease);
+            return state.total_size.get();
+        }
+
+        fn setFirst(self: *Self, page_id: ?CachePageId) Error!void {
+            var lease = try self.storage_mgr.state();
+            defer lease.deinit();
+            const state = try self.stateCastMut(&lease);
+            state.first.set(page_id orelse PackedInt(CachePageId, Endian).max);
+            lease.finish();
+        }
+
+        fn setLast(self: *Self, page_id: ?CachePageId) Error!void {
+            var lease = try self.storage_mgr.state();
+            defer lease.deinit();
+            const state = try self.stateCastMut(&lease);
+            state.last.set(page_id orelse PackedInt(CachePageId, Endian).max);
+            lease.finish();
+        }
+
+        fn setTotalSize(self: *Self, size: PosType) Error!void {
+            var lease = try self.storage_mgr.state();
+            defer lease.deinit();
+            const state = try self.stateCastMut(&lease);
+            state.total_size.set(size);
+            lease.finish();
+        }
+
+        fn destroyPage(self: *Self, page_id: CachePageId) Error!void {
+            return self.storage_mgr.destroyPage(page_id);
+        }
+    };
 
     const Context = struct {
         cache: *PageCacheT,
-        mgr: *StorageManagerT,
+        mgr: StateAdapter,
         settings: Settings,
     };
 
@@ -332,7 +427,7 @@ pub fn Indexed(
         pub fn init(cache: *PageCacheT, mgr: *StorageManagerT, settings: Settings) Self {
             const ctx = Context{
                 .cache = cache,
-                .mgr = mgr,
+                .mgr = .{ .storage_mgr = mgr },
                 .settings = settings,
             };
 

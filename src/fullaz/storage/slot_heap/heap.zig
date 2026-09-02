@@ -206,13 +206,13 @@ pub fn Heap(comptime ModelT: type) type {
         }
 
         pub fn height(self: *Self) Error!usize {
-            const root = self.model.accessor().getRoot() orelse return 0;
+            const root = (try self.model.accessor().getRoot()) orelse return 0;
             return self.levelOf(root);
         }
 
         pub fn top(self: *Self) Error!Peek {
             const acc = self.model.accessor();
-            const location = acc.getCachedTop() orelse return Error.EmptySet;
+            const location = (try acc.getCachedTop()) orelse return Error.EmptySet;
             if (location.slot_id != @as(SlotId, 0)) {
                 return Error.CorruptTree;
             }
@@ -226,7 +226,7 @@ pub fn Heap(comptime ModelT: type) type {
 
         pub fn mutableTop(self: *Self) Error!MutablePeek {
             const acc = self.model.accessor();
-            const location = acc.getCachedTop() orelse return Error.EmptySet;
+            const location = (try acc.getCachedTop()) orelse return Error.EmptySet;
             if (location.slot_id != @as(SlotId, 0)) {
                 return Error.CorruptTree;
             }
@@ -255,7 +255,7 @@ pub fn Heap(comptime ModelT: type) type {
             const required = try self.model.requiredLeafSpace(key, value);
             const acc = self.model.accessor();
 
-            if (acc.getRoot() == null) {
+            if (try acc.getRoot() == null) {
                 const leaf_id = blk: {
                     var guard = LeafGuard.init(acc, try acc.createLeaf());
                     const created_id = guard.ptr().id();
@@ -308,7 +308,7 @@ pub fn Heap(comptime ModelT: type) type {
 
         fn popImpl(self: *Self) Error!void {
             const acc = self.model.accessor();
-            const location = acc.getCachedTop() orelse return Error.EmptySet;
+            const location = (try acc.getCachedTop()) orelse return Error.EmptySet;
             if (location.slot_id != @as(SlotId, 0)) {
                 return Error.CorruptTree;
             }
@@ -406,7 +406,7 @@ pub fn Heap(comptime ModelT: type) type {
 
         fn attachSubtree(self: *Self, child_id: NodeId, child_level: usize) Error!void {
             const acc = self.model.accessor();
-            const root_id = acc.getRoot() orelse {
+            const root_id = (try acc.getRoot()) orelse {
                 try self.setNodeParent(child_id, null);
                 try acc.setRoot(child_id);
                 return self.refreshCachedTop();
@@ -535,7 +535,7 @@ pub fn Heap(comptime ModelT: type) type {
             if (size < try inode.ptr().capacity() and !(try inode.ptr().isAvailableLinked())) {
                 try self.linkAvailable(inode.ptr());
             }
-            if (acc.getRoot() == inode.ptr().id() and size == 1) {
+            if ((try acc.getRoot()) == inode.ptr().id() and size == 1) {
                 inode.deinit();
                 return self.contractRoot();
             }
@@ -572,7 +572,7 @@ pub fn Heap(comptime ModelT: type) type {
 
         fn contractRoot(self: *Self) Error!void {
             const acc = self.model.accessor();
-            while (acc.getRoot()) |root_id| {
+            while (try acc.getRoot()) |root_id| {
                 if (try acc.isLeafId(root_id)) {
                     var leaf = try self.loadLeaf(root_id);
                     defer acc.deinitLeaf(leaf);
@@ -690,7 +690,7 @@ pub fn Heap(comptime ModelT: type) type {
 
         fn refreshCachedTop(self: *Self) Error!void {
             const acc = self.model.accessor();
-            const root_id = acc.getRoot() orelse return acc.setCachedTop(null);
+            const root_id = (try acc.getRoot()) orelse return acc.setCachedTop(null);
             if (try acc.isLeafId(root_id)) {
                 return acc.setCachedTop(self.leafLocation(root_id));
             }

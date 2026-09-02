@@ -105,7 +105,49 @@ pub fn WeightedIndex(
         pub const Error = StorageManagerT.Error;
         pub const PageId = CachePageId;
 
+        pub const StateLeaseType = struct {
+            const LeaseSelf = @This();
+
+            pub const Error = StorageManagerT.Error;
+
+            sm: *StorageManagerT,
+            bytes: [@sizeOf(CachePageId)]u8,
+
+            pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                return &self.bytes;
+            }
+
+            pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                return &self.bytes;
+            }
+
+            pub fn finish(self: *LeaseSelf) void {
+                const encoded_root = std.mem.readInt(CachePageId, &self.bytes, .little);
+                const root = if (encoded_root == std.math.maxInt(CachePageId))
+                    null
+                else
+                    encoded_root;
+                self.sm.setIndexRoot(root) catch unreachable;
+            }
+
+            pub fn deinit(_: *LeaseSelf) void {}
+        };
+
         sm: *StorageManagerT,
+
+        pub fn state(self: *Self) Error!StateLeaseType {
+            var lease: StateLeaseType = .{
+                .sm = self.sm,
+                .bytes = undefined,
+            };
+            std.mem.writeInt(
+                CachePageId,
+                &lease.bytes,
+                self.sm.getIndexRoot() orelse std.math.maxInt(CachePageId),
+                .little,
+            );
+            return lease;
+        }
 
         pub fn getRoot(self: *const Self) ?PageId {
             return self.sm.getIndexRoot();

@@ -93,13 +93,13 @@ fn validateHeap(model: *Model) !void {
     var eligible = std.AutoHashMap(Model.NodeIdType, void).init(std.testing.allocator);
     defer eligible.deinit();
 
-    const root = accessor.getRoot() orelse {
-        try std.testing.expectEqual(@as(?Model.LocationType, null), accessor.getCachedTop());
+    const root = (try accessor.getRoot()) orelse {
+        try std.testing.expectEqual(@as(?Model.LocationType, null), try accessor.getCachedTop());
         try std.testing.expectEqual(@as(u64, 0), try model.getEntriesCount());
         return;
     };
     const summary = try checkNode(model, root, null, &eligible);
-    try std.testing.expect(locationsEqual(summary.winner, accessor.getCachedTop().?));
+    try std.testing.expect(locationsEqual(summary.winner, (try accessor.getCachedTop()).?));
     try std.testing.expectEqual(summary.entries, try model.getEntriesCount());
 
     for (1..32) |level| {

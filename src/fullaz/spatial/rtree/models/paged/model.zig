@@ -5,11 +5,20 @@ const geometry = @import("../../../geometry.zig");
 const page_rtree = @import("../../../../page/rtree.zig");
 const errors = @import("../../../../core/errors.zig");
 const StructuralMutationCoordinator = @import("../../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
+const PackedInt = @import("../../../../core/packed_int.zig").PackedInt;
 
 pub const Settings = struct {
     leaf_page_kind: u16 = 0,
     inode_page_kind: u16 = 1,
 };
+
+/// Durable state required to reopen one paged R-tree.
+pub fn State(comptime PageIdT: type) type {
+    const PackedPageId = PackedInt(PageIdT, .little);
+    return extern struct {
+        root: PackedPageId = PackedPageId.init(PackedPageId.max),
+    };
+}
 
 pub fn PagedModel(
     comptime PageCacheT: type,
@@ -21,7 +30,7 @@ pub fn PagedModel(
     comptime Endian: std.builtin.Endian,
 ) type {
     comptime {
-        interfaces.requiresStorageManager(StorageManagerT);
+        interfaces.requiresStorageManager(StorageManagerT, PageCacheT.Pid);
         interfaces.requiresPageCache(PageCacheT);
         if (max_entries_v < 4) {
             @compileError("max_entries must be at least 4");
@@ -30,6 +39,12 @@ pub fn PagedModel(
 
     const PageHandle = PageCacheT.Handle;
     const CachePageId = PageCacheT.Pid;
+    const StateImpl = State(CachePageId);
+    const StateLeaseT = StorageManagerT.StateLeaseType;
+    const StateError = PageCacheT.Error ||
+        StorageManagerT.Error ||
+        StateLeaseT.Error ||
+        error{BadData};
     const RtreePage = page_rtree.Rtree(CachePageId, u16, CoordT, dims, Endian);
 
     const RtreeView = rtree_view.View(CachePageId, u16, CoordT, dims, Endian, false);
@@ -45,9 +60,43 @@ pub fn PagedModel(
     };
 
     const Context = struct {
+        const ContextSelf = @This();
+
         cache: *PageCacheT,
         storage_mgr: *StorageManagerT,
         settings: Settings,
+
+        fn stateCast(_: *const ContextSelf, lease: *const StateLeaseT) StateError!*const StateImpl {
+            const data = try lease.data();
+            if (data.len != @sizeOf(StateImpl)) {
+                return error.BadData;
+            }
+            return @ptrCast(data.ptr);
+        }
+
+        fn stateCastMut(_: *ContextSelf, lease: *StateLeaseT) StateError!*StateImpl {
+            const data = try lease.dataMut();
+            if (data.len != @sizeOf(StateImpl)) {
+                return error.BadData;
+            }
+            return @ptrCast(data.ptr);
+        }
+
+        fn getRoot(self: *const ContextSelf) StateError!?CachePageId {
+            var lease = try self.storage_mgr.state();
+            defer lease.deinit();
+            const state = try self.stateCast(&lease);
+            const root = state.root.get();
+            return if (root == std.math.maxInt(CachePageId)) null else root;
+        }
+
+        fn setRoot(self: *ContextSelf, root: ?CachePageId) StateError!void {
+            var lease = try self.storage_mgr.state();
+            defer lease.deinit();
+            const state = try self.stateCastMut(&lease);
+            state.root.set(root orelse std.math.maxInt(CachePageId));
+            lease.finish();
+        }
     };
 
     const ErrorSet = HeaderPageView.Error ||
@@ -55,6 +104,7 @@ pub fn PagedModel(
         errors.SlotsError ||
         PageCacheT.Error ||
         StorageManagerT.Error ||
+        StateLeaseT.Error ||
         @import("../../../../core/core.zig").structural_mutation.Error ||
         error{
             ValueTooLarge,
@@ -422,8 +472,8 @@ pub fn PagedModel(
 
         fn deinit(_: *Self) void {}
 
-        pub fn getRoot(self: *const Self) ?CachePageId {
-            return self.ctx.storage_mgr.getRoot();
+        pub fn getRoot(self: *const Self) Error!?CachePageId {
+            return self.ctx.getRoot();
         }
 
         pub fn setRoot(self: *Self, new_root: ?CachePageId) Error!void {
@@ -432,7 +482,7 @@ pub fn PagedModel(
                     return Error.BadData;
                 }
             }
-            return self.ctx.storage_mgr.setRoot(new_root);
+            return self.ctx.setRoot(new_root);
         }
 
         pub fn destroy(self: *Self, id: CachePageId) Error!void {
@@ -592,6 +642,8 @@ pub fn PagedModel(
         pub const AccessorType = AccessorImpl;
         pub const ValueEditorType = AccessorType.ValueEditorType;
         pub const max_entries = max_entries_v;
+        pub const State = StateImpl;
+        pub const state_size = @sizeOf(StateImpl);
 
         accessor_state: AccessorType,
 

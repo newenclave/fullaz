@@ -76,7 +76,7 @@ fn ownerDescriptor(
             .rtree => "fullaz.hierarchy-store.rtree-owner",
             .slot_heap => "fullaz.hierarchy-store.slot-heap-owner",
         };
-        pub const format_version: u32 = 1;
+        pub const format_version: u32 = 2;
         pub const page_kind_count = ParentTrait.page_kind_count;
         pub const page_roles = ParentTrait.page_roles;
 

@@ -1,8 +1,7 @@
 const std = @import("std");
-const PackedInt = @import("fullaz").core.packed_int.PackedInt;
 const component = @import("../component/component.zig");
 const FingerprintWriter = @import("../component/fingerprint.zig").Writer;
-const ChainStoreManager = @import("../component/managers/managers.zig").ChainStoreManager;
+const managers = @import("../component/managers/managers.zig");
 const low_level_chain_store = @import("fullaz").storage.chain_store;
 const gc = @import("fullaz").gc;
 const dynamic_metadata = @import("../file/metadata/dynamic.zig");
@@ -17,7 +16,7 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
 
     const Trait = struct {
         pub const kind_name: []const u8 = "fullaz.chain-store.paged";
-        pub const format_version: u32 = 1;
+        pub const format_version: u32 = 2;
         pub const page_kind_count: usize = 1;
         pub const page_roles: [page_kind_count][]const u8 = .{"chunk"};
 
@@ -25,7 +24,30 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
 
         pub fn Binding(comptime BackendT: type) type {
             const CacheT = BackendT.CacheType;
-            const ManagerT = ChainStoreManager(BackendT);
+            const StateT = low_level_chain_store.State(CacheT.Pid, u64, .little);
+            const StateManagerT = managers.StateManager(BackendT, StateT);
+            const ManagerT = struct {
+                const Self = @This();
+
+                pub const PageId = CacheT.Pid;
+                pub const Size = u64;
+                pub const Error = StateManagerT.Error;
+                pub const StateLeaseType = StateManagerT.StateLeaseType;
+
+                inner: StateManagerT,
+
+                pub fn init(backend: *BackendT, state_ptr: *StateT) Self {
+                    return .{ .inner = StateManagerT.init(backend, state_ptr) };
+                }
+
+                pub fn state(self: *Self) Error!StateLeaseType {
+                    return self.inner.state();
+                }
+
+                pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
+                    return self.inner.destroyPage(page_id);
+                }
+            };
             const BlobT = low_level_chain_store.Blob(
                 CacheT,
                 ManagerT,
@@ -118,63 +140,43 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                 pub const Proxy = MutableProxy;
                 pub const ConstProxy = ReadProxy;
                 pub const InitOptions = struct {};
-                pub const TransactionState = ManagerT.State;
+                pub const TransactionState = StateT;
                 pub const Error = BindingError;
 
                 pub const Runtime = struct {
                     page_kinds: component.PageKindRange,
                     cache: *CacheT,
+                    state: StateT,
                     manager: ManagerT,
                     blob: BlobT,
                     const_proxy: ConstProxy,
                 };
 
                 pub const StaticMetadata = struct {
-                    const Offset = u64;
-                    const PackedPageId = PackedInt(CacheT.Pid, .little);
-                    const PackedSize = PackedInt(Offset, .little);
-
-                    pub const Storage = extern struct {
-                        first: PackedPageId,
-                        last: PackedPageId,
-                        total_size: PackedSize,
-                    };
+                    pub const Storage = StateT;
 
                     pub const Error = error{BadMetadata};
 
                     pub fn capture(runtime: *const Runtime) Storage {
-                        const state = runtime.manager.getState();
-                        return .{
-                            .first = PackedPageId.init(state.first orelse 0),
-                            .last = PackedPageId.init(state.last orelse 0),
-                            .total_size = PackedSize.init(state.total_size),
-                        };
+                        return runtime.state;
                     }
 
                     pub fn restore(runtime: *Runtime, storage: *const Storage) void {
-                        const first = storage.first.get();
-                        const last = storage.last.get();
-                        runtime.manager.restoreState(.{
-                            .first = if (first == 0) null else first,
-                            .last = if (last == 0) null else last,
-                            .total_size = storage.total_size.get(),
-                        });
+                        runtime.state = storage.*;
                     }
 
                     pub fn validate(storage: *const Storage, page_count: usize) @This().Error!void {
-                        const first = storage.first.get();
-                        const last = storage.last.get();
-                        if ((first == 0) != (last == 0)) {
+                        if (storage.first.isMax() != storage.last.isMax()) {
                             return @This().Error.BadMetadata;
                         }
-                        if (first == 0) {
+                        if (storage.first.isMax()) {
                             if (storage.total_size.get() != 0) {
                                 return @This().Error.BadMetadata;
                             }
                             return;
                         }
-                        const first_index = std.math.cast(usize, first) orelse return @This().Error.BadMetadata;
-                        const last_index = std.math.cast(usize, last) orelse return @This().Error.BadMetadata;
+                        const first_index = std.math.cast(usize, storage.first.get()) orelse return @This().Error.BadMetadata;
+                        const last_index = std.math.cast(usize, storage.last.get()) orelse return @This().Error.BadMetadata;
                         if (first_index >= page_count or last_index >= page_count) {
                             return @This().Error.BadMetadata;
                         }
@@ -182,51 +184,35 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                 };
 
                 pub const DynamicMetadata = struct {
-                    pub const format_version: u32 = 1;
-                    pub const known_tags: []const u16 = &.{ 0x0100, 0x0101, 0x0102 };
+                    pub const format_version: u32 = 2;
+                    pub const known_tags: []const u16 = &.{0x0100};
                     pub const repeated_tags: []const u16 = &.{};
                     pub const Error = dynamic_metadata.Error;
 
                     pub fn restore(runtime: *Runtime, payload: []const u8, page_count: usize) @This().Error!void {
                         try tagged.validateKnownFields(payload, known_tags);
-                        var first: ?CacheT.Pid = null;
-                        var last: ?CacheT.Pid = null;
-                        var total_size: ?u64 = null;
+                        var state: StateT = undefined;
+                        var found_state = false;
                         var reader = tagged.Reader.init(payload);
                         while (try reader.next()) |field| {
-                            switch (field.tag) {
-                                known_tags[0] => first = try dynamic_metadata.decodeOptionalPageId(
-                                    CacheT.Pid,
-                                    try dynamic_metadata.readU64(field),
-                                    page_count,
-                                ),
-                                known_tags[1] => last = try dynamic_metadata.decodeOptionalPageId(
-                                    CacheT.Pid,
-                                    try dynamic_metadata.readU64(field),
-                                    page_count,
-                                ),
-                                known_tags[2] => total_size = try dynamic_metadata.readU64(field),
-                                else => {},
+                            if (field.tag != known_tags[0]) {
+                                continue;
                             }
+                            if (field.flags != 0 or field.value.len != @sizeOf(StateT)) {
+                                return error.BadMetadata;
+                            }
+                            @memcpy(std.mem.asBytes(&state), field.value);
+                            found_state = true;
                         }
-                        const decoded_total_size = total_size orelse return error.BadMetadata;
-                        if ((first == null) != (last == null) or
-                            (first == null and decoded_total_size != 0))
-                        {
+                        if (!found_state) {
                             return error.BadMetadata;
                         }
-                        runtime.manager.restoreState(.{
-                            .first = first,
-                            .last = last,
-                            .total_size = decoded_total_size,
-                        });
+                        try StaticMetadata.validate(&state, page_count);
+                        runtime.state = state;
                     }
 
                     pub fn encodeKnown(runtime: *const Runtime, writer: *tagged.Writer) @This().Error!void {
-                        const state = runtime.manager.getState();
-                        try dynamic_metadata.appendU64(writer, known_tags[0], state.first orelse 0);
-                        try dynamic_metadata.appendU64(writer, known_tags[1], state.last orelse 0);
-                        try dynamic_metadata.appendU64(writer, known_tags[2], state.total_size);
+                        try writer.append(known_tags[0], 0, std.mem.asBytes(&runtime.state));
                     }
                 };
 
@@ -244,8 +230,8 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                             allocator: std.mem.Allocator,
                             roots: *std.ArrayList(CollectorT.PageId),
                         ) RootsError!void {
-                            if (runtime.manager.getState().first) |first| {
-                                try roots.append(allocator, first);
+                            if (!runtime.state.first.isMax()) {
+                                try roots.append(allocator, runtime.state.first.get());
                             }
                         }
 
@@ -277,7 +263,8 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                     const chunk_page_kind = page_kinds.kindAt(0) orelse return BindingError.InvalidPageKinds;
                     runtime.page_kinds = page_kinds;
                     runtime.cache = backend.cache();
-                    runtime.manager = ManagerT.init(backend);
+                    runtime.state = .{};
+                    runtime.manager = ManagerT.init(backend, &runtime.state);
                     runtime.blob = BlobT.init(
                         runtime.cache,
                         &runtime.manager,
@@ -300,11 +287,11 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                 }
 
                 pub fn captureTransactionState(runtime: *const Runtime) TransactionState {
-                    return runtime.manager.getState();
+                    return runtime.state;
                 }
 
                 pub fn restoreTransactionState(runtime: *Runtime, state: TransactionState) void {
-                    runtime.manager.restoreState(state);
+                    runtime.state = state;
                 }
 
                 pub fn proxy(runtime: *Runtime) Proxy {

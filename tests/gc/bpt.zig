@@ -89,12 +89,12 @@ test "GC: memory model reclaims one BPT graph and retains another" {
     for (0..12) |index| {
         try std.testing.expect(try first.insert(@intCast(index), "dropped"));
     }
-    const dropped_root = bpt_model.accessor().getRoot().?;
+    const dropped_root = (try bpt_model.accessor().getRoot()).?;
     try bpt_model.accessor().setRoot(null);
     for (100..112) |index| {
         try std.testing.expect(try second.insert(@intCast(index), "retained"));
     }
-    const retained_root = bpt_model.accessor().getRoot().?;
+    const retained_root = (try bpt_model.accessor().getRoot()).?;
 
     var dropped_pages = [_]bool{false} ** 64;
     var retained_pages = [_]bool{false} ** 64;
@@ -172,17 +172,17 @@ test "GC: memory BPT leaf value scanner retains an embedded root" {
     try std.testing.expect(try padding.insert(1, "unreachable"));
     try bpt_model.accessor().setRoot(null);
     try std.testing.expect(try target.insert(10, "target"));
-    const target_root = bpt_model.accessor().getRoot().?;
+    const target_root = (try bpt_model.accessor().getRoot()).?;
     try bpt_model.accessor().setRoot(null);
 
     var encoded_target: [@sizeOf(usize)]u8 = undefined;
     std.mem.writeInt(usize, &encoded_target, target_root, .little);
     try std.testing.expect(try source.insert(20, &encoded_target));
-    const source_root = bpt_model.accessor().getRoot().?;
+    const source_root = (try bpt_model.accessor().getRoot()).?;
     try bpt_model.accessor().setRoot(null);
 
     try std.testing.expect(try garbage.insert(30, "garbage"));
-    const garbage_root = bpt_model.accessor().getRoot().?;
+    const garbage_root = (try bpt_model.accessor().getRoot()).?;
 
     var target_pages = [_]bool{false} ** 64;
     var source_pages = [_]bool{false} ** 64;
@@ -375,32 +375,63 @@ const PagedCache = struct {
 };
 
 const PagedManager = struct {
+    const Self = @This();
+
     pub const PageId = u32;
     pub const Error = PagedCache.Error;
+    pub const StateLeaseType = StateLease;
+
+    pub const StateLease = struct {
+        pub const Error = PagedCache.Error;
+
+        manager: *Self,
+
+        pub fn data(self: *const @This()) PagedCache.Error![]const u8 {
+            return &self.manager.state_bytes;
+        }
+
+        pub fn dataMut(self: *@This()) PagedCache.Error![]u8 {
+            return &self.manager.state_bytes;
+        }
+
+        pub fn finish(self: *@This()) void {
+            const page_id = std.mem.readInt(PageId, &self.manager.state_bytes, .little);
+            self.manager.root = if (page_id == std.math.maxInt(PageId)) null else page_id;
+        }
+
+        pub fn deinit(_: *@This()) void {}
+    };
 
     store: *PagedStore,
     root: ?PageId = null,
+    state_bytes: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
 
-    pub fn getRoot(self: *const @This()) ?PageId {
+    pub fn getRoot(self: *const Self) ?PageId {
         return self.root;
     }
 
-    pub fn setRoot(self: *@This(), page_id: ?PageId) Error!void {
+    pub fn setRoot(self: *Self, page_id: ?PageId) Error!void {
         self.root = page_id;
+        std.mem.writeInt(PageId, &self.state_bytes, page_id orelse std.math.maxInt(PageId), .little);
     }
 
-    pub fn isReserved(_: *const @This(), _: PageId) bool {
+    pub fn state(self: *Self) Error!StateLease {
+        std.mem.writeInt(PageId, &self.state_bytes, self.root orelse std.math.maxInt(PageId), .little);
+        return .{ .manager = self };
+    }
+
+    pub fn isReserved(_: *const Self, _: PageId) bool {
         return false;
     }
 
-    pub fn isFree(self: *const @This(), page_id: PageId) Error!bool {
+    pub fn isFree(self: *const Self, page_id: PageId) Error!bool {
         if (page_id >= self.store.count) {
             return error.InvalidPageId;
         }
         return self.store.entries[page_id].free;
     }
 
-    pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
+    pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
         if (page_id >= self.store.count) {
             return error.InvalidPageId;
         }

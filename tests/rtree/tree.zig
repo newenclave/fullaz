@@ -145,7 +145,7 @@ test "FatRTree: inode MBR contains child MBR with the configured margin" {
     }
 
     const acc = m.accessor();
-    const root = acc.getRoot().?;
+    const root = (try acc.getRoot()).?;
     try testing.expect(!(try acc.isLeafId(root)));
     var inode = (try acc.loadInode(root)).?;
     defer acc.deinitInode(inode);

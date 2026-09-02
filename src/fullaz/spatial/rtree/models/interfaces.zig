@@ -7,7 +7,7 @@ const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
 const StructuralMutationCoordinator = @import("../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
-pub const requiresStorageManager = contracts.storage_manager.requiresStorageManager;
+pub const requiresStorageManager = contracts.storage_manager.assertPagedStorageManager;
 pub const requiresPageCache = contracts.page_cache.requiresPageCache;
 
 // The key is the BoundingBox from geometry
@@ -37,7 +37,7 @@ pub fn assertModelAccessor(comptime Model: type) void {
     const LeafType = Model.LeafType;
     const InodeType = Model.InodeType;
 
-    requiresFnSignature(A, "getRoot", fn (*const A) ?NodeIdType);
+    requiresFnSignature(A, "getRoot", fn (*const A) Error!?NodeIdType);
     requiresFnSignature(A, "setRoot", fn (*A, ?NodeIdType) Error!void);
     requiresFnSignature(A, "destroy", fn (*A, NodeIdType) Error!void);
 

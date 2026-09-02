@@ -52,7 +52,41 @@ pub fn Reader(
         const Self = @This();
         pub const PageId = Format.PageId;
         pub const Error = errors.IndexStorage;
+        pub const StateLeaseType = struct {
+            const LeaseSelf = @This();
+
+            pub const Error = errors.IndexStorage;
+
+            storage: *Self,
+            bytes: [@sizeOf(PageId)]u8,
+
+            pub fn data(self: *const LeaseSelf) errors.IndexStorage![]const u8 {
+                return &self.bytes;
+            }
+
+            pub fn dataMut(self: *LeaseSelf) errors.IndexStorage![]u8 {
+                return &self.bytes;
+            }
+
+            pub fn finish(self: *LeaseSelf) void {
+                const root = std.mem.readInt(PageId, &self.bytes, .little);
+                self.storage.root = if (root == std.math.maxInt(PageId)) null else root;
+            }
+
+            pub fn deinit(_: *LeaseSelf) void {}
+        };
+
         root: ?PageId,
+
+        pub fn state(self: *Self) Error!StateLeaseType {
+            var lease: StateLeaseType = .{
+                .storage = self,
+                .bytes = undefined,
+            };
+            std.mem.writeInt(PageId, &lease.bytes, self.root orelse std.math.maxInt(PageId), .little);
+            return lease;
+        }
+
         pub fn getRoot(self: *const Self) ?PageId {
             return self.root;
         }

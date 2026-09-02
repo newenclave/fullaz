@@ -263,7 +263,7 @@ pub fn Bpt(comptime ModelT: type) type {
             var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
             defer mutation.deinit();
             const accessor = self.model.accessor();
-            const root_id = accessor.getRoot() orelse return;
+            const root_id = (try accessor.getRoot()) orelse return;
             try self.destroyNode(root_id);
             try accessor.setRoot(null);
         }
@@ -290,7 +290,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
         pub fn iterator(self: *const Self) Error!?Iterator {
             const accessor = self.model.accessor();
-            if (accessor.getRoot()) |root_id| {
+            if (try accessor.getRoot()) |root_id| {
                 if (try self.getLeftMostLeafId(root_id)) |left_id| {
                     return try Iterator.init(self.model, left_id, .before_first);
                 }
@@ -318,7 +318,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
         pub fn iteratorFromEnd(self: *const Self) Error!?Iterator {
             const accessor = self.model.accessor();
-            if (accessor.getRoot()) |root_id| {
+            if (try accessor.getRoot()) |root_id| {
                 if (try self.getRightMostLeafId(root_id)) |right_id| {
                     return try Iterator.init(self.model, right_id, .after_last);
                 }
@@ -328,7 +328,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
         pub fn find(self: *const Self, key: KeyLikeType) Error!?Iterator {
             const accessor = self.model.accessor();
-            if (accessor.getRoot()) |root| {
+            if (try accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
                 if (search.leaf) |leaf_const| {
                     var leaf = leaf_const;
@@ -343,7 +343,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
         pub fn lowerBound(self: *const Self, key: KeyLikeType) Error!?Iterator {
             const accessor = self.model.accessor();
-            if (accessor.getRoot()) |root| {
+            if (try accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
                 if (search.leaf) |leaf_const| {
                     var leaf = leaf_const;
@@ -356,7 +356,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
         pub fn dump(self: *Self) Error!void {
             const accessor = self.model.accessor();
-            if (accessor.getRoot()) |root| {
+            if (try accessor.getRoot()) |root| {
                 try self.dumpNode(root, 0, null, null);
             } else {
                 std.debug.print("<Empty>\n", .{});
@@ -369,7 +369,7 @@ pub fn Bpt(comptime ModelT: type) type {
             comptime valueFormatter: ?fn (ValueInType) []const u8,
         ) !void {
             const accessor = self.model.accessor();
-            if (accessor.getRoot()) |root| {
+            if (try accessor.getRoot()) |root| {
                 try self.dumpNode(root, 0, keyFormatter, valueFormatter);
             } else {
                 std.debug.print("<Empty>\n", .{});
@@ -459,7 +459,7 @@ pub fn Bpt(comptime ModelT: type) type {
             var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
             defer mutation.deinit();
             const accessor = self.model.accessor();
-            if (accessor.getRoot()) |root| {
+            if (try accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
                 defer accessor.deinitLeaf(search.leaf);
                 if (!search.found) {
@@ -503,7 +503,7 @@ pub fn Bpt(comptime ModelT: type) type {
             var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
             defer mutation.deinit();
             const accessor = self.model.accessor();
-            if (accessor.getRoot()) |root| {
+            if (try accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
                 if (search.leaf) |leaf_const| {
                     var leaf = leaf_const;
@@ -537,7 +537,7 @@ pub fn Bpt(comptime ModelT: type) type {
             var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
             defer mutation.deinit();
             const accessor = self.model.accessor();
-            if (accessor.getRoot()) |root| {
+            if (try accessor.getRoot()) |root| {
                 const search = try self.findLeafWith(key, root);
                 if (search.leaf) |leaf_const| {
                     const removed = blk: {
@@ -562,7 +562,7 @@ pub fn Bpt(comptime ModelT: type) type {
         /// The returned editor keeps its leaf and page layout alive until deinit.
         pub fn openValueEditor(self: *Self, key: KeyLikeType) Error!?ValueEditor {
             const accessor = self.model.accessor();
-            const root = accessor.getRoot() orelse return null;
+            const root = (try accessor.getRoot()) orelse return null;
             const search = try self.findLeafWith(key, root);
             const leaf_const = search.leaf orelse return null;
             var leaf = leaf_const;
@@ -644,7 +644,7 @@ pub fn Bpt(comptime ModelT: type) type {
 
         fn fixEmptyRoot(self: *Self) Error!void {
             const accessor = self.model.accessor();
-            if (accessor.getRoot()) |root_id| {
+            if (try accessor.getRoot()) |root_id| {
                 if (try accessor.loadLeaf(root_id)) |root_leaf| {
                     const empty = blk: {
                         defer accessor.deinitLeaf(root_leaf);

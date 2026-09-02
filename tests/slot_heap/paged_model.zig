@@ -11,19 +11,32 @@ const FsmModel = fullaz.storage.fsm.models.Memory(u32, u16);
 const Fsm = fullaz.storage.fsm.Fsm(FsmModel);
 const WideFsmModel = fullaz.storage.fsm.models.Memory(u32, u32);
 const WideFsm = fullaz.storage.fsm.Fsm(WideFsmModel);
-const TestLocation = fullaz.storage.slot_heap.models.paged.View(u32, u16, .little, true).LocationType;
+const State = fullaz.storage.slot_heap.models.paged.State(u32, u16, 32, 1);
 
 const StorageManager = struct {
     pub const PageId = u32;
-    pub const CountType = u64;
-    pub const Error = error{MaxDepth};
+    pub const Error = std.mem.Allocator.Error;
+    pub const StateLeaseType = struct {
+        const Self = @This();
 
-    pub const Location = TestLocation;
+        pub const Error = StorageManager.Error;
 
-    root: ?PageId = null,
-    cached_top: ?Location = null,
-    entries_count: CountType = 0,
-    available: [16]?PageId = [_]?PageId{null} ** 16,
+        value: *State,
+
+        pub fn data(self: *const Self) Self.Error![]const u8 {
+            return std.mem.asBytes(@as(*const State, self.value));
+        }
+
+        pub fn dataMut(self: *Self) Self.Error![]u8 {
+            return std.mem.asBytes(self.value);
+        }
+
+        pub fn finish(_: *Self) void {}
+
+        pub fn deinit(_: *Self) void {}
+    };
+
+    state_value: State = .{},
     destroyed: std.ArrayList(PageId) = .empty,
     allocator: std.mem.Allocator,
 
@@ -35,42 +48,8 @@ const StorageManager = struct {
         self.destroyed.deinit(self.allocator);
     }
 
-    pub fn getRoot(self: *const @This()) ?PageId {
-        return self.root;
-    }
-
-    pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
-        self.root = root;
-    }
-
-    pub fn getCachedTop(self: *const @This()) ?Location {
-        return self.cached_top;
-    }
-
-    pub fn setCachedTop(self: *@This(), top: ?Location) Error!void {
-        self.cached_top = top;
-    }
-
-    pub fn getEntriesCount(self: *const @This()) Error!CountType {
-        return self.entries_count;
-    }
-
-    pub fn setEntriesCount(self: *@This(), count: CountType) Error!void {
-        self.entries_count = count;
-    }
-
-    pub fn getAvailableInode(self: *const @This(), level: usize) Error!?PageId {
-        if (level >= self.available.len) {
-            return Error.MaxDepth;
-        }
-        return self.available[level];
-    }
-
-    pub fn setAvailableInode(self: *@This(), level: usize, inode: ?PageId) Error!void {
-        if (level >= self.available.len) {
-            return Error.MaxDepth;
-        }
-        self.available[level] = inode;
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
     }
 
     pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
@@ -78,9 +57,18 @@ const StorageManager = struct {
     }
 };
 
+const StateAdapter = fullaz.storage.slot_heap.models.paged.StateAdapter(
+    StorageManager,
+    State,
+    u32,
+    u16,
+    32,
+    1,
+);
+
 const Model = fullaz.storage.slot_heap.models.Paged(
     PageCache,
-    StorageManager,
+    StateAdapter,
     Fsm,
     compare,
     void,
@@ -88,7 +76,7 @@ const Model = fullaz.storage.slot_heap.models.Paged(
 const Heap = fullaz.storage.slot_heap.Heap(Model);
 const WideModel = fullaz.storage.slot_heap.models.Paged(
     PageCache,
-    StorageManager,
+    StateAdapter,
     WideFsm,
     compare,
     void,
@@ -98,6 +86,7 @@ const TestContext = struct {
     device: Device,
     cache: PageCache,
     storage_manager: StorageManager,
+    state_adapter: StateAdapter,
     fsm_model: FsmModel,
     fsm: Fsm,
     model: Model,
@@ -109,12 +98,13 @@ const TestContext = struct {
         errdefer self.cache.deinit();
         self.storage_manager = StorageManager.init(std.testing.allocator);
         errdefer self.storage_manager.deinit();
+        self.state_adapter = StateAdapter.init(&self.storage_manager);
         self.fsm_model = try FsmModel.init(std.testing.allocator);
         errdefer self.fsm_model.deinit();
         self.fsm = Fsm.init(&self.fsm_model);
         self.model = try Model.init(
             &self.cache,
-            &self.storage_manager,
+            &self.state_adapter,
             &self.fsm,
             .{
                 .key_size = 4,
@@ -151,6 +141,7 @@ test "SlotHeap paged model: contract and settings" {
     defer cache.deinit();
     var storage_manager = StorageManager.init(std.testing.allocator);
     defer storage_manager.deinit();
+    var state_adapter = StateAdapter.init(&storage_manager);
     var fsm_model = try FsmModel.init(std.testing.allocator);
     defer fsm_model.deinit();
     var fsm = Fsm.init(&fsm_model);
@@ -158,14 +149,14 @@ test "SlotHeap paged model: contract and settings" {
 
     try std.testing.expectError(error.InvalidSettings, Model.init(
         &cache,
-        &storage_manager,
+        &state_adapter,
         &fsm,
         .{ .key_size = 0, .maximum_value_size = 1, .comparator_id = 1 },
         {},
     ));
     try std.testing.expectError(error.InvalidSettings, Model.init(
         &cache,
-        &storage_manager,
+        &state_adapter,
         &fsm,
         .{
             .key_size = 4,
@@ -187,7 +178,7 @@ test "SlotHeap paged model: contract and settings" {
     defer wide_fsm.deinit();
     try std.testing.expectError(error.InvalidSettings, WideModel.init(
         &large_cache,
-        &storage_manager,
+        &state_adapter,
         &wide_fsm,
         .{ .key_size = 4, .maximum_value_size = 1, .comparator_id = 1 },
         {},
@@ -307,9 +298,10 @@ test "SlotHeap paged model: generic heap grows, orders, and cleans up" {
         try heap.pop();
     }
 
-    try std.testing.expectEqual(@as(?u32, null), ctx.storage_manager.root);
-    try std.testing.expectEqual(@as(?StorageManager.Location, null), ctx.storage_manager.cached_top);
-    try std.testing.expectEqual(@as(u64, 0), ctx.storage_manager.entries_count);
+    try std.testing.expect(ctx.storage_manager.state_value.root.isMax());
+    try std.testing.expect(ctx.storage_manager.state_value.cached_top_page.isMax());
+    try std.testing.expect(ctx.storage_manager.state_value.cached_top_slot.isMax());
+    try std.testing.expectEqual(@as(u64, 0), ctx.storage_manager.state_value.entries_count.get());
     try std.testing.expectEqual(@as(usize, 0), ctx.fsm_model.entries.items.len);
     try std.testing.expect(ctx.storage_manager.destroyed.items.len > 0);
     for (ctx.storage_manager.destroyed.items, 0..) |page_id, index| {
@@ -317,8 +309,8 @@ test "SlotHeap paged model: generic heap grows, orders, and cleans up" {
             try std.testing.expect(page_id != other_page_id);
         }
     }
-    for (ctx.storage_manager.available) |head| {
-        try std.testing.expectEqual(@as(?u32, null), head);
+    for (ctx.storage_manager.state_value.available_inode_heads) |head| {
+        try std.testing.expect(head.isMax());
     }
 }
 
@@ -329,8 +321,8 @@ test "SlotHeap paged: top value editor preserves heap metadata and rolls back" {
     var heap = Heap.init(&ctx.model);
     try heap.push("0002", "two");
     try heap.push("0001", "one");
-    const root = ctx.storage_manager.root;
-    const cached_top = ctx.storage_manager.cached_top;
+    const root = ctx.storage_manager.state_value.root;
+    const cached_top = ctx.storage_manager.state_value.cached_top_page;
     const fsm_entries = ctx.fsm_model.entries.items.len;
 
     var editor = try heap.openValueEditor();
@@ -342,8 +334,8 @@ test "SlotHeap paged: top value editor preserves heap metadata and rolls back" {
     try std.testing.expectError(error.EditorInvalidated, editor.valueMut());
     editor.deinit();
 
-    try std.testing.expectEqual(root, ctx.storage_manager.root);
-    try std.testing.expectEqual(cached_top, ctx.storage_manager.cached_top);
+    try std.testing.expectEqual(root, ctx.storage_manager.state_value.root);
+    try std.testing.expectEqual(cached_top, ctx.storage_manager.state_value.cached_top_page);
     try std.testing.expectEqual(fsm_entries, ctx.fsm_model.entries.items.len);
     try std.testing.expectEqual(@as(u64, 2), try heap.count());
     var top = try heap.top();

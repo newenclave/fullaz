@@ -54,6 +54,44 @@ const NoneStorageManager = struct {
     pub const Error = error{};
 
     root_block_id: ?u32 = null,
+    state_bytes: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
+
+    pub const StateLeaseType = struct {
+        const LeaseSelf = @This();
+
+        pub const Error = NoneStorageManager.Error;
+
+        manager: *Self,
+
+        pub fn init(manager: *Self) LeaseSelf {
+            return .{ .manager = manager };
+        }
+
+        pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+            return &self.manager.state_bytes;
+        }
+
+        pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+            return &self.manager.state_bytes;
+        }
+
+        pub fn finish(self: *LeaseSelf) void {
+            const page_id = std.mem.readInt(PageId, &self.manager.state_bytes, .little);
+            self.manager.root_block_id = if (page_id == std.math.maxInt(PageId)) null else page_id;
+        }
+
+        pub fn deinit(_: *LeaseSelf) void {}
+    };
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        std.mem.writeInt(
+            PageId,
+            &self.state_bytes,
+            self.root_block_id orelse std.math.maxInt(PageId),
+            .little,
+        );
+        return StateLeaseType.init(self);
+    }
 
     pub fn getRoot(self: *const @This()) ?u32 {
         return self.root_block_id;
@@ -61,6 +99,7 @@ const NoneStorageManager = struct {
 
     pub fn setRoot(self: *@This(), root: ?u32) Error!void {
         self.root_block_id = root;
+        std.mem.writeInt(PageId, &self.state_bytes, root orelse std.math.maxInt(PageId), .little);
         // Persist to disk header, etc.
     }
 
@@ -105,11 +144,51 @@ test "WBpt paged: root leaf is released before reclamation" {
     const RawCache = PageCacheT(Device);
     const Cache = fullaz_db.MemoryReclaimingCache(RawCache);
     const Manager = struct {
+        const Self = @This();
+
         pub const PageId = u32;
         pub const Error = Cache.Error;
 
         cache: *Cache,
         root: ?PageId = null,
+        state_bytes: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
+
+        pub const StateLeaseType = struct {
+            const LeaseSelf = @This();
+
+            pub const Error = Cache.Error;
+
+            manager: *Self,
+
+            pub fn init(manager: *Self) LeaseSelf {
+                return .{ .manager = manager };
+            }
+
+            pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                return &self.manager.state_bytes;
+            }
+
+            pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                return &self.manager.state_bytes;
+            }
+
+            pub fn finish(self: *LeaseSelf) void {
+                const page_id = std.mem.readInt(PageId, &self.manager.state_bytes, .little);
+                self.manager.root = if (page_id == std.math.maxInt(PageId)) null else page_id;
+            }
+
+            pub fn deinit(_: *LeaseSelf) void {}
+        };
+
+        pub fn state(self: *Self) Error!StateLeaseType {
+            std.mem.writeInt(
+                PageId,
+                &self.state_bytes,
+                self.root orelse std.math.maxInt(PageId),
+                .little,
+            );
+            return StateLeaseType.init(self);
+        }
 
         pub fn getRoot(self: *const @This()) ?PageId {
             return self.root;
@@ -117,6 +196,7 @@ test "WBpt paged: root leaf is released before reclamation" {
 
         pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
             self.root = root;
+            std.mem.writeInt(PageId, &self.state_bytes, root orelse std.math.maxInt(PageId), .little);
         }
 
         pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {

@@ -188,7 +188,7 @@ fn TreeWithConfig(
             var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
             defer mutation.deinit();
             const accessor = self.model.accessor();
-            const root_id = accessor.getRoot() orelse return;
+            const root_id = (try accessor.getRoot()) orelse return;
             try self.destroyNode(root_id);
             try accessor.setRoot(null);
         }
@@ -261,7 +261,7 @@ fn TreeWithConfig(
             cb: anytype,
         ) (Error || CallbackError(@TypeOf(cb)))!void {
             const acc = self.model.accessor();
-            const root = acc.getRoot() orelse {
+            const root = (try acc.getRoot()) orelse {
                 return;
             };
             try self.searchNode(root, query, ctx, cb, .overlap);
@@ -275,7 +275,7 @@ fn TreeWithConfig(
             cb: anytype,
         ) (Error || CallbackError(@TypeOf(cb)))!void {
             const acc = self.model.accessor();
-            const root = acc.getRoot() orelse {
+            const root = (try acc.getRoot()) orelse {
                 return;
             };
             try self.searchNode(root, query, ctx, cb, .intersection);
@@ -290,7 +290,7 @@ fn TreeWithConfig(
             cb: anytype,
         ) (Error || CallbackError(@TypeOf(cb)))!void {
             const acc = self.model.accessor();
-            const root = acc.getRoot() orelse {
+            const root = (try acc.getRoot()) orelse {
                 return;
             };
             try self.searchEditableNode(root, query, ctx, cb, .overlap);
@@ -304,7 +304,7 @@ fn TreeWithConfig(
             cb: anytype,
         ) (Error || CallbackError(@TypeOf(cb)))!void {
             const acc = self.model.accessor();
-            const root = acc.getRoot() orelse {
+            const root = (try acc.getRoot()) orelse {
                 return;
             };
             try self.searchEditableNode(root, query, ctx, cb, .intersection);
@@ -448,7 +448,7 @@ fn TreeWithConfig(
         fn insertValue(self: *Self, mbr: Key, value: ValueIn, ctx: *InsertCtx) Error!void {
             const acc = self.model.accessor();
 
-            const root = acc.getRoot() orelse {
+            const root = (try acc.getRoot()) orelse {
                 var leaf = try acc.createLeaf();
                 errdefer acc.destroy(leaf.id()) catch {};
                 defer acc.deinitLeaf(leaf);
@@ -786,7 +786,7 @@ fn TreeWithConfig(
 
         pub fn height(self: *const Self) Error!usize {
             const acc = self.model.accessor();
-            const root = acc.getRoot() orelse {
+            const root = (try acc.getRoot()) orelse {
                 return 0;
             };
             return self.levelOf(root);
@@ -803,7 +803,7 @@ fn TreeWithConfig(
             var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
             defer mutation.deinit();
             const acc = self.model.accessor();
-            const root = acc.getRoot() orelse {
+            const root = (try acc.getRoot()) orelse {
                 return false;
             };
 
@@ -833,7 +833,7 @@ fn TreeWithConfig(
         /// intersection and predicate rules. Duplicate entries remain distinct.
         pub fn openValueEditor(self: *Self, query: Key, ctx: anytype, matches: anytype) Error!?ValueEditor {
             const acc = self.model.accessor();
-            const root = acc.getRoot() orelse return null;
+            const root = (try acc.getRoot()) orelse return null;
             var path = Path{};
             const hit = (try self.findLeaf(root, query, ctx, matches, &path)) orelse return null;
             var leaf = (try acc.loadLeaf(hit.leaf_id)).?;
@@ -1018,7 +1018,7 @@ fn TreeWithConfig(
             try self.drainReinserts(&ins_ctx);
 
             while (true) {
-                const root = acc.getRoot() orelse {
+                const root = (try acc.getRoot()) orelse {
                     break;
                 };
                 if (try acc.isLeafId(root)) break;
@@ -1040,7 +1040,7 @@ fn TreeWithConfig(
         fn insertSubtree(self: *Self, mbr: Key, child_id: Pid, target_level: usize, ctx: *InsertCtx) Error!void {
             const acc = self.model.accessor();
 
-            const root = acc.getRoot() orelse {
+            const root = (try acc.getRoot()) orelse {
                 try acc.setRoot(child_id);
                 return;
             };

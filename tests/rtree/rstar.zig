@@ -191,7 +191,7 @@ test "RStarTree: multi-level reinsert keeps every entry and the MBR invariant" {
 
     // The parent-MBR-equals-child-bbox invariant holds everywhere.
     const acc = m.accessor();
-    if (acc.getRoot()) |root| {
+    if (try acc.getRoot()) |root| {
         _ = try InvariantChecker.check(acc, root);
     }
 

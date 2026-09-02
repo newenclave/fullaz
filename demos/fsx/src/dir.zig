@@ -26,16 +26,44 @@ pub fn Directory(comptime PageCacheType: type) type {
         const SmSelf = @This();
         pub const PageId = constants.PageId;
         pub const Error = error{};
+        const State = bpt.models.paged.State(constants.PageId);
+
+        pub const StateLeaseType = struct {
+            const LeaseSelf = @This();
+
+            pub const Error = SmSelf.Error;
+
+            owner: *SmSelf,
+            state: State,
+
+            pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                return std.mem.asBytes(&self.state);
+            }
+
+            pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                return std.mem.asBytes(&self.state);
+            }
+
+            pub fn finish(self: *LeaseSelf) void {
+                const root = self.state.root.get();
+                self.owner.root = if (root == std.math.maxInt(constants.PageId)) null else root;
+            }
+
+            pub fn deinit(_: *LeaseSelf) void {}
+        };
 
         cache: *PageCacheType,
         root: ?constants.PageId = null,
 
-        pub fn getRoot(self: *const SmSelf) ?constants.PageId {
-            return self.root;
+        pub fn state(self: *SmSelf) SmSelf.Error!StateLeaseType {
+            var lease: StateLeaseType = .{
+                .owner = self,
+                .state = .{},
+            };
+            lease.state.root.set(self.root orelse std.math.maxInt(constants.PageId));
+            return lease;
         }
-        pub fn setRoot(self: *SmSelf, r: ?constants.PageId) SmSelf.Error!void {
-            self.root = r;
-        }
+
         pub fn destroyPage(self: *SmSelf, id: constants.PageId) SmSelf.Error!void {
             if (comptime @hasDecl(PageCacheType, "free")) {
                 self.cache.free(id) catch {};

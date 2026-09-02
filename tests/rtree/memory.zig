@@ -114,7 +114,7 @@ test "rtree memory model: load kind mismatch is null, isLeafId, destroy, root" {
     }
 
     try acc.setRoot(inode_id);
-    try testing.expectEqual(inode_id, acc.getRoot().?);
+    try testing.expectEqual(inode_id, (try acc.getRoot()).?);
 
     try acc.destroy(leaf_id);
     try testing.expect((try acc.loadLeaf(leaf_id)) == null); // destroyed slot

@@ -155,9 +155,37 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         pub const PageId = DeviceT.BlockId;
         pub const Error = Cache.Error;
 
+        pub const StateLeaseType = struct {
+            pub const Error = Cache.Error;
+
+            root: *?u64,
+            bytes: [@sizeOf(PageId)]u8,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return &self.bytes;
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return &self.bytes;
+            }
+
+            pub fn finish(self: *@This()) void {
+                const page_id = std.mem.readInt(PageId, &self.bytes, .little);
+                self.root.* = if (page_id == std.math.maxInt(PageId)) null else @intCast(page_id);
+            }
+
+            pub fn deinit(_: *@This()) void {}
+        };
+
         root: *?u64,
         free_leaf_root: *?u64,
         cache: *Cache,
+
+        pub fn state(self: *@This()) Error!StateLeaseType {
+            var bytes: [@sizeOf(PageId)]u8 = undefined;
+            std.mem.writeInt(PageId, &bytes, self.getRoot() orelse std.math.maxInt(PageId), .little);
+            return .{ .root = self.root, .bytes = bytes };
+        }
 
         pub fn getRoot(self: *const @This()) ?PageId {
             const raw = self.root.* orelse return null;

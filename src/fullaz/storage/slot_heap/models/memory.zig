@@ -611,7 +611,7 @@ pub fn Memory(
             self.ctx.allocator.free(self.available_inode_heads);
         }
 
-        pub fn getRoot(self: *const Self) ?NodeId {
+        pub fn getRoot(self: *const Self) Error!?NodeId {
             return self.root;
         }
 
@@ -619,7 +619,7 @@ pub fn Memory(
             self.root = root;
         }
 
-        pub fn getCachedTop(self: *const Self) ?Location {
+        pub fn getCachedTop(self: *const Self) Error!?Location {
             return self.cached_top;
         }
 

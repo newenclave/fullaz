@@ -539,7 +539,7 @@ fn Accessor(comptime KeyT: type, comptime maximum_elements: usize, comptime cmp:
         allocator: std.mem.Allocator,
         coordinator: StructuralMutationCoordinator = .{},
 
-        pub fn getRoot(self: *const Self) ?RootType {
+        pub fn getRoot(self: *const Self) Error!?RootType {
             return self.root;
         }
         pub fn setRoot(self: *Self, new_root: ?RootType) Error!void {

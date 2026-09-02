@@ -108,9 +108,9 @@ fn assertAccessor(comptime ModelT: type) void {
         @compileError(@typeName(Accessor) ++ ".Error must match " ++ @typeName(ModelT) ++ ".Error");
     }
 
-    requiresFnSignature(Accessor, "getRoot", fn (*const Accessor) ?NodeId);
+    requiresFnSignature(Accessor, "getRoot", fn (*const Accessor) Error!?NodeId);
     requiresFnSignature(Accessor, "setRoot", fn (*Accessor, ?NodeId) Error!void);
-    requiresFnSignature(Accessor, "getCachedTop", fn (*const Accessor) ?Location);
+    requiresFnSignature(Accessor, "getCachedTop", fn (*const Accessor) Error!?Location);
     requiresFnSignature(Accessor, "setCachedTop", fn (*Accessor, ?Location) Error!void);
     requiresFnSignature(Accessor, "getAvailableInode", fn (*const Accessor, usize) Error!?NodeId);
     requiresFnSignature(Accessor, "setAvailableInode", fn (*Accessor, usize, ?NodeId) Error!void);
@@ -224,40 +224,42 @@ pub fn assertModel(comptime ModelT: type) void {
     requiresFnSignature(ModelT, "getEntriesCount", fn (*const ModelT) Error!ModelT.CountType);
 }
 
-/// Persistent slot-heap metadata includes the root, cached winner, count, and
-/// one available-inode list head per tree level.
+/// A paged SlotHeap state adapter provides lease-backed heap metadata, slab
+/// roots, and page reclamation.
 ///
 /// ```zig
-/// const Manager = @import("heap_storage.zig").Manager;
-/// const Location = struct { page_id: Manager.PageId, slot_id: u16 };
+/// const StateAdapter = @import("heap_state.zig").StateAdapter;
+/// const Location = struct { page_id: StateAdapter.PageId, slot_id: u16 };
 /// comptime {
-///     _ = Manager.PageId;
-///     _ = Manager.CountType;
-///     assertPagedStorageManager(Manager, Location);
+///     _ = StateAdapter.PageId;
+///     _ = StateAdapter.CountType;
+///     assertPagedStateAdapter(StateAdapter, Location);
 /// }
 /// ```
-pub fn assertPagedStorageManager(comptime ManagerT: type, comptime LocationT: type) void {
-    requiresErrorDeclaration(ManagerT, "Error");
-    requiresTypeDeclaration(ManagerT, "PageId");
-    requiresTypeDeclaration(ManagerT, "CountType");
+pub fn assertPagedStateAdapter(comptime StateAdapterT: type, comptime LocationT: type) void {
+    requiresErrorDeclaration(StateAdapterT, "Error");
+    requiresTypeDeclaration(StateAdapterT, "PageId");
+    requiresTypeDeclaration(StateAdapterT, "CountType");
 
     if (@typeInfo(LocationT) != .@"struct" or !@hasField(LocationT, "page_id")) {
         @compileError(@typeName(LocationT) ++ " must contain a page_id field");
     }
-    if (@FieldType(LocationT, "page_id") != ManagerT.PageId) {
-        @compileError("Slot-heap location page ID must match the storage manager PageId");
+    if (@FieldType(LocationT, "page_id") != StateAdapterT.PageId) {
+        @compileError("Slot-heap location page ID must match the state adapter PageId");
     }
 
-    const Error = ManagerT.Error;
-    const PageId = ManagerT.PageId;
-    const Count = ManagerT.CountType;
-    requiresFnSignature(ManagerT, "getRoot", fn (*const ManagerT) ?PageId);
-    requiresFnSignature(ManagerT, "setRoot", fn (*ManagerT, ?PageId) Error!void);
-    requiresFnSignature(ManagerT, "getCachedTop", fn (*const ManagerT) ?LocationT);
-    requiresFnSignature(ManagerT, "setCachedTop", fn (*ManagerT, ?LocationT) Error!void);
-    requiresFnSignature(ManagerT, "getEntriesCount", fn (*const ManagerT) Error!Count);
-    requiresFnSignature(ManagerT, "setEntriesCount", fn (*ManagerT, Count) Error!void);
-    requiresFnSignature(ManagerT, "getAvailableInode", fn (*const ManagerT, usize) Error!?PageId);
-    requiresFnSignature(ManagerT, "setAvailableInode", fn (*ManagerT, usize, ?PageId) Error!void);
-    requiresFnSignature(ManagerT, "destroyPage", fn (*ManagerT, PageId) Error!void);
+    const Error = StateAdapterT.Error;
+    const PageId = StateAdapterT.PageId;
+    const Count = StateAdapterT.CountType;
+    requiresFnSignature(StateAdapterT, "getRoot", fn (*const StateAdapterT) Error!?PageId);
+    requiresFnSignature(StateAdapterT, "setRoot", fn (*StateAdapterT, ?PageId) Error!void);
+    requiresFnSignature(StateAdapterT, "getCachedTop", fn (*const StateAdapterT) Error!?LocationT);
+    requiresFnSignature(StateAdapterT, "setCachedTop", fn (*StateAdapterT, ?LocationT) Error!void);
+    requiresFnSignature(StateAdapterT, "getEntriesCount", fn (*const StateAdapterT) Error!Count);
+    requiresFnSignature(StateAdapterT, "setEntriesCount", fn (*StateAdapterT, Count) Error!void);
+    requiresFnSignature(StateAdapterT, "getAvailableInode", fn (*const StateAdapterT, usize) Error!?PageId);
+    requiresFnSignature(StateAdapterT, "setAvailableInode", fn (*StateAdapterT, usize, ?PageId) Error!void);
+    requiresFnSignature(StateAdapterT, "getSizeClassRoot", fn (*const StateAdapterT, u16) Error!?PageId);
+    requiresFnSignature(StateAdapterT, "setSizeClassRoot", fn (*StateAdapterT, u16, ?PageId) Error!void);
+    requiresFnSignature(StateAdapterT, "destroyPage", fn (*StateAdapterT, PageId) Error!void);
 }

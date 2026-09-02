@@ -53,7 +53,7 @@ test "fullaz-db: paged BPT descriptor preserves validated options" {
     const Trait = descriptor.Trait;
 
     try std.testing.expectEqualStrings("fullaz.bpt.paged", Trait.kind_name);
-    try std.testing.expectEqual(@as(u32, 1), Trait.format_version);
+    try std.testing.expectEqual(@as(u32, 2), Trait.format_version);
     try std.testing.expectEqual(@as(usize, 2), Trait.page_kind_count);
     try std.testing.expectEqualSlices([]const u8, &.{ "leaf", "inode" }, &Trait.page_roles);
     try std.testing.expectEqual(@as(u32, 7), Trait.comparator_id);
@@ -91,7 +91,8 @@ test "fullaz-db: paged BPT binding generates a reclaiming storage manager" {
         .maximum_key_size = 64,
         .maximum_value_size = 128,
     }).Trait;
-    const Manager = Trait.Binding(Backend).Manager;
+    const Binding = Trait.Binding(Backend);
+    const Manager = Binding.Manager;
 
     var device = try Device.init(std.testing.allocator, 4096);
     defer device.deinit();
@@ -103,14 +104,17 @@ test "fullaz-db: paged BPT binding generates a reclaiming storage manager" {
         .allocator_value = std.testing.allocator,
         .cache_ptr = &cache,
     };
-    var manager = Manager.init(&backend);
+    var state: Binding.State = .{};
+    var manager = Manager.init(&backend, &state);
 
-    try std.testing.expectEqual(null, manager.getRoot());
+    try std.testing.expect(state.root.isMax());
     var handle = try cache.create();
     const page_id = try handle.pid();
     handle.deinit();
-    try manager.setRoot(page_id);
-    try std.testing.expectEqual(page_id, manager.getRoot().?);
+    state.root.set(page_id);
+    var lease = try manager.state();
+    defer lease.deinit();
+    try std.testing.expectEqualSlices(u8, std.mem.asBytes(&state), try lease.data());
 
     try manager.destroyPage(page_id);
     try std.testing.expectEqualSlices(u32, &.{page_id}, cache.free_pages.items);
@@ -208,11 +212,11 @@ test "fullaz-db: paged BPT reclaims the first leaf after a failed insert" {
     defer Binding.deinitRuntime(&runtime);
 
     try std.testing.expectError(error.KeyTooLarge, runtime.tree.insert("oversized", "value"));
-    try std.testing.expectEqual(null, runtime.manager.getRoot());
+    try std.testing.expect(runtime.state.root.isMax());
     try std.testing.expectEqualSlices(u32, &.{0}, cache.free_pages.items);
 
     try std.testing.expect(try runtime.tree.insert("key", "value"));
-    try std.testing.expectEqual(@as(u32, 0), runtime.manager.getRoot().?);
+    try std.testing.expectEqual(@as(u32, 0), runtime.state.root.get());
     try std.testing.expectEqual(@as(usize, 0), cache.free_pages.items.len);
     try std.testing.expectEqual(@as(usize, 1), device.blocksCount());
 }

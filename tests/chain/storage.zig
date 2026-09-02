@@ -7,13 +7,60 @@ const printer = @import("test_printer");
 const NoneStorageManager = struct {
     pub const Self = @This();
     pub const PageId = u32;
-    pub const Size = u32;
+    pub const Size = u64;
     pub const Error = error{};
+    const State = chain_store.State(PageId, Size, .little);
 
     first_block_id: ?u32 = null,
     last_block_id: ?u32 = null,
-    total_sze: u32 = 0,
+    total_sze: Size = 0,
     get_first_calls: ?*usize = null,
+
+    pub const StateLeaseType = struct {
+        const LeaseSelf = @This();
+
+        pub const Error = NoneStorageManager.Error;
+
+        manager: *NoneStorageManager,
+        bytes: [@sizeOf(State)]u8,
+
+        pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+            return &self.bytes;
+        }
+
+        pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+            return &self.bytes;
+        }
+
+        pub fn finish(self: *LeaseSelf) void {
+            var state_value: State = undefined;
+            @memcpy(std.mem.asBytes(&state_value), &self.bytes);
+            self.manager.first_block_id = if (state_value.first.get() == std.math.maxInt(PageId))
+                null
+            else
+                state_value.first.get();
+            self.manager.last_block_id = if (state_value.last.get() == std.math.maxInt(PageId))
+                null
+            else
+                state_value.last.get();
+            self.manager.total_sze = state_value.total_size.get();
+        }
+
+        pub fn deinit(_: *LeaseSelf) void {}
+    };
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        var lease: StateLeaseType = .{
+            .manager = self,
+            .bytes = undefined,
+        };
+        var state_value: State = .{};
+        state_value.first.set(self.first_block_id orelse std.math.maxInt(PageId));
+        state_value.last.set(self.last_block_id orelse std.math.maxInt(PageId));
+        state_value.total_size.set(self.total_sze);
+        @memcpy(&lease.bytes, std.mem.asBytes(&state_value));
+        return lease;
+    }
 
     pub fn destroyPage(_: *@This(), id: PageId) Error!void {
         _ = id;
@@ -152,8 +199,8 @@ test "ChainStore Blob: append positions at the tail without a second head lookup
 
     get_first_calls = 0;
     try std.testing.expectEqual(@as(usize, 1), try blob.append("z"));
-    try std.testing.expectEqual(@as(usize, 1), get_first_calls);
-    try std.testing.expectEqual(@as(u32, 401), try blob.size());
+    try std.testing.expectEqual(@as(usize, 0), get_first_calls);
+    try std.testing.expectEqual(@as(u64, 401), try blob.size());
 }
 
 test "ChainStore Blob: explicit offsets and zero-page clear" {
@@ -178,11 +225,11 @@ test "ChainStore Blob: explicit offsets and zero-page clear" {
     try std.testing.expectEqualStrings("ef", out[0..2]);
 
     try blob.truncate(3);
-    try std.testing.expectEqual(@as(u32, 3), try blob.size());
+    try std.testing.expectEqual(@as(u64, 3), try blob.size());
     try std.testing.expectError(error.OutOfBounds, blob.truncate(4));
 
     try blob.clear();
-    try std.testing.expectEqual(@as(u32, 0), try blob.size());
+    try std.testing.expectEqual(@as(u64, 0), try blob.size());
     try std.testing.expect(mgr.first_block_id == null);
     try std.testing.expect(mgr.last_block_id == null);
 }
@@ -208,14 +255,63 @@ test "ChainStore Blob: clear releases pages before reclamation" {
     const RawCache = page_cache.PageCache(Device);
     const Cache = @import("fullaz-db").MemoryReclaimingCache(RawCache);
     const Manager = struct {
+        const ManagerSelf = @This();
+
         pub const PageId = u32;
-        pub const Size = u32;
+        pub const Size = u64;
         pub const Error = Cache.Error;
+        const State = chain_store.State(PageId, Size, .little);
 
         cache: *Cache,
         first: ?PageId = null,
         last: ?PageId = null,
         total: Size = 0,
+
+        pub const StateLeaseType = struct {
+            const LeaseSelf = @This();
+
+            pub const Error = ManagerSelf.Error;
+
+            manager: *ManagerSelf,
+            bytes: [@sizeOf(State)]u8,
+
+            pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                return &self.bytes;
+            }
+
+            pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                return &self.bytes;
+            }
+
+            pub fn finish(self: *LeaseSelf) void {
+                var state_value: State = undefined;
+                @memcpy(std.mem.asBytes(&state_value), &self.bytes);
+                self.manager.first = if (state_value.first.get() == std.math.maxInt(PageId))
+                    null
+                else
+                    state_value.first.get();
+                self.manager.last = if (state_value.last.get() == std.math.maxInt(PageId))
+                    null
+                else
+                    state_value.last.get();
+                self.manager.total = state_value.total_size.get();
+            }
+
+            pub fn deinit(_: *LeaseSelf) void {}
+        };
+
+        pub fn state(self: *@This()) Error!StateLeaseType {
+            var lease: StateLeaseType = .{
+                .manager = self,
+                .bytes = undefined,
+            };
+            var state_value: State = .{};
+            state_value.first.set(self.first orelse std.math.maxInt(PageId));
+            state_value.last.set(self.last orelse std.math.maxInt(PageId));
+            state_value.total_size.set(self.total);
+            @memcpy(&lease.bytes, std.mem.asBytes(&state_value));
+            return lease;
+        }
 
         pub fn getTotalSize(self: *const @This()) Error!Size {
             return self.total;

@@ -469,7 +469,7 @@ test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
         }.matches, "heap")).?;
         defer heap.deinit();
         try heap.push("top-key-00000001", try heap.embed("bpt"));
-        heap_root = heap.root().?;
+        heap_root = (try heap.root()).?;
         var leaf = try heap.openEmbeddedForEdit("bpt");
         defer leaf.deinit();
         try std.testing.expect(try leaf.insert("value", leaf.raw("bpt", "ok")));
