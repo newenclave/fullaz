@@ -42,13 +42,13 @@ test "cloud: reclaiming cache reuses and clears freed pages" {
     }
     try reclaiming.free(first);
     try reclaiming.free(second);
-    try std.testing.expectEqual(@as(usize, 2), reclaiming.state.free_page_count);
+    try std.testing.expectEqual(@as(usize, 2), reclaiming.state_value.free_page_count);
 
     const reused = try createPage(&reclaiming);
     try std.testing.expectEqual(second, reused);
     try std.testing.expectEqual(blocks_before_reuse, device.blocksCount());
-    try std.testing.expectEqual(@as(usize, 1), reclaiming.state.free_page_count);
-    try std.testing.expectEqual(@as(usize, 1), reclaiming.state.reused_page_count);
+    try std.testing.expectEqual(@as(usize, 1), reclaiming.state_value.free_page_count);
+    try std.testing.expectEqual(@as(usize, 1), reclaiming.state_value.reused_page_count);
     {
         var handle = try cache.fetch(reused);
         defer handle.deinit();
@@ -61,20 +61,49 @@ test "cloud: reclaiming cache reuses and clears freed pages" {
 test "cloud: reclaiming cache state persists in the superblock" {
     var device = try Device.init(std.testing.allocator, common.block_size);
     defer device.deinit();
-    var cache = try PageCache.init(&device, std.testing.allocator, common.frames);
-    defer cache.deinit();
-    try formatSuperblock(&cache);
 
     const Cache = ReclaimingCache(PageCache);
-    var reclaiming = Cache.init(&cache, .{});
-    const page_id = try createPage(&reclaiming);
-    try reclaiming.free(page_id);
-    _ = try createPage(&reclaiming);
+    var remaining_page_id: u32 = undefined;
+    {
+        var cache = try PageCache.init(&device, std.testing.allocator, common.frames);
+        defer cache.deinit();
+        try formatSuperblock(&cache);
 
-    var handle = try cache.fetch(constants.superblock_pid);
-    defer handle.deinit();
-    const view = superblock.View(true).init(try handle.data());
-    try std.testing.expect((view.getFreePageRoot()) == null);
-    try std.testing.expectEqual(@as(usize, 0), view.getFreePageCount());
-    try std.testing.expectEqual(@as(usize, 1), view.getReusedPageCount());
+        var reclaiming = Cache.init(&cache, .{});
+        const first = try createPage(&reclaiming);
+        const second = try createPage(&reclaiming);
+        try reclaiming.free(first);
+        try reclaiming.free(second);
+        try std.testing.expectEqual(second, try createPage(&reclaiming));
+        remaining_page_id = first;
+        try cache.flushAll();
+    }
+
+    var cache = try PageCache.init(&device, std.testing.allocator, common.frames);
+    defer cache.deinit();
+    const initial_state = blk: {
+        var handle = try cache.fetch(constants.superblock_pid);
+        defer handle.deinit();
+        const view = superblock.View(true).init(try handle.data());
+        break :blk Cache.State{
+            .free_list = view.header().free_page_root,
+            .free_page_count = view.getFreePageCount(),
+            .reused_page_count = view.getReusedPageCount(),
+        };
+    };
+    var reclaiming = Cache.init(&cache, initial_state);
+    {
+        var lease = try reclaiming.state();
+        defer lease.deinit();
+        const state = try fullaz.core.storage_manager.StateAccessor(
+            Cache.StateLeaseType,
+            Cache.FreeListState,
+        ).view(&lease);
+        try std.testing.expectEqual(remaining_page_id, state.root.get());
+    }
+
+    try std.testing.expectEqual(remaining_page_id, try createPage(&reclaiming));
+    try std.testing.expect(reclaiming.state_value.free_list.root.isMax());
+    try std.testing.expectEqual(@as(usize, 0), reclaiming.state_value.free_page_count);
+    try std.testing.expectEqual(@as(usize, 2), reclaiming.state_value.reused_page_count);
 }

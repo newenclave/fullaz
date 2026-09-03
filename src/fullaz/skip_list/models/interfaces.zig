@@ -8,7 +8,6 @@ const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
 const StructuralMutationCoordinator = @import("../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
-pub const requiresStorageManager = contracts.storage_manager.requiresStorageManager;
 pub const requiresPageCache = contracts.page_cache.requiresPageCache;
 
 pub fn assertModelAccessor(comptime Model: type) void {

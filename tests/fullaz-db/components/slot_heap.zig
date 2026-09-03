@@ -28,7 +28,7 @@ const Descriptor = fullaz_db.slotHeap(.{
     .maximum_value_size = 16,
 });
 
-test "fullaz-db: SlotHeap descriptor composes its state adapter, FSM, and paged model" {
+test "fullaz-db: SlotHeap descriptor composes projected state managers, FSM, and paged model" {
     const Binding = Descriptor.Trait.Binding(Backend);
     comptime fullaz_db.assertBinding(Binding, Backend);
     comptime fullaz_db.assertStaticMetadata(Binding, Binding.StaticMetadata);
@@ -49,7 +49,7 @@ test "fullaz-db: SlotHeap descriptor composes its state adapter, FSM, and paged 
     );
     defer Binding.deinitRuntime(&runtime);
 
-    try std.testing.expectEqual(@as(?u32, null), try runtime.state_adapter.getRoot());
+    try std.testing.expect(runtime.state.heap.root.isMax());
     try std.testing.expectEqual(@as(u64, 0), try runtime.heap.count());
 
     var batch = try cache.begin();

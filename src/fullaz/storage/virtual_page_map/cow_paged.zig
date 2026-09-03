@@ -1,12 +1,43 @@
 const std = @import("std");
 const PackedInt = @import("../../core/packed_int.zig").PackedInt;
 const page_cache_contract = @import("../../contracts/page_cache.zig");
+const storage_manager_contract = @import("../../contracts/storage_manager.zig");
+const storage_manager = @import("../../core/storage_manager.zig");
 const virtual_page_map_contract = @import("../../contracts/virtual_page_map.zig");
+
+/// Durable state for the current copy-on-write map generation.
+pub fn State(comptime PhysicalPageIdT: type, comptime VirtualPageIdT: type) type {
+    const PackedPhysicalPageId = PackedInt(PhysicalPageIdT, .little);
+    const PackedVirtualPageId = PackedInt(VirtualPageIdT, .little);
+    const PackedLevel = PackedInt(u16, .little);
+    const StateT = extern struct {
+        root_page_id: PackedPhysicalPageId = PackedPhysicalPageId.init(PackedPhysicalPageId.max),
+        root_level: PackedLevel = PackedLevel.init(0),
+        next_virtual_page_id: PackedVirtualPageId = PackedVirtualPageId.init(0),
+    };
+
+    comptime {
+        if (@alignOf(StateT) != 1 or
+            @offsetOf(StateT, "root_page_id") != 0 or
+            @offsetOf(StateT, "root_level") != @sizeOf(PackedPhysicalPageId) or
+            @offsetOf(StateT, "next_virtual_page_id") != @sizeOf(PackedPhysicalPageId) + @sizeOf(PackedLevel) or
+            @sizeOf(StateT) != @sizeOf(PackedPhysicalPageId) + @sizeOf(PackedLevel) + @sizeOf(PackedVirtualPageId))
+        {
+            @compileError("CowPaged state layout changed");
+        }
+    }
+    return StateT;
+}
 
 /// An append-only, copy-on-write virtual page map. Each mutation copies only
 /// the radix path from the changed VID to the current root.
-pub fn CowPaged(comptime PageCacheT: type, comptime VirtualPageIdT: type) type {
+pub fn CowPaged(
+    comptime PageCacheT: type,
+    comptime StorageManagerT: type,
+    comptime VirtualPageIdT: type,
+) type {
     comptime page_cache_contract.requiresTransactionalPageCache(PageCacheT);
+    comptime storage_manager_contract.assertStorageManager(StorageManagerT);
     comptime {
         const type_info = @typeInfo(VirtualPageIdT);
         if (type_info != .int or type_info.int.signedness != .unsigned) {
@@ -21,6 +52,9 @@ pub fn CowPaged(comptime PageCacheT: type, comptime VirtualPageIdT: type) type {
     const PackedPhysicalPageId = PackedInt(PhysicalPageId, .little);
     const PackedU16 = PackedInt(u16, .little);
     const nil_page_id = std.math.maxInt(PhysicalPageId);
+    const StateT = State(PhysicalPageId, VirtualPageIdT);
+    const StateLeaseT = StorageManagerT.StateLeaseType;
+    const StateView = storage_manager.StateAccessor(StateLeaseT, StateT);
     const node_magic = "FZCOWPM1";
     const node_version = 1;
 
@@ -38,13 +72,17 @@ pub fn CowPaged(comptime PageCacheT: type, comptime VirtualPageIdT: type) type {
 
         pub const PhysicalPageIdType = PhysicalPageId;
         pub const VirtualPageIdType = VirtualPageIdT;
+        pub const State = StateT;
         pub const append_only_dense_virtual_page_ids = true;
         pub const Snapshot = struct {
             root_page_id: ?PhysicalPageId,
             root_level: u16,
             next_virtual_page_id: VirtualPageIdT,
         };
-        pub const Error = PageCacheT.Error || error{
+        pub const Error = PageCacheT.Error ||
+            StorageManagerT.Error ||
+            StateLeaseT.Error ||
+            StateView.Error || error{
             BatchActive,
             TransactionInactive,
             PageIdExhausted,
@@ -63,38 +101,45 @@ pub fn CowPaged(comptime PageCacheT: type, comptime VirtualPageIdT: type) type {
 
             pub fn commit(self: *WriteBatch) void {
                 std.debug.assert(self.active);
+                self.map.finishBatch(true);
                 self.active = false;
-                self.map.batch_active = false;
             }
 
             pub fn discard(self: *WriteBatch) void {
                 std.debug.assert(self.active);
                 self.map.snapshot = self.snapshot;
+                self.map.finishBatch(false);
                 self.active = false;
-                self.map.batch_active = false;
             }
 
             /// The backing cache has a terminal failure and the next open
             /// selects a durable superblock generation instead of this state.
             pub fn abandon(self: *WriteBatch) void {
                 std.debug.assert(self.active);
+                self.map.finishBatch(false);
                 self.active = false;
-                self.map.batch_active = false;
             }
         };
 
         cache: *PageCacheT,
+        storage_manager: *StorageManagerT,
         snapshot: Snapshot,
         remap_context: PageCacheT.PidPolicyType.RemapContextType,
+        active_state_lease: ?StateLeaseT = null,
+        active_state: ?*StateT = null,
         batch_active: bool = false,
 
         pub fn init(
             cache: *PageCacheT,
-            snapshot: Snapshot,
+            state_manager: *StorageManagerT,
             remap_context: PageCacheT.PidPolicyType.RemapContextType,
         ) Error!Self {
+            var lease = try state_manager.state();
+            defer lease.deinit();
+            const snapshot = snapshotFromState(try StateView.view(&lease));
             const self = Self{
                 .cache = cache,
+                .storage_manager = state_manager,
                 .snapshot = snapshot,
                 .remap_context = remap_context,
             };
@@ -166,6 +211,18 @@ pub fn CowPaged(comptime PageCacheT: type, comptime VirtualPageIdT: type) type {
             if (self.batch_active or !self.cache.transactionActive()) {
                 return error.TransactionInactive;
             }
+            self.active_state_lease = try self.storage_manager.state();
+            errdefer {
+                self.active_state_lease.?.deinit();
+                self.active_state_lease = null;
+            }
+            const durable_state = try StateView.viewMut(&self.active_state_lease.?);
+            const durable_snapshot = snapshotFromState(durable_state);
+            try self.validateSnapshotValue(durable_snapshot);
+            if (!std.meta.eql(durable_snapshot, self.snapshot)) {
+                return error.InconsistentMapping;
+            }
+            self.active_state = durable_state;
             self.batch_active = true;
             return .{
                 .map = self,
@@ -321,19 +378,49 @@ pub fn CowPaged(comptime PageCacheT: type, comptime VirtualPageIdT: type) type {
         }
 
         fn validateSnapshot(self: *const Self) Error!void {
-            if (self.snapshot.next_virtual_page_id == 0) {
-                if (self.snapshot.root_page_id != null or self.snapshot.root_level != 0) {
+            return self.validateSnapshotValue(self.snapshot);
+        }
+
+        fn validateSnapshotValue(self: *const Self, snapshot: Snapshot) Error!void {
+            if (snapshot.next_virtual_page_id == 0) {
+                if (snapshot.root_page_id != null or snapshot.root_level != 0) {
                     return error.InvalidNode;
                 }
                 return;
             }
-            const root_page_id = self.snapshot.root_page_id orelse return error.InvalidNode;
+            const root_page_id = snapshot.root_page_id orelse return error.InvalidNode;
             if (@as(usize, @intCast(root_page_id)) >= self.cache.pageCount()) {
                 return error.InvalidNode;
             }
             var root = try self.cache.fetch(root_page_id);
             defer root.deinit();
-            try self.validateNode(try root.data(), root_page_id, self.snapshot.root_level);
+            try self.validateNode(try root.data(), root_page_id, snapshot.root_level);
+        }
+
+        fn snapshotFromState(state: *const StateT) Snapshot {
+            return .{
+                .root_page_id = if (state.root_page_id.isMax())
+                    null
+                else
+                    state.root_page_id.get(),
+                .root_level = state.root_level.get(),
+                .next_virtual_page_id = state.next_virtual_page_id.get(),
+            };
+        }
+
+        fn finishBatch(self: *Self, publish: bool) void {
+            std.debug.assert(self.batch_active);
+            if (publish) {
+                const state = self.active_state.?;
+                state.root_page_id.set(self.snapshot.root_page_id orelse nil_page_id);
+                state.root_level.set(self.snapshot.root_level);
+                state.next_virtual_page_id.set(self.snapshot.next_virtual_page_id);
+                self.active_state_lease.?.finish();
+            }
+            self.active_state = null;
+            self.active_state_lease.?.deinit();
+            self.active_state_lease = null;
+            self.batch_active = false;
         }
 
         fn validateNode(self: *const Self, bytes: []const u8, page_id: PhysicalPageId, level: u16) Error!void {

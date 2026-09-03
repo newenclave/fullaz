@@ -35,7 +35,6 @@ pub const slotHeap = components.slotHeap;
 pub const chainStore = components.chainStore;
 pub const weightedSequence = components.weightedSequence;
 pub const SlotHeapSizeClasses = components.SizeClasses;
-pub const ChainStoreManager = components.ChainStoreManager;
 pub const Schema = schema.Schema;
 pub const StaticSuperblock = database.StaticSuperblock;
 pub const schemaFingerprint = schema_fingerprint.digest;

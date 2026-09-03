@@ -2,12 +2,14 @@ const std = @import("std");
 const errors = @import("../../../../core/errors.zig");
 const contracts = @import("../../../../contracts/contracts.zig");
 const contract_interfaces = @import("../../../../contracts/interfaces.zig");
+const storage_manager_core = @import("../../../../core/storage_manager.zig");
 const geometry = @import("../../../geometry.zig");
 const orthtree_page = @import("../../../../page/orthtree.zig");
 const orthtree_interfaces = @import("../interfaces.zig");
 const slot_chain = @import("../../../../storage/slot_chain/slot_chain.zig");
 const traits = @import("../traits.zig");
 const view_mod = @import("view.zig");
+const state = @import("state.zig");
 const StructuralMutationCoordinator = @import("../../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
 const requiresErrorDeclaration = contract_interfaces.requiresErrorDeclaration;
@@ -62,6 +64,9 @@ pub fn PagedModelImpl(
     const TraitStorage = TraitPolicy.Storage;
     const Pid = PageCacheT.Pid;
     const PageHandle = PageCacheT.Handle;
+    const StateT = state.State(Pid, Endian);
+    const StateLeaseT = StorageManagerT.StateLeaseType;
+    const StateView = storage_manager_core.StateAccessor(StateLeaseT, StateT);
     const BoxT = geometry.BoundingBox(CoordT, dims);
     const OrthtreePage = orthtree_page.Orthtree(
         Pid,
@@ -99,13 +104,10 @@ pub fn PagedModelImpl(
 
     comptime {
         contracts.page_cache.requiresPageCache(PageCacheT);
-        orthtree_interfaces.requiresPagedStorageManager(StorageManagerT, NativeNodeId);
+        orthtree_interfaces.requiresPagedStorageManager(StorageManagerT, Pid);
         requiresTypeDeclaration(FsmT, "Pid");
         requiresTypeDeclaration(FsmT, "Size");
         requiresErrorDeclaration(FsmT, "Error");
-        if (StorageManagerT.PageId != Pid) {
-            @compileError("Orthtree storage manager PageId must match page cache Pid");
-        }
         if (FsmT.Pid != Pid) {
             @compileError("Orthtree FSM Pid must match page cache Pid");
         }
@@ -144,6 +146,7 @@ pub fn PagedModelImpl(
         errors.IteratorError ||
         PageCacheT.Error ||
         StorageManagerT.Error ||
+        StateLeaseT.Error ||
         FsmT.Error ||
         MutableNodePage.Error ||
         TraitPolicy.Error ||
@@ -203,6 +206,8 @@ pub fn PagedModelImpl(
             const Handle = slot_chain.HandleImpl(
                 PageCacheT,
                 NodeT,
+                u32,
+                Pid,
                 void,
                 void,
                 void,
@@ -466,7 +471,29 @@ pub fn PagedModelImpl(
         pub const Error = ErrorSet;
         pub const Id = NativeNodeId;
         pub const PageId = Pid;
-        pub const Size = u32;
+        pub const State = slot_chain.State(Pid, u32, Pid, Endian);
+        pub const StateLeaseType = struct {
+            pub const Error = ErrorSet;
+
+            node: *Self,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                const node_view = try self.node.readView();
+                const first = &node_view.subheader().entries_first;
+                const bytes: [*]const u8 = @ptrCast(first);
+                return bytes[0..@sizeOf(State)];
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                var node_view = try self.node.mutableView();
+                const first = &node_view.subheaderMut().entries_first;
+                const bytes: [*]u8 = @ptrCast(first);
+                return bytes[0..@sizeOf(State)];
+            }
+
+            pub fn finish(_: *@This()) void {}
+            pub fn deinit(_: *@This()) void {}
+        };
         pub const Box = BoxT;
         pub const Trait = TraitStorage;
         pub const Entries = EntriesWrapperType(Self);
@@ -478,6 +505,19 @@ pub fn PagedModelImpl(
         storage_manager: *StorageManagerT,
         fsm: *FsmT,
         settings: SettingsT,
+
+        comptime {
+            const Subheader = OrthtreePage.NodeSlotSubheader;
+            if (@offsetOf(Subheader, "entries_last") !=
+                @offsetOf(Subheader, "entries_first") + @sizeOf(OrthtreePage.PageId) or
+                @offsetOf(Subheader, "entries_count") !=
+                    @offsetOf(Subheader, "entries_first") + 2 * @sizeOf(OrthtreePage.PageId) or
+                @sizeOf(State) != 2 * @sizeOf(OrthtreePage.PageId) +
+                    @sizeOf(OrthtreePage.EntryCount))
+            {
+                @compileError("Orthtree embedded SlotChain state layout changed");
+            }
+        }
 
         fn init(
             handle: PageHandle,
@@ -565,37 +605,8 @@ pub fn PagedModelImpl(
             view.setParent(parent);
         }
 
-        pub fn getFirst(self: *const Self) Error!?Pid {
-            const view = try self.readView();
-            return view.entryChain().first;
-        }
-
-        pub fn setFirst(self: *Self, first: ?Pid) Error!void {
-            var view = try self.mutableView();
-            const chain = view.entryChain();
-            try view.setEntryChainUnchecked(first, chain.last, chain.count);
-        }
-
-        pub fn getLast(self: *const Self) Error!?Pid {
-            const view = try self.readView();
-            return view.entryChain().last;
-        }
-
-        pub fn setLast(self: *Self, last: ?Pid) Error!void {
-            var view = try self.mutableView();
-            const chain = view.entryChain();
-            try view.setEntryChainUnchecked(chain.first, last, chain.count);
-        }
-
-        pub fn getTotalSize(self: *const Self) Error!Size {
-            const count = self.readViewUnchecked().entryChain().count;
-            return std.math.cast(Size, count) orelse Error.BadData;
-        }
-
-        pub fn setTotalSize(self: *Self, count: Size) Error!void {
-            var view = try self.mutableView();
-            const chain = view.entryChain();
-            try view.setEntryChainUnchecked(chain.first, chain.last, count);
+        pub fn state(self: *Self) Error!StateLeaseType {
+            return .{ .node = self };
         }
 
         pub fn destroyPage(self: *Self, page_id: Pid) Error!void {
@@ -739,12 +750,34 @@ pub fn PagedModelImpl(
             };
         }
 
-        pub fn getRoot(self: *const Self) ?NativeNodeId {
-            return self.storage_manager.getRoot();
+        pub fn getRoot(self: *const Self) Error!?NativeNodeId {
+            var lease = try self.storage_manager.state();
+            defer lease.deinit();
+            const durable_state = try StateView.view(&lease);
+            if (durable_state.root_page.isMax()) {
+                if (durable_state.root_slot.get() != 0) {
+                    return Error.BadData;
+                }
+                return null;
+            }
+            return .{
+                .page_id = durable_state.root_page.get(),
+                .slot_id = durable_state.root_slot.get(),
+            };
         }
 
         pub fn setRoot(self: *Self, root: ?NativeNodeId) Error!void {
-            try self.storage_manager.setRoot(root);
+            var lease = try self.storage_manager.state();
+            defer lease.deinit();
+            const durable_state = try StateView.viewMut(&lease);
+            if (root) |node_id| {
+                durable_state.root_page.set(node_id.page_id);
+                durable_state.root_slot.set(node_id.slot_id);
+            } else {
+                durable_state.root_page.setMax();
+                durable_state.root_slot.set(0);
+            }
+            lease.finish();
         }
 
         fn fsmSize(_: *const Self, slots_count: usize) Error!FsmT.Size {
@@ -828,6 +861,7 @@ pub fn PagedModelImpl(
         pub const Trait = TraitStorage;
         pub const Error = ErrorSet;
         pub const Settings = SettingsT;
+        pub const State = StateT;
 
         accessor_state: AccessorType,
         coordinator: StructuralMutationCoordinator = .{},
@@ -977,19 +1011,31 @@ pub fn PagedModelImpl(
         }
 
         pub fn incrementEntriesCount(self: *Self) Error!void {
-            const count = try self.accessor_state.storage_manager.getEntriesCount();
-            const next = std.math.add(usize, count, 1) catch return Error.BadData;
-            try self.accessor_state.storage_manager.setEntriesCount(next);
+            var lease = try self.accessor_state.storage_manager.state();
+            defer lease.deinit();
+            const durable_state = try StateView.viewMut(&lease);
+            const next = std.math.add(u64, durable_state.entries_count.get(), 1) catch
+                return Error.BadData;
+            durable_state.entries_count.set(next);
+            lease.finish();
         }
 
         pub fn decrementEntriesCount(self: *Self) Error!void {
-            const count = try self.accessor_state.storage_manager.getEntriesCount();
-            const next = std.math.sub(usize, count, 1) catch return Error.BadData;
-            try self.accessor_state.storage_manager.setEntriesCount(next);
+            var lease = try self.accessor_state.storage_manager.state();
+            defer lease.deinit();
+            const durable_state = try StateView.viewMut(&lease);
+            const next = std.math.sub(u64, durable_state.entries_count.get(), 1) catch
+                return Error.BadData;
+            durable_state.entries_count.set(next);
+            lease.finish();
         }
 
         pub fn getEntriesCount(self: *const Self) Error!usize {
-            return self.accessor_state.storage_manager.getEntriesCount();
+            var lease = try self.accessor_state.storage_manager.state();
+            defer lease.deinit();
+            const durable_state = try StateView.view(&lease);
+            return std.math.cast(usize, durable_state.entries_count.get()) orelse
+                Error.BadData;
         }
 
         pub fn valueOutAsIn(_: *const Self, value: ValueOut) ValueIn {

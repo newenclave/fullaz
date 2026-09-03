@@ -207,38 +207,6 @@ const Model = struct {
     }
 };
 
-const StorageManager = struct {
-    pub const PageId = u32;
-    pub const CountType = u64;
-    pub const Error = MockError;
-
-    pub fn getRoot(_: *const StorageManager) Error!?PageId {
-        return null;
-    }
-    pub fn setRoot(_: *StorageManager, _: ?PageId) Error!void {}
-    pub fn getCachedTop(_: *const StorageManager) Error!?Location {
-        return null;
-    }
-    pub fn setCachedTop(_: *StorageManager, _: ?Location) Error!void {}
-    pub fn getEntriesCount(_: *const StorageManager) Error!CountType {
-        return 0;
-    }
-    pub fn setEntriesCount(_: *StorageManager, _: CountType) Error!void {}
-    pub fn getAvailableInode(_: *const StorageManager, _: usize) Error!?PageId {
-        return null;
-    }
-    pub fn setAvailableInode(_: *StorageManager, _: usize, _: ?PageId) Error!void {}
-    pub fn getSizeClassRoot(_: *const StorageManager, _: u16) Error!?PageId {
-        return null;
-    }
-    pub fn setSizeClassRoot(_: *StorageManager, _: u16, _: ?PageId) Error!void {}
-    pub fn destroyPage(_: *StorageManager, _: PageId) Error!void {}
-};
-
 test "SlotHeap model contract accepts a conforming model" {
     comptime interfaces.assertModel(Model);
-}
-
-test "SlotHeap state adapter contract accepts persistent metadata" {
-    comptime interfaces.assertPagedStateAdapter(StorageManager, Location);
 }

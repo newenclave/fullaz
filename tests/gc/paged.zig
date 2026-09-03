@@ -1,5 +1,6 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
+const GcState = fullaz.gc.models.paged.State(usize);
 
 const Store = struct {
     const page_size = 128;
@@ -12,7 +13,7 @@ const Store = struct {
     allocator: std.mem.Allocator,
     entries: []Entry,
     count: usize,
-    gc_root: ?usize = null,
+    gc_state: GcState = .{},
 
     fn init(allocator: std.mem.Allocator, page_count: usize) !Store {
         const entries = try allocator.alloc(Entry, page_count + 32);
@@ -99,17 +100,31 @@ const Cache = struct {
 };
 
 const StorageManager = struct {
+    const Self = @This();
+
     pub const PageId = usize;
     pub const Error = Cache.Error;
+    pub const StateLeaseType = struct {
+        pub const Error = StorageManager.Error;
+
+        state_value: *GcState,
+
+        pub fn data(self: *const @This()) @This().Error![]const u8 {
+            return std.mem.asBytes(@as(*const GcState, self.state_value));
+        }
+
+        pub fn dataMut(self: *@This()) @This().Error![]u8 {
+            return std.mem.asBytes(self.state_value);
+        }
+
+        pub fn finish(_: *@This()) void {}
+        pub fn deinit(_: *@This()) void {}
+    };
 
     store: *Store,
 
-    pub fn getRoot(self: *const @This()) ?PageId {
-        return self.store.gc_root;
-    }
-
-    pub fn setRoot(self: *@This(), page_id: ?PageId) Error!void {
-        self.store.gc_root = page_id;
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .state_value = &self.store.gc_state };
     }
 
     pub fn isReserved(self: *const @This(), page_id: PageId) bool {
@@ -235,7 +250,7 @@ test "GC: paged model uses configured private kinds and validates private pages"
     try collector.register(1, 1, null, ScannerFixture.leaf, null);
     try collector.start(&.{0});
 
-    try std.testing.expectEqual(@as(?usize, 5), store.gc_root);
+    try std.testing.expectEqual(@as(usize, 5), store.gc_state.state_page_root.get());
     try std.testing.expectEqual(state_kind, std.mem.readInt(u16, store.entries[5].bytes[0..2], .little));
     try std.testing.expectEqual(mark_bitmap_kind, std.mem.readInt(u16, store.entries[6].bytes[0..2], .little));
     try std.testing.expectEqual(free_bitmap_kind, std.mem.readInt(u16, store.entries[7].bytes[0..2], .little));

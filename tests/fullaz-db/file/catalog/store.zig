@@ -1,35 +1,35 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
 const fullaz_db = @import("fullaz-db");
+const CatalogState = fullaz.storage.slot_chain.State(u32, u64, u32, .little);
 
 const Manager = struct {
     pub const PageId = u32;
-    pub const Size = u64;
     pub const Error = error{};
+    pub const StateLeaseType = struct {
+        pub const Error = error{};
 
-    first: ?PageId = null,
-    last: ?PageId = null,
-    total: Size = 0,
+        value: *CatalogState,
+
+        pub fn data(self: *const @This()) @This().Error![]const u8 {
+            return std.mem.asBytes(@as(*const CatalogState, self.value));
+        }
+
+        pub fn dataMut(self: *@This()) @This().Error![]u8 {
+            return std.mem.asBytes(self.value);
+        }
+
+        pub fn finish(_: *@This()) void {}
+        pub fn deinit(_: *@This()) void {}
+    };
+
+    state_value: CatalogState = .{},
+
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
+    }
 
     pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
-    pub fn getTotalSize(self: *const @This()) Error!Size {
-        return self.total;
-    }
-    pub fn setTotalSize(self: *@This(), value: Size) Error!void {
-        self.total = value;
-    }
-    pub fn getFirst(self: *const @This()) Error!?PageId {
-        return self.first;
-    }
-    pub fn setFirst(self: *@This(), value: ?PageId) Error!void {
-        self.first = value;
-    }
-    pub fn getLast(self: *const @This()) Error!?PageId {
-        return self.last;
-    }
-    pub fn setLast(self: *@This(), value: ?PageId) Error!void {
-        self.last = value;
-    }
 };
 
 fn encodeRecord(bytes: []u8, scratch: []u8, revision: u32, name: []const u8) ![]const u8 {

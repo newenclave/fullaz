@@ -23,6 +23,7 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
 
     const PhysicalPageId = DeviceT.BlockId;
     const VirtualPageId = SchemaT.PageId;
+    const LogicalFreeListState = @import("fullaz").storage.free_list.State(VirtualPageId, .little);
     const PhysicalPool = struct {
         allocator: std.mem.Allocator,
         free_pages: std.ArrayList(PhysicalPageId) = .empty,
@@ -121,7 +122,35 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
         RetiringPidPolicy,
     );
     const PhysicalCache = page_cache.ReusablePageCache(RawCache, PhysicalPool);
-    const Vpm = virtual_page_map.CowPaged(PhysicalCache, VirtualPageId);
+    const VpmState = virtual_page_map.CowPagedState(PhysicalPageId, VirtualPageId);
+    const VpmStore = struct {
+        const Self = @This();
+
+        pub const Error = error{};
+        pub const StateLeaseType = struct {
+            pub const Error = error{};
+
+            value: *VpmState,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return std.mem.asBytes(@as(*const VpmState, self.value));
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return std.mem.asBytes(self.value);
+            }
+
+            pub fn finish(_: *@This()) void {}
+            pub fn deinit(_: *@This()) void {}
+        };
+
+        state_value: *VpmState,
+
+        pub fn state(self: *Self) Error!StateLeaseType {
+            return .{ .value = self.state_value };
+        }
+    };
+    const Vpm = virtual_page_map.CowPaged(PhysicalCache, VpmStore, VirtualPageId);
     const VirtualCache = page_cache.VirtualPageCacheImpl(
         PhysicalCache,
         Vpm,
@@ -131,16 +160,28 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
     const LogicalStore = struct {
         pub const PageId = VirtualPageId;
         pub const Error = error{};
+        pub const StateLeaseType = struct {
+            pub const Error = error{};
+
+            value: *LogicalFreeListState,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return std.mem.asBytes(@as(*const LogicalFreeListState, self.value));
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return std.mem.asBytes(self.value);
+            }
+
+            pub fn finish(_: *@This()) void {}
+            pub fn deinit(_: *@This()) void {}
+        };
 
         vpm: *Vpm,
-        root: *?PageId,
+        state_value: *LogicalFreeListState,
 
-        pub fn getRoot(self: *const @This()) ?PageId {
-            return self.root.*;
-        }
-
-        pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
-            self.root.* = root;
+        pub fn state(self: *@This()) Error!StateLeaseType {
+            return .{ .value = self.state_value };
         }
 
         pub fn pageCount(self: *const @This()) usize {
@@ -156,50 +197,59 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
         generation: PackedInt(u64, .little),
         page_id: PackedInt(PhysicalPageId, .little),
     };
+    const RetiredQueueState = slot_queue.State(
+        VirtualPageId,
+        u64,
+        VirtualPageId,
+        .little,
+    );
     const RetiredQueueStore = struct {
         pub const PageId = VirtualPageId;
-        pub const Size = u64;
         pub const Error = LogicalCache.Error;
+        pub const StateLeaseType = struct {
+            pub const Error = LogicalCache.Error;
+
+            value: *RetiredQueueState,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return std.mem.asBytes(@as(*const RetiredQueueState, self.value));
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return std.mem.asBytes(self.value);
+            }
+
+            pub fn finish(_: *@This()) void {}
+            pub fn deinit(_: *@This()) void {}
+        };
 
         cache: *LogicalCache,
-        first: *?PageId,
-        last: *?PageId,
-        total_size: *Size,
+        state_value: *RetiredQueueState,
+
+        pub fn state(self: *@This()) Error!StateLeaseType {
+            return .{ .value = self.state_value };
+        }
 
         pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
             return self.cache.free(page_id);
         }
-
-        pub fn getFirst(self: *const @This()) Error!?PageId {
-            return self.first.*;
-        }
-
-        pub fn setFirst(self: *@This(), page_id: ?PageId) Error!void {
-            self.first.* = page_id;
-        }
-
-        pub fn getLast(self: *const @This()) Error!?PageId {
-            return self.last.*;
-        }
-
-        pub fn setLast(self: *@This(), page_id: ?PageId) Error!void {
-            self.last.* = page_id;
-        }
-
-        pub fn getTotalSize(self: *const @This()) Error!Size {
-            return self.total_size.*;
-        }
-
-        pub fn setTotalSize(self: *@This(), size: Size) Error!void {
-            self.total_size.* = size;
-        }
     };
-    const RetiredQueue = slot_queue.SlotQueue(LogicalCache, RetiredQueueStore, .little);
-    const RetiredQueueState = struct {
-        first: ?VirtualPageId,
-        last: ?VirtualPageId,
-        size: u64,
-    };
+    const RetiredQueue = slot_queue.SlotQueue(
+        LogicalCache,
+        RetiredQueueStore,
+        u64,
+        VirtualPageId,
+        .little,
+    );
+
+    comptime {
+        if (@offsetOf(RetiredQueueState, "page_chain") != 0 or
+            @offsetOf(RetiredQueueState, "total_size") != 2 * @sizeOf(VirtualPageId) or
+            @sizeOf(RetiredQueueState) != 2 * @sizeOf(VirtualPageId) + @sizeOf(u64))
+        {
+            @compileError("Virtual COW retired queue state layout changed");
+        }
+    }
 
     const Backend = struct {
         const Self = @This();
@@ -232,6 +282,11 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
     const ComponentOptions = shape.initOptions(SchemaT, bindings);
     const Metadata = shape.staticMetadata(SchemaT, bindings);
     const Superblock = VirtualCowSuperblock(Metadata, PhysicalPageId, VirtualPageId);
+    comptime {
+        if (@sizeOf(LogicalFreeListState) != @sizeOf(@FieldType(Metadata, "free_root"))) {
+            @compileError("virtual COW free-list durable field width changed");
+        }
+    }
     const Options = databaseOptions(ComponentOptions);
 
     const Slot = enum { first, second };
@@ -244,14 +299,14 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
         physical_pool: PhysicalPool,
         retirements: RetirementCollector,
         physical_cache: PhysicalCache,
+        vpm_state: VpmState,
+        vpm_store: VpmStore,
         vpm: Vpm,
         virtual_cache: VirtualCache,
-        logical_free_root: ?VirtualPageId,
+        logical_free_state: LogicalFreeListState,
         logical_store: LogicalStore,
         logical_cache: LogicalCache,
-        retired_queue_first: ?VirtualPageId,
-        retired_queue_last: ?VirtualPageId,
-        retired_queue_size: u64,
+        retired_queue_state: RetiredQueueState,
         retired_queue_store: RetiredQueueStore,
         retired_queue: RetiredQueue,
         transaction_retired_queue_state: RetiredQueueState,
@@ -471,6 +526,11 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
             }
         }
 
+        fn logicalFreeRoot(core: *const Core) ?VirtualPageId {
+            const root = core.logical_free_state.root;
+            return if (root.isMax()) null else root.get();
+        }
+
         fn slotPageId(slot: Slot) PhysicalPageId {
             return switch (slot) {
                 .first => Superblock.first_superblock_page_id,
@@ -497,16 +557,22 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
                 snapshot.root_page_id,
                 snapshot.root_level,
                 snapshot.next_virtual_page_id,
-                core.retired_queue_first,
-                core.retired_queue_last,
-                core.retired_queue_size,
+                if (core.retired_queue_state.page_chain.first.isMax())
+                    null
+                else
+                    core.retired_queue_state.page_chain.first.get(),
+                if (core.retired_queue_state.page_chain.last.isMax())
+                    null
+                else
+                    core.retired_queue_state.page_chain.last.get(),
+                core.retired_queue_state.total_size.get(),
                 core.identity,
                 shape.captureStaticMetadata(
                     SchemaT,
                     bindings,
                     Metadata,
                     &core.components,
-                    core.logical_store.getRoot(),
+                    logicalFreeRoot(core),
                 ),
             );
         }
@@ -536,15 +602,11 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
             errdefer core.retirements.deinit();
             core.physical_cache = PhysicalCache.init(&core.raw_cache, &core.physical_pool, allocator);
             errdefer core.physical_cache.deinit();
-            core.logical_free_root = null;
-            core.retired_queue_first = null;
-            core.retired_queue_last = null;
-            core.retired_queue_size = 0;
-            core.transaction_retired_queue_state = .{
-                .first = null,
-                .last = null,
-                .size = 0,
-            };
+            core.vpm_state = .{};
+            core.vpm_store = .{ .state_value = &core.vpm_state };
+            core.logical_free_state = .{};
+            core.retired_queue_state = .{};
+            core.transaction_retired_queue_state = .{};
             core.promoted_retired_pages = .empty;
             errdefer core.promoted_retired_pages.deinit(allocator);
             core.transaction_active = false;
@@ -558,7 +620,17 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
         }
 
         fn initVirtualLayers(core: *Core, snapshot: Vpm.Snapshot) Error!void {
-            core.vpm = try Vpm.init(&core.physical_cache, snapshot, &core.retirements);
+            core.vpm_state.root_page_id.set(
+                snapshot.root_page_id orelse std.math.maxInt(PhysicalPageId),
+            );
+            core.vpm_state.root_level.set(snapshot.root_level);
+            core.vpm_state.next_virtual_page_id.set(snapshot.next_virtual_page_id);
+            core.vpm_store.state_value = &core.vpm_state;
+            core.vpm = try Vpm.init(
+                &core.physical_cache,
+                &core.vpm_store,
+                &core.retirements,
+            );
             errdefer core.vpm.deinit();
             core.virtual_cache = VirtualCache.init(
                 &core.physical_cache,
@@ -566,14 +638,15 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
                 .init(&core.retirements),
             );
             errdefer core.virtual_cache.deinit();
-            core.logical_store = .{ .vpm = &core.vpm, .root = &core.logical_free_root };
+            core.logical_store = .{
+                .vpm = &core.vpm,
+                .state_value = &core.logical_free_state,
+            };
             core.logical_cache = LogicalCache.init(&core.virtual_cache, &core.logical_store);
             errdefer core.logical_cache.deinit();
             core.retired_queue_store = .{
                 .cache = &core.logical_cache,
-                .first = &core.retired_queue_first,
-                .last = &core.retired_queue_last,
-                .total_size = &core.retired_queue_size,
+                .state_value = &core.retired_queue_state,
             };
             try initRetiredQueue(core);
             errdefer core.retired_queue.deinit();
@@ -731,9 +804,7 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
         }
 
         fn restoreRetiredQueueState(core: *Core) void {
-            core.retired_queue_first = core.transaction_retired_queue_state.first;
-            core.retired_queue_last = core.transaction_retired_queue_state.last;
-            core.retired_queue_size = core.transaction_retired_queue_state.size;
+            core.retired_queue_state = core.transaction_retired_queue_state;
         }
 
         fn parseRetiredPage(bytes: []const u8) Error!RetiredPage {
@@ -866,17 +937,22 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
             }
             try shape.validateStaticMetadata(SchemaT, bindings, Metadata, &storage.metadata, virtual_page_count);
             try initComponents(core, options);
-            core.logical_free_root = shape.restoreStaticMetadata(
+            core.logical_free_state.root.set(shape.restoreStaticMetadata(
                 SchemaT,
                 bindings,
                 Metadata,
                 &core.components,
                 &storage.metadata,
-            );
+            ) orelse std.math.maxInt(VirtualPageId));
             try core.logical_cache.validateFreeList();
-            core.retired_queue_first = Superblock.retiredQueueFirst(&storage);
-            core.retired_queue_last = Superblock.retiredQueueLast(&storage);
-            core.retired_queue_size = storage.retired_queue_size.get();
+            core.retired_queue_state = .{};
+            if (Superblock.retiredQueueFirst(&storage)) |page_id| {
+                core.retired_queue_state.page_chain.first.set(page_id);
+            }
+            if (Superblock.retiredQueueLast(&storage)) |page_id| {
+                core.retired_queue_state.page_chain.last.set(page_id);
+            }
+            core.retired_queue_state.total_size.set(storage.retired_queue_size.get());
             core.active_slot = selected.slot;
             core.commit_generation = storage.commit_generation.get();
             return .{ .core_ = core };
@@ -891,11 +967,7 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
                 return error.BatchActive;
             }
             core.transaction_component_states = captureTransactionStates(core);
-            core.transaction_retired_queue_state = .{
-                .first = core.retired_queue_first,
-                .last = core.retired_queue_last,
-                .size = core.retired_queue_size,
-            };
+            core.transaction_retired_queue_state = core.retired_queue_state;
             core.retirements.begin();
             core.transaction_cache_batch = try core.logical_cache.begin();
             promoteRetiredPages(core) catch |err| {
@@ -937,12 +1009,15 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
             return .{
                 .physical_page_count = core.device.blocksCount(),
                 .virtual_page_count = core.vpm.pageCount(),
-                .logical_free_root = core.logical_store.getRoot(),
+                .logical_free_root = logicalFreeRoot(core),
                 .commit_generation = core.commit_generation,
                 .active_slot = core.active_slot,
                 .reused_physical_pages = core.physical_cache.reusedPageCount(),
                 .reusable_physical_pages = core.physical_pool.free_pages.items.len,
-                .quarantined_physical_pages = std.math.cast(usize, core.retired_queue_size) orelse std.math.maxInt(usize),
+                .quarantined_physical_pages = std.math.cast(
+                    usize,
+                    core.retired_queue_state.total_size.get(),
+                ) orelse std.math.maxInt(usize),
             };
         }
 

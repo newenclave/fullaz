@@ -592,8 +592,31 @@ test "fullaz-db hierarchyStore: memory and static databases construct and persis
             options,
         );
         defer database.deinit();
-        var found = (try database.getConst("store").owner("files").find("node")).?;
-        defer found.deinit();
-        try std.testing.expectEqualStrings("static", (try found.get()).?.value[64..70]);
+        {
+            var found = (try database.getConst("store").owner("files").find("node")).?;
+            defer found.deinit();
+            const value = (try found.get()).?.value;
+            try std.testing.expectEqualStrings("static", value[64..70]);
+            try std.testing.expectEqual(
+                @as(u64, 1),
+                (try fullaz_db.value_envelope.readAny(value)).metadata.instance_id,
+            );
+        }
+        {
+            var transaction = try database.begin();
+            var files = transaction.get("store").owner("files");
+            try std.testing.expect(try files.insert("node-2", try files.raw("node", "reopen")));
+            try transaction.commit();
+        }
+        {
+            var found = (try database.getConst("store").owner("files").find("node-2")).?;
+            defer found.deinit();
+            const value = (try found.get()).?.value;
+            try std.testing.expectEqualStrings("reopen", value[64..70]);
+            try std.testing.expectEqual(
+                @as(u64, 2),
+                (try fullaz_db.value_envelope.readAny(value)).metadata.instance_id,
+            );
+        }
     }
 }

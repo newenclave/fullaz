@@ -1,28 +1,32 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
 const fullaz_db = @import("fullaz-db");
+const RadixState = fullaz.radix_tree.models.paged.State(u32, .little);
 
 const Manager = struct {
     pub const PageId = u32;
     pub const Error = error{};
+    pub const StateLeaseType = struct {
+        pub const Error = Manager.Error;
 
-    root: ?PageId = null,
-    free_leaf_root: ?PageId = null,
+        value: *RadixState,
 
-    pub fn getRoot(self: *const @This()) ?PageId {
-        return self.root;
-    }
+        pub fn data(self: *const @This()) @This().Error![]const u8 {
+            return std.mem.asBytes(@as(*const RadixState, self.value));
+        }
 
-    pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
-        self.root = root;
-    }
+        pub fn dataMut(self: *@This()) @This().Error![]u8 {
+            return std.mem.asBytes(self.value);
+        }
 
-    pub fn getFreeLeafRoot(self: *const @This()) ?PageId {
-        return self.free_leaf_root;
-    }
+        pub fn finish(_: *@This()) void {}
+        pub fn deinit(_: *@This()) void {}
+    };
 
-    pub fn setFreeLeafRoot(self: *@This(), root: ?PageId) Error!void {
-        self.free_leaf_root = root;
+    state_value: RadixState = .{},
+
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
     }
 
     pub fn destroyPage(_: *@This(), _: PageId) Error!void {}

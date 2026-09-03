@@ -1,13 +1,14 @@
 const std = @import("std");
 const chain_view = @import("view.zig");
 const scanner = @import("scanner.zig");
+const chain_state = @import("state.zig");
 const page_header = @import("../../page/header.zig");
 const interfaces = @import("../../contracts/contracts.zig");
 const errors = @import("../../core/errors.zig");
 const PackedInt = @import("../../core/packed_int.zig").PackedInt;
-const StateAccessor = @import("../../core/storage_manager.zig").StateAccessor;
+const storage_manager = @import("../../core/storage_manager.zig");
+const StateAccessor = storage_manager.StateAccessor;
 const requiresStorageManager = @import("interfaces.zig").requiresStorageManager;
-const requiresStorageManagerIndexRoot = @import("interfaces.zig").requiresStorageManagerIndexRoot;
 const weighted_index = @import("weighted_index.zig");
 
 pub const Settings = struct {
@@ -16,28 +17,24 @@ pub const Settings = struct {
     index_inode_page_kind: u16 = 1,
 };
 
-/// Durable state required to reopen one chain store.
-pub fn State(
-    comptime PageIdT: type,
-    comptime SizeT: type,
-    comptime Endian: std.builtin.Endian,
-) type {
-    const PackedPageId = PackedInt(PageIdT, Endian);
-    const PackedSize = PackedInt(SizeT, Endian);
-
-    return extern struct {
-        first: PackedPageId = PackedPageId.init(PackedPageId.max),
-        last: PackedPageId = PackedPageId.init(PackedPageId.max),
-        total_size: PackedSize = PackedSize.init(0),
-    };
-}
+pub const State = chain_state.State;
+pub const WeightedState = chain_state.WeightedState;
 
 pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type, comptime Endian: std.builtin.Endian) type {
+    comptime requiresStorageManager(StorageManagerT, PageCacheT.Pid);
     const PosType = StorageManagerT.Size;
     const CachePageId = PageCacheT.Pid;
     const NoIndexImpl = weighted_index.NoIndex(CachePageId, PosType);
+    const StateImpl = State(CachePageId, PosType, Endian);
 
-    return Indexed(PageCacheT, StorageManagerT, NoIndexImpl, Endian);
+    return Indexed(
+        PageCacheT,
+        StorageManagerT,
+        NoIndexImpl,
+        StateImpl,
+        0,
+        Endian,
+    );
 }
 
 pub fn HandleWeighted(
@@ -45,7 +42,8 @@ pub fn HandleWeighted(
     comptime StorageManagerT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
-    comptime requiresStorageManagerIndexRoot(StorageManagerT);
+    comptime requiresStorageManager(StorageManagerT, PageCacheT.Pid);
+    const StateImpl = WeightedState(PageCacheT.Pid, StorageManagerT.Size, Endian);
     const IndexImpl = weighted_index.WeightedIndex(
         PageCacheT,
         StorageManagerT,
@@ -55,6 +53,8 @@ pub fn HandleWeighted(
         PageCacheT,
         StorageManagerT,
         IndexImpl,
+        StateImpl,
+        @offsetOf(StateImpl, "chain"),
         Endian,
     );
 }
@@ -63,6 +63,8 @@ pub fn Indexed(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
     comptime IndexT: type,
+    comptime ParentStateT: type,
+    comptime chain_state_offset: usize,
     comptime Endian: std.builtin.Endian,
 ) type {
     comptime {
@@ -75,7 +77,13 @@ pub fn Indexed(
     const PageHandle = PageCacheT.Handle;
     const CachePageId = PageCacheT.Pid;
     const StateImpl = State(CachePageId, PosType, Endian);
-    const StateLeaseT = StorageManagerT.StateLeaseType;
+    const ChainStateManager = storage_manager.PagedByteRegionStorageManager(
+        StorageManagerT,
+        @sizeOf(ParentStateT),
+        chain_state_offset,
+        @sizeOf(StateImpl),
+    );
+    const StateLeaseT = ChainStateManager.StateLeaseType;
     const StateView = StateAccessor(StateLeaseT, StateImpl);
 
     const CommonPageViewConst = page_header.View(CachePageId, Index, Endian, true);
@@ -97,7 +105,8 @@ pub fn Indexed(
         storage_mgr: *StorageManagerT,
 
         fn getFirst(self: *const Self) Error!?CachePageId {
-            var lease = try self.storage_mgr.state();
+            var manager = ChainStateManager.init(self.storage_mgr);
+            var lease = try manager.state();
             defer lease.deinit();
             const state = try StateView.view(&lease);
             const first = state.first.get();
@@ -105,7 +114,8 @@ pub fn Indexed(
         }
 
         fn getLast(self: *const Self) Error!?CachePageId {
-            var lease = try self.storage_mgr.state();
+            var manager = ChainStateManager.init(self.storage_mgr);
+            var lease = try manager.state();
             defer lease.deinit();
             const state = try StateView.view(&lease);
             const last = state.last.get();
@@ -113,14 +123,16 @@ pub fn Indexed(
         }
 
         fn getTotalSize(self: *const Self) Error!PosType {
-            var lease = try self.storage_mgr.state();
+            var manager = ChainStateManager.init(self.storage_mgr);
+            var lease = try manager.state();
             defer lease.deinit();
             const state = try StateView.view(&lease);
             return state.total_size.get();
         }
 
         fn setFirst(self: *Self, page_id: ?CachePageId) Error!void {
-            var lease = try self.storage_mgr.state();
+            var manager = ChainStateManager.init(self.storage_mgr);
+            var lease = try manager.state();
             defer lease.deinit();
             const state = try StateView.viewMut(&lease);
             state.first.set(page_id orelse PackedInt(CachePageId, Endian).max);
@@ -128,7 +140,8 @@ pub fn Indexed(
         }
 
         fn setLast(self: *Self, page_id: ?CachePageId) Error!void {
-            var lease = try self.storage_mgr.state();
+            var manager = ChainStateManager.init(self.storage_mgr);
+            var lease = try manager.state();
             defer lease.deinit();
             const state = try StateView.viewMut(&lease);
             state.last.set(page_id orelse PackedInt(CachePageId, Endian).max);
@@ -136,7 +149,8 @@ pub fn Indexed(
         }
 
         fn setTotalSize(self: *Self, size: PosType) Error!void {
-            var lease = try self.storage_mgr.state();
+            var manager = ChainStateManager.init(self.storage_mgr);
+            var lease = try manager.state();
             defer lease.deinit();
             const state = try StateView.viewMut(&lease);
             state.total_size.set(size);

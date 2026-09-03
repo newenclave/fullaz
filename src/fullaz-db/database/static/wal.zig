@@ -222,6 +222,11 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
             return shape.requireTransactionIdle(SchemaT, bindings, &core.components);
         }
 
+        fn freeRoot(core: *const Core) ?SchemaT.PageId {
+            const root = core.store.state_value.root;
+            return if (root.isMax()) null else root.get();
+        }
+
         fn writeSuperblock(core: *Core, clean: bool) Error!void {
             var page = try core.raw_cache.fetch(0);
             defer page.deinit();
@@ -230,7 +235,7 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
                 core.device.blockSize(),
                 core.device.blocksCount(),
                 core.identity,
-                shape.captureStaticMetadata(SchemaT, bindings, Metadata, &core.components, core.store.getRoot()),
+                shape.captureStaticMetadata(SchemaT, bindings, Metadata, &core.components, freeRoot(core)),
                 clean,
             );
         }
@@ -357,13 +362,13 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
             );
             try initComponents(core, options);
             errdefer deinitComponentPrefix(core, SchemaT.fields.len);
-            core.store.root = shape.restoreStaticMetadata(
+            core.store.state_value.root.set(shape.restoreStaticMetadata(
                 SchemaT,
                 bindings,
                 Metadata,
                 &core.components,
                 &storage.metadata,
-            );
+            ) orelse std.math.maxInt(SchemaT.PageId));
             try core.cache.validateFreeList();
             return .{ .core_ = core };
         }
@@ -403,7 +408,7 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
             return .{
                 .page_size = core.device.blockSize(),
                 .page_count = core.device.blocksCount(),
-                .free_root = core.store.getRoot(),
+                .free_root = freeRoot(core),
             };
         }
 

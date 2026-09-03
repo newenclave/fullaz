@@ -1,7 +1,9 @@
 const view = @import("view.zig");
 const handle = @import("handle.zig");
+const state = @import("state.zig");
 
 pub const scanRefs = @import("scanner.zig").scanRefs;
+pub const State = state.State;
 
 pub const View = view.View;
 pub const ViewImpl = view.ViewImpl;
@@ -33,19 +35,21 @@ pub fn BidirectionalView(
 pub fn ForwardHandle(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime TailT: type,
     comptime SubheaderT: type,
     comptime Endian: @import("std").builtin.Endian,
 ) type {
-    return ForwardHandleImpl(PageCacheT, StorageManagerT, void, SubheaderT, Endian);
+    return ForwardHandleImpl(PageCacheT, StorageManagerT, TailT, void, SubheaderT, Endian);
 }
 
 pub fn BidirectionalHandle(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime TailT: type,
     comptime SubheaderT: type,
     comptime Endian: @import("std").builtin.Endian,
 ) type {
-    return BidirectionalHandleImpl(PageCacheT, StorageManagerT, void, SubheaderT, Endian);
+    return BidirectionalHandleImpl(PageCacheT, StorageManagerT, TailT, void, SubheaderT, Endian);
 }
 
 pub const Settings = struct {

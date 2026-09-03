@@ -3,13 +3,22 @@ const errors = @import("../../core/errors.zig");
 const slot_chain = @import("../slot_chain/slot_chain.zig");
 
 pub const scanRefs = slot_chain.scanRefs;
+pub const State = slot_chain.State;
 
 pub fn SlotQueue(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime SizeT: type,
+    comptime TailT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
-    const Chain = slot_chain.ForwardHandle(PageCacheT, StorageManagerT, Endian);
+    const Chain = slot_chain.ForwardHandle(
+        PageCacheT,
+        StorageManagerT,
+        SizeT,
+        TailT,
+        Endian,
+    );
 
     return struct {
         const Self = @This();
@@ -17,6 +26,8 @@ pub fn SlotQueue(
         pub const Error = Chain.Error || errors.SetError;
         pub const ValueIn = Chain.ValueIn;
         pub const PageId = Chain.PageId;
+        pub const Size = Chain.Size;
+        pub const StateType = Chain.StateType;
         pub const ValueEditor = Chain.ValueEditor;
 
         /// Owns the iterator that keeps the peeked value borrowed from the queue.

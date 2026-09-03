@@ -10,13 +10,26 @@ const PageCache = common.PageCache;
 const C = cloud.Cloud(PageCache);
 
 const testing = std.testing;
+const FsmState = fullaz.storage.fsm.models.paged.slab.State(
+    constants.PageId,
+    cloud.storage.NodeSizePolicy,
+    constants.endian,
+);
+const FsmStateView = fullaz.core.storage_manager.StateAccessor(C.FsmManager.StateLeaseType, FsmState);
 
 const spec = scene.Spec{ .seed = 0xC0FFEE, .cluster_count = 8 };
 
 fn rootTraitCount(c: *C) !u32 {
-    var root = try c.model.accessor().loadNode(c.manager.root.?);
+    var root = try c.model.accessor().loadNode((try c.model.accessor().getRoot()).?);
     defer c.model.accessor().deinitNode(&root);
     return cloud.trait.Splat.count(root.trait());
+}
+
+fn hasFsmRoot(c: *C) !bool {
+    var lease = try c.fsm_manager.state();
+    defer lease.deinit();
+    const root = (try FsmStateView.view(&lease)).classes[0].first;
+    return !root.isMax();
 }
 
 test "cloud: formatting builds an index that holds every point" {
@@ -313,7 +326,7 @@ test "cloud: the free-space map survives a reopen" {
         defer cache.deinit();
         var c = try C.format(testing.allocator, &cache, common.block_size, spec, 500);
         defer c.deinit();
-        try testing.expect(c.manager.fsm_class_root != null);
+        try testing.expect(try hasFsmRoot(&c));
         try c.save();
     }
 
@@ -322,7 +335,7 @@ test "cloud: the free-space map survives a reopen" {
     var c = try C.open(testing.allocator, &cache, common.block_size);
     defer c.deinit();
 
-    try testing.expect(c.manager.fsm_class_root != null);
+    try testing.expect(try hasFsmRoot(&c));
     // A page with room is still findable, so new nodes land in it.
     try testing.expect((try c.fsm.find(1)) != null);
 }

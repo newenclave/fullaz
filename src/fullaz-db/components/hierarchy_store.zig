@@ -5,6 +5,7 @@ const dynamic_metadata = @import("../file/metadata/dynamic.zig");
 const tagged = @import("../file/tagged_fields.zig");
 const hierarchy_bpt = @import("hierarchy_store/bpt.zig");
 const hierarchy_owners = @import("hierarchy_store/owners.zig");
+const PackedInt = @import("fullaz").core.packed_int.PackedInt;
 
 /// A hierarchy aggregate owns all top-level structural ranges followed by one
 /// shared block for every nominal hierarchy type.
@@ -16,14 +17,14 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
 
     const Trait = struct {
         pub const kind_name: []const u8 = "fullaz.hierarchy-store";
-        pub const format_version: u32 = 4;
+        pub const format_version: u32 = 5;
         pub const page_kind_count: usize = total_page_kinds;
         pub const page_roles: [page_kind_count][]const u8 = buildPageRoles(HierarchyT, options);
         pub const owner_count = options.owners.len;
         pub const type_page_kind_offset = owner_page_kinds;
 
         pub fn fingerprint(writer: *hierarchy.FingerprintWriter) void {
-            writer.writeBytes("fullaz.hierarchy-store.v4");
+            writer.writeBytes("fullaz.hierarchy-store.v5");
             writer.writeInt(u32, @intCast(options.owners.len));
             inline for (options.owners) |owner| {
                 writer.writeBytes(owner.tag);
@@ -89,7 +90,7 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
 
                 pub const StaticMetadata = struct {
                     pub const Storage = AggregateStorage;
-                    pub const Error = staticErrors(Bindings, 0);
+                    pub const Error = staticErrors(Bindings, 0) || error{BadMetadata};
 
                     pub fn capture(runtime: *const Runtime) Storage {
                         var storage: AggregateStorage = undefined;
@@ -98,6 +99,7 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
                                 &@field(runtime.owners, ownerField(index)),
                             );
                         }
+                        storage.next_instance_id.set(runtime.next_instance_id);
                         return storage;
                     }
 
@@ -108,6 +110,7 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
                                 &@field(storage.*, ownerField(index)),
                             );
                         }
+                        runtime.next_instance_id = storage.next_instance_id.get();
                     }
 
                     pub fn validate(storage: *const Storage, page_count: usize) @This().Error!void {
@@ -117,11 +120,14 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
                                 page_count,
                             );
                         }
+                        if (storage.next_instance_id.get() == 0) {
+                            return error.BadMetadata;
+                        }
                     }
                 };
 
                 pub const DynamicMetadata = struct {
-                    pub const format_version: u32 = 4;
+                    pub const format_version: u32 = 5;
                     pub const known_tags: []const u16 = &OwnerTags;
                     pub const repeated_tags: []const u16 = &.{};
                     pub const Error = dynamic_metadata.Error;
@@ -341,14 +347,17 @@ fn memberStruct(comptime bindings_: anytype, comptime member: []const u8) type {
 }
 
 fn staticStorage(comptime bindings_: anytype) type {
-    comptime var names: [bindings_.len][]const u8 = undefined;
-    comptime var types: [bindings_.len]type = undefined;
-    comptime var attributes: [bindings_.len]std.builtin.Type.StructField.Attributes = undefined;
+    comptime var names: [bindings_.len + 1][]const u8 = undefined;
+    comptime var types: [bindings_.len + 1]type = undefined;
+    comptime var attributes: [bindings_.len + 1]std.builtin.Type.StructField.Attributes = undefined;
     inline for (bindings_, 0..) |Binding, index| {
         names[index] = ownerField(index);
         types[index] = Binding.StaticMetadata.Storage;
         attributes[index] = .{};
     }
+    names[bindings_.len] = "next_instance_id";
+    types[bindings_.len] = PackedInt(u64, .little);
+    attributes[bindings_.len] = .{};
     return @Struct(.@"extern", null, &names, &types, &attributes);
 }
 

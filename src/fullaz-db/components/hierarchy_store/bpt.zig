@@ -16,6 +16,7 @@ const slot_heap_page = fullaz.page.slot_heap;
 const fsm = fullaz.storage.fsm;
 const low_level_slot_heap = fullaz.storage.slot_heap;
 const gc = fullaz.gc;
+const storage_manager = fullaz.core.storage_manager;
 
 /// Owns a parent value editor without coupling embedded children to the parent
 /// structure's concrete editor type. `finish` commits the parent value; callers
@@ -144,7 +145,7 @@ pub fn hierarchyCore(
 
     const Trait = struct {
         pub const kind_name: []const u8 = "fullaz.bpt.embedded-hierarchy";
-        pub const format_version: u32 = 2;
+        pub const format_version: u32 = 3;
         pub const page_kind_count: usize = hierarchy_page_kind_count;
         pub const page_roles: [page_kind_count][]const u8 = hierarchy_page_roles;
 
@@ -209,10 +210,6 @@ pub fn hierarchyCore(
                     };
                 }
 
-                pub fn getRoot(self: *const Self) ?PageIdT {
-                    return if (self.root.isMax()) null else self.root.get();
-                }
-
                 pub fn destroyPage(self: *Self, page_id: PageIdT) Error!void {
                     return self.cache.free(page_id);
                 }
@@ -257,38 +254,6 @@ pub fn hierarchyCore(
                     return .{ .payload = self.payload };
                 }
 
-                pub fn getTotalSize(self: *const Self) Error!Size {
-                    return self.payload.total_size.get();
-                }
-
-                pub fn setTotalSize(self: *Self, total_size: Size) Error!void {
-                    self.payload.total_size.set(total_size);
-                }
-
-                pub fn getFirst(self: *const Self) Error!?PageId {
-                    return if (self.payload.first.isMax()) null else self.payload.first.get();
-                }
-
-                pub fn setFirst(self: *Self, first: ?PageId) Error!void {
-                    if (first) |page_id| {
-                        self.payload.first.set(page_id);
-                    } else {
-                        self.payload.first.setMax();
-                    }
-                }
-
-                pub fn getLast(self: *const Self) Error!?PageId {
-                    return if (self.payload.last.isMax()) null else self.payload.last.get();
-                }
-
-                pub fn setLast(self: *Self, last: ?PageId) Error!void {
-                    if (last) |page_id| {
-                        self.payload.last.set(page_id);
-                    } else {
-                        self.payload.last.setMax();
-                    }
-                }
-
                 pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
                     return self.cache.free(page_id);
                 }
@@ -302,7 +267,7 @@ pub fn hierarchyCore(
                         PageIdT,
                         u16,
                         ChildTrait.maximum_level,
-                        ChildTrait.size_class_count,
+                        ChildTrait.SizeClassPolicy,
                     );
 
                     const InlineStateManager = struct {
@@ -345,24 +310,27 @@ pub fn hierarchyCore(
                             return self.cache.free(page_id);
                         }
                     };
-                    const StateAdapter = low_level_slot_heap.models.paged.StateAdapter(
+                    const HeapStateManager = storage_manager.PagedFieldStorageManager(
                         InlineStateManager,
                         Payload,
-                        PageIdT,
-                        u16,
-                        ChildTrait.maximum_level,
-                        ChildTrait.size_class_count,
+                        "heap",
+                    );
+                    const FsmStateManager = storage_manager.PagedFieldStorageManager(
+                        InlineStateManager,
+                        Payload,
+                        "fsm",
                     );
                     const FsmModel = fsm.models.paged.slab.Model(
                         CacheT,
-                        StateAdapter,
+                        FsmStateManager,
                         ChildTrait.SizeClassPolicy,
                         LocationAccessor,
                     );
                     const Fsm = fsm.Fsm(FsmModel);
                     const Model = low_level_slot_heap.models.Paged(
                         CacheT,
-                        StateAdapter,
+                        HeapStateManager,
+                        ChildTrait.maximum_level,
                         Fsm,
                         ChildTrait.compare,
                         ChildTrait.CompareContext,
@@ -372,7 +340,8 @@ pub fn hierarchyCore(
                     return struct {
                         pub const PayloadType = Payload;
                         pub const StateManager = InlineStateManager;
-                        pub const StateAdapterType = StateAdapter;
+                        pub const HeapStateManagerType = HeapStateManager;
+                        pub const FsmStateManagerType = FsmStateManager;
                         pub const FsmModelType = FsmModel;
                         pub const FsmType = Fsm;
                         pub const ModelType = Model;
@@ -784,12 +753,12 @@ pub fn hierarchyCore(
                                     }
                                     const state: *const Child.State = @ptrCast(value.payload.ptr);
                                     if (comptime childKind(HierarchyT, index) == .slot_heap) {
-                                        if (!state.root.isMax()) {
-                                            try sink.visit(state.root.get());
+                                        if (!state.heap.root.isMax()) {
+                                            try sink.visit(state.heap.root.get());
                                         }
-                                        for (state.fsm_class_roots) |fsm_root| {
-                                            if (!fsm_root.isMax()) {
-                                                try sink.visit(fsm_root.get());
+                                        for (state.fsm.classes) |class_state| {
+                                            if (!class_state.first.isMax()) {
+                                                try sink.visit(class_state.first.get());
                                             }
                                         }
                                     } else if (comptime childKind(HierarchyT, index) == .chain_store) {
@@ -1219,7 +1188,10 @@ pub fn hierarchyCore(
                             }
 
                             pub fn root(self: *const Self) ?PageIdT {
-                                return self.manager.getRoot();
+                                return if (self.manager.root.isMax())
+                                    null
+                                else
+                                    self.manager.root.get();
                             }
 
                             pub fn finish(self: *Self) (ChildTree.Error || ValueEditorOwner.Error || value_envelope.Error || error{ChildEditorActive})!void {
@@ -1348,7 +1320,10 @@ pub fn hierarchyCore(
                             /// Returns the canonical root of the chunk chain.
                             pub fn first(self: *const Self) (ChainBlob.Error || value_envelope.Error)!?PageIdT {
                                 try self.requireOpen();
-                                return self.manager.getFirst();
+                                return if (self.manager.payload.first.isMax())
+                                    null
+                                else
+                                    self.manager.payload.first.get();
                             }
 
                             pub fn finish(self: *Self) (ChainBlob.Error || ValueEditorOwner.Error || value_envelope.Error)!void {
@@ -1483,7 +1458,10 @@ pub fn hierarchyCore(
 
                             /// Returns the canonical inline root of this weighted sequence.
                             pub fn root(self: *const Self) ?PageIdT {
-                                return self.manager.getRoot();
+                                return if (self.manager.root.isMax())
+                                    null
+                                else
+                                    self.manager.root.get();
                             }
 
                             pub fn finish(self: *Self) Error!void {
@@ -1736,7 +1714,10 @@ pub fn hierarchyCore(
 
                             /// Returns the canonical inline root of this R-tree.
                             pub fn root(self: *const Self) ?PageIdT {
-                                return self.manager.getRoot();
+                                return if (self.manager.root.isMax())
+                                    null
+                                else
+                                    self.manager.root.get();
                             }
 
                             pub fn finish(self: *Self) Error!void {
@@ -1813,7 +1794,8 @@ pub fn hierarchyCore(
                             parent_editor: ValueEditorOwner,
                             envelope_editor: value_envelope.EmbeddedEditor,
                             state_manager: *Child.StateManager,
-                            state_adapter: *Child.StateAdapterType,
+                            heap_state_manager: *Child.HeapStateManagerType,
+                            fsm_state_manager: *Child.FsmStateManagerType,
                             fsm_model: *Child.FsmModelType,
                             fsm_value: *Child.FsmType,
                             model: *Child.ModelType,
@@ -1962,7 +1944,8 @@ pub fn hierarchyCore(
 
                             /// Returns the canonical inline root of this SlotHeap.
                             pub fn root(self: *const Self) Error!?PageIdT {
-                                return self.state_adapter.getRoot();
+                                const root_value = self.state_manager.payload.heap.root;
+                                return if (root_value.isMax()) null else root_value.get();
                             }
 
                             pub fn finish(self: *Self) Error!void {
@@ -1989,7 +1972,8 @@ pub fn hierarchyCore(
                                 self.runtime.backend.allocator().destroy(self.fsm_value);
                                 self.fsm_model.deinit();
                                 self.runtime.backend.allocator().destroy(self.fsm_model);
-                                self.runtime.backend.allocator().destroy(self.state_adapter);
+                                self.runtime.backend.allocator().destroy(self.fsm_state_manager);
+                                self.runtime.backend.allocator().destroy(self.heap_state_manager);
                                 self.runtime.backend.allocator().destroy(self.state_manager);
                                 self.parent_editor.rollback();
                                 self.parent_editor.deinit();
@@ -2584,14 +2568,21 @@ pub fn hierarchyCore(
                         const state_manager = try self.runtime.backend.allocator().create(Child.StateManager);
                         errdefer self.runtime.backend.allocator().destroy(state_manager);
                         state_manager.* = Child.StateManager.init(self.runtime.backend.cache(), storage);
-                        const state_adapter = try self.runtime.backend.allocator().create(Child.StateAdapterType);
-                        errdefer self.runtime.backend.allocator().destroy(state_adapter);
-                        state_adapter.* = Child.StateAdapterType.init(state_manager);
+                        const heap_state_manager = try self.runtime.backend.allocator().create(
+                            Child.HeapStateManagerType,
+                        );
+                        errdefer self.runtime.backend.allocator().destroy(heap_state_manager);
+                        heap_state_manager.* = Child.HeapStateManagerType.init(state_manager);
+                        const fsm_state_manager = try self.runtime.backend.allocator().create(
+                            Child.FsmStateManagerType,
+                        );
+                        errdefer self.runtime.backend.allocator().destroy(fsm_state_manager);
+                        fsm_state_manager.* = Child.FsmStateManagerType.init(state_manager);
                         const fsm_model = try self.runtime.backend.allocator().create(Child.FsmModelType);
                         errdefer self.runtime.backend.allocator().destroy(fsm_model);
                         fsm_model.* = Child.FsmModelType.init(
                             self.runtime.backend.cache(),
-                            state_adapter,
+                            fsm_state_manager,
                             ChildTrait.size_class_policy,
                             .{ .page_kind = self.runtime.childPageKinds(index).kindAt(2).? },
                         );
@@ -2602,7 +2593,7 @@ pub fn hierarchyCore(
                         errdefer self.runtime.backend.allocator().destroy(model);
                         model.* = try Child.ModelType.init(
                             self.runtime.backend.cache(),
-                            state_adapter,
+                            heap_state_manager,
                             fsm_value,
                             .{
                                 .key_size = ChildTrait.maximum_key_size,
@@ -2623,7 +2614,8 @@ pub fn hierarchyCore(
                             .parent_editor = parent_editor,
                             .envelope_editor = envelope_editor,
                             .state_manager = state_manager,
-                            .state_adapter = state_adapter,
+                            .heap_state_manager = heap_state_manager,
+                            .fsm_state_manager = fsm_state_manager,
                             .fsm_model = fsm_model,
                             .fsm_value = fsm_value,
                             .model = model,

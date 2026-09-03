@@ -8,45 +8,52 @@ const PackedInt = fullaz.core.packed_int.PackedInt;
 const model_interfaces = fullaz.spatial.orthtree.models.interfaces;
 const FsmModel = fullaz.storage.fsm.models.Memory(u32, u16);
 const Fsm = fullaz.storage.fsm.Fsm(FsmModel);
+const OrthtreeState = fullaz.spatial.orthtree.models.paged.State(u32, .little);
 
 const StorageManager = struct {
+    const Self = @This();
+
     pub const PageId = u32;
-    pub const NodeId = fullaz.spatial.orthtree.models.paged.NodeId(PageId, u16);
     pub const Error = error{};
+    pub const StateLeaseType = struct {
+        pub const Error = error{};
 
-    root: ?NodeId = null,
-    entries_count: usize = 0,
-    fsm_roots: [256]?PageId = .{null} ** 256,
+        value: *OrthtreeState,
 
-    pub fn getRoot(self: *const @This()) ?NodeId {
-        return self.root;
+        pub fn data(self: *const @This()) @This().Error![]const u8 {
+            return std.mem.asBytes(@as(*const OrthtreeState, self.value));
+        }
+
+        pub fn dataMut(self: *@This()) @This().Error![]u8 {
+            return std.mem.asBytes(self.value);
+        }
+
+        pub fn finish(_: *@This()) void {}
+        pub fn deinit(_: *@This()) void {}
+    };
+
+    state_data: OrthtreeState = .{},
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .value = &self.state_data };
     }
 
-    pub fn setRoot(self: *@This(), root: ?NodeId) Error!void {
-        self.root = root;
-    }
+    pub fn destroyPage(_: *Self, _: PageId) Error!void {}
 
-    pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
-
-    pub fn getEntriesCount(self: *const @This()) Error!usize {
-        return self.entries_count;
-    }
-
-    pub fn setEntriesCount(self: *@This(), count: usize) Error!void {
-        self.entries_count = count;
-    }
-
-    pub fn getSizeClassRoot(self: *const @This(), class: u16) Error!?PageId {
-        return self.fsm_roots[class];
-    }
-
-    pub fn setSizeClassRoot(self: *@This(), class: u16, root: ?PageId) Error!void {
-        self.fsm_roots[class] = root;
+    fn root(self: *const Self) ?fullaz.spatial.orthtree.models.paged.NodeId(PageId, u16) {
+        if (self.state_data.root_page.isMax()) {
+            return null;
+        }
+        return .{
+            .page_id = self.state_data.root_page.get(),
+            .slot_id = self.state_data.root_slot.get(),
+        };
     }
 };
 
 const FsmSizePolicy = struct {
     pub const SizeClass = u16;
+    pub const maximum_class_count: usize = 256;
 
     pub fn getSizeClass(_: *const @This(), size: SizeClass) SizeClass {
         return size >> 8;
@@ -57,12 +64,55 @@ const FsmSizePolicy = struct {
     }
 };
 
+const PersistentFsmState = fullaz.storage.fsm.models.paged.slab.State(
+    u32,
+    FsmSizePolicy,
+    .little,
+);
+const PersistentFsmStorageManager = struct {
+    const Self = @This();
+
+    pub const PageId = u32;
+    pub const Error = error{};
+    pub const StateLeaseType = struct {
+        pub const Error = error{};
+
+        value: *PersistentFsmState,
+
+        pub fn data(self: *const @This()) @This().Error![]const u8 {
+            return std.mem.asBytes(@as(*const PersistentFsmState, self.value));
+        }
+
+        pub fn dataMut(self: *@This()) @This().Error![]u8 {
+            return std.mem.asBytes(self.value);
+        }
+
+        pub fn finish(_: *@This()) void {}
+        pub fn deinit(_: *@This()) void {}
+    };
+
+    state_data: PersistentFsmState = .{},
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .value = &self.state_data };
+    }
+
+    pub fn destroyPage(_: *Self, _: PageId) Error!void {}
+};
+
 const NodeLocationAccessor = fullaz.spatial.orthtree.models.paged.NodePageLocationAccessor(u32, u16, .little);
-const PersistentFsmModel = fullaz.storage.fsm.models.paged.slab.Model(Cache, StorageManager, FsmSizePolicy, NodeLocationAccessor);
+const PersistentFsmModel = fullaz.storage.fsm.models.paged.slab.Model(
+    Cache,
+    PersistentFsmStorageManager,
+    FsmSizePolicy,
+    NodeLocationAccessor,
+);
 const PersistentFsm = fullaz.storage.fsm.Fsm(PersistentFsmModel);
 
 test "OrthTree paged model: storage manager contract uses NodeId roots" {
-    comptime model_interfaces.requiresPagedStorageManager(StorageManager, StorageManager.NodeId);
+    comptime model_interfaces.requiresPagedStorageManager(StorageManager, StorageManager.PageId);
+    try std.testing.expectEqual(@as(usize, 1), @alignOf(OrthtreeState));
+    try std.testing.expectEqual(@as(usize, 14), @sizeOf(OrthtreeState));
 }
 
 fn CountTrait(comptime CoordT: type, comptime dims: usize, comptime ValueT: type) type {
@@ -343,7 +393,7 @@ test "OrthTree paged model: removeIf updates traits and compacts entries" {
     try std.testing.expectEqual(@as(usize, 2), try tree.removeIf(bounds, Match.call, {}));
     try std.testing.expectEqual(@as(usize, 1), try model.getEntriesCount());
 
-    var root = try model.accessor().loadNode(storage_manager.root.?);
+    var root = try model.accessor().loadNode(storage_manager.root().?);
     defer model.accessor().deinitNode(&root);
     try std.testing.expectEqual(@as(u32, 1), root.trait().count.get());
 
@@ -397,12 +447,19 @@ test "OrthTree paged model: center-crossing entries span entry chunks" {
     try std.testing.expectEqual(@as(usize, 12), try model.getEntriesCount());
 
     const accessor = model.accessor();
-    var root = try accessor.loadNode(storage_manager.root.?);
+    var root = try accessor.loadNode(storage_manager.root().?);
     defer accessor.deinitNode(&root);
     try std.testing.expect(!root.isLeaf());
     try std.testing.expectEqual(@as(usize, 10), root.size());
-    const first_entry_page = (try root.getFirst()).?;
-    const last_entry_page = (try root.getLast()).?;
+    var entry_state_lease = try root.state();
+    defer entry_state_lease.deinit();
+    const EntryStateView = fullaz.core.storage_manager.StateAccessor(
+        @TypeOf(entry_state_lease),
+        @TypeOf(root).State,
+    );
+    const entry_state = try EntryStateView.view(&entry_state_lease);
+    const first_entry_page = entry_state.page_chain.first.get();
+    const last_entry_page = entry_state.page_chain.last.get();
     try std.testing.expect(first_entry_page != last_entry_page);
 
     var counter = Counter{};
@@ -464,7 +521,7 @@ test "OrthTree paged model: trait, entries, and root persist across cache reopen
         try std.testing.expectEqual(@as(usize, 2), try model.getEntriesCount());
 
         {
-            var root = try model.accessor().loadNode(storage_manager.root.?);
+            var root = try model.accessor().loadNode(storage_manager.root().?);
             defer model.accessor().deinitNode(&root);
             try std.testing.expectEqual(@as(u32, 2), root.trait().count.get());
         }
@@ -500,12 +557,18 @@ test "OrthTree paged model: paged FSM reopens and reuses partially filled node p
     var device = try Device.init(std.testing.allocator, 256);
     defer device.deinit();
     var storage_manager = StorageManager{};
+    var fsm_storage_manager = PersistentFsmStorageManager{};
     var spilled_page_id: u32 = undefined;
 
     {
         var cache = try Cache.init(&device, std.testing.allocator, 32);
         defer cache.deinit();
-        var fsm_model = PersistentFsmModel.init(&cache, &storage_manager, FsmSizePolicy{}, .{ .page_kind = 0x73 });
+        var fsm_model = PersistentFsmModel.init(
+            &cache,
+            &fsm_storage_manager,
+            FsmSizePolicy{},
+            .{ .page_kind = 0x73 },
+        );
         var fsm = PersistentFsm.init(&fsm_model);
         defer fsm.deinit();
         var model = try Model.init(&cache, &storage_manager, &fsm, settings);
@@ -533,7 +596,7 @@ test "OrthTree paged model: paged FSM reopens and reuses partially filled node p
         }
 
         {
-            var root_page = try cache.fetch(storage_manager.root.?.page_id);
+            var root_page = try cache.fetch(storage_manager.root().?.page_id);
             defer root_page.deinit();
             try std.testing.expect((try NodeLocationAccessor.read(try root_page.data())) != null);
         }
@@ -543,7 +606,12 @@ test "OrthTree paged model: paged FSM reopens and reuses partially filled node p
     {
         var cache = try Cache.init(&device, std.testing.allocator, 32);
         defer cache.deinit();
-        var fsm_model = PersistentFsmModel.init(&cache, &storage_manager, FsmSizePolicy{}, .{ .page_kind = 0x73 });
+        var fsm_model = PersistentFsmModel.init(
+            &cache,
+            &fsm_storage_manager,
+            FsmSizePolicy{},
+            .{ .page_kind = 0x73 },
+        );
         var fsm = PersistentFsm.init(&fsm_model);
         defer fsm.deinit();
         var model = try Model.init(&cache, &storage_manager, &fsm, settings);
@@ -592,7 +660,7 @@ test "OrthTree paged model: loader rejects a mismatched self pid without leaking
     var tree = Tree.init(&model);
     try tree.initRootBounds(Box.create(.{ 0, 0 }, .{ 100, 100 }));
 
-    const root_id = storage_manager.root.?;
+    const root_id = storage_manager.root().?;
     var page = try cache.fetch(root_id.page_id);
     defer page.deinit();
     var header_view = HeaderView.init(try page.dataMut());
@@ -630,7 +698,7 @@ test "OrthTree paged model: loader rejects incompatible node page metadata witho
     var tree = Tree.init(&model);
     try tree.initRootBounds(Box.create(.{ 0, 0 }, .{ 100, 100 }));
 
-    const root_id = storage_manager.root.?;
+    const root_id = storage_manager.root().?;
     var page = try cache.fetch(root_id.page_id);
     defer page.deinit();
     var node_page = PackedView.NodePage.init(try page.dataMut());
@@ -780,7 +848,7 @@ test "OrthTree paged model: three dimensional f32 insert, split, and reopen" {
         try std.testing.expect(probe.nodes > C.Tree.child_count);
         try std.testing.expect(probe.min_extent > 1.0);
 
-        var root = try model.accessor().loadNode(storage_manager.root.?);
+        var root = try model.accessor().loadNode(storage_manager.root().?);
         defer model.accessor().deinitNode(&root);
         try std.testing.expectEqual(count, root.trait().count.get());
 
@@ -807,7 +875,7 @@ test "OrthTree paged model: three dimensional f32 insert, split, and reopen" {
         try std.testing.expectEqual(@as(usize, count), counter.count);
         try std.testing.expectEqual(@as(usize, count), try model.getEntriesCount());
 
-        var root = try model.accessor().loadNode(storage_manager.root.?);
+        var root = try model.accessor().loadNode(storage_manager.root().?);
         defer model.accessor().deinitNode(&root);
         try std.testing.expectEqual(count, root.trait().count.get());
     }
@@ -822,7 +890,7 @@ const GrowthFixture = struct {
         return Box.create(.{ x, y }, .{ x, y });
     }
 
-    fn rootTraitCount(model: *Model, root_id: StorageManager.NodeId) !u32 {
+    fn rootTraitCount(model: *Model, root_id: Model.NodeId) !u32 {
         var root = try model.accessor().loadNode(root_id);
         defer model.accessor().deinitNode(&root);
         return root.trait().count.get();
@@ -904,7 +972,7 @@ test "OrthTree paged model: repeated root growth keeps the tree usable" {
     try std.testing.expectEqual(@as(usize, 2), try model.getEntriesCount());
     try std.testing.expectEqual(
         @as(u32, 2),
-        try F.rootTraitCount(&model, storage_manager.root.?),
+        try F.rootTraitCount(&model, storage_manager.root().?),
     );
 
     const bounds = (try tree.bounds()).?;

@@ -2375,7 +2375,7 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
             (try queue.get()).?.value,
             Hierarchy.typeIdentityByTag("queue"),
         );
-        child_root = state.root.get();
+        child_root = state.heap.root.get();
     }
 
     try database.startGarbageCollection();

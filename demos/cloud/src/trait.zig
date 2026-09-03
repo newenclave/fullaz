@@ -68,6 +68,8 @@ pub fn SplatTrait(comptime CoordT: type, comptime dims: usize, comptime ValueT: 
             accumulate(storage, box, -1);
         }
 
+        pub fn onUpdate(_: *Storage, _: Box, _: Value, _: Value) Error!void {}
+
         pub fn count(storage: *const Storage) u32 {
             return storage.count.get();
         }

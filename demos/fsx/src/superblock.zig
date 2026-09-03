@@ -11,13 +11,14 @@ const pid_none = constants.pid_none;
 const U16 = PackedInt(u16, E);
 const U32 = PackedInt(u32, E);
 const Pid = PackedInt(PageId, E);
+pub const FreeListState = fullaz.storage.free_list.State(PageId, E);
 
 pub const Header = extern struct {
     magic: U32,
     version: U16,
     block_size: U32,
     root_dir_root: Pid,
-    freed_head: Pid,
+    freed_head: FreeListState,
 };
 
 pub const Error = error{ BadMagic, BadVersion, BadBlockSize };
@@ -61,7 +62,7 @@ pub fn View(comptime read_only: bool) type {
             h.version.set(constants.version);
             h.block_size.set(block_size);
             h.root_dir_root.set(pid_none);
-            h.freed_head.set(pid_none);
+            h.freed_head = .{};
         }
 
         pub fn validate(self: *const Self, block_size: u32) Error!void {
@@ -89,10 +90,20 @@ pub fn View(comptime read_only: bool) type {
         }
 
         pub fn getFreedHead(self: *const Self) ?PageId {
-            return unwrap(self.header().freed_head.get());
+            return unwrap(self.header().freed_head.root.get());
         }
         pub fn setFreedHead(self: *Self, pid: ?PageId) void {
-            self.headerMut().freed_head.set(wrap(pid));
+            self.headerMut().freed_head.root.set(wrap(pid));
         }
     };
+}
+
+comptime {
+    if (@alignOf(Header) != 1 or
+        @sizeOf(FreeListState) != @sizeOf(Pid) or
+        @offsetOf(Header, "freed_head") != @sizeOf(U32) + @sizeOf(U16) + @sizeOf(U32) + @sizeOf(Pid) or
+        @sizeOf(Header) != @offsetOf(Header, "freed_head") + @sizeOf(Pid))
+    {
+        @compileError("fsx superblock header layout changed");
+    }
 }

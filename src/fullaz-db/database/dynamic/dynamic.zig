@@ -1,4 +1,5 @@
 const std = @import("std");
+const fullaz = @import("fullaz");
 const device_interfaces = @import("fullaz").device.interfaces;
 const page_cache = @import("fullaz").storage.page_cache;
 const memory_policy = @import("fullaz").storage.memory_policy;
@@ -8,6 +9,44 @@ const component = @import("../../component/component.zig");
 const component_fingerprint = @import("../../component/fingerprint.zig");
 const PageKindRange = component.PageKindRange;
 const file = @import("../../file/file.zig");
+
+fn DirectIndexManager(
+    comptime PageIdT: type,
+    comptime CacheT: type,
+    comptime StateT: type,
+) type {
+    return struct {
+        pub const PageId = PageIdT;
+        pub const Error = CacheT.Error;
+        pub const StateLeaseType = struct {
+            pub const Error = CacheT.Error;
+
+            value: *StateT,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return std.mem.asBytes(@as(*const StateT, self.value));
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return std.mem.asBytes(self.value);
+            }
+
+            pub fn finish(_: *@This()) void {}
+            pub fn deinit(_: *@This()) void {}
+        };
+
+        state_value: *StateT,
+        cache: *CacheT,
+
+        pub fn state(self: *@This()) Error!StateLeaseType {
+            return .{ .value = self.state_value };
+        }
+
+        pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
+            return self.cache.free(page_id);
+        }
+    };
+}
 
 /// A page-zero boot database with persistent, dynamically cataloged components.
 pub fn DynamicDatabase(comptime DeviceT: type) type {
@@ -32,6 +71,36 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
     );
 
     const DevicePageId = DeviceT.BlockId;
+    const FreeListState = fullaz.storage.free_list.State(DevicePageId, .little);
+    const RadixState = fullaz.radix_tree.models.paged.State(DevicePageId, .little);
+    const NameBptState = fullaz.bpt.models.paged.State(DevicePageId);
+    const GcState = fullaz.gc.models.paged.State(DevicePageId);
+    const CatalogState = fullaz.storage.slot_chain.State(
+        DevicePageId,
+        u64,
+        DevicePageId,
+        .little,
+    );
+    const RuntimeState = struct {
+        image_id: [16]u8,
+        page_size: u32,
+        page_id_bits: u16,
+        clean: bool,
+        feature_flags: u64,
+        page_count: u64,
+        free_list: FreeListState,
+        catalog: CatalogState,
+        live_component_count: u64,
+        id_radix: RadixState,
+        name_bpt: NameBptState,
+        next_component_id: u64,
+        next_component_page_kind: u16,
+        catalog_epoch: u64,
+        generation: u64,
+        gc_state: GcState,
+        gc_cycle_active: bool = false,
+        gc_cycle_generation: u64 = 0,
+    };
     const Log = LogDeviceT orelse void;
     const WalInitialization = enum {
         ready,
@@ -45,21 +114,29 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         const StoreSelf = @This();
 
         pub const PageId = DevicePageId;
-        pub const Error = error{PageIdTooLarge};
+        pub const Error = error{};
+        pub const StateLeaseType = struct {
+            pub const Error = error{};
+
+            value: *FreeListState,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return std.mem.asBytes(@as(*const FreeListState, self.value));
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return std.mem.asBytes(self.value);
+            }
+
+            pub fn finish(_: *@This()) void {}
+            pub fn deinit(_: *@This()) void {}
+        };
 
         device: *DeviceT,
-        state: *file.boot.State,
+        state_value: *FreeListState,
 
-        pub fn getRoot(self: *const StoreSelf) ?PageId {
-            const raw = self.state.free_root orelse return null;
-            return std.math.cast(PageId, raw) orelse unreachable;
-        }
-
-        pub fn setRoot(self: *StoreSelf, root: ?PageId) Error!void {
-            self.state.free_root = if (root) |page_id|
-                std.math.cast(u64, page_id) orelse return error.PageIdTooLarge
-            else
-                null;
+        pub fn state(self: *StoreSelf) Error!StateLeaseType {
+            return .{ .value = self.state_value };
         }
 
         pub fn pageCount(self: *const StoreSelf) usize {
@@ -72,22 +149,32 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
     };
     const Cache = page_cache.PersistentReclaimingCache(RawCache, ReclaimStore);
     const GcStore = struct {
+        const StoreSelf = @This();
+
         pub const PageId = DevicePageId;
         pub const Error = Cache.Error || error{PageIdTooLarge};
+        pub const StateLeaseType = struct {
+            pub const Error = StoreSelf.Error;
 
-        state: *file.boot.State,
+            value: *GcState,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return std.mem.asBytes(@as(*const GcState, self.value));
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return std.mem.asBytes(self.value);
+            }
+
+            pub fn finish(_: *@This()) void {}
+            pub fn deinit(_: *@This()) void {}
+        };
+
+        state_value: *GcState,
         cache: *Cache,
 
-        pub fn getRoot(self: *const @This()) ?PageId {
-            const root = self.state.gc_state_root orelse return null;
-            return std.math.cast(PageId, root) orelse unreachable;
-        }
-
-        pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
-            self.state.gc_state_root = if (root) |page_id|
-                std.math.cast(u64, page_id) orelse return error.PageIdTooLarge
-            else
-                null;
+        pub fn state(self: *StoreSelf) Error!StateLeaseType {
+            return .{ .value = self.state_value };
         }
 
         pub fn isReserved(_: *const @This(), page_id: PageId) bool {
@@ -113,106 +200,48 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
     const GcCollector = gc.Gc(GcModel);
 
     const CatalogManager = struct {
-        pub const PageId = DeviceT.BlockId;
-        pub const Size = u64;
-        pub const Error = Cache.Error;
+        const ManagerSelf = @This();
 
-        state: *file.boot.State,
-        cache: *Cache,
-
-        pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
-            return self.cache.free(page_id);
-        }
-
-        pub fn getTotalSize(self: *const @This()) Error!Size {
-            return self.state.catalog_record_count;
-        }
-
-        pub fn setTotalSize(self: *@This(), value: Size) Error!void {
-            self.state.catalog_record_count = value;
-        }
-
-        pub fn getFirst(self: *const @This()) Error!?PageId {
-            const raw = self.state.catalog_first orelse return null;
-            return std.math.cast(PageId, raw);
-        }
-
-        pub fn setFirst(self: *@This(), value: ?PageId) Error!void {
-            self.state.catalog_first = if (value) |page_id| @intCast(page_id) else null;
-        }
-
-        pub fn getLast(self: *const @This()) Error!?PageId {
-            const raw = self.state.catalog_last orelse return null;
-            return std.math.cast(PageId, raw);
-        }
-
-        pub fn setLast(self: *@This(), value: ?PageId) Error!void {
-            self.state.catalog_last = if (value) |page_id| @intCast(page_id) else null;
-        }
-    };
-
-    const IndexManager = struct {
         pub const PageId = DeviceT.BlockId;
         pub const Error = Cache.Error;
-
         pub const StateLeaseType = struct {
+            const LeaseSelf = @This();
+
             pub const Error = Cache.Error;
 
-            root: *?u64,
-            bytes: [@sizeOf(PageId)]u8,
+            value: *CatalogState,
 
-            pub fn data(self: *const @This()) @This().Error![]const u8 {
-                return &self.bytes;
+            pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                return std.mem.asBytes(@as(*const CatalogState, self.value));
             }
 
-            pub fn dataMut(self: *@This()) @This().Error![]u8 {
-                return &self.bytes;
+            pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                return std.mem.asBytes(self.value);
             }
 
-            pub fn finish(self: *@This()) void {
-                const page_id = std.mem.readInt(PageId, &self.bytes, .little);
-                self.root.* = if (page_id == std.math.maxInt(PageId)) null else @intCast(page_id);
-            }
+            pub fn finish(_: *LeaseSelf) void {}
 
-            pub fn deinit(_: *@This()) void {}
+            pub fn deinit(_: *LeaseSelf) void {}
         };
 
-        root: *?u64,
-        free_leaf_root: *?u64,
+        state_value: *CatalogState,
         cache: *Cache,
-
-        pub fn state(self: *@This()) Error!StateLeaseType {
-            var bytes: [@sizeOf(PageId)]u8 = undefined;
-            std.mem.writeInt(PageId, &bytes, self.getRoot() orelse std.math.maxInt(PageId), .little);
-            return .{ .root = self.root, .bytes = bytes };
-        }
-
-        pub fn getRoot(self: *const @This()) ?PageId {
-            const raw = self.root.* orelse return null;
-            return std.math.cast(PageId, raw);
-        }
-
-        pub fn setRoot(self: *@This(), value: ?PageId) Error!void {
-            self.root.* = if (value) |page_id| @intCast(page_id) else null;
-        }
-
-        pub fn getFreeLeafRoot(self: *const @This()) ?PageId {
-            const raw = self.free_leaf_root.* orelse return null;
-            return std.math.cast(PageId, raw);
-        }
-
-        pub fn setFreeLeafRoot(self: *@This(), value: ?PageId) Error!void {
-            self.free_leaf_root.* = if (value) |page_id| @intCast(page_id) else null;
-        }
 
         pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
             return self.cache.free(page_id);
         }
+
+        pub fn state(self: *ManagerSelf) Error!StateLeaseType {
+            return .{ .value = self.state_value };
+        }
     };
 
+    const RadixIndexManager = DirectIndexManager(DevicePageId, Cache, RadixState);
+    const NameIndexManager = DirectIndexManager(DevicePageId, Cache, NameBptState);
+
     const Catalog = file.CatalogStore(Cache, CatalogManager);
-    const CatalogIds = file.CatalogIdIndex(Cache, IndexManager);
-    const CatalogNames = file.CatalogNameIndex(Cache, IndexManager);
+    const CatalogIds = file.CatalogIdIndex(Cache, RadixIndexManager);
+    const CatalogNames = file.CatalogNameIndex(Cache, NameIndexManager);
 
     const ComponentBackend = struct {
         pub const PageId = DevicePageId;
@@ -239,20 +268,20 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         device: DeviceT,
         log: Log,
         raw_cache: RawCache,
-        state: file.boot.State,
+        state: RuntimeState,
         boot_payload: ?[]u8 = null,
         reclaim_store: ReclaimStore,
         cache: Cache,
         gc_store: GcStore,
         catalog_manager: CatalogManager,
-        catalog_id_manager: IndexManager,
-        catalog_name_manager: IndexManager,
+        catalog_id_manager: RadixIndexManager,
+        catalog_name_manager: NameIndexManager,
         catalog: Catalog,
         catalog_ids: CatalogIds,
         catalog_names: CatalogNames,
         transaction_active: bool = false,
         transaction_batch: Cache.WriteBatch = undefined,
-        state_snapshot: file.boot.State = undefined,
+        state_snapshot: RuntimeState = undefined,
     };
 
     return struct {
@@ -263,7 +292,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         pub const WalType = WalT;
         pub const RawCacheType = RawCache;
         pub const CacheType = Cache;
-        pub const State = file.boot.State;
+        pub const State = RuntimeState;
         pub const GcModelType = GcModel;
         pub const GcCollectorType = GcCollector;
 
@@ -352,7 +381,147 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             };
         }
 
-        fn initialState(device: *const DeviceT, options: InitOptions) Error!State {
+        fn radixRoot(state: *const RadixState) ?DevicePageId {
+            return if (state.root.isMax()) null else state.root.get();
+        }
+
+        fn nameRoot(state: *const NameBptState) ?DevicePageId {
+            return if (state.root.isMax()) null else state.root.get();
+        }
+
+        fn freeRoot(state: *const FreeListState) ?DevicePageId {
+            return if (state.root.isMax()) null else state.root.get();
+        }
+
+        fn catalogFirst(state: *const CatalogState) ?DevicePageId {
+            return if (state.page_chain.first.isMax()) null else state.page_chain.first.get();
+        }
+
+        fn catalogLast(state: *const CatalogState) ?DevicePageId {
+            return if (state.page_chain.last.isMax()) null else state.page_chain.last.get();
+        }
+
+        fn catalogRecordCount(state: *const CatalogState) u64 {
+            return state.total_size.get();
+        }
+
+        fn gcRoot(state: *const GcState) ?DevicePageId {
+            return if (state.state_page_root.isMax()) null else state.state_page_root.get();
+        }
+
+        fn runtimeState(state: file.boot.State) Error!RuntimeState {
+            var free_list: FreeListState = .{};
+            if (state.free_root) |root| {
+                free_list.root.set(
+                    std.math.cast(DevicePageId, root) orelse return error.PageIdTooLarge,
+                );
+            }
+            var catalog: CatalogState = .{};
+            if (state.catalog_first) |page_id| {
+                catalog.page_chain.first.set(
+                    std.math.cast(DevicePageId, page_id) orelse return error.PageIdTooLarge,
+                );
+            }
+            if (state.catalog_last) |page_id| {
+                catalog.page_chain.last.set(
+                    std.math.cast(DevicePageId, page_id) orelse return error.PageIdTooLarge,
+                );
+            }
+            catalog.total_size.set(state.catalog_record_count);
+            var id_radix: RadixState = .{};
+            if (state.id_radix_root) |root| {
+                id_radix.root.set(
+                    std.math.cast(DevicePageId, root) orelse return error.PageIdTooLarge,
+                );
+            }
+            if (state.id_radix_free_leaf_root) |root| {
+                id_radix.free_leaf_root.set(
+                    std.math.cast(DevicePageId, root) orelse return error.PageIdTooLarge,
+                );
+            }
+            var name_bpt: NameBptState = .{};
+            if (state.name_bpt_root) |root| {
+                name_bpt.root.set(
+                    std.math.cast(DevicePageId, root) orelse return error.PageIdTooLarge,
+                );
+            }
+            var gc_state: GcState = .{};
+            if (state.gc_state_root) |root| {
+                gc_state.state_page_root.set(
+                    std.math.cast(DevicePageId, root) orelse return error.PageIdTooLarge,
+                );
+            }
+            return .{
+                .image_id = state.image_id,
+                .page_size = state.page_size,
+                .page_id_bits = state.page_id_bits,
+                .clean = state.clean,
+                .feature_flags = state.feature_flags,
+                .page_count = state.page_count,
+                .free_list = free_list,
+                .catalog = catalog,
+                .live_component_count = state.live_component_count,
+                .id_radix = id_radix,
+                .name_bpt = name_bpt,
+                .next_component_id = state.next_component_id,
+                .next_component_page_kind = state.next_component_page_kind,
+                .catalog_epoch = state.catalog_epoch,
+                .generation = state.generation,
+                .gc_state = gc_state,
+                .gc_cycle_active = state.gc_cycle_active,
+                .gc_cycle_generation = state.gc_cycle_generation,
+            };
+        }
+
+        fn serializedState(state: RuntimeState) Error!file.boot.State {
+            return .{
+                .image_id = state.image_id,
+                .page_size = state.page_size,
+                .page_id_bits = state.page_id_bits,
+                .clean = state.clean,
+                .feature_flags = state.feature_flags,
+                .page_count = state.page_count,
+                .free_root = if (freeRoot(&state.free_list)) |root|
+                    std.math.cast(u64, root) orelse return error.PageIdTooLarge
+                else
+                    null,
+                .catalog_first = if (catalogFirst(&state.catalog)) |page_id|
+                    std.math.cast(u64, page_id) orelse return error.PageIdTooLarge
+                else
+                    null,
+                .catalog_last = if (catalogLast(&state.catalog)) |page_id|
+                    std.math.cast(u64, page_id) orelse return error.PageIdTooLarge
+                else
+                    null,
+                .catalog_record_count = catalogRecordCount(&state.catalog),
+                .live_component_count = state.live_component_count,
+                .id_radix_root = if (radixRoot(&state.id_radix)) |root|
+                    std.math.cast(u64, root) orelse return error.PageIdTooLarge
+                else
+                    null,
+                .id_radix_free_leaf_root = if (state.id_radix.free_leaf_root.isMax())
+                    null
+                else
+                    std.math.cast(u64, state.id_radix.free_leaf_root.get()) orelse
+                        return error.PageIdTooLarge,
+                .name_bpt_root = if (nameRoot(&state.name_bpt)) |root|
+                    std.math.cast(u64, root) orelse return error.PageIdTooLarge
+                else
+                    null,
+                .next_component_id = state.next_component_id,
+                .next_component_page_kind = state.next_component_page_kind,
+                .catalog_epoch = state.catalog_epoch,
+                .generation = state.generation,
+                .gc_state_root = if (gcRoot(&state.gc_state)) |root|
+                    std.math.cast(u64, root) orelse return error.PageIdTooLarge
+                else
+                    null,
+                .gc_cycle_active = state.gc_cycle_active,
+                .gc_cycle_generation = state.gc_cycle_generation,
+            };
+        }
+
+        fn initialState(device: *const DeviceT, options: InitOptions) Error!RuntimeState {
             return .{
                 .image_id = options.image_id,
                 .page_size = try pageSize(device),
@@ -360,19 +529,16 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 .clean = true,
                 .feature_flags = 0,
                 .page_count = device.blocksCount(),
-                .free_root = null,
-                .catalog_first = null,
-                .catalog_last = null,
-                .catalog_record_count = 0,
+                .free_list = .{},
+                .catalog = .{},
                 .live_component_count = 0,
-                .id_radix_root = null,
-                .id_radix_free_leaf_root = null,
-                .name_bpt_root = null,
+                .id_radix = .{},
+                .name_bpt = .{},
                 .next_component_id = 1,
                 .next_component_page_kind = file.system_kinds.first_component,
                 .catalog_epoch = 0,
                 .generation = 0,
-                .gc_state_root = null,
+                .gc_state = .{},
                 .gc_cycle_active = false,
                 .gc_cycle_generation = 0,
             };
@@ -435,21 +601,25 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
 
             core.state = state;
             core.boot_payload = null;
-            core.reclaim_store = .{ .device = &core.device, .state = &core.state };
+            core.reclaim_store = .{
+                .device = &core.device,
+                .state_value = &core.state.free_list,
+            };
             core.cache = Cache.init(&core.raw_cache, &core.reclaim_store);
             errdefer core.cache.deinit();
-            core.gc_store = .{ .state = &core.state, .cache = &core.cache };
+            core.gc_store = .{ .state_value = &core.state.gc_state, .cache = &core.cache };
 
-            core.catalog_manager = .{ .state = &core.state, .cache = &core.cache };
+            core.catalog_manager = .{
+                .state_value = &core.state.catalog,
+                .cache = &core.cache,
+            };
             core.catalog_id_manager = .{
-                .root = &core.state.id_radix_root,
-                .free_leaf_root = &core.state.id_radix_free_leaf_root,
+                .state_value = &core.state.id_radix,
                 .cache = &core.cache,
             };
 
             core.catalog_name_manager = .{
-                .root = &core.state.name_bpt_root,
-                .free_leaf_root = &core.state.id_radix_free_leaf_root,
+                .state_value = &core.state.name_bpt,
                 .cache = &core.cache,
             };
 
@@ -493,7 +663,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             try file.boot.format(
                 try page.dataMut(),
                 scratch,
-                core.state,
+                try serializedState(core.state),
                 core.boot_payload orelse &.{},
             );
             const view = try file.boot.read(try page.data(), .{
@@ -601,20 +771,13 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 return error.DirtyDatabase;
             }
 
-            core.state = view.state;
+            core.state = try runtimeState(view.state);
             core.boot_payload = try core.allocator.dupe(u8, view.payload);
-            core.catalog_manager.state = &core.state;
-            core.catalog_id_manager.root = &core.state.id_radix_root;
-            core.catalog_id_manager.free_leaf_root = &core.state.id_radix_free_leaf_root;
-            core.catalog_name_manager.root = &core.state.name_bpt_root;
-            core.catalog_name_manager.free_leaf_root = &core.state.id_radix_free_leaf_root;
+            core.catalog_manager.state_value = &core.state.catalog;
+            core.catalog_id_manager.state_value = &core.state.id_radix;
+            core.catalog_name_manager.state_value = &core.state.name_bpt;
 
-            if (core.state.free_root) |free_root| {
-                _ = std.math.cast(DevicePageId, free_root) orelse return error.BadFreeList;
-            }
-            if (core.state.gc_state_root) |gc_state_root| {
-                const page_id = std.math.cast(DevicePageId, gc_state_root) orelse
-                    return error.BadGcState;
+            if (gcRoot(&core.state.gc_state)) |page_id| {
                 if (@as(usize, @intCast(page_id)) >= core.device.blocksCount()) {
                     return error.BadGcState;
                 }
@@ -729,7 +892,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
 
             fn hasActiveDependent(self: *Transaction, component_id: u64) Error!bool {
                 const core = self.corePtr();
-                var iterator = try core.catalog.iterator(core.state.catalog_record_count);
+                var iterator = try core.catalog.iterator(catalogRecordCount(&core.state.catalog));
                 defer iterator.deinit();
                 while (try iterator.next()) |entry| {
                     const current_ref = (try core.catalog_ids.get(entry.record.component_id)) orelse {
@@ -1063,7 +1226,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
 
                 var active_count: u64 = 0;
                 {
-                    var iterator = try core.catalog.iterator(core.state.catalog_record_count);
+                    var iterator = try core.catalog.iterator(catalogRecordCount(&core.state.catalog));
                     defer iterator.deinit();
                     while (try iterator.next()) |entry| {
                         const current_ref = (try core.catalog_ids.get(entry.record.component_id)) orelse
@@ -1132,39 +1295,35 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 if (active_count != core.state.live_component_count) {
                     return error.CatalogIndexMismatch;
                 }
-                if (retained.items.len == core.state.catalog_record_count) {
+                const records_before = catalogRecordCount(&core.state.catalog);
+                if (retained.items.len == records_before) {
                     return .{
-                        .records_before = core.state.catalog_record_count,
-                        .records_retained = core.state.catalog_record_count,
+                        .records_before = records_before,
+                        .records_retained = records_before,
                         .historical_records_removed = 0,
                         .metadata_pages_reclaimed = 0,
                     };
                 }
                 const old_catalog_pages = try core.catalog.collectPageIds(
                     core.allocator,
-                    core.state.catalog_record_count,
+                    records_before,
                 );
                 defer core.allocator.free(old_catalog_pages);
 
                 var candidate_state = core.state;
-                candidate_state.catalog_first = null;
-                candidate_state.catalog_last = null;
-                candidate_state.catalog_record_count = 0;
-                candidate_state.id_radix_root = null;
-                candidate_state.id_radix_free_leaf_root = null;
-                candidate_state.name_bpt_root = null;
+                candidate_state.catalog = .{};
+                candidate_state.id_radix = .{};
+                candidate_state.name_bpt = .{};
                 var candidate_catalog_manager = CatalogManager{
-                    .state = &candidate_state,
+                    .state_value = &candidate_state.catalog,
                     .cache = &core.cache,
                 };
-                var candidate_id_manager = IndexManager{
-                    .root = &candidate_state.id_radix_root,
-                    .free_leaf_root = &candidate_state.id_radix_free_leaf_root,
+                var candidate_id_manager = RadixIndexManager{
+                    .state_value = &candidate_state.id_radix,
                     .cache = &core.cache,
                 };
-                var candidate_name_manager = IndexManager{
-                    .root = &candidate_state.name_bpt_root,
-                    .free_leaf_root = &candidate_state.id_radix_free_leaf_root,
+                var candidate_name_manager = NameIndexManager{
+                    .state_value = &candidate_state.name_bpt,
                     .cache = &core.cache,
                 };
                 var candidate_catalog = try Catalog.init(&core.cache, &candidate_catalog_manager);
@@ -1202,12 +1361,9 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                         return error.CatalogIndexMismatch;
                     }
                 }
-                core.state.catalog_first = candidate_state.catalog_first;
-                core.state.catalog_last = candidate_state.catalog_last;
-                core.state.catalog_record_count = candidate_state.catalog_record_count;
-                core.state.id_radix_root = candidate_state.id_radix_root;
-                core.state.id_radix_free_leaf_root = candidate_state.id_radix_free_leaf_root;
-                core.state.name_bpt_root = candidate_state.name_bpt_root;
+                core.state.catalog = candidate_state.catalog;
+                core.state.id_radix = candidate_state.id_radix;
+                core.state.name_bpt = candidate_state.name_bpt;
 
                 for (old_catalog_pages) |page_id| {
                     try core.cache.free(page_id);
@@ -1239,10 +1395,10 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 }
 
                 return .{
-                    .records_before = core.state_snapshot.catalog_record_count,
-                    .records_retained = candidate_state.catalog_record_count,
-                    .historical_records_removed = core.state_snapshot.catalog_record_count -
-                        candidate_state.catalog_record_count,
+                    .records_before = catalogRecordCount(&core.state_snapshot.catalog),
+                    .records_retained = catalogRecordCount(&candidate_state.catalog),
+                    .historical_records_removed = catalogRecordCount(&core.state_snapshot.catalog) -
+                        catalogRecordCount(&candidate_state.catalog),
                     .metadata_pages_reclaimed = metadata_pages_reclaimed,
                 };
             }
@@ -1426,7 +1582,10 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     return;
                 }
                 const core = self.corePtr();
-                self.store = .{ .state = &core.state, .cache = &core.cache };
+                self.store = .{
+                    .state_value = &core.state.gc_state,
+                    .cache = &core.cache,
+                };
                 self.model = try GcModel.init(core.allocator, &core.cache, &self.store);
                 self.collector_state = GcCollector.init(&self.model);
                 self.initialized = true;
@@ -1499,16 +1658,16 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 roots: *std.ArrayList(DevicePageId),
             ) SessionSelf.Error!void {
                 const core = self.corePtr();
-                inline for ([_]?u64{
-                    core.state.catalog_first,
-                    core.state.id_radix_root,
-                    core.state.name_bpt_root,
+                inline for ([_]?DevicePageId{
+                    catalogFirst(&core.state.catalog),
+                    radixRoot(&core.state.id_radix),
+                    nameRoot(&core.state.name_bpt),
                 }) |root| {
-                    if (root) |raw_root| {
-                        try roots.append(core.allocator, std.math.cast(DevicePageId, raw_root) orelse return error.PageIdTooLarge);
+                    if (root) |page_id| {
+                        try roots.append(core.allocator, page_id);
                     }
                 }
-                var iterator = try core.catalog.iterator(core.state.catalog_record_count);
+                var iterator = try core.catalog.iterator(catalogRecordCount(&core.state.catalog));
                 defer iterator.deinit();
                 while (try iterator.next()) |entry| {
                     if (entry.record.metadata_root_pid != 0) {
@@ -1656,7 +1815,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             const core = self.corePtr();
             var found = [_]bool{false} ** SchemaT.fields.len;
             var active_count: u64 = 0;
-            var iterator = try core.catalog.iterator(core.state.catalog_record_count);
+            var iterator = try core.catalog.iterator(catalogRecordCount(&core.state.catalog));
             defer iterator.deinit();
             while (try iterator.next()) |entry| {
                 const id_ref = (try core.catalog_ids.get(entry.record.component_id)) orelse

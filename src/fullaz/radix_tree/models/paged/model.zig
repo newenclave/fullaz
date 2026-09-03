@@ -9,6 +9,26 @@ const model_interfaces = @import("../interfaces.zig");
 const StructuralMutationCoordinator = core.structural_mutation.StructuralMutationCoordinator;
 const StructuralMutationError = core.structural_mutation.Error;
 
+/// Durable state required to reopen one paged Radix tree.
+pub fn State(comptime PageIdT: type, comptime endian: std.builtin.Endian) type {
+    const PackedPageId = core.packed_int.PackedInt(PageIdT, endian);
+    const StateImpl = extern struct {
+        root: PackedPageId = PackedPageId.init(PackedPageId.max),
+        free_leaf_root: PackedPageId = PackedPageId.init(PackedPageId.max),
+    };
+
+    comptime {
+        if (@alignOf(StateImpl) != 1 or
+            @offsetOf(StateImpl, "root") != 0 or
+            @offsetOf(StateImpl, "free_leaf_root") != @sizeOf(PackedPageId) or
+            @sizeOf(StateImpl) != 2 * @sizeOf(PackedPageId))
+        {
+            @compileError("RadixTree paged state layout changed");
+        }
+    }
+    return StateImpl;
+}
+
 const SettingsImpl = struct {
     leaf_page_kind: u16 = 0,
     inode_page_kind: u16 = 1,
@@ -18,10 +38,13 @@ const SettingsImpl = struct {
 
 pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime KeyT: type, comptime ValueSize: usize) type {
     comptime {
-        contracts.storage_manager.requiresStorageManager(StorageManagerT);
-        model_interfaces.assertFreeLeafStorageManager(StorageManagerT, PageCacheT.Pid);
+        contracts.storage_manager.assertPagedStorageManager(StorageManagerT, PageCacheT.Pid);
         contracts.page_cache.requiresPageCache(PageCacheT);
     }
+
+    const StateImpl = State(PageCacheT.Pid, .little);
+    const StateLeaseT = StorageManagerT.StateLeaseType;
+    const StateView = core.storage_manager.StateAccessor(StateLeaseT, StateImpl);
 
     const Context = struct {
         cache: *PageCacheT = undefined,
@@ -37,6 +60,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         errors.SpaceError ||
         errors.OrderError ||
         header.ValidationError ||
+        StateView.Error ||
         error{InvalidSettings} ||
         StructuralMutationError;
 
@@ -444,15 +468,11 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         }
 
         pub fn getRoot(self: *const Self) ErrorSet!?RawPageId {
-            const root_id = self.ctx.storage_mgr.getRoot();
-            if (root_id) |id| {
-                return id;
-            }
-            return null;
+            return self.getStateRoot("root");
         }
 
         pub fn setRoot(self: *Self, pid: ?RawPageId) ErrorSet!void {
-            try self.ctx.storage_mgr.setRoot(pid);
+            try self.setStateRoot("root", pid);
         }
 
         pub fn getRootLevel(self: *const Self) ErrorSet!?usize {
@@ -512,7 +532,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         }
 
         pub fn getFreeLeaf(self: *Self) Error!?LeafImpl {
-            const page_id = self.ctx.storage_mgr.getFreeLeafRoot() orelse return null;
+            const page_id = (try self.getStateRoot("free_leaf_root")) orelse return null;
             var leaf = try self.loadLeaf(page_id);
             errdefer self.deinitLeaf(&leaf);
             if (!try leaf.isInFree() or (try leaf.getPrevFreeLeaf()) != null) {
@@ -525,7 +545,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             if (try leaf.isInFree()) {
                 return;
             }
-            const old_root = self.ctx.storage_mgr.getFreeLeafRoot();
+            const old_root = try self.getStateRoot("free_leaf_root");
             var old_head: ?LeafImpl = null;
             defer if (old_head) |*head| {
                 self.deinitLeaf(head);
@@ -541,7 +561,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             if (old_head) |*head| {
                 try head.setPrevFreeLeaf(leaf.id());
             }
-            try self.ctx.storage_mgr.setFreeLeafRoot(leaf.id());
+            try self.setStateRoot("free_leaf_root", leaf.id());
         }
 
         pub fn removeFreeLeaf(self: *Self, page_id: RawPageId) Error!void {
@@ -553,7 +573,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
 
             const prev_id = try current.getPrevFreeLeaf();
             const next_id = try current.getNextFreeLeaf();
-            const root = self.ctx.storage_mgr.getFreeLeafRoot();
+            const root = try self.getStateRoot("free_leaf_root");
             if ((prev_id == null and root != page_id) or
                 (prev_id != null and root == page_id))
             {
@@ -589,7 +609,7 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             if (previous) |*leaf| {
                 try leaf.setNextFreeLeaf(next_id);
             } else {
-                try self.ctx.storage_mgr.setFreeLeafRoot(next_id);
+                try self.setStateRoot("free_leaf_root", next_id);
             }
             if (next) |*leaf| {
                 try leaf.setPrevFreeLeaf(prev_id);
@@ -676,6 +696,29 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             try self.ctx.storage_mgr.destroyPage(page_id);
         }
 
+        fn getStateRoot(
+            self: *const Self,
+            comptime field_name: []const u8,
+        ) ErrorSet!?RawPageId {
+            var lease = try self.ctx.storage_mgr.state();
+            defer lease.deinit();
+            const state = try StateView.view(&lease);
+            const page_id = @field(state, field_name).get();
+            return if (page_id == std.math.maxInt(RawPageId)) null else page_id;
+        }
+
+        fn setStateRoot(
+            self: *Self,
+            comptime field_name: []const u8,
+            page_id: ?RawPageId,
+        ) ErrorSet!void {
+            var lease = try self.ctx.storage_mgr.state();
+            defer lease.deinit();
+            const state = try StateView.viewMut(&lease);
+            @field(state, field_name).set(page_id orelse std.math.maxInt(RawPageId));
+            lease.finish();
+        }
+
         fn sliceAligned(buf: []u8, n: usize) Error![]KeyDigit {
             if (core.memory.sliceAligned(KeyDigit, buf, n)) |slice| {
                 return slice;
@@ -698,6 +741,8 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         pub const ValueOutType = ValueInType;
         pub const NodeIdType = RawPageId;
         pub const PageId = CachePageId;
+        pub const State = StateImpl;
+        pub const state_size = @sizeOf(StateImpl);
 
         pub const Error = ErrorSet;
 

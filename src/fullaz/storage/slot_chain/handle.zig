@@ -5,17 +5,25 @@ const errors = @import("../../core/errors.zig");
 const scanner = @import("scanner.zig");
 const structural_mutation = @import("../../core/core.zig").structural_mutation;
 const StructuralMutationCoordinator = structural_mutation.StructuralMutationCoordinator;
+const state_mod = @import("state.zig");
+const storage_manager_mod = @import("../../core/storage_manager.zig");
+const storage_manager_contract = @import("../../contracts/storage_manager.zig");
+const StateAccessor = storage_manager_mod.StateAccessor;
 
 pub const Settings = page_chain.Settings;
 
 pub fn Handle(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime SizeT: type,
+    comptime TailT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
     return HandleImpl(
         PageCacheT,
         StorageManagerT,
+        SizeT,
+        TailT,
         void,
         void,
         void,
@@ -27,6 +35,8 @@ pub fn Handle(
 pub fn HandleImpl(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime SizeT: type,
+    comptime TailT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime FsmT: type,
@@ -37,6 +47,8 @@ pub fn HandleImpl(
         return HandleForwardImpl(
             PageCacheT,
             StorageManagerT,
+            SizeT,
+            TailT,
             AdditionalT,
             SubheaderT,
             FsmT,
@@ -46,6 +58,8 @@ pub fn HandleImpl(
     return HandleBidirectionalImpl(
         PageCacheT,
         StorageManagerT,
+        SizeT,
+        TailT,
         AdditionalT,
         SubheaderT,
         FsmT,
@@ -56,6 +70,8 @@ pub fn HandleImpl(
 pub fn HandleBidirectionalImpl(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime SizeT: type,
+    comptime TailT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime FsmT: type,
@@ -64,6 +80,8 @@ pub fn HandleBidirectionalImpl(
     return HandleDirectionalImpl(
         PageCacheT,
         StorageManagerT,
+        SizeT,
+        TailT,
         AdditionalT,
         SubheaderT,
         FsmT,
@@ -75,6 +93,8 @@ pub fn HandleBidirectionalImpl(
 pub fn HandleForwardImpl(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime SizeT: type,
+    comptime TailT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime FsmT: type,
@@ -83,6 +103,8 @@ pub fn HandleForwardImpl(
     return HandleDirectionalImpl(
         PageCacheT,
         StorageManagerT,
+        SizeT,
+        TailT,
         AdditionalT,
         SubheaderT,
         FsmT,
@@ -94,6 +116,8 @@ pub fn HandleForwardImpl(
 fn HandleDirectionalImpl(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime SizeT: type,
+    comptime TailT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime FsmT: type,
@@ -101,14 +125,24 @@ fn HandleDirectionalImpl(
     comptime Endian: std.builtin.Endian,
 ) type {
     const FsmError = if (FsmT != void) FsmT.Error else error{};
-    const PosType = StorageManagerT.Size;
-    _ = PosType;
     const IndexT = u16;
     const CachePageId = PageCacheT.Pid;
-    const has_tail = @hasDecl(StorageManagerT, "getLast") and @hasDecl(
+    const State = state_mod.State(CachePageId, SizeT, TailT, Endian);
+    const StateView = StateAccessor(StorageManagerT.StateLeaseType, State);
+    const PageChainState = page_chain.State(CachePageId, TailT, Endian);
+    const PageChainManager = storage_manager_mod.PagedFieldStorageManager(
         StorageManagerT,
-        "setLast",
+        State,
+        "page_chain",
     );
+    const has_tail = TailT != void;
+
+    comptime {
+        storage_manager_contract.assertPagedStorageManager(StorageManagerT, CachePageId);
+        if (@FieldType(State, "page_chain") != PageChainState) {
+            @compileError("SlotChain state must contain its exact PageChain state");
+        }
+    }
 
     const ViewType = view.ViewImpl(
         CachePageId,
@@ -135,7 +169,8 @@ fn HandleDirectionalImpl(
 
     const PageChainHandle = page_chain.HandleImpl(
         PageCacheT,
-        StorageManagerT,
+        PageChainManager,
+        TailT,
         AdditionalT,
         SubheaderT,
         forward_only,
@@ -159,6 +194,8 @@ fn HandleDirectionalImpl(
 
     const Context = struct {
         page_chain: PageChainHandle = undefined,
+        page_chain_manager: PageChainManager = undefined,
+        storage_manager: *StorageManagerT = undefined,
         fsm: ?*FsmT = null,
         settings: Settings = .{},
         coordinator: StructuralMutationCoordinator = .{},
@@ -280,8 +317,15 @@ fn HandleDirectionalImpl(
                         }
                     }
                 }
-                const total = try self.manager.getTotalSize();
-                try self.manager.setTotalSize(total - 1);
+                var state_lease = try self.manager.state();
+                defer state_lease.deinit();
+                const state = try StateView.viewMut(&state_lease);
+                const total = state.total_size.get();
+                if (total == 0) {
+                    return Error.BadData;
+                }
+                state.total_size.set(total - 1);
+                state_lease.finish();
                 self.deinitPage();
                 if (page_empty) {
                     try self.removeEmptyPage();
@@ -831,6 +875,8 @@ fn HandleDirectionalImpl(
         const Self = @This();
         pub const PageId = CachePageId;
         pub const Index = IndexT;
+        pub const Size = SizeT;
+        pub const StateType = State;
         pub const View = ViewType;
         pub const Iterator = if (forward_only) ForwardIteratorImpl else BidirectionalIteratorImpl;
         pub const PendingRemoval = PendingRemovalImpl;
@@ -839,6 +885,7 @@ fn HandleDirectionalImpl(
             PageCacheT.Error ||
             ViewType.Error ||
             StorageManagerT.Error ||
+            StateView.Error ||
             FsmError ||
             structural_mutation.Error ||
             error{InvalidReference};
@@ -886,9 +933,10 @@ fn HandleDirectionalImpl(
         ) Error!Self {
             return .{
                 .ctx = .{
-                    .page_chain = try PageChainHandle.init(
+                    .page_chain_manager = PageChainManager.init(storage_manager),
+                    .storage_manager = storage_manager,
+                    .page_chain = try PageChainHandle.initUnbound(
                         page_cache,
-                        storage_manager,
                         .{
                             .chunk_page_kind = settings.chunk_page_kind,
                         },
@@ -906,9 +954,10 @@ fn HandleDirectionalImpl(
         ) Error!Self {
             return .{
                 .ctx = .{
-                    .page_chain = try PageChainHandle.init(
+                    .page_chain_manager = PageChainManager.init(storage_manager),
+                    .storage_manager = storage_manager,
+                    .page_chain = try PageChainHandle.initUnbound(
                         page_cache,
-                        storage_manager,
                         .{
                             .chunk_page_kind = settings.chunk_page_kind,
                         },
@@ -956,6 +1005,54 @@ fn HandleDirectionalImpl(
             };
         }
 
+        fn preparePageChain(self: *Self) void {
+            self.ctx.page_chain.rebindStorageManager(&self.ctx.page_chain_manager);
+        }
+
+        fn firstId(self: *const Self) Error!?PageId {
+            var lease = try self.ctx.storage_manager.state();
+            defer lease.deinit();
+            const first = (try StateView.view(&lease)).page_chain.first.get();
+            return if (first == std.math.maxInt(PageId)) null else first;
+        }
+
+        fn lastId(self: *const Self) Error!?PageId {
+            if (comptime !has_tail) {
+                @compileError("Root-only SlotChain state does not store a tail");
+            }
+            var lease = try self.ctx.storage_manager.state();
+            defer lease.deinit();
+            const last = (try StateView.view(&lease)).page_chain.last.get();
+            return if (last == std.math.maxInt(PageId)) null else last;
+        }
+
+        fn totalSize(self: *const Self) Error!Size {
+            var lease = try self.ctx.storage_manager.state();
+            defer lease.deinit();
+            return (try StateView.view(&lease)).total_size.get();
+        }
+
+        fn setTotalSize(self: *Self, total_size: Size) Error!void {
+            var lease = try self.ctx.storage_manager.state();
+            defer lease.deinit();
+            (try StateView.viewMut(&lease)).total_size.set(total_size);
+            lease.finish();
+        }
+
+        fn incrementTotalSize(self: *Self) Error!void {
+            const total = try self.totalSize();
+            try self.setTotalSize(std.math.add(Size, total, 1) catch return Error.BadData);
+        }
+
+        fn decrementTotalSize(self: *Self, removed_slots: usize) Error!void {
+            const removed = std.math.cast(Size, removed_slots) orelse return Error.BadData;
+            const total = try self.totalSize();
+            if (removed > total) {
+                return Error.BadData;
+            }
+            try self.setTotalSize(total - removed);
+        }
+
         fn finishPageRemoval(
             self: *Self,
             page_id: PageId,
@@ -967,11 +1064,7 @@ fn HandleDirectionalImpl(
                 return;
             }
 
-            const total = try self.ctx.page_chain.manager().getTotalSize();
-            if (removed_slots > @as(usize, @intCast(total))) {
-                return Error.BadData;
-            }
-            try self.ctx.page_chain.managerMut().setTotalSize(total - @as(@TypeOf(total), @intCast(removed_slots)));
+            try self.decrementTotalSize(removed_slots);
 
             if (comptime FsmT != void) {
                 if (self.ctx.fsm) |fsm| {
@@ -995,6 +1088,7 @@ fn HandleDirectionalImpl(
         }
 
         fn removePage(self: *Self, page_id: PageId) Error!void {
+            self.preparePageChain();
             var chain_iterator = try self.ctx.page_chain.iterator();
             while (true) {
                 const page = (try chain_iterator.get()) orelse {
@@ -1032,8 +1126,7 @@ fn HandleDirectionalImpl(
                 }
 
                 _ = try sd.insert(val);
-                const total = try self.ctx.page_chain.manager().getTotalSize();
-                try self.ctx.page_chain.managerMut().setTotalSize(total + 1);
+                try self.incrementTotalSize();
                 try self.updatePageInFsm(page_id, sd.availableSpace());
             } else {
                 _ = try self.appendRefInner(val);
@@ -1053,9 +1146,9 @@ fn HandleDirectionalImpl(
         }
 
         fn appendRefInner(self: *Self, val: ValueIn) Error!SlotRef {
+            self.preparePageChain();
             try self.hydrateLastChunk();
             if (self.last_chunk) |*last_c| {
-                const total = try self.ctx.page_chain.manager().getTotalSize();
                 var sd = try last_c.slotsDirMut();
                 switch (try sd.canInsert(val.len)) {
                     .need_compact => {
@@ -1070,7 +1163,7 @@ fn HandleDirectionalImpl(
                         const slot_id: Index = @intCast(try next_sd.insert(val));
 
                         try self.ctx.page_chain.insertLast(&next.ph);
-                        try self.ctx.page_chain.managerMut().setTotalSize(total + 1);
+                        try self.incrementTotalSize();
 
                         last_c.deinit();
                         self.last_chunk = next;
@@ -1081,7 +1174,7 @@ fn HandleDirectionalImpl(
                 }
 
                 const slot_id: Index = @intCast(try sd.insert(val));
-                try self.ctx.page_chain.managerMut().setTotalSize(total + 1);
+                try self.incrementTotalSize();
                 try self.updatePageInFsm(try last_c.id(), sd.availableSpace());
                 return .{
                     .page_id = try self.last_chunk.?.id(),
@@ -1096,7 +1189,7 @@ fn HandleDirectionalImpl(
                 const slot_id: Index = @intCast(try sd.insert(val));
 
                 try self.ctx.page_chain.insertFirst(&page.ph);
-                try self.ctx.page_chain.managerMut().setTotalSize(1);
+                try self.setTotalSize(1);
                 try self.updatePageInFsm(page_id, sd.availableSpace());
                 self.last_chunk = page;
                 return .{ .page_id = page_id, .slot_id = slot_id };
@@ -1136,7 +1229,7 @@ fn HandleDirectionalImpl(
                 return;
             }
             if (comptime has_tail) {
-                const last_id = (try self.ctx.page_chain.manager().getLast()) orelse return;
+                const last_id = (try self.lastId()) orelse return;
                 self.last_chunk = try self.loadPage(last_id);
                 return;
             }
@@ -1157,7 +1250,7 @@ fn HandleDirectionalImpl(
         }
 
         pub fn size(self: *const Self) Error!usize {
-            return @intCast(try self.ctx.page_chain.manager().getTotalSize());
+            return @intCast(try self.totalSize());
         }
 
         /// Releases the optional append cache before external page reclamation.
@@ -1169,14 +1262,17 @@ fn HandleDirectionalImpl(
         }
 
         pub fn iterator(self: *Self) Error!?Iterator {
-            if (try self.ctx.page_chain.manager().getFirst() == null) return null;
+            self.preparePageChain();
+            if (try self.firstId() == null) {
+                return null;
+            }
             return Iterator.init(
                 try self.ctx.page_chain.iterator(),
                 .before_first,
                 &self.ctx.page_chain,
                 &self.last_chunk,
                 self.ctx.fsm,
-                self.ctx.page_chain.managerMut(),
+                self.ctx.storage_manager,
                 &self.ctx.coordinator,
             );
         }
@@ -1185,7 +1281,8 @@ fn HandleDirectionalImpl(
             if (comptime forward_only) {
                 @compileError("Forward-only slot chains do not support reverse iteration");
             }
-            if (try self.ctx.page_chain.manager().getFirst() == null) {
+            self.preparePageChain();
+            if (try self.firstId() == null) {
                 return null;
             }
             var page_itr = try self.ctx.page_chain.iteratorFromEnd();
@@ -1196,7 +1293,7 @@ fn HandleDirectionalImpl(
                 &self.ctx.page_chain,
                 &self.last_chunk,
                 self.ctx.fsm,
-                self.ctx.page_chain.managerMut(),
+                self.ctx.storage_manager,
                 &self.ctx.coordinator,
             );
         }
@@ -1223,6 +1320,7 @@ fn HandleDirectionalImpl(
         pub fn removeTombstones(self: *Self) Error!usize {
             var mutation = try self.ctx.coordinator.beginStructuralMutation();
             defer mutation.deinit();
+            self.preparePageChain();
             var chain_iterator = try self.ctx.page_chain.iterator();
             defer chain_iterator.deinit();
 
@@ -1265,6 +1363,7 @@ fn HandleDirectionalImpl(
         pub fn removeIf(self: *Self, context: anytype, comptime predicate: anytype) Error!usize {
             var mutation = try self.ctx.coordinator.beginStructuralMutation();
             defer mutation.deinit();
+            self.preparePageChain();
             const PredicateContext = struct {
                 const CallbackContext = @TypeOf(context);
 
@@ -1316,9 +1415,10 @@ fn HandleDirectionalImpl(
 
         /// Rebinds a pending removal to this handle's chain state and manager.
         pub fn rebindPendingRemoval(self: *Self, pending: *PendingRemoval) void {
+            self.preparePageChain();
             pending.page_chain = &self.ctx.page_chain;
             pending.last_chunk = &self.last_chunk;
-            pending.manager = self.ctx.page_chain.managerMut();
+            pending.manager = self.ctx.storage_manager;
             pending.coordinator = &self.ctx.coordinator;
         }
 

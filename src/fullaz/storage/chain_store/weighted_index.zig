@@ -1,7 +1,9 @@
 const std = @import("std");
 const errors = @import("../../core/errors.zig");
+const storage_manager = @import("../../core/storage_manager.zig");
 const wbpt = @import("../../weighted_bpt/weighted_bpt.zig");
 const index_entry = @import("index_entry.zig");
+const chain_state = @import("state.zig");
 
 pub const scanLeafRefs = @import("weighted_scanner.zig").scanLeafRefs;
 pub const scanInodeRefs = @import("weighted_scanner.zig").scanInodeRefs;
@@ -99,68 +101,28 @@ pub fn WeightedIndex(
     const EntrySizeT = SizeT;
     const Policy = IndexValuePolicy(CachePageId, EntrySizeT, Endian);
     const Entry = IndexEntry(CachePageId, EntrySizeT, Endian);
-
-    const IdxMgr = struct {
-        const Self = @This();
-        pub const Error = StorageManagerT.Error;
-        pub const PageId = CachePageId;
-
-        pub const StateLeaseType = struct {
-            const LeaseSelf = @This();
-
-            pub const Error = StorageManagerT.Error;
-
-            sm: *StorageManagerT,
-            bytes: [@sizeOf(CachePageId)]u8,
-
-            pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
-                return &self.bytes;
-            }
-
-            pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
-                return &self.bytes;
-            }
-
-            pub fn finish(self: *LeaseSelf) void {
-                const encoded_root = std.mem.readInt(CachePageId, &self.bytes, .little);
-                const root = if (encoded_root == std.math.maxInt(CachePageId))
-                    null
-                else
-                    encoded_root;
-                self.sm.setIndexRoot(root) catch unreachable;
-            }
-
-            pub fn deinit(_: *LeaseSelf) void {}
-        };
-
-        sm: *StorageManagerT,
-
-        pub fn state(self: *Self) Error!StateLeaseType {
-            var lease: StateLeaseType = .{
-                .sm = self.sm,
-                .bytes = undefined,
-            };
-            std.mem.writeInt(
-                CachePageId,
-                &lease.bytes,
-                self.sm.getIndexRoot() orelse std.math.maxInt(CachePageId),
-                .little,
-            );
-            return lease;
-        }
-
-        pub fn getRoot(self: *const Self) ?PageId {
-            return self.sm.getIndexRoot();
-        }
-        pub fn setRoot(self: *Self, root: ?PageId) Error!void {
-            return self.sm.setIndexRoot(root);
-        }
-        pub fn destroyPage(self: *Self, id: PageId) Error!void {
-            return self.sm.destroyPage(id);
-        }
-    };
-
-    const Model = wbpt.models.paged.PagedModel(PageCacheT, IdxMgr, SizeT, Policy);
+    const WeightedStateT = chain_state.WeightedState(CachePageId, SizeT, Endian);
+    const ChainStateT = chain_state.State(CachePageId, SizeT, Endian);
+    const ChainStateManager = storage_manager.PagedFieldStorageManager(
+        StorageManagerT,
+        WeightedStateT,
+        "chain",
+    );
+    const IndexStateManager = storage_manager.PagedFieldStorageManager(
+        StorageManagerT,
+        WeightedStateT,
+        "index",
+    );
+    const ChainStateView = storage_manager.StateAccessor(
+        ChainStateManager.StateLeaseType,
+        ChainStateT,
+    );
+    const Model = wbpt.models.paged.PagedModel(
+        PageCacheT,
+        IndexStateManager,
+        SizeT,
+        Policy,
+    );
     const ModelSettings = wbpt.models.paged.Settings;
     const Tree = wbpt.WeightedBpt(Model);
 
@@ -192,9 +154,7 @@ pub fn WeightedIndex(
         pub fn deinit(_: *Self) void {}
 
         pub fn locate(self: *const Self, offset: Size) Error!?LocatedRes {
-            var idx_mgr = IdxMgr{
-                .sm = self.sm,
-            };
+            var idx_mgr = IndexStateManager.init(self.sm);
             var model = Model.init(self.cache, &idx_mgr, self.settings);
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
@@ -210,14 +170,12 @@ pub fn WeightedIndex(
                 };
             }
             // Active tail chunk: not in the tree; it starts at the sealed total.
-            const last = (try self.sm.getLast()) orelse return null;
-            return LocatedRes{ .page_id = last, .chunk_start = sealed_total };
+            const tail_page_id = (try self.getLast()) orelse return null;
+            return LocatedRes{ .page_id = tail_page_id, .chunk_start = sealed_total };
         }
 
         pub fn onSeal(self: *Self, page_id: PageId, size: Size) Error!void {
-            var idx_mgr = IdxMgr{
-                .sm = self.sm,
-            };
+            var idx_mgr = IndexStateManager.init(self.sm);
             var model = Model.init(self.cache, &idx_mgr, self.settings);
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
@@ -231,9 +189,7 @@ pub fn WeightedIndex(
         }
 
         pub fn onUnseal(self: *Self) Error!void {
-            var idx_mgr = IdxMgr{
-                .sm = self.sm,
-            };
+            var idx_mgr = IndexStateManager.init(self.sm);
             var model = Model.init(self.cache, &idx_mgr, self.settings);
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
@@ -244,15 +200,22 @@ pub fn WeightedIndex(
         }
 
         pub fn clear(self: *Self) Error!void {
-            var idx_mgr = IdxMgr{
-                .sm = self.sm,
-            };
+            var idx_mgr = IndexStateManager.init(self.sm);
             var model = Model.init(self.cache, &idx_mgr, self.settings);
             var tree = Tree.init(&model, .neighbor_share);
             defer tree.deinit();
             while (try tree.totalWeight() > 0) {
                 try tree.removeEntry(0);
             }
+        }
+
+        fn getLast(self: *const Self) Error!?PageId {
+            var chain_manager = ChainStateManager.init(self.sm);
+            var lease = try chain_manager.state();
+            defer lease.deinit();
+            const state = try ChainStateView.view(&lease);
+            const page_id = state.last.get();
+            return if (page_id == std.math.maxInt(PageId)) null else page_id;
         }
     };
 }

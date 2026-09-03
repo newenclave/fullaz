@@ -5,24 +5,38 @@ const devices = @import("fullaz").device;
 const printer = @import("test_printer");
 
 const NoneStorageManager = struct {
-    pub const Self = @This();
+    const Self = @This();
     pub const PageId = u32;
     pub const Error = error{};
-    root_block_id: ?u32 = null,
+    const State = long_store.State(PageId);
 
-    pub fn getRoot(self: *const @This()) ?u32 {
-        return self.root_block_id;
+    pub const StateLeaseType = struct {
+        const LeaseSelf = @This();
+
+        pub const Error = Self.Error;
+
+        manager: *Self,
+
+        pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+            return std.mem.asBytes(&self.manager.state_data);
+        }
+
+        pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+            return std.mem.asBytes(&self.manager.state_data);
+        }
+
+        pub fn finish(_: *LeaseSelf) void {}
+
+        pub fn deinit(_: *LeaseSelf) void {}
+    };
+
+    state_data: State = .{},
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .manager = self };
     }
 
-    pub fn setRoot(self: *@This(), root: ?u32) Error!void {
-        self.root_block_id = root;
-        // Persist to disk header, etc.
-    }
-
-    pub fn destroyPage(_: *@This(), id: PageId) Error!void {
-        _ = id;
-        // Implement page destruction logic, e.g., add to free list
-    }
+    pub fn destroyPage(_: *Self, _: PageId) Error!void {}
 };
 
 test "LongStore Create a header view" {

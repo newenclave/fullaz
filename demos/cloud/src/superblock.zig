@@ -14,6 +14,7 @@ const U32 = PackedInt(u32, E);
 const U64 = PackedInt(u64, E);
 const Pid = PackedInt(PageId, E);
 const F64 = PackedFloat(f64, E);
+pub const FreeListState = fullaz.storage.free_list.State(PageId, E);
 
 pub const NodeId = fullaz.spatial.orthtree.models.paged.NodeId(PageId, u16);
 
@@ -35,7 +36,7 @@ pub const Header = extern struct {
     // Persist the wider one so a browser-exported image opens natively.
     entries_count: U64,
     fsm_class_root: Pid,
-    free_page_root: Pid,
+    free_page_root: FreeListState,
     free_page_count: U64,
     reused_page_count: U64,
 
@@ -95,7 +96,7 @@ pub fn View(comptime read_only: bool) type {
             h.root_slot.set(0);
             h.entries_count.set(0);
             h.fsm_class_root.set(pid_none);
-            h.free_page_root.set(pid_none);
+            h.free_page_root = .{};
             h.free_page_count.set(0);
             h.reused_page_count.set(0);
             h.world_seed.set(seed);
@@ -154,11 +155,11 @@ pub fn View(comptime read_only: bool) type {
         }
 
         pub fn getFreePageRoot(self: *const Self) ?PageId {
-            return unwrapPid(self.header().free_page_root.get());
+            return unwrapPid(self.header().free_page_root.root.get());
         }
 
         pub fn setFreePageRoot(self: *Self, pid: ?PageId) void {
-            self.headerMut().free_page_root.set(wrapPid(pid));
+            self.headerMut().free_page_root.root.set(wrapPid(pid));
         }
 
         pub fn getFreePageCount(self: *const Self) usize {
@@ -228,7 +229,7 @@ pub fn View(comptime read_only: bool) type {
 }
 
 comptime {
-    if (@alignOf(Header) != 1) {
+    if (@alignOf(Header) != 1 or @sizeOf(FreeListState) != @sizeOf(Pid)) {
         @compileError("superblock header must be byte aligned");
     }
     if (@sizeOf(Header) > constants.block_size) {

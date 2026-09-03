@@ -1,6 +1,7 @@
 const std = @import("std");
 const fullaz = @import("fullaz");
 const dev = fullaz.device;
+const PagedVpmState = fullaz.storage.virtual_page_map.State(u32, u32);
 
 fn TestTypes(comptime VirtualPageIdT: type) type {
     const Device = fullaz.device.MemoryBlock(u32);
@@ -60,11 +61,11 @@ fn PagedStateManager(comptime CacheT: type) type {
             manager: *Self,
 
             pub fn data(self: *const @This()) LeaseError![]const u8 {
-                return self.handle.data();
+                return (try self.handle.data())[0..@sizeOf(PagedVpmState)];
             }
 
             pub fn dataMut(self: *@This()) LeaseError![]u8 {
-                return self.handle.dataMut();
+                return (try self.handle.dataMut())[0..@sizeOf(PagedVpmState)];
             }
 
             pub fn finish(_: *@This()) void {}

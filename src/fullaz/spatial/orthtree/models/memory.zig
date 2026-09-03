@@ -549,7 +549,7 @@ pub fn MemoryImpl(
             self.nodes.deinit(self.ctx.allocator);
         }
 
-        pub fn getRoot(self: *const Self) ?IdType {
+        pub fn getRoot(self: *const Self) ErrorSet!?IdType {
             return self.root_id;
         }
 

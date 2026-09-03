@@ -8,6 +8,7 @@ const superblock = @import("superblock.zig");
 // the slab anyway. One class means one persisted root, four bytes.
 pub const NodeSizePolicy = struct {
     pub const SizeClass = u16;
+    pub const maximum_class_count: usize = 1;
 
     pub fn getSizeClass(_: *const @This(), _: SizeClass) SizeClass {
         return 0;
@@ -29,86 +30,86 @@ pub fn Manager(comptime PageCacheType: type) type {
         const Self = @This();
 
         pub const PageId = PageCacheType.Pid;
-        pub const NodeId = superblock.NodeId;
         pub const Error = PageCacheType.Error;
+        pub const TreeState = fullaz.spatial.orthtree.models.paged.State(
+            PageId,
+            constants.endian,
+        );
+        pub const FsmState = fullaz.storage.fsm.models.paged.slab.State(
+            PageId,
+            NodeSizePolicy,
+            constants.endian,
+        );
+        pub const State = extern struct {
+            tree: TreeState = .{},
+            fsm: FsmState = .{},
+        };
+        comptime {
+            const state_offset = @offsetOf(superblock.Header, "root_page");
+            const state_end = @offsetOf(superblock.Header, "fsm_class_root") +
+                @sizeOf(@FieldType(superblock.Header, "fsm_class_root"));
+            if (@alignOf(State) != 1 or
+                @offsetOf(State, "tree") != 0 or
+                @offsetOf(State, "fsm") != @sizeOf(TreeState) or
+                @sizeOf(State) != state_end - state_offset)
+            {
+                @compileError("cloud index state must exactly match its superblock fields");
+            }
+        }
+        pub const StateLeaseType = struct {
+            pub const Error = PageCacheType.Error;
 
-        pub const State = struct {
-            root: ?NodeId = null,
-            entries_count: usize = 0,
-            fsm_class_root: ?PageId = null,
-            free_page_root: ?PageId = null,
-            free_page_count: usize = 0,
-            reused_page_count: usize = 0,
+            handle: PageCacheType.Handle,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                const bytes = try self.handle.data();
+                const offset = @offsetOf(superblock.Header, "root_page");
+                return bytes[offset .. offset + @sizeOf(State)];
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                const bytes = try self.handle.dataMut();
+                const offset = @offsetOf(superblock.Header, "root_page");
+                return bytes[offset .. offset + @sizeOf(State)];
+            }
+
+            pub fn finish(_: *@This()) void {}
+
+            pub fn deinit(self: *@This()) void {
+                self.handle.deinit();
+            }
         };
 
         cache: *PageCacheType,
-        root: ?NodeId,
-        entries_count: usize,
-        fsm_class_root: ?PageId,
 
-        pub fn init(cache: *PageCacheType, state: State) Self {
-            return .{
-                .cache = cache,
-                .root = state.root,
-                .entries_count = state.entries_count,
-                .fsm_class_root = state.fsm_class_root,
-            };
+        pub fn init(cache: *PageCacheType) Self {
+            return .{ .cache = cache };
         }
 
-        pub fn getRoot(self: *const Self) ?NodeId {
-            return self.root;
-        }
-
-        pub fn setRoot(self: *Self, root: ?NodeId) Error!void {
-            self.root = root;
-            var view = try self.superblockMut();
-            defer view.handle.deinit();
-            view.sb.setRoot(root);
-        }
-
-        pub fn getEntriesCount(self: *const Self) Error!usize {
-            return self.entries_count;
-        }
-
-        pub fn setEntriesCount(self: *Self, count: usize) Error!void {
-            self.entries_count = count;
-            var view = try self.superblockMut();
-            defer view.handle.deinit();
-            view.sb.setEntriesCount(count);
-        }
-
-        pub fn getSizeClassRoot(self: *const Self, _: NodeSizePolicy.SizeClass) Error!?PageId {
-            return self.fsm_class_root;
-        }
-
-        pub fn setSizeClassRoot(
-            self: *Self,
-            _: NodeSizePolicy.SizeClass,
-            root: ?PageId,
-        ) Error!void {
-            self.fsm_class_root = root;
-            var view = try self.superblockMut();
-            defer view.handle.deinit();
-            view.sb.setFsmClassRoot(root);
+        pub fn state(self: *Self) Error!StateLeaseType {
+            return .{ .handle = try self.cache.fetch(constants.superblock_pid) };
         }
 
         pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
             try self.cache.free(page_id);
         }
-
-        const MutableSuperblock = struct {
-            handle: PageCacheType.Handle,
-            sb: superblock.View(false),
-        };
-
-        // dataMut already marks the frame dirty, so there is no flush here:
-        // setEntriesCount fires on every single insert and flushing would mean
-        // one device write per point. Cloud.save owns the flush.
-        fn superblockMut(self: *Self) Error!MutableSuperblock {
-            var handle = try self.cache.fetch(constants.superblock_pid);
-            errdefer handle.deinit();
-            const bytes = try handle.dataMut();
-            return .{ .handle = handle, .sb = superblock.View(false).init(bytes) };
-        }
     };
+}
+
+pub fn TreeManager(comptime PageCacheType: type) type {
+    const ParentManager = Manager(PageCacheType);
+    return fullaz.core.storage_manager.PagedFieldStorageManager(
+        ParentManager,
+        ParentManager.State,
+        "tree",
+    );
+}
+
+pub fn FsmManager(comptime PageCacheType: type) type {
+    const ParentManager = Manager(PageCacheType);
+    return fullaz.core.storage_manager.PagedFieldStorageManager(
+        ParentManager,
+        ParentManager.State,
+        "fsm",
+    );
 }

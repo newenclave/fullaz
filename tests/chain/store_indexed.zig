@@ -15,23 +15,35 @@ const IndexSM = struct {
     pub const Error = error{};
     pub const PageId = u32;
     pub const Size = u64;
+    const State = fullaz.storage.chain_store.WeightedState(PageId, Size, .little);
 
-    index_root: ?u32 = null,
-    last: ?u32 = null,
+    state_data: State = .{},
 
-    pub fn getIndexRoot(self: *const Self) ?u32 {
-        return self.index_root;
+    pub const StateLeaseType = struct {
+        const LeaseSelf = @This();
+
+        pub const Error = IndexSM.Error;
+
+        manager: *IndexSM,
+
+        pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+            return std.mem.asBytes(&self.manager.state_data);
+        }
+
+        pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+            return std.mem.asBytes(&self.manager.state_data);
+        }
+
+        pub fn finish(_: *LeaseSelf) void {}
+
+        pub fn deinit(_: *LeaseSelf) void {}
+    };
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .manager = self };
     }
-    pub fn setIndexRoot(self: *Self, root: ?u32) Error!void {
-        self.index_root = root;
-    }
-    pub fn getLast(self: *const Self) Error!?u32 {
-        return self.last;
-    }
-    pub fn destroyPage(self: *Self, id: PageId) Error!void {
-        _ = self;
-        _ = id;
-    }
+
+    pub fn destroyPage(_: *Self, _: PageId) Error!void {}
 };
 
 const NoneStorageManager = struct {
@@ -166,11 +178,11 @@ test "chain WeightedIndex: seal/unseal + derived-tail locate" {
 
     // No chunks at all -> nothing to locate, root slot untouched.
     try std.testing.expect((try idx.locate(0)) == null);
-    try std.testing.expect(sm.getIndexRoot() == null);
+    try std.testing.expect(sm.state_data.index.root.isMax());
 
     // Chain has one active chunk (102) but nothing sealed yet: every offset maps
     // to the derived tail chunk, starting at 0.
-    sm.last = 102;
+    sm.state_data.chain.last.set(102);
     {
         const loc = (try idx.locate(0)).?;
         try std.testing.expectEqual(@as(u32, 102), loc.page_id);
@@ -182,7 +194,7 @@ test "chain WeightedIndex: seal/unseal + derived-tail locate" {
     try idx.onSeal(100, 1000); // sealed [0, 1000)
     try idx.onSeal(101, 500); // sealed [1000, 1500)
     // Sealing created the tree, so the root now persists in the SM.
-    try std.testing.expect(sm.getIndexRoot() != null);
+    try std.testing.expect(!sm.state_data.index.root.isMax());
 
     // Sealed offsets resolve via the tree; offsets >= 1500 fall in the derived
     // tail (102), whose start is exactly the sealed total (1500).
@@ -204,7 +216,7 @@ test "chain WeightedIndex: seal/unseal + derived-tail locate" {
     // Unseal the last sealed chunk (101 becomes the active tail again, mirroring
     // a popChunk). Now only 100 is sealed; 101 is the derived tail at 1000.
     try idx.onUnseal();
-    sm.last = 101;
+    sm.state_data.chain.last.set(101);
     {
         const loc = (try idx.locate(1000)).?;
         try std.testing.expectEqual(@as(u32, 101), loc.page_id);
@@ -231,10 +243,9 @@ const FullSM = struct {
     pub const PageId = u32;
     pub const Size = u32;
     pub const Error = error{};
-    const State = chain_store.State(PageId, Size, .little);
+    const State = chain_store.WeightedState(PageId, Size, .little);
 
     state_data: State = .{},
-    index_root: ?u32 = null,
 
     pub const StateLeaseType = struct {
         const LeaseSelf = @This();
@@ -260,36 +271,7 @@ const FullSM = struct {
         return .{ .manager = self };
     }
 
-    pub fn getTotalSize(self: *const Self) Error!Size {
-        return self.state_data.total_size.get();
-    }
-    pub fn setTotalSize(self: *Self, size: Size) Error!void {
-        self.state_data.total_size.set(size);
-    }
-    pub fn getFirst(self: *const Self) Error!?PageId {
-        const first = self.state_data.first.get();
-        return if (first == std.math.maxInt(PageId)) null else first;
-    }
-    pub fn getLast(self: *const Self) Error!?PageId {
-        const last = self.state_data.last.get();
-        return if (last == std.math.maxInt(PageId)) null else last;
-    }
-    pub fn setFirst(self: *Self, id: ?PageId) Error!void {
-        self.state_data.first.set(id orelse std.math.maxInt(PageId));
-    }
-    pub fn setLast(self: *Self, id: ?PageId) Error!void {
-        self.state_data.last.set(id orelse std.math.maxInt(PageId));
-    }
-    pub fn destroyPage(self: *Self, id: PageId) Error!void {
-        _ = self;
-        _ = id;
-    }
-    pub fn getIndexRoot(self: *const Self) ?PageId {
-        return self.index_root;
-    }
-    pub fn setIndexRoot(self: *Self, root: ?PageId) Error!void {
-        self.index_root = root;
-    }
+    pub fn destroyPage(_: *Self, _: PageId) Error!void {}
 };
 
 const GtChunk = struct { start: u32, pid: u32, size: u32 };
@@ -358,7 +340,7 @@ test "chain HandleWeighted: getPosition matches a linear walk over a large file"
     try std.testing.expectEqual(@as(u32, data.len), try hdl.totalSize());
 
     // Writing sealed several chunks, so the index root must now be persisted.
-    try std.testing.expect(sm.getIndexRoot() != null);
+    try std.testing.expect(!sm.state_data.index.root.isMax());
 
     var chunks: [128]GtChunk = undefined;
     const n = try walkChunks(&hdl, &chunks);

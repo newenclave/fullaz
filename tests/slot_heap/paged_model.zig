@@ -11,7 +11,8 @@ const FsmModel = fullaz.storage.fsm.models.Memory(u32, u16);
 const Fsm = fullaz.storage.fsm.Fsm(FsmModel);
 const WideFsmModel = fullaz.storage.fsm.models.Memory(u32, u32);
 const WideFsm = fullaz.storage.fsm.Fsm(WideFsmModel);
-const State = fullaz.storage.slot_heap.models.paged.State(u32, u16, 32, 1);
+const SizePolicy = fullaz.storage.fsm.size_classes.One;
+const State = fullaz.storage.slot_heap.models.paged.State(u32, u16, 32, SizePolicy);
 
 const StorageManager = struct {
     pub const PageId = u32;
@@ -57,18 +58,16 @@ const StorageManager = struct {
     }
 };
 
-const StateAdapter = fullaz.storage.slot_heap.models.paged.StateAdapter(
+const HeapStateManager = fullaz.core.storage_manager.PagedFieldStorageManager(
     StorageManager,
     State,
-    u32,
-    u16,
-    32,
-    1,
+    "heap",
 );
 
 const Model = fullaz.storage.slot_heap.models.Paged(
     PageCache,
-    StateAdapter,
+    HeapStateManager,
+    32,
     Fsm,
     compare,
     void,
@@ -76,7 +75,8 @@ const Model = fullaz.storage.slot_heap.models.Paged(
 const Heap = fullaz.storage.slot_heap.Heap(Model);
 const WideModel = fullaz.storage.slot_heap.models.Paged(
     PageCache,
-    StateAdapter,
+    HeapStateManager,
+    32,
     WideFsm,
     compare,
     void,
@@ -86,7 +86,7 @@ const TestContext = struct {
     device: Device,
     cache: PageCache,
     storage_manager: StorageManager,
-    state_adapter: StateAdapter,
+    heap_state_manager: HeapStateManager,
     fsm_model: FsmModel,
     fsm: Fsm,
     model: Model,
@@ -98,13 +98,13 @@ const TestContext = struct {
         errdefer self.cache.deinit();
         self.storage_manager = StorageManager.init(std.testing.allocator);
         errdefer self.storage_manager.deinit();
-        self.state_adapter = StateAdapter.init(&self.storage_manager);
+        self.heap_state_manager = HeapStateManager.init(&self.storage_manager);
         self.fsm_model = try FsmModel.init(std.testing.allocator);
         errdefer self.fsm_model.deinit();
         self.fsm = Fsm.init(&self.fsm_model);
         self.model = try Model.init(
             &self.cache,
-            &self.state_adapter,
+            &self.heap_state_manager,
             &self.fsm,
             .{
                 .key_size = 4,
@@ -141,7 +141,7 @@ test "SlotHeap paged model: contract and settings" {
     defer cache.deinit();
     var storage_manager = StorageManager.init(std.testing.allocator);
     defer storage_manager.deinit();
-    var state_adapter = StateAdapter.init(&storage_manager);
+    var heap_state_manager = HeapStateManager.init(&storage_manager);
     var fsm_model = try FsmModel.init(std.testing.allocator);
     defer fsm_model.deinit();
     var fsm = Fsm.init(&fsm_model);
@@ -149,14 +149,14 @@ test "SlotHeap paged model: contract and settings" {
 
     try std.testing.expectError(error.InvalidSettings, Model.init(
         &cache,
-        &state_adapter,
+        &heap_state_manager,
         &fsm,
         .{ .key_size = 0, .maximum_value_size = 1, .comparator_id = 1 },
         {},
     ));
     try std.testing.expectError(error.InvalidSettings, Model.init(
         &cache,
-        &state_adapter,
+        &heap_state_manager,
         &fsm,
         .{
             .key_size = 4,
@@ -178,7 +178,7 @@ test "SlotHeap paged model: contract and settings" {
     defer wide_fsm.deinit();
     try std.testing.expectError(error.InvalidSettings, WideModel.init(
         &large_cache,
-        &state_adapter,
+        &heap_state_manager,
         &wide_fsm,
         .{ .key_size = 4, .maximum_value_size = 1, .comparator_id = 1 },
         {},
@@ -298,10 +298,10 @@ test "SlotHeap paged model: generic heap grows, orders, and cleans up" {
         try heap.pop();
     }
 
-    try std.testing.expect(ctx.storage_manager.state_value.root.isMax());
-    try std.testing.expect(ctx.storage_manager.state_value.cached_top_page.isMax());
-    try std.testing.expect(ctx.storage_manager.state_value.cached_top_slot.isMax());
-    try std.testing.expectEqual(@as(u64, 0), ctx.storage_manager.state_value.entries_count.get());
+    try std.testing.expect(ctx.storage_manager.state_value.heap.root.isMax());
+    try std.testing.expect(ctx.storage_manager.state_value.heap.cached_top_page.isMax());
+    try std.testing.expect(ctx.storage_manager.state_value.heap.cached_top_slot.isMax());
+    try std.testing.expectEqual(@as(u64, 0), ctx.storage_manager.state_value.heap.entries_count.get());
     try std.testing.expectEqual(@as(usize, 0), ctx.fsm_model.entries.items.len);
     try std.testing.expect(ctx.storage_manager.destroyed.items.len > 0);
     for (ctx.storage_manager.destroyed.items, 0..) |page_id, index| {
@@ -309,7 +309,7 @@ test "SlotHeap paged model: generic heap grows, orders, and cleans up" {
             try std.testing.expect(page_id != other_page_id);
         }
     }
-    for (ctx.storage_manager.state_value.available_inode_heads) |head| {
+    for (ctx.storage_manager.state_value.heap.available_inode_heads) |head| {
         try std.testing.expect(head.isMax());
     }
 }
@@ -321,8 +321,8 @@ test "SlotHeap paged: top value editor preserves heap metadata and rolls back" {
     var heap = Heap.init(&ctx.model);
     try heap.push("0002", "two");
     try heap.push("0001", "one");
-    const root = ctx.storage_manager.state_value.root;
-    const cached_top = ctx.storage_manager.state_value.cached_top_page;
+    const root = ctx.storage_manager.state_value.heap.root;
+    const cached_top = ctx.storage_manager.state_value.heap.cached_top_page;
     const fsm_entries = ctx.fsm_model.entries.items.len;
 
     var editor = try heap.openValueEditor();
@@ -334,8 +334,8 @@ test "SlotHeap paged: top value editor preserves heap metadata and rolls back" {
     try std.testing.expectError(error.EditorInvalidated, editor.valueMut());
     editor.deinit();
 
-    try std.testing.expectEqual(root, ctx.storage_manager.state_value.root);
-    try std.testing.expectEqual(cached_top, ctx.storage_manager.state_value.cached_top_page);
+    try std.testing.expectEqual(root, ctx.storage_manager.state_value.heap.root);
+    try std.testing.expectEqual(cached_top, ctx.storage_manager.state_value.heap.cached_top_page);
     try std.testing.expectEqual(fsm_entries, ctx.fsm_model.entries.items.len);
     try std.testing.expectEqual(@as(u64, 2), try heap.count());
     var top = try heap.top();

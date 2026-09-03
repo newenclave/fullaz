@@ -9,159 +9,84 @@ const extensions = fullaz.page.extensions;
 
 const printer = @import("test_printer");
 
+fn TestStateLease(comptime StateT: type) type {
+    return struct {
+        pub const Error = error{};
+
+        value: *StateT,
+
+        pub fn data(self: *const @This()) Error![]const u8 {
+            return std.mem.asBytes(@as(*const StateT, self.value));
+        }
+
+        pub fn dataMut(self: *@This()) Error![]u8 {
+            return std.mem.asBytes(self.value);
+        }
+
+        pub fn finish(_: *@This()) void {}
+        pub fn deinit(_: *@This()) void {}
+    };
+}
+
+fn storedPageId(value: anytype) ?u32 {
+    return if (value.isMax()) null else value.get();
+}
+
+const TailState = slot_chain.State(u32, u32, u32, .little);
+const RootOnlyState = slot_chain.State(u32, u32, void, .little);
+
 const NoneStorageManager = struct {
     pub const Self = @This();
     pub const PageId = u32;
-    pub const Size = u32;
     pub const Error = error{};
+    pub const StateLeaseType = TestStateLease(TailState);
 
-    first_block_id: ?u32 = null,
-    last_block_id: ?u32 = null,
-    total_size: u32 = 0,
+    state_value: TailState = .{},
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
+    }
 
     pub fn destroyPage(_: *@This(), id: PageId) Error!void {
         _ = id;
         // Implement page destruction logic, e.g., add to free list
     }
-
-    pub fn getTotalSize(self: *const Self) Error!Size {
-        return self.total_size;
-    }
-
-    pub fn setTotalSize(self: *Self, size: Size) Error!void {
-        self.total_size = size;
-    }
-
-    pub fn getFirst(self: *const Self) Error!?PageId {
-        return self.first_block_id;
-    }
-
-    pub fn getLast(self: *const Self) Error!?PageId {
-        return self.last_block_id;
-    }
-
-    pub fn setFirst(self: *Self, page_id: ?PageId) Error!void {
-        self.first_block_id = page_id;
-    }
-
-    pub fn setLast(self: *Self, page_id: ?PageId) Error!void {
-        self.last_block_id = page_id;
-    }
 };
 
 const RootOnlyStorageManager = struct {
     pub const PageId = u32;
-    pub const Size = u32;
     pub const Error = error{};
+    pub const StateLeaseType = TestStateLease(RootOnlyState);
 
-    first_block_id: ?u32 = null,
-    total_size: u32 = 0,
+    state_value: RootOnlyState = .{},
+
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
+    }
 
     pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
-
-    pub fn getTotalSize(self: *const @This()) Error!Size {
-        return self.total_size;
-    }
-
-    pub fn setTotalSize(self: *@This(), size: Size) Error!void {
-        self.total_size = size;
-    }
-
-    pub fn getFirst(self: *const @This()) Error!?PageId {
-        return self.first_block_id;
-    }
-
-    pub fn setFirst(self: *@This(), page_id: ?PageId) Error!void {
-        self.first_block_id = page_id;
-    }
 };
 
 const TrackingStorageManager = struct {
     pub const PageId = u32;
-    pub const Size = u32;
     pub const Error = error{};
+    pub const StateLeaseType = TestStateLease(TailState);
 
-    first_block_id: ?u32 = null,
-    last_block_id: ?u32 = null,
-    total_size: u32 = 0,
+    state_value: TailState = .{},
     destroyed_page_id: ?u32 = null,
+
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
+    }
 
     pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
         self.destroyed_page_id = page_id;
-    }
-
-    pub fn getTotalSize(self: *const @This()) Error!Size {
-        return self.total_size;
-    }
-
-    pub fn setTotalSize(self: *@This(), size: Size) Error!void {
-        self.total_size = size;
-    }
-
-    pub fn getFirst(self: *const @This()) Error!?PageId {
-        return self.first_block_id;
-    }
-
-    pub fn setFirst(self: *@This(), page_id: ?PageId) Error!void {
-        self.first_block_id = page_id;
-    }
-
-    pub fn getLast(self: *const @This()) Error!?PageId {
-        return self.last_block_id;
-    }
-
-    pub fn setLast(self: *@This(), page_id: ?PageId) Error!void {
-        self.last_block_id = page_id;
-    }
-};
-
-const FsmStorageManager = struct {
-    pub const PageId = u32;
-    pub const Size = u32;
-    pub const Error = error{};
-
-    first_block_id: ?u32 = null,
-    last_block_id: ?u32 = null,
-    total_size: u32 = 0,
-    fsm_roots: [256]?u32 = .{null} ** 256,
-
-    pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
-
-    pub fn getTotalSize(self: *const @This()) Error!Size {
-        return self.total_size;
-    }
-
-    pub fn setTotalSize(self: *@This(), size: Size) Error!void {
-        self.total_size = size;
-    }
-
-    pub fn getFirst(self: *const @This()) Error!?PageId {
-        return self.first_block_id;
-    }
-
-    pub fn getLast(self: *const @This()) Error!?PageId {
-        return self.last_block_id;
-    }
-
-    pub fn setFirst(self: *@This(), page_id: ?PageId) Error!void {
-        self.first_block_id = page_id;
-    }
-
-    pub fn setLast(self: *@This(), page_id: ?PageId) Error!void {
-        self.last_block_id = page_id;
-    }
-
-    pub fn getSizeClassRoot(self: *const @This(), class: u16) Error!?PageId {
-        return self.fsm_roots[class];
-    }
-
-    pub fn setSizeClassRoot(self: *@This(), class: u16, root: ?PageId) Error!void {
-        self.fsm_roots[class] = root;
     }
 };
 
 const FsmSizePolicy = struct {
     pub const SizeClass = u16;
+    pub const maximum_class_count: usize = 256;
 
     pub fn getSizeClass(_: *const @This(), size: SizeClass) SizeClass {
         return size >> 8;
@@ -171,6 +96,37 @@ const FsmSizePolicy = struct {
         return 256;
     }
 };
+
+const FsmCompositeState = extern struct {
+    chain: TailState = .{},
+    fsm: fsm.models.paged.slab.State(u32, FsmSizePolicy, .little) =
+        fsm.models.paged.slab.emptyState(u32, FsmSizePolicy, .little),
+};
+
+const FsmParentStorageManager = struct {
+    pub const PageId = u32;
+    pub const Error = error{};
+    pub const StateLeaseType = TestStateLease(FsmCompositeState);
+
+    state_value: FsmCompositeState = .{},
+
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
+    }
+
+    pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
+};
+
+const FsmChainStorageManager = fullaz.core.storage_manager.PagedFieldStorageManager(
+    FsmParentStorageManager,
+    FsmCompositeState,
+    "chain",
+);
+const FsmRootStorageManager = fullaz.core.storage_manager.PagedFieldStorageManager(
+    FsmParentStorageManager,
+    FsmCompositeState,
+    "fsm",
+);
 
 test "SlotChain: create" {
     const View = slot_chain.View(u32, u32, .little, false);
@@ -187,7 +143,7 @@ test "SlotChain: create" {
 test "SlotChain: handle" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -222,7 +178,7 @@ test "SlotChain: handle" {
 test "SlotChain: iterator" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -257,7 +213,7 @@ test "SlotChain: iterator" {
 test "SlotChain: append reuses persisted tail after handle reopen" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1024);
@@ -291,7 +247,7 @@ test "SlotChain: append reuses persisted tail after handle reopen" {
 test "SlotChain: iterator crosses chunks" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -336,7 +292,7 @@ test "SlotChain: iterator crosses chunks" {
 test "SlotChain forward-only: root-only manager appends after reopen and iterates chunks" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.ForwardHandle(Cache, RootOnlyStorageManager, .little);
+    const Handle = slot_chain.ForwardHandle(Cache, RootOnlyStorageManager, u32, void, .little);
 
     var mgr = RootOnlyStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -380,7 +336,7 @@ test "SlotChain forward-only: root-only manager appends after reopen and iterate
 test "SlotChain bidirectional: root-only manager traverses backward from the end" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.BidirectionalHandle(Cache, RootOnlyStorageManager, .little);
+    const Handle = slot_chain.BidirectionalHandle(Cache, RootOnlyStorageManager, u32, void, .little);
 
     var mgr = RootOnlyStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -408,7 +364,7 @@ test "SlotChain bidirectional: root-only manager traverses backward from the end
 test "SlotChain: insertUnordered falls back to append without FSM" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -434,7 +390,17 @@ test "SlotChain: insertUnordered uses FSM free-space index" {
     const Cache = page_cache.PageCache(Device);
     const FsmModel = fsm.models.Memory(u32, u16);
     const Fsm = fsm.Fsm(FsmModel);
-    const Handle = slot_chain.HandleImpl(Cache, NoneStorageManager, void, void, Fsm, false, .little);
+    const Handle = slot_chain.HandleImpl(
+        Cache,
+        NoneStorageManager,
+        u32,
+        u32,
+        void,
+        void,
+        Fsm,
+        false,
+        .little,
+    );
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -454,9 +420,9 @@ test "SlotChain: insertUnordered uses FSM free-space index" {
     var second: [3000]u8 = undefined;
     @memset(&second, 'b');
     _ = try hdl.append(&first);
-    const first_id = mgr.first_block_id.?;
+    const first_id = storedPageId(&mgr.state_value.page_chain.first).?;
     _ = try hdl.append(&second);
-    const last_id = mgr.last_block_id.?;
+    const last_id = storedPageId(&mgr.state_value.page_chain.last).?;
     try std.testing.expect(first_id != last_id);
 
     try hdl.insertUnordered("fsm");
@@ -473,7 +439,7 @@ test "SlotChain: insertUnordered uses FSM free-space index" {
 test "SlotChain: pending removal keeps marked data alive" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -502,7 +468,7 @@ test "SlotChain: pending removal keeps marked data alive" {
 test "SlotChain: pending removal cleans one slot idempotently" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -526,7 +492,7 @@ test "SlotChain: pending removal cleans one slot idempotently" {
     try std.testing.expect(!(try pending.clean()));
     try std.testing.expectError(error.InvalidIterator, pending.value());
 
-    var page = try hdl.loadPage(mgr.first_block_id.?);
+    var page = try hdl.loadPage(storedPageId(&mgr.state_value.page_chain.first).?);
     defer page.deinit();
     try std.testing.expectEqual(@as(usize, 2), try page.size());
     try std.testing.expect(!try page.isTombstone(0));
@@ -544,7 +510,7 @@ test "SlotChain: pending removal cleans one slot idempotently" {
 test "SlotChain: pending removal destroys an empty page" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, TrackingStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, TrackingStorageManager, u32, u32, .little);
 
     var mgr = TrackingStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -564,16 +530,16 @@ test "SlotChain: pending removal destroys an empty page" {
 
     try std.testing.expect(try pending.clean());
     try std.testing.expectEqual(@as(?u32, page_id), mgr.destroyed_page_id);
-    try std.testing.expect((try mgr.getFirst()) == null);
-    try std.testing.expect((try mgr.getLast()) == null);
-    try std.testing.expectEqual(@as(u32, 0), try mgr.getTotalSize());
+    try std.testing.expect(storedPageId(&mgr.state_value.page_chain.first) == null);
+    try std.testing.expect(storedPageId(&mgr.state_value.page_chain.last) == null);
+    try std.testing.expectEqual(@as(u32, 0), mgr.state_value.total_size.get());
     try std.testing.expect((try hdl.iterator()) == null);
 }
 
 test "SlotChain: markTombstonesIf skips marked slots until cleanup" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var manager = NoneStorageManager{};
     var device = try Device.init(std.testing.allocator, 4096);
@@ -608,7 +574,7 @@ test "SlotChain: markTombstonesIf skips marked slots until cleanup" {
 test "SlotChain bidirectional iterator: markTombstone marks the current slot" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.BidirectionalHandle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.BidirectionalHandle(Cache, NoneStorageManager, u32, u32, .little);
 
     var manager = NoneStorageManager{};
     var device = try Device.init(std.testing.allocator, 4096);
@@ -629,7 +595,7 @@ test "SlotChain bidirectional iterator: markTombstone marks the current slot" {
 test "SlotChain forward iterator: markTombstone marks the current slot" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.ForwardHandle(Cache, RootOnlyStorageManager, .little);
+    const Handle = slot_chain.ForwardHandle(Cache, RootOnlyStorageManager, u32, void, .little);
 
     var manager = RootOnlyStorageManager{};
     var device = try Device.init(std.testing.allocator, 4096);
@@ -650,7 +616,7 @@ test "SlotChain forward iterator: markTombstone marks the current slot" {
 test "SlotChain: removeIf removes matching slots across pages" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, TrackingStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, TrackingStorageManager, u32, u32, .little);
 
     var manager = TrackingStorageManager{};
     var device = try Device.init(std.testing.allocator, 4096);
@@ -665,7 +631,7 @@ test "SlotChain: removeIf removes matching slots across pages" {
     var second: [3000]u8 = undefined;
     @memset(&second, 'b');
     _ = try handle.append(&first);
-    const first_page_id = manager.first_block_id.?;
+    const first_page_id = storedPageId(&manager.state_value.page_chain.first).?;
     _ = try handle.append(&second);
 
     const Match = struct {
@@ -689,7 +655,17 @@ test "SlotChain: pending removal updates FSM and total size" {
     const Cache = page_cache.PageCache(Device);
     const FsmModel = fsm.models.Memory(u32, u16);
     const Fsm = fsm.Fsm(FsmModel);
-    const Handle = slot_chain.HandleImpl(Cache, NoneStorageManager, void, void, Fsm, false, .little);
+    const Handle = slot_chain.HandleImpl(
+        Cache,
+        NoneStorageManager,
+        u32,
+        u32,
+        void,
+        void,
+        Fsm,
+        false,
+        .little,
+    );
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -723,7 +699,7 @@ test "SlotChain: pending removal updates FSM and total size" {
 test "SlotChain: pending removal rejects iterator boundary states" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -747,7 +723,7 @@ test "SlotChain: pending removal rejects iterator boundary states" {
 test "SlotChain: appendRef survives later appends and payload compaction" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var manager = NoneStorageManager{};
     var device = try Device.init(std.testing.allocator, 4096);
@@ -794,14 +770,16 @@ test "SlotChain: paged FSM stores its location in the effective header" {
     );
     const FsmModel = fsm.models.paged.slab.Model(
         Cache,
-        FsmStorageManager,
+        FsmRootStorageManager,
         FsmSizePolicy,
         LocationAccessor,
     );
     const Fsm = fsm.Fsm(FsmModel);
     const Handle = slot_chain.HandleImpl(
         Cache,
-        FsmStorageManager,
+        FsmChainStorageManager,
+        u32,
+        u32,
         UserAdditional,
         void,
         Fsm,
@@ -809,14 +787,16 @@ test "SlotChain: paged FSM stores its location in the effective header" {
         .little,
     );
 
-    var storage = FsmStorageManager{};
+    var storage = FsmParentStorageManager{};
+    var chain_storage = FsmChainStorageManager.init(&storage);
+    var fsm_storage = FsmRootStorageManager.init(&storage);
     var dev = try Device.init(std.testing.allocator, 4096);
     defer dev.deinit();
     var cache = try Cache.init(&dev, std.testing.allocator, 32);
     defer cache.deinit();
     var fsm_model = FsmModel.init(
         &cache,
-        &storage,
+        &fsm_storage,
         FsmSizePolicy{},
         .{ .page_kind = 0x62 },
     );
@@ -825,7 +805,7 @@ test "SlotChain: paged FSM stores its location in the effective header" {
 
     var hdl = try Handle.initWithFsm(
         &cache,
-        &storage,
+        &chain_storage,
         &fsm_index,
         .{},
     );
@@ -835,8 +815,14 @@ test "SlotChain: paged FSM stores its location in the effective header" {
     @memset(&value, 'x');
     const page_id = try hdl.append(&value);
     try std.testing.expectEqual(@as(?u32, page_id), try fsm_index.find(1));
-    try std.testing.expectEqual(@as(?u32, page_id), try storage.getFirst());
-    try std.testing.expectEqual(@as(?u32, page_id), try storage.getLast());
+    try std.testing.expectEqual(
+        @as(?u32, page_id),
+        storedPageId(&storage.state_value.chain.page_chain.first),
+    );
+    try std.testing.expectEqual(
+        @as(?u32, page_id),
+        storedPageId(&storage.state_value.chain.page_chain.last),
+    );
     {
         var page = try cache.fetch(page_id);
         defer page.deinit();
@@ -852,14 +838,14 @@ test "SlotChain: paged FSM stores its location in the effective header" {
 
     try std.testing.expectEqual(@as(usize, 0), try hdl.size());
     try std.testing.expect((try fsm_index.find(700)) == null);
-    try std.testing.expect((try storage.getFirst()) == null);
-    try std.testing.expect((try storage.getLast()) == null);
+    try std.testing.expect(storedPageId(&storage.state_value.chain.page_chain.first) == null);
+    try std.testing.expect(storedPageId(&storage.state_value.chain.page_chain.last) == null);
 }
 
 test "SlotChain: value editor commits, rolls back, and coordinates mutations" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = slot_chain.Handle(Cache, NoneStorageManager, .little);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
 
     var manager = NoneStorageManager{};
     var device = try Device.init(std.testing.allocator, 4096);

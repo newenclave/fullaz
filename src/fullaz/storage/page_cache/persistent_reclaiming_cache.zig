@@ -1,7 +1,10 @@
 const std = @import("std");
 const page_cache_contract = @import("../../contracts/page_cache.zig");
+const storage_manager_contract = @import("../../contracts/storage_manager.zig");
 const interfaces = @import("../../contracts/interfaces.zig");
+const storage_manager = @import("../../core/storage_manager.zig");
 const freed = @import("../../page/freed.zig");
+const free_list = @import("../free_list.zig");
 
 /// Adds a persistent, on-page free list to an append-only dense page cache.
 /// The store owns the durable free-list root and must roll it back with the
@@ -12,16 +15,17 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
         if (!@hasDecl(StoreT, "PageId") or !@hasDecl(StoreT, "Error")) {
             @compileError("PersistentReclaimingCache store requires PageId and Error");
         }
+        storage_manager_contract.assertStorageManager(StoreT);
         if (StoreT.PageId != InnerCacheT.Pid) {
             @compileError("PersistentReclaimingCache store PageId must match cache Pid");
         }
-        interfaces.requiresFnSignature(StoreT, "getRoot", fn (*const StoreT) ?StoreT.PageId);
-        interfaces.requiresFnSignature(StoreT, "setRoot", fn (*StoreT, ?StoreT.PageId) StoreT.Error!void);
         interfaces.requiresFnSignature(StoreT, "pageCount", fn (*const StoreT) usize);
         interfaces.requiresFnSignature(StoreT, "isReserved", fn (*const StoreT, StoreT.PageId) bool);
     }
 
     const PageId = InnerCacheT.Pid;
+    const FreeListState = free_list.State(PageId, .little);
+    const StateAccessor = storage_manager.StateAccessor(StoreT.StateLeaseType, FreeListState);
     const FreedView = freed.View(PageId, .little, true);
     const nil = std.math.maxInt(PageId);
 
@@ -30,7 +34,8 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
 
         pub const Handle = InnerCacheT.Handle;
         pub const Pid = PageId;
-        pub const Error = InnerCacheT.Error || StoreT.Error || error{
+        pub const State = FreeListState;
+        pub const Error = InnerCacheT.Error || StoreT.Error || StateAccessor.Error || error{
             PageAlreadyFree,
             PageIdExhausted,
             PageNotAllocated,
@@ -47,7 +52,7 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
 
             cache: *Self,
             inner: InnerCacheT.WriteBatch,
-            root_snapshot: ?PageId,
+            state_snapshot: FreeListState,
             phase: Phase = .active,
 
             pub fn commit(self: *WriteBatch) Error!void {
@@ -68,7 +73,10 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
                     return Error.TransactionInactive;
                 }
                 if (self.phase == .active) {
-                    try self.cache.store.setRoot(self.root_snapshot);
+                    var lease = try self.cache.store.state();
+                    defer lease.deinit();
+                    (try StateAccessor.viewMut(&lease)).* = self.state_snapshot;
+                    lease.finish();
                     self.phase = .root_restored;
                 }
                 self.inner.discard() catch |err| {
@@ -97,10 +105,13 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
         }
 
         pub fn begin(self: *Self) Error!WriteBatch {
+            var lease = try self.store.state();
+            defer lease.deinit();
+            const state_snapshot = (try StateAccessor.view(&lease)).*;
             return .{
                 .cache = self,
                 .inner = try self.inner.begin(),
-                .root_snapshot = self.store.getRoot(),
+                .state_snapshot = state_snapshot,
             };
         }
 
@@ -147,17 +158,18 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             if (try self.isFree(page_id)) {
                 return Error.PageAlreadyFree;
             }
+            var lease = try self.store.state();
+            defer lease.deinit();
+            const state = try StateAccessor.viewMut(&lease);
             var handle = try self.inner.fetch(page_id);
             defer handle.deinit();
 
-            const next = self.store.getRoot() orelse nil;
+            const next = state.root.get();
             const FreedMut = freed.View(PageId, .little, false);
             var view = FreedMut.init(try handle.dataMut());
             view.formatPage(next);
-            self.store.setRoot(page_id) catch |err| {
-                self.inner.markTransactionFailed();
-                return err;
-            };
+            state.root.set(page_id);
+            lease.finish();
         }
 
         pub fn flush(self: *Self, page_id: PageId) Error!void {
@@ -194,7 +206,7 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
 
         /// Validates the persisted free-list before it is used after a reopen.
         pub fn validateFreeList(self: *Self) Error!void {
-            var current = self.store.getRoot();
+            var current = try self.freeRoot();
             var steps: usize = 0;
             const page_count = self.store.pageCount();
             while (current) |page_id| {
@@ -207,15 +219,22 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
         }
 
         fn pop(self: *Self) Error!?PageId {
-            const head = self.store.getRoot() orelse return null;
+            var lease = try self.store.state();
+            defer lease.deinit();
+            const state = try StateAccessor.view(&lease);
+            if (state.root.isMax()) {
+                return null;
+            }
+            const head = state.root.get();
             const next = try self.nextFreePage(head);
-            try self.store.setRoot(next);
+            (try StateAccessor.viewMut(&lease)).root.set(next orelse nil);
+            lease.finish();
             return head;
         }
 
         /// Reports whether a PID currently belongs to the durable free list.
         pub fn isFree(self: *Self, page_id: PageId) Error!bool {
-            var current = self.store.getRoot();
+            var current = try self.freeRoot();
             var steps: usize = 0;
             const max_steps = self.store.pageCount();
             while (current) |candidate| {
@@ -259,6 +278,13 @@ pub fn PersistentReclaimingCache(comptime InnerCacheT: type, comptime StoreT: ty
             if (page_id == nil or page_index >= self.store.pageCount() or self.store.isReserved(page_id)) {
                 return Error.BadFreeList;
             }
+        }
+
+        fn freeRoot(self: *Self) Error!?PageId {
+            var lease = try self.store.state();
+            defer lease.deinit();
+            const root = (try StateAccessor.view(&lease)).root;
+            return if (root.isMax()) null else root.get();
         }
 
         comptime {

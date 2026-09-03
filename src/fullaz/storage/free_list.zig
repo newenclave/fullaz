@@ -1,30 +1,39 @@
 const std = @import("std");
 const freed = @import("../page/freed.zig");
 const contracts = @import("../contracts/contracts.zig");
+const storage_manager = @import("../core/storage_manager.zig");
+const PackedInt = @import("../core/packed_int.zig").PackedInt;
 
-const requiresFnSignature = contracts.interfaces.requiresFnSignature;
-const requiresErrorDeclaration = contracts.interfaces.requiresErrorDeclaration;
-const requiresTypeDeclaration = contracts.interfaces.requiresTypeDeclaration;
-
-pub fn requiresStore(comptime T: type) void {
-    requiresErrorDeclaration(T, "Error");
-    const Error = T.Error;
-    requiresTypeDeclaration(T, "PageId");
-    requiresFnSignature(T, "getRoot", fn (*const T) ?T.PageId);
-    requiresFnSignature(T, "setRoot", fn (*T, ?T.PageId) Error!void);
+/// Exact durable free-list state. `maxInt(PageIdT)` is the null root.
+pub fn State(comptime PageIdT: type, comptime Endian: std.builtin.Endian) type {
+    const PackedPageId = PackedInt(PageIdT, Endian);
+    const StateT = extern struct {
+        root: PackedPageId = .init(std.math.maxInt(PageIdT)),
+    };
+    comptime {
+        if (@alignOf(StateT) != 1 or
+            @offsetOf(StateT, "root") != 0 or
+            @sizeOf(StateT) != @sizeOf(PackedPageId))
+        {
+            @compileError("FreeList state layout changed");
+        }
+    }
+    return StateT;
 }
 
 pub fn FreeList(comptime PageCacheT: type, comptime StoreManagerT: type, comptime Endian: std.builtin.Endian) type {
-    comptime requiresStore(StoreManagerT);
+    comptime contracts.storage_manager.assertStorageManager(StoreManagerT);
 
-    const PageId = StoreManagerT.PageId;
-    const NIL: PageId = std.math.maxInt(PageId);
+    const PageId = PageCacheT.Pid;
+    const StateT = State(PageId, Endian);
+    const StateAccessor = storage_manager.StateAccessor(StoreManagerT.StateLeaseType, StateT);
     const FreedView = freed.View(PageId, Endian, false);
     const FreedViewConst = freed.View(PageId, Endian, true);
 
     return struct {
         const Self = @This();
-        pub const Error = StoreManagerT.Error || PageCacheT.Error;
+        pub const State = StateT;
+        pub const Error = StoreManagerT.Error || StateAccessor.Error || PageCacheT.Error;
 
         cache: *PageCacheT = undefined,
         store: *StoreManagerT = undefined,
@@ -40,27 +49,40 @@ pub fn FreeList(comptime PageCacheT: type, comptime StoreManagerT: type, comptim
             self.* = undefined;
         }
 
-        pub fn isEmpty(self: *const Self) bool {
-            return self.store.getRoot() == null;
+        pub fn isEmpty(self: *Self) Error!bool {
+            var lease = try self.store.state();
+            defer lease.deinit();
+            return (try StateAccessor.view(&lease)).root.isMax();
         }
 
         pub fn push(self: *Self, pid: PageId) Error!void {
-            const next: PageId = if (self.store.getRoot()) |r| r else NIL;
+            var lease = try self.store.state();
+            defer lease.deinit();
+            const state = try StateAccessor.viewMut(&lease);
+            const next = state.root.get();
             var ph = try self.cache.fetch(pid);
             defer ph.deinit();
             var view = FreedView.init(try ph.dataMut());
             view.formatPage(next);
-            try self.store.setRoot(pid);
+            state.root.set(pid);
+            lease.finish();
         }
 
         pub fn pop(self: *Self) Error!?PageId {
-            const head = self.store.getRoot() orelse return null;
+            var lease = try self.store.state();
+            defer lease.deinit();
+            const state = try StateAccessor.view(&lease);
+            if (state.root.isMax()) {
+                return null;
+            }
+            const head = state.root.get();
             var ph = try self.cache.fetch(head);
             defer ph.deinit();
 
             const view = FreedViewConst.init(try ph.data());
             const next = view.header().next.get();
-            try self.store.setRoot(if (next == NIL) null else next);
+            (try StateAccessor.viewMut(&lease)).root.set(next);
+            lease.finish();
             return head;
         }
     };

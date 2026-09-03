@@ -35,6 +35,7 @@ fn expected(value: boot.State) boot.Expected {
 
 test "fullaz-db file boot: round-trips state and validates identity" {
     var initial = state();
+    initial.free_root = 5;
     initial.id_radix_free_leaf_root = 7;
     var page = [_]u8{0} ** 512;
     var scratch = [_]u8{undefined} ** 512;
@@ -45,6 +46,7 @@ test "fullaz-db file boot: round-trips state and validates identity" {
     try std.testing.expectEqual(initial.next_component_id, view.state.next_component_id);
     try std.testing.expectEqual(initial.next_component_page_kind, view.state.next_component_page_kind);
     try std.testing.expectEqual(initial.id_radix_free_leaf_root, view.state.id_radix_free_leaf_root);
+    try std.testing.expectEqual(initial.free_root, view.state.free_root);
     try std.testing.expect(view.state.clean);
 
     var wrong = expected(initial);

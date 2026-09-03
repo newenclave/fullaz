@@ -129,7 +129,7 @@ fn assertNode(comptime M: type) void {
 fn assertAccessor(comptime M: type) void {
     const A = M.AccessorType;
 
-    requiresFnSignature(A, "getRoot", fn (*const A) ?M.NodeId);
+    requiresFnSignature(A, "getRoot", fn (*const A) M.Error!?M.NodeId);
     requiresFnSignature(A, "setRoot", fn (*A, ?M.NodeId) M.Error!void);
     requiresFnSignature(A, "createNode", fn (*A, M.Box) M.Error!M.Node);
     requiresFnSignature(A, "loadNode", fn (*A, M.NodeId) M.Error!M.Node);
@@ -182,27 +182,6 @@ pub fn assertModel(comptime M: type) void {
     requiresFnSignature(M, "onUpdate", fn (*M, *M.Node, M.Box, M.ValueIn, M.ValueIn) M.Error!void);
 }
 
-pub fn requiresLegacyPagedStorageManager(comptime T: type) void {
-    contracts.storage_manager.requiresStorageManager(T);
-
-    const Error = T.Error;
-    requiresFnSignature(T, "getEntriesCount", fn (*const T) Error!usize);
-    requiresFnSignature(T, "setEntriesCount", fn (*T, usize) Error!void);
-}
-
-pub fn requiresPagedStorageManager(comptime T: type, comptime ExpectedNodeId: type) void {
-    requiresErrorDeclaration(T, "Error");
-    requiresTypeDeclaration(T, "PageId");
-    requiresTypeDeclaration(T, "NodeId");
-
-    if (T.NodeId != ExpectedNodeId) {
-        @compileError(@typeName(T) ++ ".NodeId must match the paged Orthtree NodeId");
-    }
-
-    const Error = T.Error;
-    requiresFnSignature(T, "getRoot", fn (*const T) ?T.NodeId);
-    requiresFnSignature(T, "setRoot", fn (*T, ?T.NodeId) Error!void);
-    requiresFnSignature(T, "destroyPage", fn (*T, T.PageId) Error!void);
-    requiresFnSignature(T, "getEntriesCount", fn (*const T) Error!usize);
-    requiresFnSignature(T, "setEntriesCount", fn (*T, usize) Error!void);
+pub fn requiresPagedStorageManager(comptime T: type, comptime PageIdT: type) void {
+    contracts.storage_manager.assertPagedStorageManager(T, PageIdT);
 }

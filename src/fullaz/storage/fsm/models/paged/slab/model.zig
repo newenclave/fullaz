@@ -1,8 +1,11 @@
 const std = @import("std");
 const errors = @import("../../../../../core/errors.zig");
+const storage_manager = @import("../../../../../core/storage_manager.zig");
+const storage_manager_contract = @import("../../../../../contracts/storage_manager.zig");
 const assertLocationAccessor = @import("../../../location_accessor.zig").assertAccessor;
 const fsm_interfaces = @import("../../interfaces.zig");
 const view_mod = @import("view.zig");
+const state_mod = @import("state.zig");
 const page_chain = @import("../../../../page_chain/page_chain.zig");
 const scanner = @import("scanner.zig");
 
@@ -12,68 +15,74 @@ pub const Settings = struct {
 
 pub fn Paged(
     comptime PageCacheT: type,
-    comptime SlabStorageManagerT: type,
+    comptime StorageManagerT: type,
     comptime SizePolicyT: type,
     comptime LocationAccessorT: type,
 ) type {
+    @setEvalBranchQuota(100_000);
     comptime assertLocationAccessor(LocationAccessorT);
     comptime fsm_interfaces.assertSizePolicy(SizePolicyT);
 
     const CachePageId = PageCacheT.Pid;
-    comptime fsm_interfaces.assertSlabStorageManager(SlabStorageManagerT, CachePageId);
+    comptime storage_manager_contract.assertPagedStorageManager(StorageManagerT, CachePageId);
     const PageHandle = PageCacheT.Handle;
     const SizeClassT = SizePolicyT.SizeClass;
+    const FsmState = state_mod.State(CachePageId, SizePolicyT, .little);
+    const FsmStateView = storage_manager.StateAccessor(StorageManagerT.StateLeaseType, FsmState);
+    const ClassState = page_chain.State(CachePageId, void, .little);
+    const maximum_class_count = SizePolicyT.maximum_class_count;
 
     const View = view_mod.View(CachePageId, u16, SizeClassT, .little, false).SlabPageView;
     const ConstView = view_mod.View(CachePageId, u16, SizeClassT, .little, true).SlabPageView;
 
-    const ClassChainManagerImpl = struct {
-        const Self = @This();
-        pub const Size = u0;
-        pub const Error = SlabStorageManagerT.Error;
-
-        sm: *SlabStorageManagerT,
-        class: SizeClassT,
-
-        pub fn getFirst(self: *Self) SlabStorageManagerT.Error!?CachePageId {
-            return self.sm.getSizeClassRoot(self.class);
+    const ClassTypes = struct {
+        fn Manager(comptime class_index: usize) type {
+            return storage_manager.PagedByteRegionStorageManager(
+                StorageManagerT,
+                @sizeOf(FsmState),
+                @offsetOf(FsmState, "classes") + class_index * @sizeOf(ClassState),
+                @sizeOf(ClassState),
+            );
         }
 
-        pub fn setFirst(self: *Self, pid: ?CachePageId) SlabStorageManagerT.Error!void {
-            return self.sm.setSizeClassRoot(self.class, pid);
-        }
-
-        pub fn destroyPage(self: *Self, pid: CachePageId) SlabStorageManagerT.Error!void {
-            return self.sm.destroyPage(pid);
+        fn Chain(comptime class_index: usize) type {
+            return page_chain.BidirectionalHandleImpl(
+                PageCacheT,
+                Manager(class_index),
+                void,
+                void,
+                View.SubheaderType,
+                .little,
+            );
         }
     };
+
+    const RepresentativeChain = ClassTypes.Chain(0);
 
     return struct {
         const Self = @This();
 
-        const ClassChainManager = ClassChainManagerImpl;
-
-        const PageChainHandle = page_chain.BidirectionalHandleImpl(
-            PageCacheT,
-            ClassChainManager,
-            void,
-            View.SubheaderType,
-            .little,
-        );
-
+        pub const State = FsmState;
         pub const Pid = CachePageId;
         pub const Size = u16;
-        pub const Error = PageChainHandle.Error ||
+        pub const Error = RepresentativeChain.Error ||
             LocationAccessorT.Error ||
+            FsmStateView.Error ||
             View.Error ||
-            errors.PageError;
+            errors.PageError ||
+            error{BadData};
 
         cache: *PageCacheT,
-        sm: *SlabStorageManagerT,
+        sm: *StorageManagerT,
         policy: SizePolicyT,
         settings: Settings,
 
-        pub fn init(cache: *PageCacheT, sm: *SlabStorageManagerT, policy: SizePolicyT, settings: Settings) Self {
+        pub fn init(
+            cache: *PageCacheT,
+            sm: *StorageManagerT,
+            policy: SizePolicyT,
+            settings: Settings,
+        ) Self {
             return .{
                 .cache = cache,
                 .sm = sm,
@@ -107,75 +116,37 @@ pub fn Paged(
             );
         }
 
-        fn initClassChainManager(self: *Self, class: SizeClassT) ClassChainManager {
-            return .{
-                .sm = self.sm,
-                .class = class,
-            };
-        }
-
-        fn initClassChain(self: *Self, manager: *ClassChainManager) PageChainHandle.Error!PageChainHandle {
-            return PageChainHandle.init(self.cache, manager, .{
-                .chunk_page_kind = self.settings.page_kind,
-            });
-        }
-
         pub fn find(self: *Self, size: Size) Error!?Pid {
-            const c0 = self.policy.getSizeClass(size);
+            @setEvalBranchQuota(100_000);
+            const first_class = self.policy.getSizeClass(size);
             const class_count = try self.classCount();
-            if (@as(usize, c0) >= class_count) {
+            if (@as(usize, first_class) >= class_count) {
                 return Error.BadData;
             }
 
-            var class_index: usize = c0;
+            var class_index: usize = first_class;
             while (class_index < class_count) : (class_index += 1) {
-                const c: SizeClassT = @intCast(class_index);
-                var manager = self.initClassChainManager(c);
-                var chain = try self.initClassChain(&manager);
-                defer {
-                    chain.deinit();
-                }
-                var itr = try chain.iterator();
-                defer {
-                    itr.deinit();
-                }
-
-                var steps: usize = 0;
-                var expected_prev: ?Pid = null;
-                while ((try itr.get()) != null) {
-                    if (steps >= self.cache.pageCount()) {
-                        return Error.BadData;
+                inline for (0..maximum_class_count) |candidate| {
+                    if (class_index == candidate) {
+                        if (try self.findInClass(candidate, size)) |page_id| {
+                            return page_id;
+                        }
                     }
-                    steps += 1;
-                    var slab = itr.chunkPtr().?;
-                    const cv = ConstView.init(try slab.page());
-                    try validatePreviousLink(&cv, expected_prev);
-                    if (cv.sizeClass() != c) {
-                        return Error.BadData;
-                    }
-                    if (try cv.findBySize(size)) |si| {
-                        return si.pid;
-                    }
-                    expected_prev = try slab.id();
-                    try itr.next();
                 }
             }
             return null;
         }
 
         pub fn add(self: *Self, pid: Pid, free: Size) Error!void {
-            const c = self.policy.getSizeClass(free);
-            try self.validateClass(c);
-            var slab = try self.slabWithRoom(c);
-            defer {
-                slab.chunk.deinit();
+            @setEvalBranchQuota(100_000);
+            const class = self.policy.getSizeClass(free);
+            try self.validateClass(class);
+            inline for (0..maximum_class_count) |candidate| {
+                if (@as(usize, class) == candidate) {
+                    return self.addToClass(candidate, pid, free);
+                }
             }
-            var v = View.init(try slab.chunk.pageMut());
-            const si = try v.insert(pid, free);
-            try self.writeLocation(pid, .{
-                .page_id = try slab.chunk.id(),
-                .slot_id = @intCast(si.slot_id),
-            });
+            unreachable;
         }
 
         pub fn update(self: *Self, pid: Pid, free: Size) Error!void {
@@ -184,6 +155,7 @@ pub fn Paged(
         }
 
         pub fn remove(self: *Self, pid: Pid) Error!void {
+            @setEvalBranchQuota(100_000);
             const location = (try self.readLocation(pid)) orelse return Error.BadData;
             var ph = try self.fetchSlab(location.page_id);
             var owns_page_handle = true;
@@ -192,73 +164,55 @@ pub fn Paged(
                     ph.deinit();
                 }
             }
-            var v = View.init(try ph.dataMut());
-            const slot = (try v.get(@intCast(location.slot_id))) orelse return Error.BadData;
+            var slab = View.init(try ph.dataMut());
+            const slot = (try slab.get(@intCast(location.slot_id))) orelse return Error.BadData;
             if (slot.pid != pid) {
                 return Error.BadData;
             }
-            const size_class = v.sizeClass();
+            const size_class = slab.sizeClass();
             try self.validateClass(size_class);
             if (!try self.classContains(size_class, location.page_id)) {
                 return Error.BadData;
             }
-            try v.remove(slot.slot_id);
-            if (try v.isEmpty()) {
-                var manager = self.initClassChainManager(size_class);
-                var chain = try self.initClassChain(&manager);
-                defer {
-                    chain.deinit();
+            try slab.remove(slot.slot_id);
+            if (!try slab.isEmpty()) {
+                return;
+            }
+
+            inline for (0..maximum_class_count) |candidate| {
+                if (@as(usize, size_class) == candidate) {
+                    const Manager = ClassTypes.Manager(candidate);
+                    const Chain = ClassTypes.Chain(candidate);
+                    var manager = Manager.init(self.sm);
+                    var chain = try Chain.init(self.cache, &manager, .{
+                        .chunk_page_kind = self.settings.page_kind,
+                    });
+                    defer chain.deinit();
+
+                    var chunk = Chain.Chunk.init(ph);
+                    owns_page_handle = false;
+                    chain.evictChunk(&chunk) catch |err| {
+                        chunk.deinit();
+                        return err;
+                    };
+                    try chain.destroyChunk(chunk);
+                    return;
                 }
-
-                var chunk = PageChainHandle.Chunk.init(ph);
-                owns_page_handle = false;
-                chain.evictChunk(&chunk) catch |err| {
-                    chunk.deinit();
-                    return err;
-                };
-                try chain.destroyChunk(chunk);
             }
+            unreachable;
         }
 
-        // --- helpers ---
-        const SlabRef = struct {
-            chunk: PageChainHandle.Chunk,
-        };
-
-        fn fetchSlab(self: *Self, pid: CachePageId) Error!PageHandle {
-            var ph = try self.cache.fetch(pid);
-            errdefer {
-                ph.deinit();
-            }
-            const cv = ConstView.init(try ph.data());
-            try cv.validateTyped();
-            if (cv.pageHeader().kind.get() != self.settings.page_kind) {
-                return Error.InvalidId;
-            }
-            return ph;
-        }
-
-        fn createSlab(chain: *PageChainHandle, c: SizeClassT) Error!SlabRef {
-            var chunk = try chain.createChunk();
-            errdefer {
-                chunk.deinit();
-            }
-            var v = View.init(try chunk.pageMut());
-            try v.formatPayload(c);
-            return .{ .chunk = chunk };
-        }
-
-        fn slabWithRoom(self: *Self, c: SizeClassT) Error!SlabRef {
-            try self.validateClass(c);
-            var manager = self.initClassChainManager(c);
-            var chain = try self.initClassChain(&manager);
-            defer {
-                chain.deinit();
-            }
+        fn findInClass(self: *Self, comptime class_index: usize, size: Size) Error!?Pid {
+            const Manager = ClassTypes.Manager(class_index);
+            const Chain = ClassTypes.Chain(class_index);
+            const class: SizeClassT = @intCast(class_index);
+            var manager = Manager.init(self.sm);
+            var chain = try Chain.init(self.cache, &manager, .{
+                .chunk_page_kind = self.settings.page_kind,
+            });
+            defer chain.deinit();
             var itr = try chain.iterator();
-            defer {
-                itr.deinit();
-            }
+            defer itr.deinit();
 
             var steps: usize = 0;
             var expected_prev: ?Pid = null;
@@ -267,31 +221,104 @@ pub fn Paged(
                     return Error.BadData;
                 }
                 steps += 1;
-                const slab = itr.chunkPtr().?;
-                const cv = ConstView.init(try slab.page());
-                try validatePreviousLink(&cv, expected_prev);
-                if (cv.sizeClass() != c) {
+                const chunk = itr.chunkPtr().?;
+                const slab = ConstView.init(try chunk.page());
+                try validatePreviousLink(&slab, expected_prev);
+                if (slab.sizeClass() != class) {
                     return Error.BadData;
                 }
-                if (!try cv.isFull()) {
-                    return .{ .chunk = (try itr.cloneChunk()).? };
+                if (try slab.findBySize(size)) |slot| {
+                    return slot.pid;
                 }
-                expected_prev = try slab.id();
+                expected_prev = try chunk.id();
+                try itr.next();
+            }
+            return null;
+        }
+
+        fn addToClass(
+            self: *Self,
+            comptime class_index: usize,
+            pid: Pid,
+            free: Size,
+        ) Error!void {
+            const Manager = ClassTypes.Manager(class_index);
+            const Chain = ClassTypes.Chain(class_index);
+            const class: SizeClassT = @intCast(class_index);
+            var manager = Manager.init(self.sm);
+            var chain = try Chain.init(self.cache, &manager, .{
+                .chunk_page_kind = self.settings.page_kind,
+            });
+            defer chain.deinit();
+            var itr = try chain.iterator();
+            defer itr.deinit();
+
+            var steps: usize = 0;
+            var expected_prev: ?Pid = null;
+            while ((try itr.get()) != null) {
+                if (steps >= self.cache.pageCount()) {
+                    return Error.BadData;
+                }
+                steps += 1;
+                const chunk = itr.chunkPtr().?;
+                const read_view = ConstView.init(try chunk.page());
+                try validatePreviousLink(&read_view, expected_prev);
+                if (read_view.sizeClass() != class) {
+                    return Error.BadData;
+                }
+                if (!try read_view.isFull()) {
+                    var writable = (try itr.cloneChunk()).?;
+                    defer writable.deinit();
+                    var slab = View.init(try writable.pageMut());
+                    const slot = try slab.insert(pid, free);
+                    try self.writeLocation(pid, .{
+                        .page_id = try writable.id(),
+                        .slot_id = @intCast(slot.slot_id),
+                    });
+                    return;
+                }
+                expected_prev = try chunk.id();
                 try itr.next();
             }
 
-            var created = try createSlab(&chain, c);
-            errdefer {
-                created.chunk.deinit();
+            var created = try chain.createChunk();
+            errdefer created.deinit();
+            var slab = View.init(try created.pageMut());
+            try slab.formatPayload(class);
+            const slot = try slab.insert(pid, free);
+            const slab_page_id = try created.id();
+            try chain.insertFirst(&created);
+            try self.writeLocation(pid, .{
+                .page_id = slab_page_id,
+                .slot_id = @intCast(slot.slot_id),
+            });
+            created.deinit();
+        }
+
+        fn fetchSlab(self: *Self, pid: CachePageId) Error!PageHandle {
+            var ph = try self.cache.fetch(pid);
+            errdefer ph.deinit();
+            const slab = ConstView.init(try ph.data());
+            try slab.validateTyped();
+            if (slab.pageHeader().kind.get() != self.settings.page_kind) {
+                return Error.InvalidId;
             }
-            try chain.insertFirst(&created.chunk);
-            return created;
+            return ph;
         }
 
         fn classCount(self: *const Self) Error!usize {
             const count = self.policy.count();
-            if (count == 0 or count > @as(usize, std.math.maxInt(SizeClassT)) + 1) {
+            if (count == 0 or count > maximum_class_count) {
                 return Error.BadData;
+            }
+
+            var lease = try self.sm.state();
+            defer lease.deinit();
+            const state = try FsmStateView.view(&lease);
+            for (state.classes[count..]) |unused| {
+                if (!unused.first.isMax()) {
+                    return Error.BadData;
+                }
             }
             return count;
         }
@@ -303,15 +330,30 @@ pub fn Paged(
         }
 
         fn classContains(self: *Self, class: SizeClassT, page_id: Pid) Error!bool {
-            var manager = self.initClassChainManager(class);
-            var chain = try self.initClassChain(&manager);
-            defer {
-                chain.deinit();
+            @setEvalBranchQuota(100_000);
+            inline for (0..maximum_class_count) |candidate| {
+                if (@as(usize, class) == candidate) {
+                    return self.classContainsAt(candidate, page_id);
+                }
             }
+            unreachable;
+        }
+
+        fn classContainsAt(
+            self: *Self,
+            comptime class_index: usize,
+            page_id: Pid,
+        ) Error!bool {
+            const Manager = ClassTypes.Manager(class_index);
+            const Chain = ClassTypes.Chain(class_index);
+            const class: SizeClassT = @intCast(class_index);
+            var manager = Manager.init(self.sm);
+            var chain = try Chain.init(self.cache, &manager, .{
+                .chunk_page_kind = self.settings.page_kind,
+            });
+            defer chain.deinit();
             var itr = try chain.iterator();
-            defer {
-                itr.deinit();
-            }
+            defer itr.deinit();
 
             var steps: usize = 0;
             var expected_prev: ?Pid = null;
@@ -320,10 +362,10 @@ pub fn Paged(
                     return Error.BadData;
                 }
                 steps += 1;
-                const slab = itr.chunkPtr().?;
-                const cv = ConstView.init(try slab.page());
-                try validatePreviousLink(&cv, expected_prev);
-                if (cv.sizeClass() != class) {
+                const chunk = itr.chunkPtr().?;
+                const slab = ConstView.init(try chunk.page());
+                try validatePreviousLink(&slab, expected_prev);
+                if (slab.sizeClass() != class) {
                     return Error.BadData;
                 }
                 if (entry.page_id == page_id) {
@@ -341,19 +383,19 @@ pub fn Paged(
             }
         }
 
-        fn writeLocation(self: *Self, data_pid: CachePageId, location: LocationAccessorT.Location) Error!void {
+        fn writeLocation(
+            self: *Self,
+            data_pid: CachePageId,
+            location: LocationAccessorT.Location,
+        ) Error!void {
             var ph = try self.cache.fetch(data_pid);
-            defer {
-                ph.deinit();
-            }
+            defer ph.deinit();
             try LocationAccessorT.write(try ph.dataMut(), location);
         }
 
         fn readLocation(self: *Self, data_pid: CachePageId) Error!?LocationAccessorT.Location {
             var ph = try self.cache.fetch(data_pid);
-            defer {
-                ph.deinit();
-            }
+            defer ph.deinit();
             return try LocationAccessorT.read(try ph.data());
         }
     };

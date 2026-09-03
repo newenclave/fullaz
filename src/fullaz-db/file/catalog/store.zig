@@ -7,7 +7,13 @@ const system_kinds = @import("../system_kinds.zig");
 
 /// Append-only storage for immutable catalog record revisions.
 pub fn CatalogStore(comptime CacheT: type, comptime ManagerT: type) type {
-    const ChainT = slot_chain.Handle(CacheT, ManagerT, .little);
+    const ChainT = slot_chain.Handle(
+        CacheT,
+        ManagerT,
+        u64,
+        CacheT.Pid,
+        .little,
+    );
 
     return struct {
         const Self = @This();

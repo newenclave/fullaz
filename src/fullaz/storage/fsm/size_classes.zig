@@ -4,6 +4,7 @@ const std = @import("std");
 pub const One = struct {
     const Self = @This();
     pub const SizeClass = u16;
+    pub const maximum_class_count: usize = 1;
 
     pub fn getSizeClass(_: *const Self, _: u16) SizeClass {
         return 0;
@@ -18,6 +19,7 @@ pub const One = struct {
 pub const Logarithmic = struct {
     const Self = @This();
     pub const SizeClass = u16;
+    pub const maximum_class_count: usize = 17;
     pub const Error = error{
         InvalidBase,
         InvalidMinimumTrackedSpace,

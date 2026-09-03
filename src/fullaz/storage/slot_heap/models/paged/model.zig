@@ -10,6 +10,8 @@ const scanner = @import("../../scanner.zig");
 const StructuralMutationCoordinator = @import("../../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 const PackedInt = @import("../../../../core/packed_int.zig").PackedInt;
 const StateAccessor = @import("../../../../core/storage_manager.zig").StateAccessor;
+const storage_manager_contract = @import("../../../../contracts/storage_manager.zig");
+const slab_fsm = @import("../../../fsm/models/paged/slab/slab.zig");
 
 const requiresErrorDeclaration = contract_interfaces.requiresErrorDeclaration;
 const requiresFnSignature = contract_interfaces.requiresFnSignature;
@@ -24,12 +26,11 @@ pub const Settings = struct {
     maximum_level: usize = 32,
 };
 
-/// Durable state required to reopen one paged slot heap and its slab FSM.
-pub fn State(
+/// Native durable state required to reopen one paged slot heap.
+pub fn HeapState(
     comptime PageIdT: type,
     comptime SlotIdT: type,
     comptime maximum_level: usize,
-    comptime size_class_count: usize,
 ) type {
     const PackedPageId = PackedInt(PageIdT, .little);
     const PackedSlotId = PackedInt(SlotIdT, .little);
@@ -41,162 +42,39 @@ pub fn State(
         cached_top_slot: PackedSlotId = PackedSlotId.init(PackedSlotId.max),
         entries_count: PackedCount = PackedCount.init(0),
         available_inode_heads: [maximum_level + 1]PackedPageId = .{PackedPageId.init(PackedPageId.max)} ** (maximum_level + 1),
-        fsm_class_roots: [size_class_count]PackedPageId = .{PackedPageId.init(PackedPageId.max)} ** size_class_count,
     };
 }
 
-/// Lease-backed access to one SlotHeap's durable state and slab FSM roots.
-pub fn StateAdapter(
-    comptime StateManagerT: type,
-    comptime StateT: type,
+/// Composite durable state for a heap and its policy-bounded slab FSM.
+pub fn State(
     comptime PageIdT: type,
     comptime SlotIdT: type,
     comptime maximum_level: usize,
-    comptime size_class_count: usize,
+    comptime SizePolicyT: type,
 ) type {
-    const ExpectedState = State(PageIdT, SlotIdT, maximum_level, size_class_count);
-    const StateLeaseT = StateManagerT.StateLeaseType;
-    const StateView = StateAccessor(StateLeaseT, StateT);
-    const PackedPageId = PackedInt(PageIdT, .little);
+    const NativeHeapState = HeapState(PageIdT, SlotIdT, maximum_level);
+    const FsmState = slab_fsm.State(PageIdT, SizePolicyT, .little);
+    const CompositeState = extern struct {
+        heap: NativeHeapState = .{},
+        fsm: FsmState = slab_fsm.emptyState(PageIdT, SizePolicyT, .little),
+    };
 
     comptime {
-        contracts.storage_manager.assertPagedStorageManager(StateManagerT, PageIdT);
-        if (StateT != ExpectedState) {
-            @compileError("SlotHeap state adapter State must be the matching paged SlotHeap State");
+        if (@alignOf(CompositeState) != 1 or
+            @offsetOf(CompositeState, "heap") != 0 or
+            @offsetOf(CompositeState, "fsm") != @sizeOf(NativeHeapState) or
+            @sizeOf(CompositeState) != @sizeOf(NativeHeapState) + @sizeOf(FsmState))
+        {
+            @compileError("SlotHeap composite state layout changed");
         }
     }
-
-    return struct {
-        const Self = @This();
-
-        pub const PageId = PageIdT;
-        pub const CountType = u64;
-        pub const Error = StateManagerT.Error ||
-            StateLeaseT.Error ||
-            error{
-                BadData,
-                InvalidSizeClass,
-                MaxDepth,
-            };
-
-        state_manager: *StateManagerT,
-
-        pub fn init(state_manager: *StateManagerT) Self {
-            return .{ .state_manager = state_manager };
-        }
-
-        pub fn getRoot(self: *const Self) Error!?PageId {
-            var lease = try self.state_manager.state();
-            defer lease.deinit();
-            const state = try StateView.view(&lease);
-            return if (state.root.isMax()) null else state.root.get();
-        }
-
-        pub fn setRoot(self: *Self, root: ?PageId) Error!void {
-            var lease = try self.state_manager.state();
-            defer lease.deinit();
-            const state = try StateView.viewMut(&lease);
-            state.root.set(root orelse PackedPageId.max);
-            lease.finish();
-        }
-
-        pub fn getCachedTop(self: *const Self) Error!?view_mod.View(PageId, SlotIdT, .little, false).LocationType {
-            var lease = try self.state_manager.state();
-            defer lease.deinit();
-            const state = try StateView.view(&lease);
-            if (state.cached_top_page.isMax()) {
-                return null;
-            }
-            return .{
-                .page_id = state.cached_top_page.get(),
-                .slot_id = state.cached_top_slot.get(),
-            };
-        }
-
-        pub fn setCachedTop(
-            self: *Self,
-            top: ?view_mod.View(PageId, SlotIdT, .little, false).LocationType,
-        ) Error!void {
-            var lease = try self.state_manager.state();
-            defer lease.deinit();
-            const state = try StateView.viewMut(&lease);
-            if (top) |location| {
-                state.cached_top_page.set(location.page_id);
-                state.cached_top_slot.set(location.slot_id);
-            } else {
-                state.cached_top_page.setMax();
-                state.cached_top_slot.setMax();
-            }
-            lease.finish();
-        }
-
-        pub fn getEntriesCount(self: *const Self) Error!CountType {
-            var lease = try self.state_manager.state();
-            defer lease.deinit();
-            return (try StateView.view(&lease)).entries_count.get();
-        }
-
-        pub fn setEntriesCount(self: *Self, count: CountType) Error!void {
-            var lease = try self.state_manager.state();
-            defer lease.deinit();
-            const state = try StateView.viewMut(&lease);
-            state.entries_count.set(count);
-            lease.finish();
-        }
-
-        pub fn getAvailableInode(self: *const Self, level: usize) Error!?PageId {
-            if (level == 0 or level > maximum_level) {
-                return error.MaxDepth;
-            }
-            var lease = try self.state_manager.state();
-            defer lease.deinit();
-            const head = (try StateView.view(&lease)).available_inode_heads[level];
-            return if (head.isMax()) null else head.get();
-        }
-
-        pub fn setAvailableInode(self: *Self, level: usize, inode: ?PageId) Error!void {
-            if (level == 0 or level > maximum_level) {
-                return error.MaxDepth;
-            }
-            var lease = try self.state_manager.state();
-            defer lease.deinit();
-            const state = try StateView.viewMut(&lease);
-            state.available_inode_heads[level].set(inode orelse PackedPageId.max);
-            lease.finish();
-        }
-
-        pub fn getSizeClassRoot(self: *const Self, class: u16) Error!?PageId {
-            const index: usize = class;
-            if (index >= size_class_count) {
-                return error.InvalidSizeClass;
-            }
-            var lease = try self.state_manager.state();
-            defer lease.deinit();
-            const root = (try StateView.view(&lease)).fsm_class_roots[index];
-            return if (root.isMax()) null else root.get();
-        }
-
-        pub fn setSizeClassRoot(self: *Self, class: u16, root: ?PageId) Error!void {
-            const index: usize = class;
-            if (index >= size_class_count) {
-                return error.InvalidSizeClass;
-            }
-            var lease = try self.state_manager.state();
-            defer lease.deinit();
-            const state = try StateView.viewMut(&lease);
-            state.fsm_class_roots[index].set(root orelse PackedPageId.max);
-            lease.finish();
-        }
-
-        pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
-            return self.state_manager.destroyPage(page_id);
-        }
-    };
+    return CompositeState;
 }
 
 pub fn Paged(
     comptime PageCacheT: type,
-    comptime StateAdapterT: type,
+    comptime StorageManagerT: type,
+    comptime maximum_level: usize,
     comptime FsmT: type,
     comptime cmp: anytype,
     comptime CompareContextT: type,
@@ -215,8 +93,10 @@ pub fn Paged(
 
     const NodeId = PageCacheT.Pid;
     const SlotId = u16;
-    const Count = StateAdapterT.CountType;
+    const Count = u64;
     const Space = FsmT.Size;
+    const NativeHeapState = HeapState(NodeId, SlotId, maximum_level);
+    const HeapStateView = StateAccessor(StorageManagerT.StateLeaseType, NativeHeapState);
     const MutableView = view_mod.View(NodeId, SlotId, .little, false);
     const ReadView = view_mod.View(NodeId, SlotId, .little, true);
     const Location = MutableView.LocationType;
@@ -225,12 +105,9 @@ pub fn Paged(
     const PageHandle = PageCacheT.Handle;
 
     comptime {
-        interfaces.assertPagedStateAdapter(StateAdapterT, Location);
+        storage_manager_contract.assertPagedStorageManager(StorageManagerT, NodeId);
         requiresFnSignature(PageCacheT, "pageSize", fn (*const PageCacheT) usize);
         requiresFnSignature(PageHandle, "deinit", fn (*PageHandle) void);
-        if (StateAdapterT.PageId != NodeId) {
-            @compileError("Slot-heap state adapter PageId must match page cache Pid");
-        }
         if (FsmT.Pid != NodeId) {
             @compileError("Slot-heap FSM Pid must match page cache Pid");
         }
@@ -250,7 +127,8 @@ pub fn Paged(
     const ErrorSet = errors.PageError ||
         errors.SlotsError ||
         PageCacheT.Error ||
-        StateAdapterT.Error ||
+        StorageManagerT.Error ||
+        StorageManagerT.StateLeaseType.Error ||
         FsmT.Error ||
         MutableView.Error ||
         @import("../../../../core/core.zig").structural_mutation.Error ||
@@ -267,7 +145,7 @@ pub fn Paged(
 
     const Context = struct {
         cache: *PageCacheT,
-        state_adapter: *StateAdapterT,
+        state_manager: *StorageManagerT,
         fsm: *FsmT,
         compare_context: CompareContextT,
         settings: Settings,
@@ -739,14 +617,14 @@ pub fn Paged(
 
         fn init(
             cache: *PageCacheT,
-            state_adapter: *StateAdapterT,
+            state_manager: *StorageManagerT,
             fsm: *FsmT,
             compare_context: CompareContextT,
             settings: Settings,
         ) Self {
             return .{ .ctx = .{
                 .cache = cache,
-                .state_adapter = state_adapter,
+                .state_manager = state_manager,
                 .fsm = fsm,
                 .compare_context = compare_context,
                 .settings = settings,
@@ -754,27 +632,95 @@ pub fn Paged(
         }
 
         pub fn getRoot(self: *const Self) Error!?NodeId {
-            return self.ctx.state_adapter.getRoot();
+            var lease = try self.ctx.state_manager.state();
+            defer lease.deinit();
+            const root = (try HeapStateView.view(&lease)).root;
+            return if (root.isMax()) null else root.get();
         }
 
         pub fn setRoot(self: *Self, root: ?NodeId) Error!void {
-            try self.ctx.state_adapter.setRoot(root);
+            if (root == std.math.maxInt(NodeId)) {
+                return Error.BadData;
+            }
+            var lease = try self.ctx.state_manager.state();
+            defer lease.deinit();
+            const state = try HeapStateView.viewMut(&lease);
+            state.root.set(root orelse std.math.maxInt(NodeId));
+            lease.finish();
         }
 
         pub fn getCachedTop(self: *const Self) Error!?Location {
-            return self.ctx.state_adapter.getCachedTop();
+            var lease = try self.ctx.state_manager.state();
+            defer lease.deinit();
+            const state = try HeapStateView.view(&lease);
+            if (state.cached_top_page.isMax() != state.cached_top_slot.isMax()) {
+                return Error.BadData;
+            }
+            if (state.cached_top_page.isMax()) {
+                return null;
+            }
+            return .{
+                .page_id = state.cached_top_page.get(),
+                .slot_id = state.cached_top_slot.get(),
+            };
         }
 
         pub fn setCachedTop(self: *Self, top: ?Location) Error!void {
-            try self.ctx.state_adapter.setCachedTop(top);
+            if (top) |location| {
+                if (location.page_id == std.math.maxInt(NodeId) or
+                    location.slot_id == std.math.maxInt(SlotId))
+                {
+                    return Error.BadData;
+                }
+            }
+            var lease = try self.ctx.state_manager.state();
+            defer lease.deinit();
+            const state = try HeapStateView.viewMut(&lease);
+            if (top) |location| {
+                state.cached_top_page.set(location.page_id);
+                state.cached_top_slot.set(location.slot_id);
+            } else {
+                state.cached_top_page.setMax();
+                state.cached_top_slot.setMax();
+            }
+            lease.finish();
         }
 
         pub fn getAvailableInode(self: *const Self, level: usize) Error!?NodeId {
-            return self.ctx.state_adapter.getAvailableInode(level);
+            if (level == 0 or level > maximum_level) {
+                return Error.MaxDepth;
+            }
+            var lease = try self.ctx.state_manager.state();
+            defer lease.deinit();
+            const head = (try HeapStateView.view(&lease)).available_inode_heads[level];
+            return if (head.isMax()) null else head.get();
         }
 
         pub fn setAvailableInode(self: *Self, level: usize, inode: ?NodeId) Error!void {
-            try self.ctx.state_adapter.setAvailableInode(level, inode);
+            if (level == 0 or level > maximum_level) {
+                return Error.MaxDepth;
+            }
+            if (inode == std.math.maxInt(NodeId)) {
+                return Error.BadData;
+            }
+            var lease = try self.ctx.state_manager.state();
+            defer lease.deinit();
+            const state = try HeapStateView.viewMut(&lease);
+            state.available_inode_heads[level].set(inode orelse std.math.maxInt(NodeId));
+            lease.finish();
+        }
+
+        pub fn getEntriesCount(self: *const Self) Error!Count {
+            var lease = try self.ctx.state_manager.state();
+            defer lease.deinit();
+            return (try HeapStateView.view(&lease)).entries_count.get();
+        }
+
+        pub fn setEntriesCount(self: *Self, count: Count) Error!void {
+            var lease = try self.ctx.state_manager.state();
+            defer lease.deinit();
+            (try HeapStateView.viewMut(&lease)).entries_count.set(count);
+            lease.finish();
         }
 
         pub fn createLeaf(self: *Self) Error!LeafImpl {
@@ -783,7 +729,7 @@ pub fn Paged(
             errdefer {
                 handle.deinit();
                 if (created_page_id) |page_id| {
-                    self.ctx.state_adapter.destroyPage(page_id) catch {};
+                    self.ctx.state_manager.destroyPage(page_id) catch {};
                 }
             }
             const page_id = try handle.pid();
@@ -812,7 +758,7 @@ pub fn Paged(
             errdefer {
                 handle.deinit();
                 if (created_page_id) |page_id| {
-                    self.ctx.state_adapter.destroyPage(page_id) catch {};
+                    self.ctx.state_manager.destroyPage(page_id) catch {};
                 }
             }
             const page_id = try handle.pid();
@@ -938,7 +884,7 @@ pub fn Paged(
         }
 
         pub fn destroy(self: *Self, page_id: NodeId) Error!void {
-            try self.ctx.state_adapter.destroyPage(page_id);
+            try self.ctx.state_manager.destroyPage(page_id);
         }
 
         pub fn findLeaf(self: *Self, required: Space) Error!?NodeId {
@@ -1007,7 +953,7 @@ pub fn Paged(
 
         pub fn init(
             cache: *PageCacheT,
-            state_adapter: *StateAdapterT,
+            state_manager: *StorageManagerT,
             fsm: *FsmT,
             settings: Settings,
             compare_context: CompareContextT,
@@ -1015,6 +961,7 @@ pub fn Paged(
             if (settings.key_size == 0 or
                 settings.leaf_page_kind == settings.inode_page_kind or
                 settings.maximum_level == 0 or
+                settings.maximum_level != maximum_level or
                 std.math.cast(SlotId, settings.maximum_level) == null or
                 std.math.cast(SlotId, settings.key_size) == null)
             {
@@ -1060,7 +1007,7 @@ pub fn Paged(
             return .{
                 .accessor_state = AccessorType.init(
                     cache,
-                    state_adapter,
+                    state_manager,
                     fsm,
                     compare_context,
                     settings,
@@ -1147,19 +1094,19 @@ pub fn Paged(
         }
 
         pub fn incrementEntriesCount(self: *Self) Error!void {
-            const count = try self.accessor_state.ctx.state_adapter.getEntriesCount();
+            const count = try self.accessor_state.getEntriesCount();
             const next = std.math.add(Count, count, 1) catch return Error.CountOverflow;
-            try self.accessor_state.ctx.state_adapter.setEntriesCount(next);
+            try self.accessor_state.setEntriesCount(next);
         }
 
         pub fn decrementEntriesCount(self: *Self) Error!void {
-            const count = try self.accessor_state.ctx.state_adapter.getEntriesCount();
+            const count = try self.accessor_state.getEntriesCount();
             const next = std.math.sub(Count, count, 1) catch return Error.CountOverflow;
-            try self.accessor_state.ctx.state_adapter.setEntriesCount(next);
+            try self.accessor_state.setEntriesCount(next);
         }
 
         pub fn getEntriesCount(self: *const Self) Error!Count {
-            return self.accessor_state.ctx.state_adapter.getEntriesCount();
+            return self.accessor_state.getEntriesCount();
         }
     };
 }

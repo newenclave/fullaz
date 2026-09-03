@@ -54,37 +54,44 @@ fn keyCmp(ctx: anytype, k1: []const u8, k2: []const u8) std.math.Order {
     }
 }
 
-const PidType = struct {
-    page_id: u32 = 0,
-    slot_id: usize = 0,
-};
+fn TestStorageManager(comptime maximum_level: usize) type {
+    const State = skip_list.models.paged.State(u32, maximum_level, .little);
 
-const NoneStorageManager = struct {
-    pub const Self = @This();
+    return struct {
+        const Self = @This();
 
-    pub const PageId = PidType;
-    pub const Error = error{};
-    roots: [32]?PidType = .{null} ** 32,
+        pub const Error = error{};
+        pub const StateLeaseType = struct {
+            const LeaseSelf = @This();
 
-    pub fn getRoot(self: *const Self, level: usize) Error!?PidType {
-        if (level >= self.roots.len) {
-            @panic("Level exceeds maximum supported levels");
+            pub const Error = Self.Error;
+
+            manager: *Self,
+
+            pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                return std.mem.asBytes(&self.manager.state_data);
+            }
+
+            pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                return std.mem.asBytes(&self.manager.state_data);
+            }
+
+            pub fn finish(_: *LeaseSelf) void {}
+
+            pub fn deinit(_: *LeaseSelf) void {}
+        };
+
+        state_data: State = .{},
+
+        pub fn state(self: *Self) Error!StateLeaseType {
+            return .{ .manager = self };
         }
-        return self.roots[level];
-    }
+    };
+}
 
-    pub fn setRoot(self: *Self, level: usize, root: ?PidType) Error!void {
-        if (level >= self.roots.len) {
-            @panic("Level exceeds maximum supported levels");
-        }
-        self.roots[level] = root;
-    }
-
-    pub fn destroyPage(_: *Self, id: PageId) Error!void {
-        _ = id;
-        // Implement page destruction logic, e.g., add to free list
-    }
-};
+const StorageManager1 = TestStorageManager(1);
+const StorageManager4 = TestStorageManager(4);
+const StorageManager6 = TestStorageManager(6);
 
 test "SkipList paged: page and view" {
     var buf: [4096]u8 = .{0} ** 4096;
@@ -104,7 +111,7 @@ test "SkipList paged: create and load nodes" {
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
 
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+    const Model = ModelType(PageCache, StorageManager1, 1, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
@@ -116,13 +123,12 @@ test "SkipList paged: create and load nodes" {
     var cache = try PageCache.init(&dev, allocator, 16);
     defer cache.deinit();
 
-    var mgr = NoneStorageManager{};
+    var mgr = StorageManager1{};
 
     var prng: std.Random.DefaultPrng = .init(getNowTimestamp());
     const rand = prng.random();
 
     var model = Model.init(&cache, &mgr, &fsm_inst, .{
-        .max_level = 1,
         .key_len = 4,
         .value_len = 4,
         .node_page_kind = 42,
@@ -165,7 +171,7 @@ test "SkipList paged: interfaces" {
     //const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+    const Model = ModelType(PageCache, StorageManager4, 4, Fsm, void, keyCmp, void);
 
     comptime interfaces.assertPath(Model.AccessorType.Path);
 }
@@ -174,13 +180,13 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+    const Model = ModelType(PageCache, StorageManager4, 4, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
     var cache = try PageCache.init(&dev, allocator, 16);
     defer cache.deinit();
-    var mgr = NoneStorageManager{};
+    var mgr = StorageManager4{};
     var fsm_mem = try FsmMem.init(allocator);
     defer fsm_mem.deinit();
     var fsm_inst = Fsm.init(&fsm_mem);
@@ -193,7 +199,6 @@ test "SkipList paged: createNode allocates a slot + tracks the page; destroy fre
     const rand = prng.random();
 
     var model = Model.init(&cache, &mgr, &fsm_inst, .{
-        .max_level = 4,
         .key_len = 4,
         .value_len = 4,
     }, {}, rand, allocator);
@@ -259,13 +264,13 @@ test "SkipList paged: node next/prev links round-trip per level" {
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+    const Model = ModelType(PageCache, StorageManager4, 4, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
     var cache = try PageCache.init(&dev, allocator, 16);
     defer cache.deinit();
-    var mgr = NoneStorageManager{};
+    var mgr = StorageManager4{};
     var fsm_mem = try FsmMem.init(allocator);
     defer fsm_mem.deinit();
     var fsm_inst = Fsm.init(&fsm_mem);
@@ -275,7 +280,6 @@ test "SkipList paged: node next/prev links round-trip per level" {
     const rand = prng.random();
 
     var model = Model.init(&cache, &mgr, &fsm_inst, .{
-        .max_level = 4,
         .key_len = 4,
         .value_len = 4,
     }, {}, rand, allocator);
@@ -344,7 +348,7 @@ test "SkipList paged scanner follows level-zero next links and values" {
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+    const Model = ModelType(PageCache, StorageManager1, 1, Fsm, void, keyCmp, void);
     const Visitor = struct {
         expected_page_id: u32,
         refs: usize = 0,
@@ -368,7 +372,7 @@ test "SkipList paged scanner follows level-zero next links and values" {
     defer dev.deinit();
     var cache = try PageCache.init(&dev, allocator, 16);
     defer cache.deinit();
-    var manager = NoneStorageManager{};
+    var manager = StorageManager1{};
     var fsm_mem = try FsmMem.init(allocator);
     defer fsm_mem.deinit();
     var fsm_inst = Fsm.init(&fsm_mem);
@@ -378,7 +382,7 @@ test "SkipList paged scanner follows level-zero next links and values" {
         &cache,
         &manager,
         &fsm_inst,
-        .{ .max_level = 1, .key_len = 4, .value_len = 4 },
+        .{ .key_len = 4, .value_len = 4 },
         {},
         prng.random(),
         allocator,
@@ -441,13 +445,13 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+    const Model = ModelType(PageCache, StorageManager4, 4, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 1024); // small page -> easy to fill and fragment
     defer dev.deinit();
     var cache = try PageCache.init(&dev, allocator, 16);
     defer cache.deinit();
-    var mgr = NoneStorageManager{};
+    var mgr = StorageManager4{};
     var fsm_mem = try FsmMem.init(allocator);
     defer fsm_mem.deinit();
     var fsm_inst = Fsm.init(&fsm_mem);
@@ -457,7 +461,6 @@ test "SkipList paged: checkCompactPage compacts a fragmented page so a larger sl
     const rand = prng.random();
 
     var model = Model.init(&cache, &mgr, &fsm_inst, .{
-        .max_level = 4,
         .key_len = 4,
         .value_len = 4,
     }, {}, rand, allocator);
@@ -530,13 +533,13 @@ test "SkipList paged: iterator remove test" {
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+    const Model = ModelType(PageCache, StorageManager4, 4, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
     var cache = try PageCache.init(&dev, allocator, 16);
     defer cache.deinit();
-    var mgr = NoneStorageManager{};
+    var mgr = StorageManager4{};
     var fsm_mem = try FsmMem.init(allocator);
     defer fsm_mem.deinit();
     var fsm_inst = Fsm.init(&fsm_mem);
@@ -546,7 +549,6 @@ test "SkipList paged: iterator remove test" {
     const rand = prng.random();
 
     var model = Model.init(&cache, &mgr, &fsm_inst, .{
-        .max_level = 4,
         .key_len = 4,
         .value_len = 4,
     }, {}, rand, allocator);
@@ -610,20 +612,19 @@ test "SkipList paged: iterator value editor locks layout, rolls back, and finish
     const allocator = std.testing.allocator;
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const Model = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+    const Model = ModelType(PageCache, StorageManager4, 4, Fsm, void, keyCmp, void);
 
     var dev = try Device.init(allocator, 4096);
     defer dev.deinit();
     var cache = try PageCache.init(&dev, allocator, 16);
     defer cache.deinit();
-    var mgr = NoneStorageManager{};
+    var mgr = StorageManager4{};
     var fsm_mem = try FsmMem.init(allocator);
     defer fsm_mem.deinit();
     var fsm_inst = Fsm.init(&fsm_mem);
     defer fsm_inst.deinit();
     var prng: std.Random.DefaultPrng = .init(2);
     var model = Model.init(&cache, &mgr, &fsm_inst, .{
-        .max_level = 4,
         .key_len = 4,
         .value_len = 4,
     }, {}, prng.random(), allocator);
@@ -718,7 +719,7 @@ test "SkipList paged: randomized parity vs memory model" {
 
     const Device = device.MemoryBlock(u32);
     const PageCache = PageCacheT(Device);
-    const PagedModel = ModelType(PageCache, NoneStorageManager, Fsm, void, keyCmp, void);
+    const PagedModel = ModelType(PageCache, StorageManager6, 6, Fsm, void, keyCmp, void);
     const PagedSL = SkipList(PagedModel);
 
     // one seed drives the op stream; print it so any failure is reproducible.
@@ -738,14 +739,13 @@ test "SkipList paged: randomized parity vs memory model" {
     defer dev.deinit();
     var cache = try PageCache.init(&dev, allocator, 32);
     defer cache.deinit();
-    var mgr = NoneStorageManager{};
+    var mgr = StorageManager6{};
     var fsm_mem = try FsmMem.init(allocator);
     defer fsm_mem.deinit();
     var fsm_inst = Fsm.init(&fsm_mem);
     defer fsm_inst.deinit();
 
     var paged_model = PagedModel.init(&cache, &mgr, &fsm_inst, .{
-        .max_level = 6,
         .key_len = 4,
         .value_len = 4,
     }, {}, paged_prng.random(), allocator);

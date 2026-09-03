@@ -301,7 +301,7 @@ export fn snapshotPages(include_waste: u32) u32 {
     if (include_waste != 0) {
         var live = std.AutoHashMap(u32, void).init(allocator);
         defer live.deinit();
-        if (world.manager.root) |root_id| {
+        if (world.model.accessor().getRoot() catch |err| return fail(err)) |root_id| {
             markLiveChunks(&live, root_id) catch |err| return fail(err);
         }
 

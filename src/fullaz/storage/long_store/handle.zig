@@ -1,8 +1,10 @@
 const std = @import("std");
 const view = @import("view.zig");
 const scanner = @import("scanner.zig");
+const long_store_state = @import("state.zig");
 const page_header = @import("../../page/header.zig");
 const interfaces = @import("../../contracts/contracts.zig");
+const storage_manager = @import("../../core/storage_manager.zig");
 const errors = @import("../../core/errors.zig");
 
 pub const Settings = struct {
@@ -13,13 +15,16 @@ pub const Settings = struct {
 pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type) type {
     comptime {
         interfaces.page_cache.requiresPageCache(PageCacheT);
-        interfaces.storage_manager.requiresStorageManager(StorageManagerT);
+        interfaces.storage_manager.assertPagedStorageManager(StorageManagerT, PageCacheT.Pid);
     }
 
     const PosType = u32;
     const Index = u16;
     const PageHandle = PageCacheT.Handle;
     const CachePageId = PageCacheT.Pid;
+    const StateT = long_store_state.State(CachePageId);
+    const StateLeaseT = StorageManagerT.StateLeaseType;
+    const StateView = storage_manager.StateAccessor(StateLeaseT, StateT);
 
     //    const CommonPageView = page_header.View(CachePageId, u16, .little, false);
     const CommonPageViewConst = page_header.View(CachePageId, Index, .little, true);
@@ -27,12 +32,32 @@ pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type) type {
     const ViewTypesConst = view.View(CachePageId, Index, PosType, .little, true);
 
     const CommonErrors = PageCacheT.Error ||
-        StorageManagerT.Error;
+        StorageManagerT.Error ||
+        StateLeaseT.Error ||
+        error{BadData};
 
     const Context = struct {
+        const Self = @This();
+
         cache: *PageCacheT,
         mgr: *StorageManagerT,
         settings: Settings,
+
+        fn getRoot(self: *const Self) CommonErrors!?CachePageId {
+            var lease = try self.mgr.state();
+            defer lease.deinit();
+            const durable_state = try StateView.view(&lease);
+            const root = durable_state.root.get();
+            return if (root == std.math.maxInt(CachePageId)) null else root;
+        }
+
+        fn setRoot(self: *Self, root: ?CachePageId) CommonErrors!void {
+            var lease = try self.mgr.state();
+            defer lease.deinit();
+            const durable_state = try StateView.viewMut(&lease);
+            durable_state.root.set(root orelse std.math.maxInt(CachePageId));
+            lease.finish();
+        }
     };
 
     const HeaderImpl = struct {
@@ -432,12 +457,12 @@ pub fn Handle(comptime PageCacheT: type, comptime StorageManagerT: type) type {
             var v = ViewTypes.HeaderView.init(try ph.dataMut());
             v.formatPage(self.ctx.settings.header_page_kind, pid, 0);
             v.subheaderMut().link.back.set(pid);
-            try self.ctx.mgr.setRoot(pid);
+            try self.ctx.setRoot(pid);
             return pid;
         }
 
         pub fn open(self: *Self) Error!void {
-            const header_pid_opt = self.ctx.mgr.getRoot();
+            const header_pid_opt = try self.ctx.getRoot();
             if (header_pid_opt == null) {
                 return Error.InvalidId;
             }

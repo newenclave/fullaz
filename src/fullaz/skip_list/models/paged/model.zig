@@ -1,11 +1,12 @@
 const std = @import("std");
 const core = @import("../../../core/core.zig");
+const contracts = @import("../../../contracts/contracts.zig");
 const errors = core.errors;
 const SubheaderView = @import("view.zig").View;
+const state = @import("state.zig");
 const interfaces = @import("../interfaces.zig");
 
 pub const Settings = struct {
-    max_level: usize = undefined,
     key_len: usize = undefined,
     value_len: usize = undefined,
     node_page_kind: u16 = 1,
@@ -14,19 +15,26 @@ pub const Settings = struct {
 pub fn Paged(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime maximum_level: usize,
     comptime FsmT: type,
     comptime AdditionalT: type,
     comptime cmp: anytype,
     comptime CtxT: type,
 ) type {
+    comptime contracts.storage_manager.assertStorageManager(StorageManagerT);
     const PageHandle = PageCacheT.Handle;
     const CachePageId = PageCacheT.Pid;
+    const StateT = state.State(CachePageId, maximum_level, .little);
+    const StateLeaseT = StorageManagerT.StateLeaseType;
+    const StateView = core.storage_manager.StateAccessor(StateLeaseT, StateT);
     const StructuralMutationCoordinator = core.structural_mutation.StructuralMutationCoordinator;
     const StructuralMutationError = core.structural_mutation.Error;
     const ErrorSet = PageCacheT.Error ||
         StorageManagerT.Error ||
+        StateLeaseT.Error ||
         FsmT.Error ||
         errors.SlotsError ||
+        error{BadData} ||
         StructuralMutationError;
 
     const KeyT = []const u8;
@@ -341,7 +349,7 @@ pub fn Paged(
                 @panic("k must be greater than 0");
             }
             if (k == 1) {
-                return self.context.rng.intRangeAtMost(usize, 1, self.context.settings.max_level);
+                return self.context.rng.intRangeAtMost(usize, 1, maximum_level);
             }
 
             while (true) {
@@ -350,7 +358,7 @@ pub fn Paged(
                     level += 1;
                 }
 
-                if (level < self.context.settings.max_level) {
+                if (level < maximum_level) {
                     return level;
                 }
             }
@@ -443,26 +451,45 @@ pub fn Paged(
         }
 
         pub fn getRoot(self: *const Self, level: usize) Error!?PidImpl {
-            const root_pid = try self.context.storage.getRoot(level);
-            if (root_pid) |rp| {
-                return .{
-                    .page_id = rp.page_id,
-                    .slot_id = rp.slot_id,
-                };
-            } else {
+            if (level >= maximum_level) {
+                return Error.OutOfBounds;
+            }
+            var lease = try self.context.storage.state();
+            defer lease.deinit();
+            const durable_state = try StateView.view(&lease);
+            const root = durable_state.roots[level];
+            if (root.page_id.isMax() != root.slot_id.isMax()) {
+                return Error.BadData;
+            }
+            if (root.page_id.isMax()) {
                 return null;
             }
+            return .{
+                .page_id = root.page_id.get(),
+                .slot_id = root.slot_id.get(),
+            };
         }
 
         pub fn setRoot(self: *Self, level: usize, pid: ?PidImpl) Error!void {
-            if (pid) |p| {
-                try self.context.storage.setRoot(level, .{
-                    .page_id = p.page_id,
-                    .slot_id = p.slot_id,
-                });
-            } else {
-                try self.context.storage.setRoot(level, null);
+            if (level >= maximum_level) {
+                return Error.OutOfBounds;
             }
+            const slot_id = if (pid) |p|
+                std.math.cast(u16, p.slot_id) orelse return Error.OutOfBounds
+            else
+                null;
+            var lease = try self.context.storage.state();
+            defer lease.deinit();
+            const durable_state = try StateView.viewMut(&lease);
+            const root = &durable_state.roots[level];
+            if (pid) |p| {
+                root.page_id.set(p.page_id);
+                root.slot_id.set(slot_id.?);
+            } else {
+                root.page_id.setMax();
+                root.slot_id.setMax();
+            }
+            lease.finish();
         }
 
         fn destroyImpl(self: *Self, pid: PidImpl) Error!void {
@@ -491,7 +518,7 @@ pub fn Paged(
         pub fn createPath(self: *Self) Error!PathImpl {
             return PathImpl.init(
                 self.context.allocator,
-                self.context.settings.max_level,
+                maximum_level,
             );
         }
 
@@ -594,7 +621,8 @@ pub fn Paged(
         }
 
         pub fn getMaxLevel(self: *const Self) Error!usize {
-            return self.accessor_state.context.settings.max_level;
+            _ = self;
+            return maximum_level;
         }
 
         pub fn accessor(self: *Self) *AccessorType {

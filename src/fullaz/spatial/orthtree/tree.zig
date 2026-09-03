@@ -122,7 +122,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
         pub fn bounds(self: *const Self) Error!?Box {
             const acc = self.accessor();
-            if (acc.getRoot()) |root_id| {
+            if (try acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
                 return root_node.bounds();
@@ -138,7 +138,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
         fn initRootBoundsImpl(self: *Self, bbox: Box) ErrorSet!void {
             const acc = self.accessor();
-            if (acc.getRoot()) |_| {
+            if (try acc.getRoot()) |_| {
                 return ErrorSet.AlreadyInitialized;
             }
             var root_node = try acc.createNode(bbox);
@@ -150,7 +150,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
             var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
             defer mutation.deinit();
             const acc = self.accessor();
-            if (acc.getRoot()) |root_id| {
+            if (try acc.getRoot()) |root_id| {
                 const needs_growth = blk: {
                     var root_node = try acc.loadNode(root_id);
                     defer acc.deinitNode(&root_node);
@@ -160,13 +160,13 @@ pub fn TreeImpl(comptime ModelT: type) type {
                     try self.growRootToContainImpl(child_box);
                 }
 
-                var root_node = try acc.loadNode(acc.getRoot().?);
+                var root_node = try acc.loadNode((try acc.getRoot()).?);
                 defer acc.deinitNode(&root_node);
                 try self.insertIntoNodeImpl(&root_node, child_box, value);
                 try self.model.incrementEntriesCount();
             } else {
                 try self.initRootBoundsImpl(child_box);
-                var root_node = try acc.loadNode(acc.getRoot().?);
+                var root_node = try acc.loadNode((try acc.getRoot()).?);
                 defer acc.deinitNode(&root_node);
                 try self.insertIntoNodeImpl(&root_node, child_box, value);
                 try self.model.incrementEntriesCount();
@@ -175,7 +175,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
         pub fn query(self: *const Self, qbox: Box, comptime callback: anytype, ctx: anytype) Error!void {
             const acc = self.accessor();
-            if (acc.getRoot()) |root_id| {
+            if (try acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
                 try self.queryNode(&root_node, qbox, callback, ctx);
@@ -184,7 +184,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
         pub fn queryEditable(self: *Self, qbox: Box, comptime callback: anytype, ctx: anytype) Error!void {
             const acc = self.accessor();
-            if (acc.getRoot()) |root_id| {
+            if (try acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
                 try self.queryEditableNode(&root_node, qbox, callback, ctx);
@@ -195,7 +195,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
             var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
             defer mutation.deinit();
             const acc = self.accessor();
-            if (acc.getRoot()) |root_id| {
+            if (try acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
                 if (try self.removeFromNode(&root_node, qbox, predicate, ctx)) |result_const| {
@@ -214,7 +214,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
             var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
             defer mutation.deinit();
             const acc = self.accessor();
-            if (acc.getRoot()) |root_id| {
+            if (try acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
                 return try self.removeIfFromNode(&root_node, null, qbox, predicate, ctx);
@@ -224,7 +224,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
         pub fn visitNodes(self: *Self, comptime callback: anytype, ctx: anytype) Error!void {
             const acc = self.accessor();
-            if (acc.getRoot()) |root_id| {
+            if (try acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
                 try self.visitNode(&root_node, callback, ctx);
@@ -238,7 +238,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
             ctx: anytype,
         ) Error!void {
             const acc = self.accessor();
-            if (acc.getRoot()) |root_id| {
+            if (try acc.getRoot()) |root_id| {
                 var root_node = try acc.loadNode(root_id);
                 defer acc.deinitNode(&root_node);
                 try self.traverseNode(&root_node, on_node, on_entry, ctx);
@@ -381,7 +381,7 @@ pub fn TreeImpl(comptime ModelT: type) type {
 
         fn growRootToContainImpl(self: *Self, box: Box) Error!void {
             var acc = self.accessor();
-            var current_root_id = acc.getRoot() orelse return;
+            var current_root_id = (try acc.getRoot()) orelse return;
 
             var expanded_bounds = blk: {
                 var root_node = try acc.loadNode(current_root_id);

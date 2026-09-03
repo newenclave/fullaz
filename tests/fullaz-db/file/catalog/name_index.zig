@@ -40,14 +40,6 @@ const Manager = struct {
         return lease;
     }
 
-    pub fn getRoot(self: *const @This()) ?PageId {
-        return self.root;
-    }
-
-    pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
-        self.root = root;
-    }
-
     pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
 };
 

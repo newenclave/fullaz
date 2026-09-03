@@ -5,6 +5,7 @@ const dev = @import("fullaz").device;
 const printer = @import("test_printer");
 
 const RadixModel = radix_tree.models.paged.Model;
+const RadixState = radix_tree.models.paged.State(u32, .little);
 const View = radix_tree.models.paged.View;
 const TreeType = radix_tree.Tree;
 
@@ -42,24 +43,35 @@ const NoneStorageManager = struct {
     pub const Self = @This();
     pub const PageId = u32;
     pub const Error = error{};
-    root_block_id: ?u32 = null,
-    free_leaf_root: ?u32 = null,
+    pub const StateLeaseType = struct {
+        pub const Error = NoneStorageManager.Error;
 
-    pub fn getRoot(self: *const @This()) ?u32 {
-        return self.root_block_id;
-    }
+        manager: *NoneStorageManager,
 
-    pub fn setRoot(self: *@This(), root: ?u32) Error!void {
-        self.root_block_id = root;
-        // Persist to disk header, etc.
-    }
+        pub fn data(self: *const @This()) @This().Error![]const u8 {
+            return std.mem.asBytes(@as(*const RadixState, &self.manager.state_value));
+        }
 
-    pub fn getFreeLeafRoot(self: *const @This()) ?PageId {
-        return self.free_leaf_root;
-    }
+        pub fn dataMut(self: *@This()) @This().Error![]u8 {
+            return std.mem.asBytes(&self.manager.state_value);
+        }
 
-    pub fn setFreeLeafRoot(self: *@This(), root: ?PageId) Error!void {
-        self.free_leaf_root = root;
+        pub fn finish(self: *@This()) void {
+            self.manager.finishes += 1;
+        }
+
+        pub fn deinit(self: *@This()) void {
+            self.manager.active_leases -= 1;
+        }
+    };
+
+    state_value: RadixState = .{},
+    active_leases: usize = 0,
+    finishes: usize = 0,
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        self.active_leases += 1;
+        return .{ .manager = self };
     }
 
     pub fn destroyPage(_: *@This(), id: PageId) Error!void {
@@ -67,6 +79,11 @@ const NoneStorageManager = struct {
         // Implement page destruction logic, e.g., add to free list
     }
 };
+
+fn freeLeafRoot(manager: *const NoneStorageManager) ?u32 {
+    const page_id = manager.state_value.free_leaf_root.get();
+    return if (page_id == std.math.maxInt(u32)) null else page_id;
+}
 
 fn TestSuite(comptime BlockIdT: type, comptime StorageManager: type, comptime KeyT: type, comptime ValueT: type) type {
     const Device = dev.MemoryBlock(BlockIdT);
@@ -233,6 +250,9 @@ test "RadixTree paged: model create tree" {
     });
 
     try suite.tree.set(0x11223344, "Hello!");
+    try std.testing.expectEqual(@as(u32, 0), suite.store_mgr.state_value.root.get());
+    try std.testing.expect(suite.store_mgr.finishes > 0);
+    try std.testing.expectEqual(@as(usize, 0), suite.store_mgr.active_leases);
     try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(0x11223344)).?, "Hello!"));
 
     try suite.tree.set(0x12, "12345678");
@@ -296,13 +316,13 @@ test "RadixTree paged: reuses partial leaves and unlinks empty leaves" {
 
     const leaf_base = suite.model.effectiveSettings().leaf_base;
     try suite.tree.set(0, "first");
-    const first_leaf_id = suite.store_mgr.free_leaf_root.?;
+    const first_leaf_id = freeLeafRoot(&suite.store_mgr).?;
     try suite.tree.set(leaf_base, "second");
-    const second_leaf_id = suite.store_mgr.free_leaf_root.?;
+    const second_leaf_id = freeLeafRoot(&suite.store_mgr).?;
     try std.testing.expect(first_leaf_id != second_leaf_id);
 
     try suite.tree.free(0);
-    try std.testing.expectEqual(@as(?u32, second_leaf_id), suite.store_mgr.free_leaf_root);
+    try std.testing.expectEqual(@as(?u32, second_leaf_id), freeLeafRoot(&suite.store_mgr));
     try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(leaf_base)).?, "second"));
 
     try std.testing.expectEqual(
@@ -320,11 +340,11 @@ test "RadixTree paged: free leaf list unlinks in constant time" {
 
     const leaf_base = suite.model.effectiveSettings().leaf_base;
     try suite.tree.set(0, "first");
-    const tail_id = suite.store_mgr.free_leaf_root.?;
+    const tail_id = freeLeafRoot(&suite.store_mgr).?;
     try suite.tree.set(leaf_base, "second");
-    const middle_id = suite.store_mgr.free_leaf_root.?;
+    const middle_id = freeLeafRoot(&suite.store_mgr).?;
     try suite.tree.set(@as(u64, leaf_base) * 2, "third");
-    const head_id = suite.store_mgr.free_leaf_root.?;
+    const head_id = freeLeafRoot(&suite.store_mgr).?;
 
     try suite.reopen();
 
@@ -339,7 +359,7 @@ test "RadixTree paged: free leaf list unlinks in constant time" {
     try std.testing.expectEqual(@as(?u32, null), tail.next);
 
     try suite.model.accessor().removeFreeLeaf(middle_id);
-    try std.testing.expectEqual(@as(?u32, head_id), suite.store_mgr.free_leaf_root);
+    try std.testing.expectEqual(@as(?u32, head_id), freeLeafRoot(&suite.store_mgr));
     try std.testing.expectEqual(@as(?u32, tail_id), (try readFreeLeafState(&suite.page_cache, head_id)).next);
     const removed_middle = try readFreeLeafState(&suite.page_cache, middle_id);
     try std.testing.expect(!removed_middle.listed);
@@ -348,9 +368,9 @@ test "RadixTree paged: free leaf list unlinks in constant time" {
     try std.testing.expectEqual(@as(?u32, head_id), (try readFreeLeafState(&suite.page_cache, tail_id)).prev);
 
     try suite.model.accessor().removeFreeLeaf(head_id);
-    try std.testing.expectEqual(@as(?u32, tail_id), suite.store_mgr.free_leaf_root);
+    try std.testing.expectEqual(@as(?u32, tail_id), freeLeafRoot(&suite.store_mgr));
     try suite.model.accessor().removeFreeLeaf(tail_id);
-    try std.testing.expectEqual(@as(?u32, null), suite.store_mgr.free_leaf_root);
+    try std.testing.expectEqual(@as(?u32, null), freeLeafRoot(&suite.store_mgr));
 }
 
 test "RadixTree paged: full leaves unlink from the free list" {
@@ -361,17 +381,17 @@ test "RadixTree paged: full leaves unlink from the free list" {
 
     const leaf_base = suite.model.effectiveSettings().leaf_base;
     try suite.tree.set(0, "first");
-    const tail_id = suite.store_mgr.free_leaf_root.?;
+    const tail_id = freeLeafRoot(&suite.store_mgr).?;
     try suite.tree.set(leaf_base, "second");
-    const full_id = suite.store_mgr.free_leaf_root.?;
+    const full_id = freeLeafRoot(&suite.store_mgr).?;
     try suite.tree.set(@as(u64, leaf_base) * 2, "third");
-    const head_id = suite.store_mgr.free_leaf_root.?;
+    const head_id = freeLeafRoot(&suite.store_mgr).?;
 
     for (1..leaf_base) |offset| {
         try suite.tree.set(@as(u64, leaf_base) + offset, "full");
     }
 
-    try std.testing.expectEqual(@as(?u32, head_id), suite.store_mgr.free_leaf_root);
+    try std.testing.expectEqual(@as(?u32, head_id), freeLeafRoot(&suite.store_mgr));
     try std.testing.expectEqual(@as(?u32, tail_id), (try readFreeLeafState(&suite.page_cache, head_id)).next);
     const full = try readFreeLeafState(&suite.page_cache, full_id);
     try std.testing.expect(!full.listed);
@@ -396,7 +416,7 @@ test "RadixTree paged: free leaf list rejects malformed links" {
     defer page.deinit();
     var view = View(u32, u16, u64, 8, .little, false).LeafSubheaderView.init(try page.dataMut());
     try view.setFreeLeafLinks(null, leaf_id);
-    try suite.store_mgr.setFreeLeafRoot(leaf_id);
+    suite.store_mgr.state_value.free_leaf_root.set(leaf_id);
 
     try std.testing.expectError(error.BadData, accessor.getFreeLeaf());
 }
@@ -461,9 +481,10 @@ test "RadixTree paged scanners visit occupied slots only" {
     try suite.tree.scanLeafRefs(leaf_id, try leaf_page.data(), &visitor);
     try std.testing.expectEqual(@as(usize, 1), visitor.values);
     try std.testing.expectEqual(@as(usize, 1), visitor.refs);
-    try std.testing.expectEqual(@as(?u32, leaf_id), suite.store_mgr.free_leaf_root);
+    try std.testing.expectEqual(@as(?u32, leaf_id), freeLeafRoot(&suite.store_mgr));
     try std.testing.expectEqual(@as(u32, free_leaf_id), blk: {
         const listed_view = View(u32, u16, u64, 8, .little, true).LeafSubheaderView.init(try leaf_page.data());
         break :blk (try listed_view.getNextFreeLeaf()).?;
     });
+    try std.testing.expectEqual(@as(usize, 0), suite.store_mgr.active_leases);
 }

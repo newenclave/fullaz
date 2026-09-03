@@ -59,22 +59,33 @@ test "ReclaimingCache: freed_head persists through the superblock across reopen"
     const allocator = std.testing.allocator;
     var device = try Device.init(allocator, 4096);
     defer device.deinit();
-    var cache = try PageCache.init(&device, allocator, 32);
-    defer cache.deinit();
-
-    try formatSuperblock(&cache);
 
     var freed: u32 = undefined;
     {
+        var cache = try PageCache.init(&device, allocator, 32);
+        defer cache.deinit();
+        try formatSuperblock(&cache);
         var rc = try RC.init(&cache);
         const a = try allocPid(&rc);
         _ = try allocPid(&rc);
         try rc.free(a);
         freed = a;
+        try cache.flushAll();
     }
 
     {
+        var cache = try PageCache.init(&device, allocator, 32);
+        defer cache.deinit();
         var rc = try RC.init(&cache);
+        {
+            var lease = try rc.state();
+            defer lease.deinit();
+            const state = try fullaz.core.storage_manager.StateAccessor(
+                RC.StateLeaseType,
+                superblock.FreeListState,
+            ).view(&lease);
+            try std.testing.expectEqual(freed, state.root.get());
+        }
         try std.testing.expectEqual(freed, try allocPid(&rc));
     }
 }

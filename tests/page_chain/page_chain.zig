@@ -9,22 +9,55 @@ const printer = @import("test_printer");
 
 const extensions = fullaz.page.extensions;
 
+fn TestStateLease(comptime StateT: type, comptime ErrorT: type) type {
+    return struct {
+        pub const Error = ErrorT;
+
+        value: *StateT,
+
+        pub fn data(self: *const @This()) Error![]const u8 {
+            return std.mem.asBytes(@as(*const StateT, self.value));
+        }
+
+        pub fn dataMut(self: *@This()) Error![]u8 {
+            return std.mem.asBytes(self.value);
+        }
+
+        pub fn finish(_: *@This()) void {}
+        pub fn deinit(_: *@This()) void {}
+    };
+}
+
+fn storedPageId(value: anytype) ?u32 {
+    return if (value.isMax()) null else value.get();
+}
+
+fn storePageId(value: anytype, page_id: ?u32) void {
+    value.set(page_id orelse std.math.maxInt(u32));
+}
+
 test "PageChain: destroyChunk releases its page before reclamation" {
     const Device = devices.MemoryBlock(u32);
     const RawCache = page_cache.PageCache(Device);
     const Cache = fullaz_db.MemoryReclaimingCache(RawCache);
     const Manager = struct {
         pub const PageId = u32;
-        pub const Size = u32;
         pub const Error = Cache.Error;
+        pub const State = page_chain.State(PageId, void, .little);
+        pub const StateLeaseType = TestStateLease(State, Error);
 
         cache: *Cache,
+        state_value: State = .{},
+
+        pub fn state(self: *@This()) Error!StateLeaseType {
+            return .{ .value = &self.state_value };
+        }
 
         pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
             return self.cache.free(page_id);
         }
     };
-    const Chain = page_chain.ForwardHandle(Cache, Manager, void, .little);
+    const Chain = page_chain.ForwardHandle(Cache, Manager, void, void, .little);
 
     var device = try Device.init(std.testing.allocator, 256);
     defer device.deinit();
@@ -159,86 +192,59 @@ test "PageChain: user links do not conflict with chain links" {
 const NoneStorageManager = struct {
     pub const Self = @This();
     pub const PageId = u32;
-    pub const Size = u32;
     pub const Error = error{};
+    pub const State = page_chain.State(PageId, PageId, .little);
+    pub const StateLeaseType = TestStateLease(State, Error);
 
-    first_block_id: ?u32 = null,
-    last_block_id: ?u32 = null,
-    total_sze: u32 = 0,
+    state_value: State = .{},
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
+    }
 
     pub fn destroyPage(_: *@This(), id: PageId) Error!void {
         _ = id;
         // Implement page destruction logic, e.g., add to free list
-    }
-
-    pub fn getTotalSize(self: *const Self) Error!Size {
-        return self.total_sze;
-    }
-
-    pub fn setTotalSize(self: *Self, size: Size) Error!void {
-        self.total_sze = size;
-    }
-
-    pub fn getFirst(self: *const Self) Error!?PageId {
-        return self.first_block_id;
-    }
-
-    pub fn getLast(self: *const Self) Error!?PageId {
-        return self.last_block_id;
-    }
-
-    pub fn setFirst(self: *Self, page_id: ?PageId) Error!void {
-        self.first_block_id = page_id;
-    }
-
-    pub fn setLast(self: *Self, page_id: ?PageId) Error!void {
-        self.last_block_id = page_id;
     }
 };
 
 const ForwardOnlyStorageManager = struct {
     pub const Self = @This();
     pub const PageId = u32;
-    pub const Size = u32;
     pub const Error = error{};
+    pub const State = page_chain.State(PageId, void, .little);
+    pub const StateLeaseType = TestStateLease(State, Error);
 
-    first_block_id: ?u32 = null,
+    state_value: State = .{},
     destroyed_count: usize = 0,
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
+    }
 
     pub fn destroyPage(self: *Self, id: PageId) Error!void {
         _ = id;
         self.destroyed_count += 1;
-    }
-
-    pub fn getFirst(self: *const Self) Error!?PageId {
-        return self.first_block_id;
-    }
-
-    pub fn setFirst(self: *Self, page_id: ?PageId) Error!void {
-        self.first_block_id = page_id;
     }
 };
 
 const RootOnlyBidirectionalStorageManager = struct {
     pub const Self = @This();
     pub const PageId = u32;
-    pub const Size = u32;
     pub const Error = error{};
+    pub const State = page_chain.State(PageId, void, .little);
+    pub const StateLeaseType = TestStateLease(State, Error);
 
-    first_block_id: ?u32 = null,
+    state_value: State = .{},
     destroyed_count: usize = 0,
+
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
+    }
 
     pub fn destroyPage(self: *Self, id: PageId) Error!void {
         _ = id;
         self.destroyed_count += 1;
-    }
-
-    pub fn getFirst(self: *const Self) Error!?PageId {
-        return self.first_block_id;
-    }
-
-    pub fn setFirst(self: *Self, page_id: ?PageId) Error!void {
-        self.first_block_id = page_id;
     }
 };
 
@@ -249,7 +255,7 @@ test "PageChain: handle" {
 
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.Handle(Cache, NoneStorageManager, Subheader, .little);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, u32, Subheader, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 1000);
@@ -281,7 +287,7 @@ test "PageChain: handle" {
 test "PageChain: loadChunk rejects a plain page with the same kind" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, u32, void, .little);
     const PlainView = fullaz.page.header.View(u32, u16, .little, false);
 
     var mgr = NoneStorageManager{};
@@ -305,7 +311,7 @@ test "PageChain: loadChunk rejects a plain page with the same kind" {
 test "PageChain: bidirectional loader rejects a mismatched self pid" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, u32, void, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -328,7 +334,7 @@ test "PageChain: bidirectional loader rejects a mismatched self pid" {
 test "PageChain: forward loader rejects a mismatched self pid" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.ForwardHandle(Cache, NoneStorageManager, void, .little);
+    const Handle = page_chain.ForwardHandle(Cache, NoneStorageManager, u32, void, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -351,7 +357,7 @@ test "PageChain: forward loader rejects a mismatched self pid" {
 test "PageChain: iterator rejects a linked page with another kind" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, u32, void, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -383,7 +389,7 @@ test "PageChain: iterator rejects a linked page with another kind" {
 test "PageChain: forward handle maintains an optional tail" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.ForwardHandle(Cache, NoneStorageManager, void, .little);
+    const Handle = page_chain.ForwardHandle(Cache, NoneStorageManager, u32, void, .little);
 
     comptime {
         if (@hasDecl(Handle.Chunk, "getPrev") or @hasDecl(Handle.Chunk, "setPrev")) {
@@ -404,29 +410,29 @@ test "PageChain: forward handle maintains an optional tail" {
     defer first.deinit();
     const first_id = try first.id();
     try hdl.insertFirst(&first);
-    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getFirst());
-    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getLast());
+    try std.testing.expectEqual(@as(?u32, first_id), storedPageId(&mgr.state_value.first));
+    try std.testing.expectEqual(@as(?u32, first_id), storedPageId(&mgr.state_value.last));
 
     var after = try hdl.createChunk();
     defer after.deinit();
     const after_id = try after.id();
     try hdl.insertAfter(first_id, &after);
     try std.testing.expectEqual(@as(?u32, after_id), try first.getNext());
-    try std.testing.expectEqual(@as(?u32, after_id), try mgr.getLast());
+    try std.testing.expectEqual(@as(?u32, after_id), storedPageId(&mgr.state_value.last));
 
     var new_first = try hdl.createChunk();
     defer new_first.deinit();
     const new_first_id = try new_first.id();
     try hdl.insertFirst(&new_first);
-    try std.testing.expectEqual(@as(?u32, new_first_id), try mgr.getFirst());
+    try std.testing.expectEqual(@as(?u32, new_first_id), storedPageId(&mgr.state_value.first));
     try std.testing.expectEqual(@as(?u32, first_id), try new_first.getNext());
-    try std.testing.expectEqual(@as(?u32, after_id), try mgr.getLast());
+    try std.testing.expectEqual(@as(?u32, after_id), storedPageId(&mgr.state_value.last));
 }
 
 test "PageChain: forward handle removes chunks with a root-only manager" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.ForwardHandle(Cache, ForwardOnlyStorageManager, void, .little);
+    const Handle = page_chain.ForwardHandle(Cache, ForwardOnlyStorageManager, void, void, .little);
 
     comptime {
         if (@hasDecl(ForwardOnlyStorageManager, "getLast") or @hasDecl(ForwardOnlyStorageManager, "setLast")) {
@@ -473,11 +479,11 @@ test "PageChain: forward handle removes chunks with a root-only manager" {
     try std.testing.expectEqual(first_id, (try root_itr.get()).?.page_id);
     root_itr = try hdl.remove(root_itr);
     try std.testing.expectEqual(last_id, (try root_itr.get()).?.page_id);
-    try std.testing.expectEqual(@as(?u32, last_id), try mgr.getFirst());
+    try std.testing.expectEqual(@as(?u32, last_id), storedPageId(&mgr.state_value.first));
 
     root_itr = try hdl.remove(root_itr);
     try std.testing.expect((try root_itr.get()) == null);
-    try std.testing.expect((try mgr.getFirst()) == null);
+    try std.testing.expect(storedPageId(&mgr.state_value.first) == null);
 
     var by_id = try hdl.createChunk();
     defer by_id.deinit();
@@ -488,7 +494,7 @@ test "PageChain: forward handle removes chunks with a root-only manager" {
     const by_id_last_pid = try by_id_last.id();
     try hdl.insertLast(&by_id_last);
     try std.testing.expect(try hdl.removeById(by_id_last_pid));
-    try std.testing.expectEqual(@as(?u32, by_id_pid), try mgr.getFirst());
+    try std.testing.expectEqual(@as(?u32, by_id_pid), storedPageId(&mgr.state_value.first));
     try std.testing.expect((try by_id.getNext()) == null);
     try std.testing.expect(!(try hdl.removeById(by_id_last_pid)));
     try std.testing.expectEqual(@as(usize, 4), mgr.destroyed_count);
@@ -500,6 +506,7 @@ test "PageChain: bidirectional handle works with a root-only manager" {
     const Handle = page_chain.BidirectionalHandle(
         Cache,
         RootOnlyBidirectionalStorageManager,
+        void,
         void,
         .little,
     );
@@ -557,7 +564,7 @@ test "PageChain: bidirectional handle works with a root-only manager" {
     try std.testing.expect((try first.getNext()) == null);
 
     try hdl.evictChunk(&first);
-    try std.testing.expect((try mgr.getFirst()) == null);
+    try std.testing.expect(storedPageId(&mgr.state_value.first) == null);
 }
 
 test "PageChain: bidirectional remove works with a root-only manager" {
@@ -566,6 +573,7 @@ test "PageChain: bidirectional remove works with a root-only manager" {
     const Handle = page_chain.BidirectionalHandle(
         Cache,
         RootOnlyBidirectionalStorageManager,
+        void,
         void,
         .little,
     );
@@ -616,14 +624,14 @@ test "PageChain: bidirectional remove works with a root-only manager" {
 
     itr = try hdl.remove(itr);
     try std.testing.expect((try itr.get()) == null);
-    try std.testing.expect((try mgr.getFirst()) == null);
+    try std.testing.expect(storedPageId(&mgr.state_value.first) == null);
     try std.testing.expectEqual(@as(usize, 3), mgr.destroyed_count);
 }
 
 test "PageChain: evictChunk relinks neighbors and boundaries" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, u32, void, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -648,34 +656,34 @@ test "PageChain: evictChunk relinks neighbors and boundaries" {
     try middle.setPrev(first_id);
     try middle.setNext(last_id);
     try last.setPrev(middle_id);
-    try mgr.setFirst(first_id);
-    try mgr.setLast(last_id);
+    storePageId(&mgr.state_value.first, first_id);
+    storePageId(&mgr.state_value.last, last_id);
 
     try hdl.evictChunk(&middle);
     try std.testing.expectEqual(@as(?u32, last_id), try first.getNext());
     try std.testing.expectEqual(@as(?u32, first_id), try last.getPrev());
     try std.testing.expect((try middle.getPrev()) == null);
     try std.testing.expect((try middle.getNext()) == null);
-    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getFirst());
-    try std.testing.expectEqual(@as(?u32, last_id), try mgr.getLast());
+    try std.testing.expectEqual(@as(?u32, first_id), storedPageId(&mgr.state_value.first));
+    try std.testing.expectEqual(@as(?u32, last_id), storedPageId(&mgr.state_value.last));
 
     try hdl.evictChunk(&first);
     try std.testing.expect((try first.getNext()) == null);
     try std.testing.expect((try last.getPrev()) == null);
-    try std.testing.expectEqual(@as(?u32, last_id), try mgr.getFirst());
-    try std.testing.expectEqual(@as(?u32, last_id), try mgr.getLast());
+    try std.testing.expectEqual(@as(?u32, last_id), storedPageId(&mgr.state_value.first));
+    try std.testing.expectEqual(@as(?u32, last_id), storedPageId(&mgr.state_value.last));
 
     try hdl.evictChunk(&last);
     try std.testing.expect((try last.getPrev()) == null);
     try std.testing.expect((try last.getNext()) == null);
-    try std.testing.expect((try mgr.getFirst()) == null);
-    try std.testing.expect((try mgr.getLast()) == null);
+    try std.testing.expect(storedPageId(&mgr.state_value.first) == null);
+    try std.testing.expect(storedPageId(&mgr.state_value.last) == null);
 }
 
 test "PageChain: insert operations preserve order and boundaries" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, u32, void, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -690,8 +698,8 @@ test "PageChain: insert operations preserve order and boundaries" {
     defer first.deinit();
     const first_id = try first.id();
     try hdl.insertFirst(&first);
-    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getFirst());
-    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getLast());
+    try std.testing.expectEqual(@as(?u32, first_id), storedPageId(&mgr.state_value.first));
+    try std.testing.expectEqual(@as(?u32, first_id), storedPageId(&mgr.state_value.last));
 
     var last = try hdl.createChunk();
     defer last.deinit();
@@ -699,8 +707,8 @@ test "PageChain: insert operations preserve order and boundaries" {
     try hdl.insertLast(&last);
     try std.testing.expectEqual(@as(?u32, last_id), try first.getNext());
     try std.testing.expectEqual(@as(?u32, first_id), try last.getPrev());
-    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getFirst());
-    try std.testing.expectEqual(@as(?u32, last_id), try mgr.getLast());
+    try std.testing.expectEqual(@as(?u32, first_id), storedPageId(&mgr.state_value.first));
+    try std.testing.expectEqual(@as(?u32, last_id), storedPageId(&mgr.state_value.last));
 
     var before_last = try hdl.createChunk();
     defer before_last.deinit();
@@ -719,14 +727,14 @@ test "PageChain: insert operations preserve order and boundaries" {
     try std.testing.expectEqual(@as(?u32, before_last_id), try after_before_last.getPrev());
     try std.testing.expectEqual(@as(?u32, last_id), try after_before_last.getNext());
     try std.testing.expectEqual(@as(?u32, after_before_last_id), try last.getPrev());
-    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getFirst());
-    try std.testing.expectEqual(@as(?u32, last_id), try mgr.getLast());
+    try std.testing.expectEqual(@as(?u32, first_id), storedPageId(&mgr.state_value.first));
+    try std.testing.expectEqual(@as(?u32, last_id), storedPageId(&mgr.state_value.last));
 }
 
 test "PageChain: iterator traverses linked chunks in both directions" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, u32, void, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -790,7 +798,7 @@ test "PageChain: iterator traverses linked chunks in both directions" {
 test "PageChain: iterator is empty for an empty chain" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, u32, void, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -813,7 +821,7 @@ test "PageChain: iterator is empty for an empty chain" {
 test "PageChain: remove returns a valid replacement iterator" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
-    const Handle = page_chain.Handle(Cache, NoneStorageManager, void, .little);
+    const Handle = page_chain.Handle(Cache, NoneStorageManager, u32, void, .little);
 
     var mgr = NoneStorageManager{};
     var dev = try Device.init(std.testing.allocator, 4096);
@@ -853,13 +861,13 @@ test "PageChain: remove returns a valid replacement iterator" {
 
     itr = try hdl.remove(itr);
     try std.testing.expect((try itr.get()) == null);
-    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getFirst());
-    try std.testing.expectEqual(@as(?u32, first_id), try mgr.getLast());
+    try std.testing.expectEqual(@as(?u32, first_id), storedPageId(&mgr.state_value.first));
+    try std.testing.expectEqual(@as(?u32, first_id), storedPageId(&mgr.state_value.last));
     try itr.prev();
     try std.testing.expectEqual(first_id, (try itr.get()).?.page_id);
 
     itr = try hdl.remove(itr);
     try std.testing.expect((try itr.get()) == null);
-    try std.testing.expect((try mgr.getFirst()) == null);
-    try std.testing.expect((try mgr.getLast()) == null);
+    try std.testing.expect(storedPageId(&mgr.state_value.first) == null);
+    try std.testing.expect(storedPageId(&mgr.state_value.last) == null);
 }

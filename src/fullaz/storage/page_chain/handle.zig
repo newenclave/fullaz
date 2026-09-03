@@ -2,6 +2,9 @@ const std = @import("std");
 const view = @import("view.zig");
 const errors = @import("../../core/errors.zig");
 const scanner = @import("scanner.zig");
+const state_mod = @import("state.zig");
+const storage_manager_contract = @import("../../contracts/storage_manager.zig");
+const StateAccessor = @import("../../core/storage_manager.zig").StateAccessor;
 
 pub const Settings = struct {
     chunk_page_kind: u16 = 0x51,
@@ -10,12 +13,14 @@ pub const Settings = struct {
 pub fn Handle(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime TailT: type,
     comptime SubheaderT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
     return HandleImpl(
         PageCacheT,
         StorageManagerT,
+        TailT,
         void,
         SubheaderT,
         false,
@@ -26,6 +31,7 @@ pub fn Handle(
 pub fn HandleImpl(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime TailT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime forward_only: bool,
@@ -35,6 +41,7 @@ pub fn HandleImpl(
         return HandleForwardImpl(
             PageCacheT,
             StorageManagerT,
+            TailT,
             AdditionalT,
             SubheaderT,
             Endian,
@@ -43,6 +50,7 @@ pub fn HandleImpl(
         return HandleBidirectionalImpl(
             PageCacheT,
             StorageManagerT,
+            TailT,
             AdditionalT,
             SubheaderT,
             Endian,
@@ -53,21 +61,22 @@ pub fn HandleImpl(
 pub fn HandleForwardImpl(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime TailT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
-    const PosType = StorageManagerT.Size;
     const IndexT = u16;
     const PageHandle = PageCacheT.Handle;
     const CachePageId = PageCacheT.Pid;
-    const has_tail = @hasDecl(StorageManagerT, "getLast") and
-        @hasDecl(StorageManagerT, "setLast");
+    const State = state_mod.State(CachePageId, TailT, Endian);
+    const StateView = StateAccessor(StorageManagerT.StateLeaseType, State);
+    const has_tail = state_mod.hasTail(CachePageId, TailT);
 
     const EmptyStruct = extern struct {};
     const SubheaderType = if (SubheaderT == void) EmptyStruct else SubheaderT;
 
-    _ = PosType;
+    comptime storage_manager_contract.assertPagedStorageManager(StorageManagerT, CachePageId);
 
     const ViewType = view.ViewImpl(
         CachePageId,
@@ -302,16 +311,18 @@ pub fn HandleForwardImpl(
             errors.IteratorError ||
             ChunkHandle.Error ||
             StorageManagerT.Error ||
+            StateView.Error ||
             PageCacheT.Error ||
             ViewTypeConst.PageView.Error;
 
         pub const PageId = CachePageId;
+        pub const StateType = State;
         pub const Chunk = ChunkHandle;
         pub const Subheader = SubheaderType;
         pub const Iterator = IteratorImpl;
 
         page_cache: *PageCacheT,
-        mgr: *StorageManagerT,
+        mgr: ?*StorageManagerT,
         settings: Settings = .{},
 
         pub fn init(
@@ -326,8 +337,20 @@ pub fn HandleForwardImpl(
             };
         }
 
+        pub fn initUnbound(page_cache: *PageCacheT, settings: Settings) Error!Self {
+            return .{
+                .page_cache = page_cache,
+                .mgr = null,
+                .settings = settings,
+            };
+        }
+
         pub fn deinit(self: *Self) void {
             _ = self;
+        }
+
+        pub fn rebindStorageManager(self: *Self, storage_manager: *StorageManagerT) void {
+            self.mgr = storage_manager;
         }
 
         pub fn scanChunkRefs(
@@ -355,15 +378,8 @@ pub fn HandleForwardImpl(
             return self.page_cache;
         }
 
-        pub fn manager(self: *const Self) *const StorageManagerT {
-            return self.mgr;
-        }
-        pub fn managerMut(self: *Self) *StorageManagerT {
-            return self.mgr;
-        }
-
         pub fn iterator(self: *const Self) Error!Iterator {
-            if (try self.mgr.getFirst()) |page_id| {
+            if (try self.firstId()) |page_id| {
                 return self.iteratorOn(page_id);
             } else {
                 return IteratorImpl.initEmpty(self.page_cache, self.settings.chunk_page_kind);
@@ -410,12 +426,12 @@ pub fn HandleForwardImpl(
             if (previous) |*prev| {
                 try prev.setNext(next);
             } else {
-                try self.mgr.setFirst(next);
+                try self.setFirstId(next);
             }
 
             if (next == null) {
                 if (comptime has_tail) {
-                    try self.mgr.setLast(if (previous) |*prev| try prev.id() else null);
+                    try self.setLastId(if (previous) |*prev| try prev.id() else null);
                 }
             }
 
@@ -471,25 +487,26 @@ pub fn HandleForwardImpl(
             var owned_chunk = ch;
             const pid = try owned_chunk.ph.pid();
             owned_chunk.deinit();
-            try self.mgr.destroyPage(pid);
+            const storage_manager = self.mgr orelse return Error.BadData;
+            try storage_manager.destroyPage(pid);
         }
 
         pub fn insertFirst(self: *Self, ch: *ChunkHandle) Error!void {
-            const first = try self.mgr.getFirst();
+            const first = try self.firstId();
             const chunk_id = try ch.id();
             if (first == null) {
                 if (comptime has_tail) {
-                    try self.mgr.setLast(chunk_id);
+                    try self.setLastId(chunk_id);
                 }
             }
             try ch.setNext(first);
-            try self.mgr.setFirst(chunk_id);
+            try self.setFirstId(chunk_id);
         }
 
         // Uses a manager tail in O(1) when available; otherwise traverses from root in O(n).
         pub fn insertLast(self: *Self, ch: *ChunkHandle) Error!void {
             if (comptime has_tail) {
-                const last = try self.mgr.getLast();
+                const last = try self.lastId();
                 const chunk_id = try ch.id();
                 if (last) |last_pid| {
                     var last_ch = try self.loadChunk(last_pid);
@@ -497,15 +514,15 @@ pub fn HandleForwardImpl(
                     var last_view = try last_ch.viewMut();
                     last_view.setNext(chunk_id);
                 } else {
-                    try self.mgr.setFirst(chunk_id);
+                    try self.setFirstId(chunk_id);
                 }
                 try ch.setNext(null);
-                try self.mgr.setLast(chunk_id);
+                try self.setLastId(chunk_id);
             } else {
                 const chunk_id = try ch.id();
-                var current_id = (try self.mgr.getFirst()) orelse {
+                var current_id = (try self.firstId()) orelse {
                     try ch.setNext(null);
-                    try self.mgr.setFirst(chunk_id);
+                    try self.setFirstId(chunk_id);
                     return;
                 };
 
@@ -528,7 +545,7 @@ pub fn HandleForwardImpl(
         // the list to find the chunk before the specified one.
         pub fn insertBefore(self: *Self, before_id: PageId, ch: *ChunkHandle) Error!void {
             const chunk_id = try ch.id();
-            if (try self.mgr.getFirst()) |first_id| {
+            if (try self.firstId()) |first_id| {
                 if (first_id == before_id) {
                     return self.insertFirst(ch);
                 }
@@ -561,9 +578,53 @@ pub fn HandleForwardImpl(
             try after.setNext(chunk_id);
             if (next == null) {
                 if (comptime has_tail) {
-                    try self.mgr.setLast(chunk_id);
+                    try self.setLastId(chunk_id);
                 }
             }
+        }
+
+        fn firstId(self: *const Self) Error!?PageId {
+            const storage_manager = self.mgr orelse return Error.BadData;
+            var lease = try storage_manager.state();
+            defer lease.deinit();
+            const first = (try StateView.view(&lease)).first.get();
+            return if (first == std.math.maxInt(PageId)) null else first;
+        }
+
+        fn setFirstId(self: *Self, page_id: ?PageId) Error!void {
+            if (page_id == std.math.maxInt(PageId)) {
+                return Error.BadData;
+            }
+            const storage_manager = self.mgr orelse return Error.BadData;
+            var lease = try storage_manager.state();
+            defer lease.deinit();
+            (try StateView.viewMut(&lease)).first.set(page_id orelse std.math.maxInt(PageId));
+            lease.finish();
+        }
+
+        fn lastId(self: *const Self) Error!?PageId {
+            if (comptime !has_tail) {
+                @compileError("Root-only PageChain state does not store a tail");
+            }
+            const storage_manager = self.mgr orelse return Error.BadData;
+            var lease = try storage_manager.state();
+            defer lease.deinit();
+            const last = (try StateView.view(&lease)).last.get();
+            return if (last == std.math.maxInt(PageId)) null else last;
+        }
+
+        fn setLastId(self: *Self, page_id: ?PageId) Error!void {
+            if (comptime !has_tail) {
+                @compileError("Root-only PageChain state does not store a tail");
+            }
+            if (page_id == std.math.maxInt(PageId)) {
+                return Error.BadData;
+            }
+            const storage_manager = self.mgr orelse return Error.BadData;
+            var lease = try storage_manager.state();
+            defer lease.deinit();
+            (try StateView.viewMut(&lease)).last.set(page_id orelse std.math.maxInt(PageId));
+            lease.finish();
         }
     };
 }
@@ -571,11 +632,11 @@ pub fn HandleForwardImpl(
 pub fn HandleBidirectionalImpl(
     comptime PageCacheT: type,
     comptime StorageManagerT: type,
+    comptime TailT: type,
     comptime AdditionalT: type,
     comptime SubheaderT: type,
     comptime Endian: std.builtin.Endian,
 ) type {
-    const PosType = StorageManagerT.Size;
     const IndexT = u16;
     const PageHandle = PageCacheT.Handle;
     const CachePageId = PageCacheT.Pid;
@@ -583,10 +644,11 @@ pub fn HandleBidirectionalImpl(
     const EmptyStruct = extern struct {};
     const SubheaderType = if (SubheaderT == void) EmptyStruct else SubheaderT;
 
-    const has_tail = @hasDecl(StorageManagerT, "getLast") and
-        @hasDecl(StorageManagerT, "setLast");
+    const State = state_mod.State(CachePageId, TailT, Endian);
+    const StateView = StateAccessor(StorageManagerT.StateLeaseType, State);
+    const has_tail = state_mod.hasTail(CachePageId, TailT);
 
-    _ = PosType;
+    comptime storage_manager_contract.assertPagedStorageManager(StorageManagerT, CachePageId);
 
     const ViewType = view.ViewImpl(
         CachePageId,
@@ -862,16 +924,18 @@ pub fn HandleBidirectionalImpl(
             errors.IteratorError ||
             ChunkHandle.Error ||
             StorageManagerT.Error ||
+            StateView.Error ||
             PageCacheT.Error ||
             ViewTypeConst.PageView.Error;
 
         pub const PageId = CachePageId;
+        pub const StateType = State;
         pub const Chunk = ChunkHandle;
         pub const Subheader = SubheaderType;
         pub const Iterator = IteratorImpl;
 
         page_cache: *PageCacheT,
-        mgr: *StorageManagerT,
+        mgr: ?*StorageManagerT,
         settings: Settings = .{},
 
         pub fn init(
@@ -886,8 +950,20 @@ pub fn HandleBidirectionalImpl(
             };
         }
 
+        pub fn initUnbound(page_cache: *PageCacheT, settings: Settings) Error!Self {
+            return .{
+                .page_cache = page_cache,
+                .mgr = null,
+                .settings = settings,
+            };
+        }
+
         pub fn deinit(self: *Self) void {
             _ = self;
+        }
+
+        pub fn rebindStorageManager(self: *Self, storage_manager: *StorageManagerT) void {
+            self.mgr = storage_manager;
         }
 
         pub fn scanChunkRefs(
@@ -915,15 +991,8 @@ pub fn HandleBidirectionalImpl(
             return self.page_cache;
         }
 
-        pub fn manager(self: *const Self) *const StorageManagerT {
-            return self.mgr;
-        }
-        pub fn managerMut(self: *Self) *StorageManagerT {
-            return self.mgr;
-        }
-
         pub fn iterator(self: *const Self) Error!Iterator {
-            if (try self.mgr.getFirst()) |page_id| {
+            if (try self.firstId()) |page_id| {
                 return self.iteratorOn(page_id);
             } else {
                 return IteratorImpl.initEmpty(self.page_cache, self.settings.chunk_page_kind);
@@ -947,10 +1016,10 @@ pub fn HandleBidirectionalImpl(
 
         fn lastId(self: *const Self) Error!?PageId {
             if (comptime has_tail) {
-                return self.mgr.getLast();
+                return self.storedLastId();
             }
 
-            var current_id = (try self.mgr.getFirst()) orelse return null;
+            var current_id = (try self.firstId()) orelse return null;
             while (true) {
                 var current = try self.loadChunk(current_id);
                 defer current.deinit();
@@ -1029,11 +1098,12 @@ pub fn HandleBidirectionalImpl(
             var owned_chunk = ch;
             const pid = try owned_chunk.ph.pid();
             owned_chunk.deinit();
-            try self.mgr.destroyPage(pid);
+            const storage_manager = self.mgr orelse return Error.BadData;
+            try storage_manager.destroyPage(pid);
         }
 
         pub fn insertFirst(self: *Self, ch: *ChunkHandle) Error!void {
-            const first = try self.mgr.getFirst();
+            const first = try self.firstId();
             const chunk_id = try ch.id();
             if (first) |first_pid| {
                 var first_ch = try self.loadChunk(first_pid);
@@ -1042,17 +1112,17 @@ pub fn HandleBidirectionalImpl(
                 first_view.setPrev(chunk_id);
             } else {
                 if (comptime has_tail) {
-                    try self.mgr.setLast(chunk_id);
+                    try self.setLastId(chunk_id);
                 }
             }
             try ch.setNext(first);
             try ch.setPrev(null);
-            try self.mgr.setFirst(chunk_id);
+            try self.setFirstId(chunk_id);
         }
 
         pub fn insertLast(self: *Self, ch: *ChunkHandle) Error!void {
             if (comptime has_tail) {
-                const last = try self.mgr.getLast();
+                const last = try self.storedLastId();
                 const chunk_id = try ch.id();
                 if (last) |last_pid| {
                     var last_ch = try self.loadChunk(last_pid);
@@ -1060,17 +1130,17 @@ pub fn HandleBidirectionalImpl(
                     var last_view = try last_ch.viewMut();
                     last_view.setNext(chunk_id);
                 } else {
-                    try self.mgr.setFirst(chunk_id);
+                    try self.setFirstId(chunk_id);
                 }
                 try ch.setPrev(last);
                 try ch.setNext(null);
-                try self.mgr.setLast(chunk_id);
+                try self.setLastId(chunk_id);
             } else {
                 const chunk_id = try ch.id();
-                var current_id = (try self.mgr.getFirst()) orelse {
+                var current_id = (try self.firstId()) orelse {
                     try ch.setPrev(null);
                     try ch.setNext(null);
-                    try self.mgr.setFirst(chunk_id);
+                    try self.setFirstId(chunk_id);
                     return;
                 };
 
@@ -1101,7 +1171,7 @@ pub fn HandleBidirectionalImpl(
                 defer prev_ch.deinit();
                 try prev_ch.setNext(chunk_id);
             } else {
-                try self.mgr.setFirst(chunk_id);
+                try self.setFirstId(chunk_id);
             }
 
             try ch.setPrev(prev);
@@ -1121,7 +1191,7 @@ pub fn HandleBidirectionalImpl(
                 try next_ch.setPrev(chunk_id);
             } else {
                 if (comptime has_tail) {
-                    try self.mgr.setLast(chunk_id);
+                    try self.setLastId(chunk_id);
                 }
             }
 
@@ -1140,7 +1210,7 @@ pub fn HandleBidirectionalImpl(
                 var prev_view = try prev_ch.viewMut();
                 prev_view.setNext(next);
             } else {
-                try self.mgr.setFirst(next);
+                try self.setFirstId(next);
             }
 
             if (next) |next_pid| {
@@ -1150,12 +1220,56 @@ pub fn HandleBidirectionalImpl(
                 next_view.setPrev(prev);
             } else {
                 if (comptime has_tail) {
-                    try self.mgr.setLast(prev);
+                    try self.setLastId(prev);
                 }
             }
 
             try ch.setNext(null);
             try ch.setPrev(null);
+        }
+
+        fn firstId(self: *const Self) Error!?PageId {
+            const storage_manager = self.mgr orelse return Error.BadData;
+            var lease = try storage_manager.state();
+            defer lease.deinit();
+            const first = (try StateView.view(&lease)).first.get();
+            return if (first == std.math.maxInt(PageId)) null else first;
+        }
+
+        fn setFirstId(self: *Self, page_id: ?PageId) Error!void {
+            if (page_id == std.math.maxInt(PageId)) {
+                return Error.BadData;
+            }
+            const storage_manager = self.mgr orelse return Error.BadData;
+            var lease = try storage_manager.state();
+            defer lease.deinit();
+            (try StateView.viewMut(&lease)).first.set(page_id orelse std.math.maxInt(PageId));
+            lease.finish();
+        }
+
+        fn storedLastId(self: *const Self) Error!?PageId {
+            if (comptime !has_tail) {
+                @compileError("Root-only PageChain state does not store a tail");
+            }
+            const storage_manager = self.mgr orelse return Error.BadData;
+            var lease = try storage_manager.state();
+            defer lease.deinit();
+            const last = (try StateView.view(&lease)).last.get();
+            return if (last == std.math.maxInt(PageId)) null else last;
+        }
+
+        fn setLastId(self: *Self, page_id: ?PageId) Error!void {
+            if (comptime !has_tail) {
+                @compileError("Root-only PageChain state does not store a tail");
+            }
+            if (page_id == std.math.maxInt(PageId)) {
+                return Error.BadData;
+            }
+            const storage_manager = self.mgr orelse return Error.BadData;
+            var lease = try storage_manager.state();
+            defer lease.deinit();
+            (try StateView.viewMut(&lease)).last.set(page_id orelse std.math.maxInt(PageId));
+            lease.finish();
         }
     };
 }

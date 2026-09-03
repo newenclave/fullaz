@@ -395,29 +395,22 @@ const PagedManager = struct {
         }
 
         pub fn finish(self: *@This()) void {
-            const page_id = std.mem.readInt(PageId, &self.manager.state_bytes, .little);
-            self.manager.root = if (page_id == std.math.maxInt(PageId)) null else page_id;
+            _ = self;
         }
 
         pub fn deinit(_: *@This()) void {}
     };
 
     store: *PagedStore,
-    root: ?PageId = null,
     state_bytes: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
 
-    pub fn getRoot(self: *const Self) ?PageId {
-        return self.root;
-    }
-
-    pub fn setRoot(self: *Self, page_id: ?PageId) Error!void {
-        self.root = page_id;
-        std.mem.writeInt(PageId, &self.state_bytes, page_id orelse std.math.maxInt(PageId), .little);
-    }
-
     pub fn state(self: *Self) Error!StateLease {
-        std.mem.writeInt(PageId, &self.state_bytes, self.root orelse std.math.maxInt(PageId), .little);
         return .{ .manager = self };
+    }
+
+    fn storedRoot(self: *const Self) ?PageId {
+        const page_id = std.mem.readInt(PageId, &self.state_bytes, .little);
+        return if (page_id == std.math.maxInt(PageId)) null else page_id;
     }
 
     pub fn isReserved(_: *const Self, _: PageId) bool {
@@ -474,8 +467,8 @@ test "GC: paged model resumes while reclaiming one BPT graph" {
         const text = try std.fmt.bufPrint(&key, "r{d:0>2}", .{index});
         try std.testing.expect(try retained_tree.insert(text, "retained"));
     }
-    const dropped_root = dropped_manager.root.?;
-    const retained_root = retained_manager.root.?;
+    const dropped_root = dropped_manager.storedRoot().?;
+    const retained_root = retained_manager.storedRoot().?;
     var dropped_pages = [_]bool{false} ** 256;
     var retained_pages = [_]bool{false} ** 256;
     try collectBptGraph(BptModel, &dropped_model, dropped_root, &dropped_pages);
@@ -514,8 +507,14 @@ test "GC: paged model resumes while reclaiming one BPT graph" {
     // Recreate the cache/model/collector objects while preserving their shared
     // page store and durable roots, then resume the active GC cycle.
     var reopened_cache = PagedCache{ .store = &store };
-    var reopened_retained_manager = PagedManager{ .store = &store, .root = retained_root };
-    var reopened_gc_manager = PagedManager{ .store = &store, .root = gc_manager.root };
+    var reopened_retained_manager = PagedManager{
+        .store = &store,
+        .state_bytes = retained_manager.state_bytes,
+    };
+    var reopened_gc_manager = PagedManager{
+        .store = &store,
+        .state_bytes = gc_manager.state_bytes,
+    };
     var reopened_retained_model = try BptModel.init(
         &reopened_cache,
         &reopened_retained_manager,

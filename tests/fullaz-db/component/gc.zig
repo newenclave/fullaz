@@ -153,12 +153,12 @@ test "fullaz-db: built-in binding GC capabilities collect roots and register str
     var slot_heap_runtime: SlotHeapBinding.Runtime = undefined;
     try SlotHeapBinding.initRuntime(&slot_heap_runtime, &backend, .{ .base = 0x0107, .count = 3 }, .{});
     defer SlotHeapBinding.deinitRuntime(&slot_heap_runtime);
-    slot_heap_runtime.state.root.set(50);
-    slot_heap_runtime.state.cached_top_page.set(53);
-    slot_heap_runtime.state.cached_top_slot.set(0);
-    slot_heap_runtime.state.available_inode_heads[1].set(54);
-    slot_heap_runtime.state.fsm_class_roots[0].set(51);
-    slot_heap_runtime.state.fsm_class_roots[1].set(52);
+    slot_heap_runtime.state.heap.root.set(50);
+    slot_heap_runtime.state.heap.cached_top_page.set(53);
+    slot_heap_runtime.state.heap.cached_top_slot.set(0);
+    slot_heap_runtime.state.heap.available_inode_heads[1].set(54);
+    slot_heap_runtime.state.fsm.classes[0].first.set(51);
+    slot_heap_runtime.state.fsm.classes[1].first.set(52);
 
     var roots: std.ArrayList(u32) = .empty;
     defer roots.deinit(std.testing.allocator);

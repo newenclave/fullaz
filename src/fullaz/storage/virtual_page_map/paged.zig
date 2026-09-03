@@ -1,9 +1,58 @@
 const std = @import("std");
 const PackedInt = @import("../../core/packed_int.zig").PackedInt;
+const core_storage_manager = @import("../../core/storage_manager.zig");
 const page_cache_contract = @import("../../contracts/page_cache.zig");
 const storage_manager_contract = @import("../../contracts/storage_manager.zig");
 const virtual_page_map_contract = @import("../../contracts/virtual_page_map.zig");
 const radix_tree = @import("../../radix_tree/radix_tree.zig");
+
+const state_magic = "FZVPM002";
+const state_version = 2;
+
+/// Exact durable state required to reopen one paged virtual page map.
+pub fn State(
+    comptime PhysicalPageIdT: type,
+    comptime VirtualPageIdT: type,
+) type {
+    const PackedVirtualPageId = PackedInt(VirtualPageIdT, .little);
+    const PackedU16 = PackedInt(u16, .little);
+    const PackedU32 = PackedInt(u32, .little);
+    const RadixState = radix_tree.models.paged.State(PhysicalPageIdT, .little);
+    const StateImpl = extern struct {
+        magic: [state_magic.len]u8,
+        version: PackedU16,
+        byte_size: PackedU16,
+        reserved: PackedU32,
+        virtual_to_physical: RadixState,
+        physical_to_virtual: RadixState,
+        next_virtual_page_id: PackedVirtualPageId,
+        crc: PackedU32,
+    };
+
+    comptime {
+        if (@alignOf(StateImpl) != 1 or
+            @sizeOf(StateImpl) > std.math.maxInt(u16) or
+            @offsetOf(StateImpl, "magic") != 0 or
+            @offsetOf(StateImpl, "version") != @sizeOf([state_magic.len]u8) or
+            @offsetOf(StateImpl, "byte_size") !=
+                @offsetOf(StateImpl, "version") + @sizeOf(PackedU16) or
+            @offsetOf(StateImpl, "reserved") !=
+                @offsetOf(StateImpl, "byte_size") + @sizeOf(PackedU16) or
+            @offsetOf(StateImpl, "virtual_to_physical") !=
+                @offsetOf(StateImpl, "reserved") + @sizeOf(PackedU32) or
+            @offsetOf(StateImpl, "physical_to_virtual") !=
+                @offsetOf(StateImpl, "virtual_to_physical") + @sizeOf(RadixState) or
+            @offsetOf(StateImpl, "next_virtual_page_id") !=
+                @offsetOf(StateImpl, "physical_to_virtual") + @sizeOf(RadixState) or
+            @offsetOf(StateImpl, "crc") !=
+                @offsetOf(StateImpl, "next_virtual_page_id") + @sizeOf(PackedVirtualPageId) or
+            @sizeOf(StateImpl) != @offsetOf(StateImpl, "crc") + @sizeOf(PackedU32))
+        {
+            @compileError("VirtualPageMap paged state layout changed");
+        }
+    }
+    return StateImpl;
+}
 
 pub fn Paged(
     comptime PageCacheT: type,
@@ -16,25 +65,9 @@ pub fn Paged(
     const PhysicalPageIdT = PageCacheT.Pid;
     const PackedPhysicalPageId = PackedInt(PhysicalPageIdT, .little);
     const PackedVirtualPageId = PackedInt(VirtualPageIdT, .little);
-    const PackedU16 = PackedInt(u16, .little);
     const PackedU32 = PackedInt(u32, .little);
-    const nil_physical_page_id = std.math.maxInt(PhysicalPageIdT);
-    const state_magic = "FZVPM002";
-    const state_version = 2;
-
-    const State = extern struct {
-        magic: [state_magic.len]u8,
-        version: PackedU16,
-        byte_size: PackedU16,
-        reserved: PackedU32,
-        virtual_to_physical_root: PackedPhysicalPageId,
-        virtual_to_physical_free_leaf_root: PackedPhysicalPageId,
-        physical_to_virtual_root: PackedPhysicalPageId,
-        physical_to_virtual_free_leaf_root: PackedPhysicalPageId,
-        next_virtual_page_id: PackedVirtualPageId,
-        crc: PackedU32,
-    };
-    const state_byte_size = @sizeOf(State);
+    const StateImpl = State(PhysicalPageIdT, VirtualPageIdT);
+    const state_byte_size = @sizeOf(StateImpl);
 
     comptime {
         assertUnsignedInteger(PhysicalPageIdT, "physical page ID");
@@ -42,90 +75,26 @@ pub fn Paged(
         if (@bitSizeOf(VirtualPageIdT) > @bitSizeOf(usize)) {
             @compileError("VirtualPageMap virtual page ID must fit usize for pageCount");
         }
-        if (@alignOf(State) != 1 or
-            state_byte_size > std.math.maxInt(u16) or
-            @offsetOf(State, "magic") != 0 or
-            @offsetOf(State, "version") != @sizeOf([state_magic.len]u8) or
-            @offsetOf(State, "byte_size") != @offsetOf(State, "version") + @sizeOf(PackedU16) or
-            @offsetOf(State, "reserved") != @offsetOf(State, "byte_size") + @sizeOf(PackedU16) or
-            @offsetOf(State, "virtual_to_physical_root") != @offsetOf(State, "reserved") + @sizeOf(PackedU32) or
-            @offsetOf(State, "virtual_to_physical_free_leaf_root") != @offsetOf(State, "virtual_to_physical_root") + @sizeOf(PackedPhysicalPageId) or
-            @offsetOf(State, "physical_to_virtual_root") != @offsetOf(State, "virtual_to_physical_free_leaf_root") + @sizeOf(PackedPhysicalPageId) or
-            @offsetOf(State, "physical_to_virtual_free_leaf_root") != @offsetOf(State, "physical_to_virtual_root") + @sizeOf(PackedPhysicalPageId) or
-            @offsetOf(State, "next_virtual_page_id") != @offsetOf(State, "physical_to_virtual_free_leaf_root") + @sizeOf(PackedPhysicalPageId) or
-            @offsetOf(State, "crc") != @offsetOf(State, "next_virtual_page_id") + @sizeOf(PackedVirtualPageId))
-        {
-            @compileError("VirtualPageMap paged state layout changed");
-        }
     }
 
     return struct {
         const Self = @This();
         const StateLeaseType = StorageManagerT.StateLeaseType;
-
-        const VirtualToPhysicalStorageManager = struct {
-            pub const PageId = PhysicalPageIdT;
-            const ManagerError = StorageManagerT.Error;
-
-            pub const Error = ManagerError;
-
-            state: *State,
-            common: *StorageManagerT,
-
-            pub fn getRoot(self: *const @This()) ?PageId {
-                const page_id = self.state.virtual_to_physical_root.get();
-                return if (page_id == nil_physical_page_id) null else page_id;
-            }
-
-            pub fn setRoot(self: *@This(), page_id: ?PageId) ManagerError!void {
-                self.state.virtual_to_physical_root.set(page_id orelse nil_physical_page_id);
-            }
-
-            pub fn getFreeLeafRoot(self: *const @This()) ?PageId {
-                const page_id = self.state.virtual_to_physical_free_leaf_root.get();
-                return if (page_id == nil_physical_page_id) null else page_id;
-            }
-
-            pub fn setFreeLeafRoot(self: *@This(), page_id: ?PageId) ManagerError!void {
-                self.state.virtual_to_physical_free_leaf_root.set(page_id orelse nil_physical_page_id);
-            }
-
-            pub fn destroyPage(self: *@This(), page_id: PageId) ManagerError!void {
-                return self.common.destroyPage(page_id);
-            }
-        };
-
-        const PhysicalToVirtualStorageManager = struct {
-            pub const PageId = PhysicalPageIdT;
-            const ManagerError = StorageManagerT.Error;
-
-            pub const Error = ManagerError;
-
-            state: *State,
-            common: *StorageManagerT,
-
-            pub fn getRoot(self: *const @This()) ?PageId {
-                const page_id = self.state.physical_to_virtual_root.get();
-                return if (page_id == nil_physical_page_id) null else page_id;
-            }
-
-            pub fn setRoot(self: *@This(), page_id: ?PageId) ManagerError!void {
-                self.state.physical_to_virtual_root.set(page_id orelse nil_physical_page_id);
-            }
-
-            pub fn getFreeLeafRoot(self: *const @This()) ?PageId {
-                const page_id = self.state.physical_to_virtual_free_leaf_root.get();
-                return if (page_id == nil_physical_page_id) null else page_id;
-            }
-
-            pub fn setFreeLeafRoot(self: *@This(), page_id: ?PageId) ManagerError!void {
-                self.state.physical_to_virtual_free_leaf_root.set(page_id orelse nil_physical_page_id);
-            }
-
-            pub fn destroyPage(self: *@This(), page_id: PageId) ManagerError!void {
-                return self.common.destroyPage(page_id);
-            }
-        };
+        const StateView = core_storage_manager.StateAccessor(StateLeaseType, StateImpl);
+        const BorrowedOuterStorageManager = core_storage_manager.BorrowedExactPagedStorageManager(
+            StorageManagerT,
+            StateImpl,
+        );
+        const VirtualToPhysicalStorageManager = core_storage_manager.PagedFieldStorageManager(
+            BorrowedOuterStorageManager,
+            StateImpl,
+            "virtual_to_physical",
+        );
+        const PhysicalToVirtualStorageManager = core_storage_manager.PagedFieldStorageManager(
+            BorrowedOuterStorageManager,
+            StateImpl,
+            "physical_to_virtual",
+        );
 
         const VirtualPidSlot = extern struct {
             vid: PackedVirtualPageId,
@@ -169,8 +138,8 @@ pub fn Paged(
             PageCacheT.Error ||
             StorageManagerT.Error ||
             StateLeaseType.Error ||
+            StateView.Error ||
             error{
-                StateTooSmall,
                 InvalidState,
                 UnsupportedStateVersion,
                 InvalidSettings,
@@ -180,24 +149,25 @@ pub fn Paged(
                 PhysicalPageAlreadyMapped,
                 InconsistentMapping,
             };
+        pub const State = StateImpl;
         pub const state_size = state_byte_size;
         pub const append_only_dense_virtual_page_ids = true;
 
         pub const WriteBatch = struct {
             map: *Self,
-            state_snapshot: [state_byte_size]u8,
+            state_snapshot: StateImpl,
             active: bool = true,
 
             pub fn commit(self: *WriteBatch) void {
                 std.debug.assert(self.active);
-                self.map.finishBatch();
+                self.map.finishBatch(true);
                 self.active = false;
             }
 
             pub fn discard(self: *WriteBatch) void {
                 std.debug.assert(self.active);
                 self.map.restoreBatchState(&self.state_snapshot);
-                self.map.finishBatch();
+                self.map.finishBatch(false);
                 self.active = false;
             }
 
@@ -207,14 +177,30 @@ pub fn Paged(
             /// WAL replay on the next open.
             pub fn abandon(self: *WriteBatch) void {
                 std.debug.assert(self.active);
-                self.map.finishBatch();
+                self.map.finishBatch(false);
                 self.active = false;
             }
         };
 
         const MutationState = struct {
-            state: *State,
             lease: ?StateLeaseType = null,
+
+            fn state(self: *MutationState, map: *Self) Error!*StateImpl {
+                return StateView.viewMut(self.leasePtr(map));
+            }
+
+            fn leasePtr(self: *MutationState, map: *Self) *StateLeaseType {
+                if (self.lease) |*lease| {
+                    return lease;
+                }
+                return &map.active_state_lease.?;
+            }
+
+            fn publish(self: *MutationState) void {
+                if (self.lease) |*lease| {
+                    lease.finish();
+                }
+            }
 
             pub fn deinit(self: *MutationState) void {
                 if (self.lease) |*lease| {
@@ -229,7 +215,6 @@ pub fn Paged(
         settings: Settings,
         next_virtual_page_id: usize,
         active_state_lease: ?StateLeaseType = null,
-        active_state_bytes: ?[]u8 = null,
         batch_active: bool = false,
 
         pub fn format(
@@ -240,22 +225,19 @@ pub fn Paged(
             try validateSettings(settings);
             var state_lease = try storage_manager.state();
             defer state_lease.deinit();
-            const bytes = try state_lease.dataMut();
-            const state = try stateMut(bytes);
-            @memset(bytes[0..state_byte_size], 0);
+            const state = try StateView.viewMut(&state_lease);
             state.* = .{
                 .magic = state_magic.*,
                 .version = .init(state_version),
                 .byte_size = .init(state_byte_size),
                 .reserved = .init(0),
-                .virtual_to_physical_root = .init(nil_physical_page_id),
-                .virtual_to_physical_free_leaf_root = .init(nil_physical_page_id),
-                .physical_to_virtual_root = .init(nil_physical_page_id),
-                .physical_to_virtual_free_leaf_root = .init(nil_physical_page_id),
+                .virtual_to_physical = .{},
+                .physical_to_virtual = .{},
                 .next_virtual_page_id = .init(0),
                 .crc = .init(0),
             };
             sealState(state);
+            state_lease.finish();
             return .{
                 .cache = cache,
                 .storage_manager = storage_manager,
@@ -272,7 +254,7 @@ pub fn Paged(
             try validateSettings(settings);
             var state_lease = try storage_manager.state();
             defer state_lease.deinit();
-            const state = try stateView(try state_lease.data());
+            const state = try StateView.view(&state_lease);
             try validateState(cache, state);
             return .{
                 .cache = cache,
@@ -290,42 +272,49 @@ pub fn Paged(
         pub fn prepareSet(self: *Self) Error!void {
             var mutation = try self.mutationState();
             defer mutation.deinit();
-            try self.validateNextVirtualPageId(mutation.state);
+            try self.validateNextVirtualPageId(try mutation.state(self));
         }
 
         pub fn set(self: *Self, physical_page_id: PhysicalPageIdT) Error!VirtualPageIdT {
             var mutation = try self.mutationState();
             defer mutation.deinit();
-            const state = mutation.state;
-            if (try self.physicalToVirtualGet(state, physical_page_id)) |virtual_page_id| {
-                if ((try self.virtualToPhysicalGet(state, virtual_page_id)) != physical_page_id) {
+            const state = try mutation.state(self);
+            const outer_lease = mutation.leasePtr(self);
+            if (try self.physicalToVirtualGet(outer_lease, physical_page_id)) |virtual_page_id| {
+                if ((try self.virtualToPhysicalGet(outer_lease, virtual_page_id)) != physical_page_id) {
                     return error.InconsistentMapping;
                 }
                 return virtual_page_id;
             }
 
             const virtual_page_id = try self.nextVirtualPageId(state);
-            if (try self.virtualToPhysicalGet(state, virtual_page_id) != null) {
+            if (try self.virtualToPhysicalGet(outer_lease, virtual_page_id) != null) {
                 return error.InconsistentMapping;
             }
             errdefer self.cache.markTransactionFailed();
-            try self.virtualToPhysicalSet(state, virtual_page_id, physical_page_id);
-            try self.physicalToVirtualSet(state, physical_page_id, virtual_page_id);
+            try self.virtualToPhysicalSet(outer_lease, virtual_page_id, physical_page_id);
+            try self.physicalToVirtualSet(outer_lease, physical_page_id, virtual_page_id);
             state.next_virtual_page_id.set(virtual_page_id + 1);
             self.next_virtual_page_id += 1;
             sealState(state);
+            mutation.publish();
             return virtual_page_id;
         }
 
         pub fn get(self: *const Self, virtual_page_id: VirtualPageIdT) Error!PhysicalPageIdT {
             if (self.batch_active) {
-                return self.getFromState(try self.activeStateConst(), virtual_page_id);
+                const outer_lease = try self.activeLease();
+                return self.getFromState(
+                    outer_lease,
+                    try StateView.view(outer_lease),
+                    virtual_page_id,
+                );
             }
             var state_lease = try self.storage_manager.state();
             defer state_lease.deinit();
-            const state = try stateView(try state_lease.data());
+            const state = try StateView.view(&state_lease);
             try validateState(self.cache, state);
-            return self.getFromState(state, virtual_page_id);
+            return self.getFromState(&state_lease, state, virtual_page_id);
         }
 
         pub fn remap(
@@ -335,19 +324,25 @@ pub fn Paged(
         ) Error!void {
             var mutation = try self.mutationState();
             defer mutation.deinit();
-            const state = mutation.state;
-            const old_physical_page_id = try self.getFromState(state, virtual_page_id);
+            const state = try mutation.state(self);
+            const outer_lease = mutation.leasePtr(self);
+            const old_physical_page_id = try self.getFromState(
+                outer_lease,
+                state,
+                virtual_page_id,
+            );
             if (old_physical_page_id == physical_page_id) {
                 return;
             }
-            if (try self.physicalToVirtualGet(state, physical_page_id) != null) {
+            if (try self.physicalToVirtualGet(outer_lease, physical_page_id) != null) {
                 return error.PhysicalPageAlreadyMapped;
             }
             errdefer self.cache.markTransactionFailed();
-            try self.physicalToVirtualSet(state, physical_page_id, virtual_page_id);
-            try self.virtualToPhysicalSet(state, virtual_page_id, physical_page_id);
-            try self.physicalToVirtualFree(state, old_physical_page_id);
+            try self.physicalToVirtualSet(outer_lease, physical_page_id, virtual_page_id);
+            try self.virtualToPhysicalSet(outer_lease, virtual_page_id, physical_page_id);
+            try self.physicalToVirtualFree(outer_lease, old_physical_page_id);
             sealState(state);
+            mutation.publish();
         }
 
         pub fn pageCount(self: *const Self) usize {
@@ -360,13 +355,10 @@ pub fn Paged(
             }
             var state_lease = try self.storage_manager.state();
             errdefer state_lease.deinit();
-            const bytes = try state_lease.dataMut();
-            const state = try stateMut(bytes);
+            const state = try StateView.viewMut(&state_lease);
             try validateState(self.cache, state);
-            var state_snapshot: [state_byte_size]u8 = undefined;
-            @memcpy(&state_snapshot, bytes[0..state_byte_size]);
+            const state_snapshot = state.*;
             self.active_state_lease = state_lease;
-            self.active_state_bytes = bytes;
             self.batch_active = true;
             return .{
                 .map = self,
@@ -394,7 +386,7 @@ pub fn Paged(
             }
         }
 
-        fn validateState(cache: *const PageCacheT, state: *const State) Error!void {
+        fn validateState(cache: *const PageCacheT, state: *const StateImpl) Error!void {
             if (!std.mem.eql(u8, &state.magic, state_magic) or
                 state.byte_size.get() != state_byte_size or
                 state.reserved.get() != 0 or
@@ -406,33 +398,35 @@ pub fn Paged(
                 return error.UnsupportedStateVersion;
             }
             inline for ([_]PackedPhysicalPageId{
-                state.virtual_to_physical_root,
-                state.virtual_to_physical_free_leaf_root,
-                state.physical_to_virtual_root,
-                state.physical_to_virtual_free_leaf_root,
+                state.virtual_to_physical.root,
+                state.virtual_to_physical.free_leaf_root,
+                state.physical_to_virtual.root,
+                state.physical_to_virtual.free_leaf_root,
             }) |root| {
                 const page_id = root.get();
-                if (page_id != nil_physical_page_id and page_id >= cache.pageCount()) {
+                if (page_id != std.math.maxInt(PhysicalPageIdT) and
+                    page_id >= cache.pageCount())
+                {
                     return error.InvalidState;
                 }
             }
         }
 
-        fn activeState(self: *Self) Error!*State {
+        fn activeLease(self: *const Self) Error!*StateLeaseType {
             if (!self.batch_active) {
                 return error.TransactionInactive;
             }
-            return stateMut(self.active_state_bytes orelse unreachable);
+            return &@constCast(self).active_state_lease.?;
         }
 
-        fn sealState(state: *State) void {
+        fn sealState(state: *StateImpl) void {
             state.crc.set(0);
             state.crc.set(crc(state));
         }
 
-        fn crc(state: *const State) u32 {
+        fn crc(state: *const StateImpl) u32 {
             const bytes = std.mem.asBytes(state);
-            const crc_offset = @offsetOf(State, "crc");
+            const crc_offset = @offsetOf(StateImpl, "crc");
             var hasher = std.hash.Crc32.init();
             hasher.update(bytes[0..crc_offset]);
             hasher.update(bytes[crc_offset + @sizeOf(PackedU32) ..]);
@@ -441,43 +435,36 @@ pub fn Paged(
 
         fn mutationState(self: *Self) Error!MutationState {
             if (self.batch_active) {
-                return .{ .state = try self.activeState() };
+                return .{};
             }
 
-            var lease = try self.storage_manager.state();
-            errdefer lease.deinit();
-            const bytes = try lease.dataMut();
-            const state = try stateMut(bytes);
-            try validateState(self.cache, state);
-            return .{
-                .state = state,
-                .lease = lease,
+            var mutation = MutationState{
+                .lease = try self.storage_manager.state(),
             };
+            errdefer mutation.deinit();
+            try validateState(self.cache, try mutation.state(self));
+            return mutation;
         }
 
-        fn activeStateConst(self: *const Self) Error!*const State {
-            if (!self.batch_active) {
-                return error.TransactionInactive;
+        fn finishBatch(self: *Self, publish: bool) void {
+            const state_lease = &self.active_state_lease.?;
+            if (publish) {
+                state_lease.finish();
             }
-            return stateView(self.active_state_bytes orelse unreachable);
-        }
-
-        fn finishBatch(self: *Self) void {
-            var state_lease = self.active_state_lease orelse unreachable;
-            self.active_state_lease = null;
-            self.active_state_bytes = null;
-            self.batch_active = false;
             state_lease.deinit();
+            self.active_state_lease = null;
+            self.batch_active = false;
         }
 
-        fn restoreBatchState(self: *Self, state_snapshot: *const [state_byte_size]u8) void {
-            const bytes = self.active_state_bytes orelse unreachable;
-            @memcpy(bytes[0..state_byte_size], state_snapshot);
-            const state: *const State = @ptrCast(state_snapshot);
-            self.next_virtual_page_id = @intCast(state.next_virtual_page_id.get());
+        fn restoreBatchState(self: *Self, state_snapshot: *const StateImpl) void {
+            const state = StateView.viewMut(&self.active_state_lease.?) catch {
+                @panic("VirtualPageMap batch state became inaccessible");
+            };
+            state.* = state_snapshot.*;
+            self.next_virtual_page_id = @intCast(state_snapshot.next_virtual_page_id.get());
         }
 
-        fn validateNextVirtualPageId(self: *const Self, state: *const State) Error!void {
+        fn validateNextVirtualPageId(self: *const Self, state: *const StateImpl) Error!void {
             if (state.next_virtual_page_id.get() == std.math.maxInt(VirtualPageIdT)) {
                 return error.PageIdExhausted;
             }
@@ -486,21 +473,25 @@ pub fn Paged(
             }
         }
 
-        fn nextVirtualPageId(self: *const Self, state: *const State) Error!VirtualPageIdT {
+        fn nextVirtualPageId(self: *const Self, state: *const StateImpl) Error!VirtualPageIdT {
             try self.validateNextVirtualPageId(state);
             return state.next_virtual_page_id.get();
         }
 
-        fn getFromState(self: *const Self, state: *const State, virtual_page_id: VirtualPageIdT) Error!PhysicalPageIdT {
+        fn getFromState(
+            self: *const Self,
+            outer_lease: *StateLeaseType,
+            state: *const StateImpl,
+            virtual_page_id: VirtualPageIdT,
+        ) Error!PhysicalPageIdT {
             if (virtual_page_id >= state.next_virtual_page_id.get()) {
                 return error.VirtualPageNotMapped;
             }
-            const mutable_state = @constCast(state);
 
-            const physical_page_id = try self.virtualToPhysicalGet(mutable_state, virtual_page_id) orelse
+            const physical_page_id = try self.virtualToPhysicalGet(outer_lease, virtual_page_id) orelse
                 return error.InconsistentMapping;
 
-            const reverse_virtual_page_id = try self.physicalToVirtualGet(mutable_state, physical_page_id) orelse
+            const reverse_virtual_page_id = try self.physicalToVirtualGet(outer_lease, physical_page_id) orelse
                 return error.InconsistentMapping;
 
             if (reverse_virtual_page_id != virtual_page_id) {
@@ -512,14 +503,15 @@ pub fn Paged(
 
         fn virtualToPhysicalGet(
             self: *const Self,
-            state: *State,
+            outer_lease: *StateLeaseType,
             virtual_page_id: VirtualPageIdT,
         ) Error!?PhysicalPageIdT {
-            var storage_manager = VirtualToPhysicalStorageManager{
-                .state = state,
-                .common = self.storage_manager,
-            };
-            var model = try VirtualToPhysicalModel.init(self.cache, &storage_manager, .{
+            var borrowed_manager = BorrowedOuterStorageManager.init(
+                self.storage_manager,
+                outer_lease,
+            );
+            var projected_manager = VirtualToPhysicalStorageManager.init(&borrowed_manager);
+            var model = try VirtualToPhysicalModel.init(self.cache, &projected_manager, .{
                 .leaf_page_kind = self.settings.virtual_to_physical.leaf,
                 .inode_page_kind = self.settings.virtual_to_physical.inode,
             });
@@ -536,15 +528,16 @@ pub fn Paged(
 
         fn virtualToPhysicalSet(
             self: *Self,
-            state: *State,
+            outer_lease: *StateLeaseType,
             virtual_page_id: VirtualPageIdT,
             physical_page_id: PhysicalPageIdT,
         ) Error!void {
-            var storage_manager = VirtualToPhysicalStorageManager{
-                .state = state,
-                .common = self.storage_manager,
-            };
-            var model = try VirtualToPhysicalModel.init(self.cache, &storage_manager, .{
+            var borrowed_manager = BorrowedOuterStorageManager.init(
+                self.storage_manager,
+                outer_lease,
+            );
+            var projected_manager = VirtualToPhysicalStorageManager.init(&borrowed_manager);
+            var model = try VirtualToPhysicalModel.init(self.cache, &projected_manager, .{
                 .leaf_page_kind = self.settings.virtual_to_physical.leaf,
                 .inode_page_kind = self.settings.virtual_to_physical.inode,
             });
@@ -560,14 +553,15 @@ pub fn Paged(
 
         fn physicalToVirtualGet(
             self: *const Self,
-            state: *State,
+            outer_lease: *StateLeaseType,
             physical_page_id: PhysicalPageIdT,
         ) Error!?VirtualPageIdT {
-            var storage_manager = PhysicalToVirtualStorageManager{
-                .state = state,
-                .common = self.storage_manager,
-            };
-            var model = try PhysicalToVirtualModel.init(self.cache, &storage_manager, .{
+            var borrowed_manager = BorrowedOuterStorageManager.init(
+                self.storage_manager,
+                outer_lease,
+            );
+            var projected_manager = PhysicalToVirtualStorageManager.init(&borrowed_manager);
+            var model = try PhysicalToVirtualModel.init(self.cache, &projected_manager, .{
                 .leaf_page_kind = self.settings.physical_to_virtual.leaf,
                 .inode_page_kind = self.settings.physical_to_virtual.inode,
             });
@@ -582,12 +576,18 @@ pub fn Paged(
             return slot.vid.get();
         }
 
-        fn physicalToVirtualSet(self: *Self, state: *State, physical_page_id: PhysicalPageIdT, virtual_page_id: VirtualPageIdT) Error!void {
-            var storage_manager = PhysicalToVirtualStorageManager{
-                .state = state,
-                .common = self.storage_manager,
-            };
-            var model = try PhysicalToVirtualModel.init(self.cache, &storage_manager, .{
+        fn physicalToVirtualSet(
+            self: *Self,
+            outer_lease: *StateLeaseType,
+            physical_page_id: PhysicalPageIdT,
+            virtual_page_id: VirtualPageIdT,
+        ) Error!void {
+            var borrowed_manager = BorrowedOuterStorageManager.init(
+                self.storage_manager,
+                outer_lease,
+            );
+            var projected_manager = PhysicalToVirtualStorageManager.init(&borrowed_manager);
+            var model = try PhysicalToVirtualModel.init(self.cache, &projected_manager, .{
                 .leaf_page_kind = self.settings.physical_to_virtual.leaf,
                 .inode_page_kind = self.settings.physical_to_virtual.inode,
             });
@@ -600,12 +600,17 @@ pub fn Paged(
             try tree.set(physical_page_id, std.mem.asBytes(&slot));
         }
 
-        fn physicalToVirtualFree(self: *Self, state: *State, physical_page_id: PhysicalPageIdT) Error!void {
-            var storage_manager = PhysicalToVirtualStorageManager{
-                .state = state,
-                .common = self.storage_manager,
-            };
-            var model = try PhysicalToVirtualModel.init(self.cache, &storage_manager, .{
+        fn physicalToVirtualFree(
+            self: *Self,
+            outer_lease: *StateLeaseType,
+            physical_page_id: PhysicalPageIdT,
+        ) Error!void {
+            var borrowed_manager = BorrowedOuterStorageManager.init(
+                self.storage_manager,
+                outer_lease,
+            );
+            var projected_manager = PhysicalToVirtualStorageManager.init(&borrowed_manager);
+            var model = try PhysicalToVirtualModel.init(self.cache, &projected_manager, .{
                 .leaf_page_kind = self.settings.physical_to_virtual.leaf,
                 .inode_page_kind = self.settings.physical_to_virtual.inode,
             });
@@ -613,20 +618,6 @@ pub fn Paged(
             var tree = PhysicalToVirtualTree.init(&model);
             defer tree.deinit();
             try tree.free(physical_page_id);
-        }
-
-        fn stateView(bytes: []const u8) Error!*const State {
-            if (bytes.len < state_byte_size) {
-                return error.StateTooSmall;
-            }
-            return @ptrCast(bytes.ptr);
-        }
-
-        fn stateMut(bytes: []u8) Error!*State {
-            if (bytes.len < state_byte_size) {
-                return error.StateTooSmall;
-            }
-            return @ptrCast(bytes.ptr);
         }
 
         comptime {

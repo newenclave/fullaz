@@ -9,6 +9,7 @@ const low_level_slot_heap = @import("fullaz").storage.slot_heap;
 const gc = @import("fullaz").gc;
 const dynamic_metadata = @import("../file/metadata/dynamic.zig");
 const tagged = @import("../file/tagged_fields.zig");
+const storage_manager_mod = @import("fullaz").core.storage_manager;
 
 pub const SizeClasses = union(enum) {
     one,
@@ -105,7 +106,7 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
 
     const Trait = struct {
         pub const kind_name: []const u8 = "fullaz.slot-heap.paged";
-        pub const format_version: u32 = 2;
+        pub const format_version: u32 = 3;
         pub const page_kind_count: usize = 3;
         pub const page_roles: [page_kind_count][]const u8 = .{ "leaf", "inode", "fsm_slab" };
         pub const CompareContext = CompareContextT;
@@ -144,28 +145,31 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                 CacheT.Pid,
                 u16,
                 configured_maximum_level,
-                class_count,
+                PolicyT,
             );
 
             const StateManagerT = managers.StateManager(BackendT, StateT);
-            const StateAdapterT = low_level_slot_heap.models.paged.StateAdapter(
+            const HeapStateManagerT = storage_manager_mod.PagedFieldStorageManager(
                 StateManagerT,
                 StateT,
-                CacheT.Pid,
-                u16,
-                configured_maximum_level,
-                class_count,
+                "heap",
+            );
+            const FsmStateManagerT = storage_manager_mod.PagedFieldStorageManager(
+                StateManagerT,
+                StateT,
+                "fsm",
             );
             const FsmModelT = fsm.models.paged.slab.Model(
                 CacheT,
-                StateAdapterT,
+                FsmStateManagerT,
                 PolicyT,
                 LocationAccessor,
             );
             const FsmT = fsm.Fsm(FsmModelT);
             const ModelT = low_level_slot_heap.models.Paged(
                 CacheT,
-                StateAdapterT,
+                HeapStateManagerT,
+                configured_maximum_level,
                 FsmT,
                 options.compare,
                 CompareContextT,
@@ -354,7 +358,8 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                 };
 
                 pub const StateManager = StateManagerT;
-                pub const StateAdapter = StateAdapterT;
+                pub const HeapStateManager = HeapStateManagerT;
+                pub const FsmStateManager = FsmStateManagerT;
                 pub const FsmModel = FsmModelT;
                 pub const Model = ModelT;
                 pub const Heap = HeapT;
@@ -374,7 +379,8 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                     cache: *CacheT,
                     state: StateT,
                     state_manager: StateManagerT,
-                    state_adapter: StateAdapterT,
+                    heap_state_manager: HeapStateManagerT,
+                    fsm_state_manager: FsmStateManagerT,
                     fsm_model: FsmModelT,
                     fsm: FsmT,
                     model: ModelT,
@@ -395,16 +401,19 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                     }
 
                     pub fn validate(storage: *const Storage, page_count: usize) @This().Error!void {
-                        try validatePageId(storage.root, page_count);
-                        try validatePageId(storage.cached_top_page, page_count);
-                        if (storage.cached_top_page.isMax() != storage.cached_top_slot.isMax()) {
+                        try validatePageId(storage.heap.root, page_count);
+                        try validatePageId(storage.heap.cached_top_page, page_count);
+                        if (storage.heap.cached_top_page.isMax() != storage.heap.cached_top_slot.isMax()) {
                             return error.BadMetadata;
                         }
-                        inline for (storage.available_inode_heads) |head| {
+                        inline for (storage.heap.available_inode_heads) |head| {
                             try validatePageId(head, page_count);
                         }
-                        inline for (storage.fsm_class_roots) |root| {
-                            try validatePageId(root, page_count);
+                        inline for (storage.fsm.classes, 0..) |class_state, index| {
+                            try validatePageId(class_state.first, page_count);
+                            if (index >= class_count and !class_state.first.isMax()) {
+                                return error.BadMetadata;
+                            }
                         }
                     }
 
@@ -419,7 +428,7 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                     }
                 };
                 pub const DynamicMetadata = struct {
-                    pub const format_version: u32 = 2;
+                    pub const format_version: u32 = 3;
                     pub const known_tags: []const u16 = &.{0x0100};
                     pub const repeated_tags: []const u16 = &.{};
                     pub const Error = dynamic_metadata.Error;
@@ -467,12 +476,12 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                             allocator: std.mem.Allocator,
                             roots: *std.ArrayList(CollectorT.PageId),
                         ) RootsError!void {
-                            if (!runtime.state.root.isMax()) {
-                                try roots.append(allocator, runtime.state.root.get());
+                            if (!runtime.state.heap.root.isMax()) {
+                                try roots.append(allocator, runtime.state.heap.root.get());
                             }
-                            for (runtime.state.fsm_class_roots) |root| {
-                                if (!root.isMax()) {
-                                    try roots.append(allocator, root.get());
+                            for (runtime.state.fsm.classes) |class_state| {
+                                if (!class_state.first.isMax()) {
+                                    try roots.append(allocator, class_state.first.get());
                                 }
                             }
                         }
@@ -527,10 +536,29 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                     runtime.cache = backend.cache();
                     runtime.state = .{};
                     runtime.state_manager = StateManagerT.init(backend, &runtime.state);
-                    runtime.state_adapter = StateAdapterT.init(&runtime.state_manager);
-                    runtime.fsm_model = FsmModelT.init(backend.cache(), &runtime.state_adapter, policy, .{ .page_kind = slab_kind });
+                    runtime.heap_state_manager = HeapStateManagerT.init(&runtime.state_manager);
+                    runtime.fsm_state_manager = FsmStateManagerT.init(&runtime.state_manager);
+                    runtime.fsm_model = FsmModelT.init(
+                        backend.cache(),
+                        &runtime.fsm_state_manager,
+                        policy,
+                        .{ .page_kind = slab_kind },
+                    );
                     runtime.fsm = FsmT.init(&runtime.fsm_model);
-                    runtime.model = try ModelT.init(backend.cache(), &runtime.state_adapter, &runtime.fsm, .{ .key_size = configured_maximum_key_size, .maximum_value_size = configured_maximum_value_size, .comparator_id = configured_comparator_id, .leaf_page_kind = leaf_kind, .inode_page_kind = inode_kind, .maximum_level = configured_maximum_level }, init_options.compare_context);
+                    runtime.model = try ModelT.init(
+                        backend.cache(),
+                        &runtime.heap_state_manager,
+                        &runtime.fsm,
+                        .{
+                            .key_size = configured_maximum_key_size,
+                            .maximum_value_size = configured_maximum_value_size,
+                            .comparator_id = configured_comparator_id,
+                            .leaf_page_kind = leaf_kind,
+                            .inode_page_kind = inode_kind,
+                            .maximum_level = configured_maximum_level,
+                        },
+                        init_options.compare_context,
+                    );
                     runtime.heap = HeapT.init(&runtime.model);
                     runtime.active_editor = false;
                     runtime.const_proxy = .{ .heap = &runtime.heap };
@@ -571,24 +599,27 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                 }
 
                 pub fn StorageBinding(comptime StorageManagerT: type) type {
-                    const StorageStateAdapterT = low_level_slot_heap.models.paged.StateAdapter(
+                    const StorageHeapStateManagerT = storage_manager_mod.PagedFieldStorageManager(
                         StorageManagerT,
                         StateT,
-                        CacheT.Pid,
-                        u16,
-                        configured_maximum_level,
-                        class_count,
+                        "heap",
+                    );
+                    const StorageFsmStateManagerT = storage_manager_mod.PagedFieldStorageManager(
+                        StorageManagerT,
+                        StateT,
+                        "fsm",
                     );
                     const StorageFsmModelT = fsm.models.paged.slab.Model(
                         CacheT,
-                        StorageStateAdapterT,
+                        StorageFsmStateManagerT,
                         PolicyT,
                         LocationAccessor,
                     );
                     const StorageFsmT = fsm.Fsm(StorageFsmModelT);
                     const StorageModelT = low_level_slot_heap.models.Paged(
                         CacheT,
-                        StorageStateAdapterT,
+                        StorageHeapStateManagerT,
+                        configured_maximum_level,
                         StorageFsmT,
                         options.compare,
                         CompareContextT,
@@ -780,7 +811,8 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
 
                         pub const State = StateT;
                         pub const StateManager = StorageManagerT;
-                        pub const StateAdapter = StorageStateAdapterT;
+                        pub const HeapStateManager = StorageHeapStateManagerT;
+                        pub const FsmStateManager = StorageFsmStateManagerT;
                         pub const FsmModel = StorageFsmModelT;
                         pub const Model = StorageModelT;
                         pub const Heap = StorageHeapT;
@@ -798,7 +830,8 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                             page_kinds: component.PageKindRange,
                             cache: *CacheT,
                             storage_manager: *StorageManagerT,
-                            state_adapter: StorageStateAdapterT,
+                            heap_state_manager: StorageHeapStateManagerT,
+                            fsm_state_manager: StorageFsmStateManagerT,
                             fsm_model: StorageFsmModelT,
                             fsm: StorageFsmT,
                             model: StorageModelT,
@@ -832,17 +865,18 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                             runtime.page_kinds = page_kinds;
                             runtime.cache = backend.cache();
                             runtime.storage_manager = storage_manager;
-                            runtime.state_adapter = StorageStateAdapterT.init(storage_manager);
+                            runtime.heap_state_manager = StorageHeapStateManagerT.init(storage_manager);
+                            runtime.fsm_state_manager = StorageFsmStateManagerT.init(storage_manager);
                             runtime.fsm_model = StorageFsmModelT.init(
                                 backend.cache(),
-                                &runtime.state_adapter,
+                                &runtime.fsm_state_manager,
                                 policy,
                                 .{ .page_kind = slab_kind },
                             );
                             runtime.fsm = StorageFsmT.init(&runtime.fsm_model);
                             runtime.model = try StorageModelT.init(
                                 backend.cache(),
-                                &runtime.state_adapter,
+                                &runtime.heap_state_manager,
                                 &runtime.fsm,
                                 .{
                                     .key_size = configured_maximum_key_size,

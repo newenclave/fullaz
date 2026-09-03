@@ -23,6 +23,8 @@ pub fn defaultCamera() superblock.Camera {
 pub fn Cloud(comptime PageCacheType: type) type {
     const ReclaimingCacheT = reclaiming_cache_mod.ReclaimingCache(PageCacheType);
     const ManagerT = storage_mod.Manager(ReclaimingCacheT);
+    const TreeManagerT = storage_mod.TreeManager(ReclaimingCacheT);
+    const FsmManagerT = storage_mod.FsmManager(ReclaimingCacheT);
     const LocationAccessor = orthtree.models.paged.NodePageLocationAccessor(
         constants.PageId,
         u16,
@@ -30,14 +32,14 @@ pub fn Cloud(comptime PageCacheType: type) type {
     );
     const FsmModelT = fullaz.storage.fsm.models.paged.slab.Model(
         ReclaimingCacheT,
-        ManagerT,
+        FsmManagerT,
         storage_mod.NodeSizePolicy,
         LocationAccessor,
     );
     const FsmT = fullaz.storage.fsm.Fsm(FsmModelT);
     const ModelT = orthtree.models.PagedImpl(
         ReclaimingCacheT,
-        ManagerT,
+        TreeManagerT,
         FsmT,
         constants.Coord,
         constants.dims,
@@ -50,6 +52,8 @@ pub fn Cloud(comptime PageCacheType: type) type {
         const Self = @This();
 
         pub const Manager = ManagerT;
+        pub const TreeManager = TreeManagerT;
+        pub const FsmManager = FsmManagerT;
         pub const ReclaimingCache = ReclaimingCacheT;
         pub const FsmModel = FsmModelT;
         pub const Fsm = FsmT;
@@ -70,6 +74,8 @@ pub fn Cloud(comptime PageCacheType: type) type {
         // format and open return Self by value. Any of them stored inline would
         // dangle the moment that copy happens.
         manager: *Manager,
+        tree_manager: *TreeManager,
+        fsm_manager: *FsmManager,
         fsm_model: *FsmModel,
         fsm: *Fsm,
         model: *Model,
@@ -83,27 +89,42 @@ pub fn Cloud(comptime PageCacheType: type) type {
         const Wired = struct {
             reclaiming_cache: *ReclaimingCache,
             manager: *Manager,
+            tree_manager: *TreeManager,
+            fsm_manager: *FsmManager,
             fsm_model: *FsmModel,
             fsm: *Fsm,
             model: *Model,
         };
 
-        fn wire(gpa: std.mem.Allocator, cache: *PageCacheType, state: Manager.State) !Wired {
+        fn wire(
+            gpa: std.mem.Allocator,
+            cache: *PageCacheType,
+            reclaim_state: ReclaimingCache.State,
+        ) !Wired {
             const reclaiming = try gpa.create(ReclaimingCache);
             errdefer gpa.destroy(reclaiming);
-            reclaiming.* = ReclaimingCache.init(cache, .{
-                .free_page_root = state.free_page_root,
-                .free_page_count = state.free_page_count,
-                .reused_page_count = state.reused_page_count,
-            });
+            reclaiming.* = ReclaimingCache.init(cache, reclaim_state);
 
             const manager = try gpa.create(Manager);
             errdefer gpa.destroy(manager);
-            manager.* = Manager.init(reclaiming, state);
+            manager.* = Manager.init(reclaiming);
+
+            const tree_manager = try gpa.create(TreeManager);
+            errdefer gpa.destroy(tree_manager);
+            tree_manager.* = TreeManager.init(manager);
+
+            const fsm_manager = try gpa.create(FsmManager);
+            errdefer gpa.destroy(fsm_manager);
+            fsm_manager.* = FsmManager.init(manager);
 
             const fsm_model = try gpa.create(FsmModel);
             errdefer gpa.destroy(fsm_model);
-            fsm_model.* = FsmModel.init(reclaiming, manager, .{}, .{ .page_kind = fsm_page_kind });
+            fsm_model.* = FsmModel.init(
+                reclaiming,
+                fsm_manager,
+                .{},
+                .{ .page_kind = fsm_page_kind },
+            );
 
             const fsm = try gpa.create(Fsm);
             errdefer gpa.destroy(fsm);
@@ -111,9 +132,17 @@ pub fn Cloud(comptime PageCacheType: type) type {
 
             const model = try gpa.create(Model);
             errdefer gpa.destroy(model);
-            model.* = try Model.init(reclaiming, manager, fsm, constants.tree_settings);
+            model.* = try Model.init(reclaiming, tree_manager, fsm, constants.tree_settings);
 
-            return .{ .reclaiming_cache = reclaiming, .manager = manager, .fsm_model = fsm_model, .fsm = fsm, .model = model };
+            return .{
+                .reclaiming_cache = reclaiming,
+                .manager = manager,
+                .tree_manager = tree_manager,
+                .fsm_manager = fsm_manager,
+                .fsm_model = fsm_model,
+                .fsm = fsm,
+                .model = model,
+            };
         }
 
         pub fn format(
@@ -140,6 +169,8 @@ pub fn Cloud(comptime PageCacheType: type) type {
                 .cache = cache,
                 .reclaiming_cache = wired.reclaiming_cache,
                 .manager = wired.manager,
+                .tree_manager = wired.tree_manager,
+                .fsm_manager = wired.fsm_manager,
                 .fsm_model = wired.fsm_model,
                 .fsm = wired.fsm,
                 .model = wired.model,
@@ -155,7 +186,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
             _ = try self.insertPoints(initial_points);
             // Frame the cloud, not the cube: the root aggregate already knows
             // where the points actually ended up.
-            if (self.manager.root) |root_id| {
+            if (try self.model.accessor().getRoot()) |root_id| {
                 var root = try self.model.accessor().loadNode(root_id);
                 defer self.model.accessor().deinitNode(&root);
                 if (trait.Splat.count(root.trait()) > 0) {
@@ -174,11 +205,8 @@ pub fn Cloud(comptime PageCacheType: type) type {
                 const view = superblock.View(true).init(try handle.data());
                 try view.validate(block_size);
                 break :blk .{
-                    .state = Manager.State{
-                        .root = view.getRoot(),
-                        .entries_count = try view.getEntriesCount(),
-                        .fsm_class_root = view.getFsmClassRoot(),
-                        .free_page_root = view.getFreePageRoot(),
+                    .reclaim_state = ReclaimingCache.State{
+                        .free_list = view.header().free_page_root,
                         .free_page_count = view.getFreePageCount(),
                         .reused_page_count = view.getReusedPageCount(),
                     },
@@ -192,7 +220,7 @@ pub fn Cloud(comptime PageCacheType: type) type {
                 };
             };
 
-            const wired = try wire(gpa, cache, restored.state);
+            const wired = try wire(gpa, cache, restored.reclaim_state);
             // No initRootBounds here: the root already exists and the call
             // would return AlreadyInitialized.
             return Self{
@@ -200,6 +228,8 @@ pub fn Cloud(comptime PageCacheType: type) type {
                 .cache = cache,
                 .reclaiming_cache = wired.reclaiming_cache,
                 .manager = wired.manager,
+                .tree_manager = wired.tree_manager,
+                .fsm_manager = wired.fsm_manager,
                 .fsm_model = wired.fsm_model,
                 .fsm = wired.fsm,
                 .model = wired.model,
@@ -220,6 +250,8 @@ pub fn Cloud(comptime PageCacheType: type) type {
             self.gpa.destroy(self.fsm);
             self.fsm_model.deinit();
             self.gpa.destroy(self.fsm_model);
+            self.gpa.destroy(self.fsm_manager);
+            self.gpa.destroy(self.tree_manager);
             self.gpa.destroy(self.manager);
             self.gpa.destroy(self.reclaiming_cache);
         }
@@ -229,9 +261,6 @@ pub fn Cloud(comptime PageCacheType: type) type {
                 var handle = try self.cache.fetch(constants.superblock_pid);
                 defer handle.deinit();
                 var view = superblock.View(false).init(try handle.dataMut());
-                view.setRoot(self.manager.root);
-                view.setEntriesCount(self.manager.entries_count);
-                view.setFsmClassRoot(self.manager.fsm_class_root);
                 view.setNextPointId(self.next_point_id);
                 view.setCamera(self.camera);
                 view.setDetailFraction(self.detail_fraction);
@@ -285,15 +314,16 @@ pub fn Cloud(comptime PageCacheType: type) type {
         }
 
         pub fn freePageCount(self: *const Self) usize {
-            return self.reclaiming_cache.state.free_page_count;
+            return self.reclaiming_cache.state_value.free_page_count;
         }
 
         pub fn freePageRoot(self: *const Self) ?constants.PageId {
-            return self.reclaiming_cache.state.free_page_root;
+            const root = self.reclaiming_cache.state_value.free_list.root;
+            return if (root.isMax()) null else root.get();
         }
 
         pub fn reusedPageCount(self: *const Self) usize {
-            return self.reclaiming_cache.state.reused_page_count;
+            return self.reclaiming_cache.state_value.reused_page_count;
         }
     };
 }

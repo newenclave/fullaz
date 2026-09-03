@@ -1,5 +1,6 @@
 const std = @import("std");
 const contract_interfaces = @import("../contracts/interfaces.zig");
+const storage_manager = @import("../contracts/storage_manager.zig");
 
 const requiresErrorDeclaration = contract_interfaces.requiresErrorDeclaration;
 const requiresFnSignature = contract_interfaces.requiresFnSignature;
@@ -45,14 +46,14 @@ pub fn assertPagedPageCache(comptime PageCacheT: type) void {
     requiresFnSignature(Handle, "dataMut", fn (*Handle) Handle.Error![]u8);
 }
 
-/// A paged GC storage manager owns the durable state root and sweep policy.
+/// A paged GC storage manager owns exact durable state and sweep policy.
 ///
 /// ```zig
 /// const Manager = struct {
 ///     pub const PageId = u32;
 ///     pub const Error = error{};
-///     pub fn getRoot(_: *const @This()) ?PageId { return null; }
-///     pub fn setRoot(_: *@This(), _: ?PageId) Error!void {}
+///     pub const StateLeaseType = StateLease;
+///     pub fn state(_: *@This()) Error!StateLeaseType { return .{}; }
 ///     pub fn isReserved(_: *const @This(), _: PageId) bool { return false; }
 ///     pub fn isFree(_: *const @This(), _: PageId) Error!bool { return false; }
 ///     pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
@@ -60,14 +61,8 @@ pub fn assertPagedPageCache(comptime PageCacheT: type) void {
 /// comptime assertPagedStorageManager(Manager, u32);
 /// ```
 pub fn assertPagedStorageManager(comptime StorageManagerT: type, comptime PageIdT: type) void {
-    requiresErrorDeclaration(StorageManagerT, "Error");
-    requiresTypeDeclaration(StorageManagerT, "PageId");
-    if (StorageManagerT.PageId != PageIdT) {
-        @compileError("GC storage manager PageId must match page cache Pid");
-    }
+    storage_manager.assertPagedStorageManager(StorageManagerT, PageIdT);
     const Error = StorageManagerT.Error;
-    requiresFnSignature(StorageManagerT, "getRoot", fn (*const StorageManagerT) ?PageIdT);
-    requiresFnSignature(StorageManagerT, "setRoot", fn (*StorageManagerT, ?PageIdT) Error!void);
     requiresFnSignature(StorageManagerT, "isReserved", fn (*const StorageManagerT, PageIdT) bool);
     requiresFnSignature(StorageManagerT, "isFree", fn (*const StorageManagerT, PageIdT) Error!bool);
     requiresFnSignature(StorageManagerT, "destroyPage", fn (*StorageManagerT, PageIdT) Error!void);

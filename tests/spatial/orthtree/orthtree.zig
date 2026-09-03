@@ -200,7 +200,7 @@ fn expectInsert(comptime Coord: type) !void {
     try tree.insert(first, 1);
     try tree.insert(second, 2);
 
-    const root_id = acc.getRoot().?;
+    const root_id = (try acc.getRoot()).?;
     var root = try acc.loadNode(root_id);
     defer acc.deinitNode(&root);
     try std.testing.expect(!root.isLeaf());
@@ -231,7 +231,7 @@ fn expectInsertGrowsRoot(comptime Coord: type) !void {
     try tree.insert(first, 1);
     try tree.insert(second, 2);
 
-    const root_id = acc.getRoot().?;
+    const root_id = (try acc.getRoot()).?;
     var root = try acc.loadNode(root_id);
     defer acc.deinitNode(&root);
     try std.testing.expect(std.meta.eql(Box.create(.{ 0, 0 }, .{ 4, 4 }), root.bounds()));
@@ -263,7 +263,7 @@ fn expectInsertGrowsRootAlongSingleAxis(comptime Coord: type) !void {
     try tree.insert(Box.create(.{ 0, 0 }, .{ 2, 2 }), 1);
     try tree.insert(Box.create(.{ 3, 1 }, .{ 4, 2 }), 2);
 
-    var root = try acc.loadNode(acc.getRoot().?);
+    var root = try acc.loadNode((try acc.getRoot()).?);
     defer acc.deinitNode(&root);
     try std.testing.expect(std.meta.eql(Box.create(.{ 0, 0 }, .{ 4, 4 }), root.bounds()));
 
@@ -332,7 +332,7 @@ fn expectInsertHooks(comptime Coord: type) !void {
     try tree.insert(Box.create(.{ 0, 0 }, .{ 10, 10 }), 5);
     try tree.insert(Box.create(.{ 1, 1 }, .{ 2, 2 }), 7);
 
-    var root = try acc.loadNode(acc.getRoot().?);
+    var root = try acc.loadNode((try acc.getRoot()).?);
     defer acc.deinitNode(&root);
     try std.testing.expectEqual(@as(u32, 12), root.trait().mass);
 
@@ -348,7 +348,7 @@ fn expectInsertHooks(comptime Coord: type) !void {
     try growth_tree.insert(Box.create(.{ 0, 0 }, .{ 2, 2 }), 5);
     try growth_tree.insert(Box.create(.{ 3, 3 }, .{ 4, 4 }), 7);
 
-    var grown_root = try growth_acc.loadNode(growth_acc.getRoot().?);
+    var grown_root = try growth_acc.loadNode((try growth_acc.getRoot()).?);
     defer growth_acc.deinitNode(&grown_root);
     try std.testing.expectEqual(@as(u32, 12), grown_root.trait().mass);
 
@@ -406,7 +406,7 @@ fn expectVisitNodes(comptime Coord: type) !void {
     try std.testing.expectEqual(@as(u32, 24), visit.mass_sum);
     try std.testing.expect(visit.saw_root);
 
-    var root = try acc.loadNode(acc.getRoot().?);
+    var root = try acc.loadNode((try acc.getRoot()).?);
     defer acc.deinitNode(&root);
     try std.testing.expect(std.meta.eql(root_bounds, root.bounds()));
     try std.testing.expectEqual(@as(usize, 1), root.trait().visits);
@@ -576,7 +576,7 @@ fn expectRemove(comptime Coord: type) !void {
     try std.testing.expect(remove_ctx.calls >= 2);
     try std.testing.expectEqual(@as(usize, 2), try model.getEntriesCount());
 
-    var root = try acc.loadNode(acc.getRoot().?);
+    var root = try acc.loadNode((try acc.getRoot()).?);
     defer acc.deinitNode(&root);
     try std.testing.expectEqual(@as(u32, 16), root.trait().mass);
 
@@ -624,7 +624,7 @@ fn expectRemoveHookError(comptime Coord: type) !void {
     try std.testing.expectEqual(@as(usize, 0), try model.getEntriesCount());
 
     const acc = model.accessor();
-    var root = try acc.loadNode(acc.getRoot().?);
+    var root = try acc.loadNode((try acc.getRoot()).?);
     defer acc.deinitNode(&root);
     try std.testing.expectEqual(@as(usize, 0), root.size());
 }
@@ -660,7 +660,7 @@ fn expectRemoveIf(comptime Coord: type) !void {
     try std.testing.expectEqual(@as(usize, 2), try tree.removeIf(bounds, Match.call, {}));
     try std.testing.expectEqual(@as(usize, 1), try model.getEntriesCount());
 
-    var root = try acc.loadNode(acc.getRoot().?);
+    var root = try acc.loadNode((try acc.getRoot()).?);
     defer acc.deinitNode(&root);
     try std.testing.expectEqual(@as(u32, 11), root.trait().mass);
 
@@ -844,7 +844,7 @@ test "OrthTree: editable query hits finish traits and roll back memory values" {
 
     var rollback = EditContext{ .finish = false };
     try tree.queryEditable(bounds, EditContext.edit, &rollback);
-    var root = try model.accessor().loadNode(model.accessor().getRoot().?);
+    var root = try model.accessor().loadNode((try model.accessor().getRoot()).?);
     defer model.accessor().deinitNode(&root);
     try std.testing.expectEqual(@as(u32, 12), root.trait().mass);
 

@@ -7,6 +7,7 @@ const dev = fullaz.device;
 const SizePolicy = struct {
     const Self = @This();
     pub const SizeClass = u16;
+    pub const maximum_class_count: usize = 256;
     pub fn getSizeClass(_: *const Self, size: SizeClass) SizeClass {
         return size >> 8;
     }
@@ -15,40 +16,42 @@ const SizePolicy = struct {
     }
 };
 
-const HashContext = struct {
-    const Self = @This();
-    pub const Hash = u16;
-    pub fn hash(_: *const Self, value: u16) Hash {
-        return value;
-    }
-    pub fn eql(_: *const Self, a: Hash, b: Hash) bool {
-        return a == b;
-    }
-};
-
 /// Test double for the slab-root manager. It records 'destroyPage' calls so tests can
 /// assert the MODEL destroys an emptied slab page (a real interaction, not mock behavior).
 const NoneStorageManager = struct {
     const Self = @This();
     pub const PageId = u32;
-    pub const SizeClass = u16;
     pub const Error = std.mem.Allocator.Error;
-    const RootStorage = std.HashMap(SizeClass, PageId, HashContext, 50);
+    pub const State = fsm.models.paged.slab.State(PageId, SizePolicy, .little);
+    pub const StateLeaseType = struct {
+        pub const Error = NoneStorageManager.Error;
+
+        value: *State,
+
+        pub fn data(self: *const @This()) @This().Error![]const u8 {
+            return std.mem.asBytes(@as(*const State, self.value));
+        }
+
+        pub fn dataMut(self: *@This()) @This().Error![]u8 {
+            return std.mem.asBytes(self.value);
+        }
+
+        pub fn finish(_: *@This()) void {}
+        pub fn deinit(_: *@This()) void {}
+    };
 
     allocator: std.mem.Allocator = undefined,
-    root_storage: RootStorage = undefined,
+    state_value: State = fsm.models.paged.slab.emptyState(u32, SizePolicy, .little),
     destroyed: std.ArrayList(PageId) = undefined,
 
     fn init(allocator: std.mem.Allocator) !Self {
         return .{
             .allocator = allocator,
-            .root_storage = RootStorage.init(allocator),
             .destroyed = try std.ArrayList(PageId).initCapacity(allocator, 4),
         };
     }
 
     fn deinit(self: *Self) void {
-        self.root_storage.deinit();
         self.destroyed.deinit(self.allocator);
         self.* = undefined;
     }
@@ -57,24 +60,26 @@ const NoneStorageManager = struct {
         try self.destroyed.append(self.allocator, id);
     }
 
+    pub fn state(self: *Self) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
+    }
+
     fn wasDestroyed(self: *const Self, id: PageId) bool {
         for (self.destroyed.items) |d| {
             if (d == id) return true;
         }
         return false;
     }
-
-    pub fn setSizeClassRoot(self: *Self, class: SizeClass, pid: ?PageId) Error!void {
-        _ = self.root_storage.remove(class);
-        if (pid) |p| {
-            try self.root_storage.put(class, p);
-        }
-    }
-
-    pub fn getSizeClassRoot(self: *Self, class: SizeClass) Error!?PageId {
-        return self.root_storage.get(class);
-    }
 };
+
+fn classRoot(sm: *const NoneStorageManager, class: u16) ?u32 {
+    const root = sm.state_value.classes[class].first;
+    return if (root.isMax()) null else root.get();
+}
+
+fn setClassRoot(sm: *NoneStorageManager, class: u16, root: ?u32) void {
+    sm.state_value.classes[class].first.set(root orelse std.math.maxInt(u32));
+}
 
 const Device = dev.MemoryBlock(u32);
 const PageCache = PageCacheT(Device);
@@ -146,7 +151,7 @@ fn fillUntilSpill(map: *Map, sm: *NoneStorageManager, cache: *PageCache, free: u
     while (i < pids.len) : (i += 1) {
         pids[i] = try makeDataPage(cache);
         try map.add(pids[i], free);
-        const root = (try sm.getSizeClassRoot(class)).?;
+        const root = classRoot(sm, class).?;
         if (first_root == null) first_root = root;
         if (root != first_root.?) {
             s = i; // pids[i] is the first entry on the new page
@@ -158,7 +163,7 @@ fn fillUntilSpill(map: *Map, sm: *NoneStorageManager, cache: *PageCache, free: u
         return error.NoSpill;
     }
     const page1 = first_root.?;
-    const page2 = (try sm.getSizeClassRoot(class)).?;
+    const page2 = classRoot(sm, class).?;
     var k: usize = 0;
     while (k < extra) : (k += 1) {
         pids[s + 1 + k] = try makeDataPage(cache);
@@ -247,8 +252,8 @@ test "Fsm paged: remove preserves an orphaned slab slot" {
 
     const data_pid = try makeDataPage(&cache);
     try map.add(data_pid, 100);
-    const root = (try sm.getSizeClassRoot(0)).?;
-    try sm.setSizeClassRoot(0, null);
+    const root = classRoot(&sm, 0).?;
+    setClassRoot(&sm, 0, null);
 
     try std.testing.expectError(Model.Error.BadData, map.remove(data_pid));
 
@@ -274,7 +279,7 @@ test "Fsm paged: find rejects a class root with another persisted class" {
 
     const data_pid = try makeDataPage(&cache);
     try map.add(data_pid, 100);
-    const root = (try sm.getSizeClassRoot(0)).?;
+    const root = classRoot(&sm, 0).?;
 
     {
         const SlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, false).SlabPageView;
@@ -302,7 +307,7 @@ test "Fsm paged: find bounds a cyclic slab chain" {
 
     const data_pid = try makeDataPage(&cache);
     try map.add(data_pid, 100);
-    const root = (try sm.getSizeClassRoot(0)).?;
+    const root = classRoot(&sm, 0).?;
     {
         const SlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, false).SlabPageView;
         var page = try cache.fetch(root);
@@ -329,7 +334,7 @@ test "Fsm paged: find rejects a broken backward slab link" {
 
     const data_pid = try makeDataPage(&cache);
     try map.add(data_pid, 100);
-    const root = (try sm.getSizeClassRoot(0)).?;
+    const root = classRoot(&sm, 0).?;
     {
         const SlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, false).SlabPageView;
         var page = try cache.fetch(root);
@@ -389,7 +394,7 @@ test "Fsm paged: a full slab page spills into a second chain page" {
     const sp = try fillUntilSpill(&map, &sm, &cache, 100, 2); // class 0
     // a real second page was created and prepended as the new class root
     try std.testing.expect(sp.page1 != sp.page2);
-    try std.testing.expectEqual(@as(?u32, sp.page2), try sm.getSizeClassRoot(0));
+    try std.testing.expectEqual(@as(?u32, sp.page2), classRoot(&sm, 0));
     // entries remain findable; nothing oversized fits
     try std.testing.expect((try map.find(100)) != null);
     try std.testing.expectEqual(@as(?u32, null), try map.find(60000));
@@ -415,17 +420,17 @@ test "Fsm paged: emptying a slab page destroys it and clears the class root" {
     try map.add(b, 110);
     try map.add(c, 120);
 
-    const slab = (try sm.getSizeClassRoot(0)).?;
+    const slab = classRoot(&sm, 0).?;
 
     try map.remove(a);
     try map.remove(b);
     // still has one entry: page alive, root unchanged
     try std.testing.expect(!sm.wasDestroyed(slab));
-    try std.testing.expectEqual(@as(?u32, slab), try sm.getSizeClassRoot(0));
+    try std.testing.expectEqual(@as(?u32, slab), classRoot(&sm, 0));
 
     try map.remove(c); // now empty
     try std.testing.expect(sm.wasDestroyed(slab));
-    try std.testing.expectEqual(@as(?u32, null), try sm.getSizeClassRoot(0));
+    try std.testing.expectEqual(@as(?u32, null), classRoot(&sm, 0));
     try std.testing.expectEqual(@as(?u32, null), try map.find(100));
 }
 
@@ -453,7 +458,7 @@ test "Fsm paged: removing the tail page unlinks it, root unchanged" {
     try std.testing.expect(sm.wasDestroyed(sp.page1));
     try std.testing.expect(!sm.wasDestroyed(sp.page2));
     // head page stays the root; its entries still findable
-    try std.testing.expectEqual(@as(?u32, sp.page2), try sm.getSizeClassRoot(0));
+    try std.testing.expectEqual(@as(?u32, sp.page2), classRoot(&sm, 0));
     try std.testing.expect((try map.find(100)) != null);
 }
 
@@ -481,7 +486,7 @@ test "Fsm paged: removing the head page advances the class root to next" {
     try std.testing.expect(sm.wasDestroyed(sp.page2));
     try std.testing.expect(!sm.wasDestroyed(sp.page1));
     // root advances to the surviving tail page; its entries still findable
-    try std.testing.expectEqual(@as(?u32, sp.page1), try sm.getSizeClassRoot(0));
+    try std.testing.expectEqual(@as(?u32, sp.page1), classRoot(&sm, 0));
     try std.testing.expect((try map.find(100)) != null);
 }
 
@@ -509,7 +514,7 @@ test "Fsm paged: removing a middle slab reconnects its neighbors" {
         len += 1;
         try map.add(pid, 100);
 
-        const root = (try sm.getSizeClassRoot(0)).?;
+        const root = classRoot(&sm, 0).?;
         if (tail == null) {
             tail = root;
         } else if (root != tail.?) {
@@ -537,7 +542,7 @@ test "Fsm paged: removing a middle slab reconnects its neighbors" {
     try std.testing.expect(sm.wasDestroyed(middle_id));
     try std.testing.expect(!sm.wasDestroyed(head_id));
     try std.testing.expect(!sm.wasDestroyed(tail_id));
-    try std.testing.expectEqual(@as(?u32, head_id), try sm.getSizeClassRoot(0));
+    try std.testing.expectEqual(@as(?u32, head_id), classRoot(&sm, 0));
 
     const ConstSlabView = fsm.models.paged.slab.View(u32, u16, u16, .little, true).SlabPageView;
     {

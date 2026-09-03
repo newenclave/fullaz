@@ -42,6 +42,7 @@ test {
     _ = @import("core/static_vector.zig");
     _ = @import("core/algorithm.zig");
     _ = @import("core/bloom.zig");
+    _ = @import("core/storage_manager.zig");
 
     _ = @import("bpt/memory_model.zig");
     _ = @import("bpt/paged_model.zig");

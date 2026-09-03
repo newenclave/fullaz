@@ -22,6 +22,8 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
 
     const PhysicalPageId = DeviceT.BlockId;
     const VirtualPageId = SchemaT.PageId;
+    const PhysicalFreeListState = @import("fullaz").storage.free_list.State(PhysicalPageId, .little);
+    const LogicalFreeListState = @import("fullaz").storage.free_list.State(VirtualPageId, .little);
     const WalT = wal.Wal(LogDeviceT, PhysicalPageId, .little);
     const RawCache = page_cache.PageCacheImpl(
         DeviceT,
@@ -33,16 +35,28 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
     const PhysicalStore = struct {
         pub const PageId = PhysicalPageId;
         pub const Error = error{};
+        pub const StateLeaseType = struct {
+            pub const Error = error{};
+
+            value: *PhysicalFreeListState,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return std.mem.asBytes(@as(*const PhysicalFreeListState, self.value));
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return std.mem.asBytes(self.value);
+            }
+
+            pub fn finish(_: *@This()) void {}
+            pub fn deinit(_: *@This()) void {}
+        };
 
         device: *DeviceT,
-        root: *?PageId,
+        state_value: *PhysicalFreeListState,
 
-        pub fn getRoot(self: *const @This()) ?PageId {
-            return self.root.*;
-        }
-
-        pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
-            self.root.* = root;
+        pub fn state(self: *@This()) Error!StateLeaseType {
+            return .{ .value = self.state_value };
         }
 
         pub fn pageCount(self: *const @This()) usize {
@@ -54,22 +68,31 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
         }
     };
     const PhysicalCache = page_cache.PersistentReclaimingCache(RawCache, PhysicalStore);
+    const VpmState = virtual_page_map.State(PhysicalPageId, VirtualPageId);
 
     const VpmManager = struct {
         pub const PageId = PhysicalPageId;
-        pub const Error = PhysicalCache.Error;
+        pub const Error = PhysicalCache.Error || error{BadData};
 
         pub const StateLeaseType = struct {
-            pub const Error = PhysicalCache.Error;
+            pub const Error = PhysicalCache.Error || error{BadData};
 
             handle: PhysicalCache.Handle,
 
             pub fn data(self: *const @This()) @This().Error![]const u8 {
-                return self.handle.data();
+                const bytes = try self.handle.data();
+                if (bytes.len < @sizeOf(VpmState)) {
+                    return error.BadData;
+                }
+                return bytes[0..@sizeOf(VpmState)];
             }
 
             pub fn dataMut(self: *@This()) @This().Error![]u8 {
-                return self.handle.dataMut();
+                const bytes = try self.handle.dataMut();
+                if (bytes.len < @sizeOf(VpmState)) {
+                    return error.BadData;
+                }
+                return bytes[0..@sizeOf(VpmState)];
             }
 
             pub fn finish(_: *@This()) void {}
@@ -95,16 +118,28 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
     const LogicalStore = struct {
         pub const PageId = VirtualPageId;
         pub const Error = error{};
+        pub const StateLeaseType = struct {
+            pub const Error = error{};
+
+            value: *LogicalFreeListState,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return std.mem.asBytes(@as(*const LogicalFreeListState, self.value));
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return std.mem.asBytes(self.value);
+            }
+
+            pub fn finish(_: *@This()) void {}
+            pub fn deinit(_: *@This()) void {}
+        };
 
         vpm: *Vpm,
-        root: *?PageId,
+        state_value: *LogicalFreeListState,
 
-        pub fn getRoot(self: *const @This()) ?PageId {
-            return self.root.*;
-        }
-
-        pub fn setRoot(self: *@This(), root: ?PageId) Error!void {
-            self.root.* = root;
+        pub fn state(self: *@This()) Error!StateLeaseType {
+            return .{ .value = self.state_value };
         }
 
         pub fn pageCount(self: *const @This()) usize {
@@ -148,6 +183,14 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
     const ComponentOptions = shape.initOptions(SchemaT, bindings);
     const Metadata = shape.staticMetadata(SchemaT, bindings);
     const Superblock = VirtualStaticSuperblock(Metadata, PhysicalPageId, VirtualPageId);
+    comptime {
+        if (@sizeOf(PhysicalFreeListState) !=
+            @sizeOf(@FieldType(Superblock.Storage, "physical_free_root")) or
+            @sizeOf(LogicalFreeListState) != @sizeOf(@FieldType(Metadata, "free_root")))
+        {
+            @compileError("virtual WAL free-list durable field width changed");
+        }
+    }
     const Options = databaseOptions(ComponentOptions);
     const vpm_settings = Vpm.Settings{
         .virtual_to_physical = .{ .leaf = 0x0010, .inode = 0x0011 },
@@ -161,13 +204,13 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
         log: LogDeviceT,
         identity: Superblock.Identity,
         raw_cache: RawCache,
-        physical_free_root: ?PhysicalPageId,
+        physical_free_state: PhysicalFreeListState,
         physical_store: PhysicalStore,
         physical_cache: PhysicalCache,
         vpm_manager: VpmManager,
         vpm: Vpm,
         virtual_cache: VirtualCache,
-        logical_free_root: ?VirtualPageId,
+        logical_free_state: LogicalFreeListState,
         logical_store: LogicalStore,
         logical_cache: LogicalCache,
         backend: Backend,
@@ -351,6 +394,16 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
             return shape.requireTransactionIdle(SchemaT, bindings, &core.components);
         }
 
+        fn physicalFreeRoot(core: *const Core) ?PhysicalPageId {
+            const root = core.physical_free_state.root;
+            return if (root.isMax()) null else root.get();
+        }
+
+        fn logicalFreeRoot(core: *const Core) ?VirtualPageId {
+            const root = core.logical_free_state.root;
+            return if (root.isMax()) null else root.get();
+        }
+
         fn restoreTransactionStates(core: *Core, states: TransactionStates) void {
             inline for (SchemaT.fields, 0..) |field, index| {
                 bindings[index].restoreTransactionState(
@@ -368,14 +421,14 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
                 core.device.blockSize(),
                 core.device.blocksCount(),
                 core.vpm.pageCount(),
-                core.physical_store.getRoot(),
+                physicalFreeRoot(core),
                 core.identity,
                 shape.captureStaticMetadata(
                     SchemaT,
                     bindings,
                     Metadata,
                     &core.components,
-                    core.logical_store.getRoot(),
+                    logicalFreeRoot(core),
                 ),
             );
         }
@@ -416,13 +469,19 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
                 .recover => try RawCache.initWalRecover(&core.device, allocator, options.cache_frames, wal_value),
             };
             errdefer core.raw_cache.deinit();
-            core.physical_free_root = null;
-            core.physical_store = .{ .device = &core.device, .root = &core.physical_free_root };
+            core.physical_free_state = .{};
+            core.physical_store = .{
+                .device = &core.device,
+                .state_value = &core.physical_free_state,
+            };
             core.physical_cache = PhysicalCache.init(&core.raw_cache, &core.physical_store);
             errdefer core.physical_cache.deinit();
             core.vpm_manager = .{ .cache = &core.physical_cache };
-            core.logical_free_root = null;
-            core.logical_store = .{ .vpm = &core.vpm, .root = &core.logical_free_root };
+            core.logical_free_state = .{};
+            core.logical_store = .{
+                .vpm = &core.vpm,
+                .state_value = &core.logical_free_state,
+            };
             core.transaction_active = false;
             core.transaction_generation = 0;
             core.layers_initialized = false;
@@ -559,7 +618,9 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
                 return error.InvalidBootstrapPage;
             }
             try core.raw_cache.normalizeRecoveredPageCount(physical_page_count);
-            core.physical_free_root = Superblock.physicalFreeRoot(&storage);
+            core.physical_free_state.root.set(
+                Superblock.physicalFreeRoot(&storage) orelse std.math.maxInt(PhysicalPageId),
+            );
             try initVirtualLayers(core, .open);
             const virtual_page_count = std.math.cast(usize, storage.virtual_page_count.get()) orelse return error.VirtualPageCountMismatch;
             if (virtual_page_count == 0 or core.vpm.pageCount() != virtual_page_count) {
@@ -572,13 +633,13 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
             try core.physical_cache.validateFreeList();
             try shape.validateStaticMetadata(SchemaT, bindings, Metadata, &storage.metadata, virtual_page_count);
             try initComponents(core, options);
-            core.logical_free_root = shape.restoreStaticMetadata(
+            core.logical_free_state.root.set(shape.restoreStaticMetadata(
                 SchemaT,
                 bindings,
                 Metadata,
                 &core.components,
                 &storage.metadata,
-            );
+            ) orelse std.math.maxInt(VirtualPageId));
             try core.logical_cache.validateFreeList();
             try core.raw_cache.completeRecovery();
             return .{ .core_ = core };
@@ -620,8 +681,8 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
             return .{
                 .physical_page_count = core.device.blocksCount(),
                 .virtual_page_count = core.vpm.pageCount(),
-                .physical_free_root = core.physical_store.getRoot(),
-                .logical_free_root = core.logical_store.getRoot(),
+                .physical_free_root = physicalFreeRoot(core),
+                .logical_free_root = logicalFreeRoot(core),
             };
         }
 

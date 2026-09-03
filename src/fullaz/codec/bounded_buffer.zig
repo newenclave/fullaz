@@ -5,7 +5,6 @@ const interfaces = @import("../contracts/interfaces.zig");
 const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 
-pub const requiresStorageManager = contracts.storage_manager.requiresStorageManager;
 pub const requiresPageCache = contracts.page_cache.requiresPageCache;
 
 pub fn assertMemoryBlockWriter(comptime WriterT: type) void {

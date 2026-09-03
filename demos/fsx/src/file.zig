@@ -13,7 +13,7 @@ pub fn File(comptime PageCacheType: type) type {
         pub const PageId = constants.PageId;
         pub const Size = constants.Size;
         pub const Error = error{};
-        const State = chain_store.State(PageId, Size, constants.endian);
+        const State = chain_store.WeightedState(PageId, Size, constants.endian);
 
         pub const StateLeaseType = struct {
             const LeaseSelf = @This();
@@ -33,11 +33,13 @@ pub fn File(comptime PageCacheType: type) type {
             }
 
             pub fn finish(self: *LeaseSelf) void {
-                const first = self.state.first.get();
-                const last = self.state.last.get();
+                const first = self.state.chain.first.get();
+                const last = self.state.chain.last.get();
                 self.owner.roots.first = if (first == constants.pid_none) null else first;
                 self.owner.roots.last = if (last == constants.pid_none) null else last;
-                self.owner.roots.total = self.state.total_size.get();
+                self.owner.roots.total = self.state.chain.total_size.get();
+                const index = self.state.index.root.get();
+                self.owner.roots.index = if (index == constants.pid_none) null else index;
             }
 
             pub fn deinit(_: *LeaseSelf) void {}
@@ -51,26 +53,17 @@ pub fn File(comptime PageCacheType: type) type {
                 .owner = self,
                 .state = .{},
             };
-            lease.state.first.set(self.roots.first orelse constants.pid_none);
-            lease.state.last.set(self.roots.last orelse constants.pid_none);
-            lease.state.total_size.set(self.roots.total);
+            lease.state.chain.first.set(self.roots.first orelse constants.pid_none);
+            lease.state.chain.last.set(self.roots.last orelse constants.pid_none);
+            lease.state.chain.total_size.set(self.roots.total);
+            lease.state.index.root.set(self.roots.index orelse constants.pid_none);
             return lease;
-        }
-
-        pub fn getLast(self: *const SmSelf) Error!?PageId {
-            return self.roots.last;
         }
 
         pub fn destroyPage(self: *SmSelf, id: PageId) Error!void {
             if (comptime @hasDecl(PageCacheType, "free")) {
                 self.cache.free(id) catch {};
             }
-        }
-        pub fn getIndexRoot(self: *const SmSelf) ?PageId {
-            return self.roots.index;
-        }
-        pub fn setIndexRoot(self: *SmSelf, pid: ?PageId) Error!void {
-            self.roots.index = pid;
         }
     };
 

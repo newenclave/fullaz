@@ -2,7 +2,10 @@ const std = @import("std");
 const gc = @import("../../gc.zig");
 const interfaces = @import("../../interfaces.zig");
 const PackedInt = @import("../../../core/packed_int.zig").PackedInt;
-const SlotQueue = @import("../../../storage/slot_queue/slot_queue.zig").SlotQueue;
+const storage_manager = @import("../../../core/storage_manager.zig");
+const slot_queue = @import("../../../storage/slot_queue/slot_queue.zig");
+const external_state = @import("state.zig");
+const SlotQueue = slot_queue.SlotQueue;
 
 /// A durable GC model with caller-owned transaction and external state root.
 ///
@@ -41,6 +44,10 @@ pub fn PagedWithKinds(
     const PackedPageKind = PackedInt(u16, .little);
     const PackedU64 = PackedInt(u64, .little);
     const nil_page_id = PackedPageId.max;
+    const QueueState = slot_queue.State(PageCacheT.Pid, u64, PageCacheT.Pid, .little);
+    const ExternalState = external_state.State(PageCacheT.Pid);
+    const ExternalStateLease = StorageManagerT.StateLeaseType;
+    const ExternalStateView = storage_manager.StateAccessor(ExternalStateLease, ExternalState);
 
     const MetadataPageHeader = extern struct {
         kind: PackedPageKind,
@@ -50,7 +57,7 @@ pub fn PagedWithKinds(
         next: PackedU64,
     };
 
-    const State = extern struct {
+    const StatePage = extern struct {
         kind: PackedPageKind,
         magic: PackedInt(u32, .little),
         role: u8,
@@ -63,13 +70,11 @@ pub fn PagedWithKinds(
         sweep_cursor: PackedCursor,
         mark_head: PackedPageId,
         free_head: PackedPageId,
-        queue_first: PackedPageId,
-        queue_last: PackedPageId,
-        queue_total_size: PackedU64,
+        queue: QueueState,
     };
 
     const metadata_header_len = @sizeOf(MetadataPageHeader);
-    const state_len = @sizeOf(State);
+    const state_len = @sizeOf(StatePage);
 
     comptime {
         if (state_page_kind == 0 or mark_bitmap_page_kind == 0 or
@@ -90,19 +95,27 @@ pub fn PagedWithKinds(
         {
             @compileError("GC metadata page layout changed");
         }
-        if (@alignOf(State) != 1 or state_len != 10 + 2 * @sizeOf(PackedU64) + 7 * @sizeOf(PackedPageId) or
-            @offsetOf(State, "kind") != 0 or
-            @offsetOf(State, "magic") != @sizeOf(PackedPageKind) or
-            @offsetOf(State, "phase") != 8 or
-            @offsetOf(State, "snapshot_page_count") != 10)
+        if (@alignOf(StatePage) != 1 or state_len != 10 + 2 * @sizeOf(PackedU64) + 7 * @sizeOf(PackedPageId) or
+            @offsetOf(StatePage, "kind") != 0 or
+            @offsetOf(StatePage, "magic") != @sizeOf(PackedPageKind) or
+            @offsetOf(StatePage, "phase") != 8 or
+            @offsetOf(StatePage, "snapshot_page_count") != 10)
         {
             @compileError("GC state layout changed");
+        }
+        if (@offsetOf(QueueState, "page_chain") != 0 or
+            @offsetOf(QueueState, "total_size") != 2 * @sizeOf(PackedPageId) or
+            @sizeOf(QueueState) != 2 * @sizeOf(PackedPageId) + @sizeOf(PackedU64))
+        {
+            @compileError("GC queue state layout changed");
         }
     }
 
     const BaseError = PageCacheT.Error ||
         PageCacheT.Handle.Error ||
-        StorageManagerT.Error || error{
+        StorageManagerT.Error ||
+        ExternalStateLease.Error || error{
+        BadData,
         TransactionInactive,
         InvalidState,
         InvalidPageId,
@@ -134,8 +147,30 @@ pub fn PagedWithKinds(
             const QueueManagerSelf = @This();
 
             pub const PageId = PageCacheT.Pid;
-            pub const Size = u64;
             pub const Error = BaseError;
+            pub const StateLeaseType = struct {
+                const LeaseSelf = @This();
+
+                pub const Error = BaseError;
+
+                page: PageCacheT.Handle,
+
+                pub fn data(self: *const LeaseSelf) LeaseSelf.Error![]const u8 {
+                    const bytes = try self.page.data();
+                    return bytes[@offsetOf(StatePage, "queue") .. @offsetOf(StatePage, "queue") + @sizeOf(QueueState)];
+                }
+
+                pub fn dataMut(self: *LeaseSelf) LeaseSelf.Error![]u8 {
+                    const bytes = try self.page.dataMut();
+                    return bytes[@offsetOf(StatePage, "queue") .. @offsetOf(StatePage, "queue") + @sizeOf(QueueState)];
+                }
+
+                pub fn finish(_: *LeaseSelf) void {}
+
+                pub fn deinit(self: *LeaseSelf) void {
+                    self.page.deinit();
+                }
+            };
 
             model: *Self,
 
@@ -143,64 +178,17 @@ pub fn PagedWithKinds(
                 return self.model.storage.destroyPage(page_id);
             }
 
-            pub fn getFirst(self: *const QueueManagerSelf) QueueManagerSelf.Error!?QueueManagerSelf.PageId {
+            pub fn state(self: *QueueManagerSelf) QueueManagerSelf.Error!StateLeaseType {
                 const state_page_id = try self.model.statePageId();
                 var page = try self.model.cache.fetch(state_page_id);
-                defer page.deinit();
+                errdefer page.deinit();
                 const bytes = try page.data();
                 try self.model.validateStateBytes(bytes);
-                const first = (try self.model.stateView(bytes)).queue_first.get();
-                return if (first == nil_page_id) null else first;
-            }
-
-            pub fn setFirst(self: *QueueManagerSelf, page_id: ?QueueManagerSelf.PageId) QueueManagerSelf.Error!void {
-                const state_page_id = try self.model.statePageId();
-                var page = try self.model.cache.fetch(state_page_id);
-                defer page.deinit();
-                const bytes = try page.dataMut();
-                try self.model.validateStateBytes(bytes);
-                (try self.model.stateMut(bytes)).queue_first.set(page_id orelse nil_page_id);
-            }
-
-            pub fn getLast(self: *const QueueManagerSelf) QueueManagerSelf.Error!?QueueManagerSelf.PageId {
-                const state_page_id = try self.model.statePageId();
-                var page = try self.model.cache.fetch(state_page_id);
-                defer page.deinit();
-                const bytes = try page.data();
-                try self.model.validateStateBytes(bytes);
-                const last = (try self.model.stateView(bytes)).queue_last.get();
-                return if (last == nil_page_id) null else last;
-            }
-
-            pub fn setLast(self: *QueueManagerSelf, page_id: ?QueueManagerSelf.PageId) QueueManagerSelf.Error!void {
-                const state_page_id = try self.model.statePageId();
-                var page = try self.model.cache.fetch(state_page_id);
-                defer page.deinit();
-                const bytes = try page.dataMut();
-                try self.model.validateStateBytes(bytes);
-                (try self.model.stateMut(bytes)).queue_last.set(page_id orelse nil_page_id);
-            }
-
-            pub fn getTotalSize(self: *const QueueManagerSelf) QueueManagerSelf.Error!QueueManagerSelf.Size {
-                const state_page_id = try self.model.statePageId();
-                var page = try self.model.cache.fetch(state_page_id);
-                defer page.deinit();
-                const bytes = try page.data();
-                try self.model.validateStateBytes(bytes);
-                return (try self.model.stateView(bytes)).queue_total_size.get();
-            }
-
-            pub fn setTotalSize(self: *QueueManagerSelf, size: QueueManagerSelf.Size) QueueManagerSelf.Error!void {
-                const state_page_id = try self.model.statePageId();
-                var page = try self.model.cache.fetch(state_page_id);
-                defer page.deinit();
-                const bytes = try page.dataMut();
-                try self.model.validateStateBytes(bytes);
-                (try self.model.stateMut(bytes)).queue_total_size.set(size);
+                return .{ .page = page };
             }
         };
 
-        const Queue = SlotQueue(PageCacheT, QueueManager, .little);
+        const Queue = SlotQueue(PageCacheT, QueueManager, u64, PageCacheT.Pid, .little);
 
         pub const Error = BaseError || Queue.Error;
 
@@ -220,7 +208,7 @@ pub fn PagedWithKinds(
                 .storage = storage,
             };
             try self.requireTransaction();
-            if (storage.getRoot()) |page_id| {
+            if (try self.getStatePageRoot()) |page_id| {
                 self.phase_value = try self.readPhase(page_id);
             }
             return self;
@@ -486,7 +474,7 @@ pub fn PagedWithKinds(
         /// Discards pending traversal work and returns the durable state to idle.
         pub fn abortCycle(self: *Self) Error!void {
             try self.requireTransaction();
-            if (self.storage.getRoot() == null) {
+            if (try self.getStatePageRoot() == null) {
                 self.phase_value = .idle;
                 return;
             }
@@ -501,7 +489,7 @@ pub fn PagedWithKinds(
         }
 
         fn ensureStatePage(self: *Self) BaseError!PageId {
-            if (self.storage.getRoot()) |page_id| {
+            if (try self.getStatePageRoot()) |page_id| {
                 try self.validateStatePage(page_id);
                 return page_id;
             }
@@ -527,18 +515,32 @@ pub fn PagedWithKinds(
                 .sweep_cursor = .init(0),
                 .mark_head = .init(nil_page_id),
                 .free_head = .init(nil_page_id),
-                .queue_first = .init(nil_page_id),
-                .queue_last = .init(nil_page_id),
-                .queue_total_size = .init(0),
+                .queue = .{},
             };
-            try self.storage.setRoot(page_id);
+            try self.setStatePageRoot(page_id);
             return page_id;
         }
 
         fn statePageId(self: *const Self) BaseError!PageId {
-            const page_id = self.storage.getRoot() orelse return error.InvalidState;
+            const page_id = (try self.getStatePageRoot()) orelse return error.InvalidState;
             try self.validateStatePage(page_id);
             return page_id;
+        }
+
+        fn getStatePageRoot(self: *const Self) BaseError!?PageId {
+            var lease = try self.storage.state();
+            defer lease.deinit();
+            const state = try ExternalStateView.view(&lease);
+            const page_id = state.state_page_root.get();
+            return if (page_id == nil_page_id) null else page_id;
+        }
+
+        fn setStatePageRoot(self: *Self, page_id: ?PageId) BaseError!void {
+            var lease = try self.storage.state();
+            defer lease.deinit();
+            const state = try ExternalStateView.viewMut(&lease);
+            state.state_page_root.set(page_id orelse nil_page_id);
+            lease.finish();
         }
 
         fn readPhase(self: *const Self, page_id: PageId) BaseError!gc.Phase {
@@ -569,14 +571,14 @@ pub fn PagedWithKinds(
             }
         }
 
-        fn stateView(_: *const Self, bytes: []const u8) BaseError!*const State {
+        fn stateView(_: *const Self, bytes: []const u8) BaseError!*const StatePage {
             if (bytes.len < state_len) {
                 return error.InvalidState;
             }
             return @ptrCast(bytes.ptr);
         }
 
-        fn stateMut(_: *Self, bytes: []u8) BaseError!*State {
+        fn stateMut(_: *Self, bytes: []u8) BaseError!*StatePage {
             if (bytes.len < state_len) {
                 return error.InvalidState;
             }

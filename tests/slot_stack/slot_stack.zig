@@ -4,45 +4,39 @@ const fullaz = @import("fullaz");
 const Device = fullaz.device.MemoryBlock(u32);
 const Cache = fullaz.storage.page_cache.PageCache(Device);
 const SlotStack = fullaz.storage.slot_stack.SlotStack;
+const StackState = fullaz.storage.slot_stack.State(u32, u32, u32, .little);
 
 const StorageManager = struct {
     pub const PageId = u32;
-    pub const Size = u32;
     pub const Error = error{};
+    pub const StateLeaseType = struct {
+        pub const Error = error{};
 
-    first_page_id: ?PageId = null,
-    last_page_id: ?PageId = null,
-    total_size: Size = 0,
+        value: *StackState,
+
+        pub fn data(self: *const @This()) @This().Error![]const u8 {
+            return std.mem.asBytes(@as(*const StackState, self.value));
+        }
+
+        pub fn dataMut(self: *@This()) @This().Error![]u8 {
+            return std.mem.asBytes(self.value);
+        }
+
+        pub fn finish(_: *@This()) void {}
+        pub fn deinit(_: *@This()) void {}
+    };
+
+    state_value: StackState = .{},
+
+    pub fn state(self: *@This()) Error!StateLeaseType {
+        return .{ .value = &self.state_value };
+    }
 
     pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
-
-    pub fn getFirst(self: *const @This()) Error!?PageId {
-        return self.first_page_id;
-    }
-
-    pub fn setFirst(self: *@This(), page_id: ?PageId) Error!void {
-        self.first_page_id = page_id;
-    }
-
-    pub fn getLast(self: *const @This()) Error!?PageId {
-        return self.last_page_id;
-    }
-
-    pub fn setLast(self: *@This(), page_id: ?PageId) Error!void {
-        self.last_page_id = page_id;
-    }
-
-    pub fn getTotalSize(self: *const @This()) Error!Size {
-        return self.total_size;
-    }
-
-    pub fn setTotalSize(self: *@This(), size: Size) Error!void {
-        self.total_size = size;
-    }
 };
 
 test "SlotStack: push, top, pop, and iterate" {
-    const Stack = SlotStack(Cache, StorageManager, .little);
+    const Stack = SlotStack(Cache, StorageManager, u32, u32, .little);
 
     var manager = StorageManager{};
     var device = try Device.init(std.testing.allocator, 4096);
@@ -82,7 +76,7 @@ test "SlotStack: push, top, pop, and iterate" {
 }
 
 test "SlotStack: top and iterator value editors" {
-    const Stack = SlotStack(Cache, StorageManager, .little);
+    const Stack = SlotStack(Cache, StorageManager, u32, u32, .little);
 
     var manager = StorageManager{};
     var device = try Device.init(std.testing.allocator, 4096);

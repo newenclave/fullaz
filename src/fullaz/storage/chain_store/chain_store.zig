@@ -4,6 +4,7 @@ pub const Handle = handle.Handle;
 pub const HandleWeighted = handle.HandleWeighted;
 pub const Settings = handle.Settings;
 pub const State = handle.State;
+pub const WeightedState = handle.WeightedState;
 pub const Blob = @import("blob.zig").Blob;
 
 pub const View = @import("view.zig").View;

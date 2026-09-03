@@ -5,15 +5,6 @@ const requiresFnSignature = interfaces.requiresFnSignature;
 const requiresErrorDeclaration = interfaces.requiresErrorDeclaration;
 const requiresTypeDeclaration = interfaces.requiresTypeDeclaration;
 
-pub fn requiresStorageManager(comptime T: type) void {
-    requiresErrorDeclaration(T, "Error");
-    const Error = T.Error;
-    requiresTypeDeclaration(T, "PageId");
-    requiresFnSignature(T, "getRoot", fn (*const T) ?T.PageId);
-    requiresFnSignature(T, "setRoot", fn (*T, ?T.PageId) Error!void);
-    requiresFnSignature(T, "destroyPage", fn (*T, T.PageId) Error!void);
-}
-
 /// A state lease owns a stable state-memory view until `deinit()`.
 ///
 /// ```zig
@@ -36,6 +27,27 @@ pub fn assertStateLease(comptime StateLeaseT: type) void {
     requiresFnSignature(StateLeaseT, "finish", fn (*StateLeaseT) void);
 }
 
+/// A storage manager provides leased access to its exact durable state bytes.
+///
+/// ```zig
+/// const Manager = struct {
+///     pub const Error = error{};
+///     pub const StateLeaseType = StateLease;
+///
+///     pub fn state(_: *Manager) Error!StateLeaseType { return .{}; }
+/// };
+/// comptime assertStorageManager(Manager);
+/// ```
+pub fn assertStorageManager(comptime StorageManagerT: type) void {
+    requiresErrorDeclaration(StorageManagerT, "Error");
+    requiresTypeDeclaration(StorageManagerT, "StateLeaseType");
+
+    const Error = StorageManagerT.Error;
+    const StateLeaseType = StorageManagerT.StateLeaseType;
+    assertStateLease(StateLeaseType);
+    requiresFnSignature(StorageManagerT, "state", fn (*StorageManagerT) Error!StateLeaseType);
+}
+
 /// A paged storage manager owns external state storage and page-release policy.
 ///
 /// ```zig
@@ -53,16 +65,12 @@ pub fn assertPagedStorageManager(
     comptime StorageManagerT: type,
     comptime PageIdT: type,
 ) void {
-    requiresErrorDeclaration(StorageManagerT, "Error");
+    assertStorageManager(StorageManagerT);
     requiresTypeDeclaration(StorageManagerT, "PageId");
-    requiresTypeDeclaration(StorageManagerT, "StateLeaseType");
 
     const Error = StorageManagerT.Error;
-    const StateLeaseType = StorageManagerT.StateLeaseType;
     if (StorageManagerT.PageId != PageIdT) {
         @compileError("Paged storage manager PageId must match the requested page ID type");
     }
-    assertStateLease(StateLeaseType);
-    requiresFnSignature(StorageManagerT, "state", fn (*StorageManagerT) Error!StateLeaseType);
     requiresFnSignature(StorageManagerT, "destroyPage", fn (*StorageManagerT, PageIdT) Error!void);
 }

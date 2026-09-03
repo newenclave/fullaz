@@ -118,14 +118,6 @@ pub fn assertValueEditor(comptime ModelT: type) void {
     requiresFnSignature(Editor, "deinit", fn (*Editor) void);
 }
 
-/// A paged Radix storage manager additionally owns the free-leaf-list root.
-pub fn assertFreeLeafStorageManager(comptime StorageManagerT: type, comptime PageIdT: type) void {
-    requiresErrorDeclaration(StorageManagerT, "Error");
-    const Error = StorageManagerT.Error;
-    requiresFnSignature(StorageManagerT, "getFreeLeafRoot", fn (*const StorageManagerT) ?PageIdT);
-    requiresFnSignature(StorageManagerT, "setFreeLeafRoot", fn (*StorageManagerT, ?PageIdT) Error!void);
-}
-
 /// A radix model exposes the types and accessor required by 'Tree'.
 ///
 /// ```zig
