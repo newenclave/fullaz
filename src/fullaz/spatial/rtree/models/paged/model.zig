@@ -8,6 +8,8 @@ const StructuralMutationCoordinator = @import("../../../../core/core.zig").struc
 const PackedInt = @import("../../../../core/packed_int.zig").PackedInt;
 const StateAccessor = @import("../../../../core/storage_manager.zig").StateAccessor;
 
+const structural_mutation = @import("../../../../core/core.zig").structural_mutation;
+
 pub const Settings = struct {
     leaf_page_kind: u16 = 0,
     inode_page_kind: u16 = 1,
@@ -91,7 +93,7 @@ pub fn PagedModel(
         PageCacheT.Error ||
         StorageManagerT.Error ||
         StateLeaseT.Error ||
-        @import("../../../../core/core.zig").structural_mutation.Error ||
+        structural_mutation.Error ||
         error{
             ValueTooLarge,
             NodeFull,
