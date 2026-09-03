@@ -1707,6 +1707,15 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 return status;
             }
 
+            /// Returns the current durable collector phase.
+            pub fn phase(self: *SessionSelf) SessionSelf.Error!gc.Phase {
+                if (!self.active) {
+                    return error.TransactionInactive;
+                }
+                try self.ensureCollector();
+                return self.model.phase();
+            }
+
             pub fn abort(self: *SessionSelf) SessionSelf.Error!void {
                 if (!self.active or !self.corePtr().state.gc_cycle_active) {
                     return error.BadGcState;
@@ -1926,6 +1935,11 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                 .page_size = core.device.blockSize(),
                 .page_count = core.device.blocksCount(),
             };
+        }
+
+        /// The full in-memory device image, in page order (memory-backed devices only).
+        pub fn deviceBytes(self: *const Self) []const u8 {
+            return self.coreConstPtr().device.storage.items;
         }
 
         /// Transfers device ownership out and invalidates the database.

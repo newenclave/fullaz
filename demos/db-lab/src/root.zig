@@ -105,6 +105,20 @@ pub fn createTable(database: anytype, name: []const u8) !void {
     try transaction.commit();
 }
 
+/// Disconnects one embedded table. Its child pages remain unreachable until a
+/// typed dynamic database runs structural garbage collection.
+pub fn deleteTable(database: anytype, name: []const u8) !bool {
+    if (name.len == 0 or name.len > 32 or std.mem.indexOfScalar(u8, name, 0) != null) {
+        return error.InvalidTable;
+    }
+    var transaction = try database.begin();
+    defer transaction.deinit();
+    const owner = transaction.get("catalog").owner("tables");
+    const removed = try owner.proxy().remove(name);
+    try transaction.commit();
+    return removed;
+}
+
 pub fn put(database: anytype, table: []const u8, key: []const u8, value: []const u8) !void {
     if (value.len > 64) {
         return error.ValueTooLarge;

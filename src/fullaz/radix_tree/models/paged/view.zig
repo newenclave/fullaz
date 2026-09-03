@@ -131,27 +131,32 @@ pub fn View(
 
         pub fn set(self: *Self, key: KeyT, value: []const u8) ErrorSet!void {
             var slot_dir = try self.slotsDirMut();
-            try slot_dir.set(key, value);
+            const slot_index = std.math.cast(usize, key) orelse return error.OutOfBounds;
+            try slot_dir.set(slot_index, value);
         }
 
         pub fn get(self: *const Self, key: KeyT) ErrorSet![]const u8 {
             const slot_dir = try self.slotsDir();
-            return try slot_dir.get(key);
+            const slot_index = std.math.cast(usize, key) orelse return error.OutOfBounds;
+            return try slot_dir.get(slot_index);
         }
 
         pub fn valueMut(self: *Self, key: KeyT) ErrorSet![]u8 {
             var slot_dir = try self.slotsDirMut();
-            return try slot_dir.getMut(key);
+            const slot_index = std.math.cast(usize, key) orelse return error.OutOfBounds;
+            return try slot_dir.getMut(slot_index);
         }
 
         pub fn isSet(self: *const Self, key: KeyT) ErrorSet!bool {
             const slot_dir = try self.slotsDir();
-            return try slot_dir.isSet(key);
+            const slot_index = std.math.cast(usize, key) orelse return error.OutOfBounds;
+            return try slot_dir.isSet(slot_index);
         }
 
         pub fn free(self: *Self, key: KeyT) ErrorSet!void {
             var slot_dir = try self.slotsDirMut();
-            try slot_dir.free(key);
+            const slot_index = std.math.cast(usize, key) orelse return error.OutOfBounds;
+            try slot_dir.free(slot_index);
         }
 
         pub fn getFirstFree(self: *const Self) ErrorSet!?KeyT {
@@ -405,12 +410,14 @@ pub fn View(
             var slot_dir = try self.slotsDirMut();
             var slot = SlotType{ .child = undefined };
             slot.child.set(value);
-            try slot_dir.set(key, std.mem.asBytes(&slot));
+            const slot_index = std.math.cast(usize, key) orelse return error.OutOfBounds;
+            try slot_dir.set(slot_index, std.mem.asBytes(&slot));
         }
 
         pub fn get(self: *const Self, key: KeyT) ErrorSet!PageIdT {
             const slot_dir = try self.slotsDir();
-            const value_as_bytes = try slot_dir.get(key);
+            const slot_index = std.math.cast(usize, key) orelse return error.OutOfBounds;
+            const value_as_bytes = try slot_dir.get(slot_index);
             if (value_as_bytes.len != @sizeOf(PageIdT)) {
                 return ErrorSet.BadData;
             }
@@ -421,12 +428,14 @@ pub fn View(
 
         pub fn isSet(self: *const Self, key: KeyT) ErrorSet!bool {
             const slot_dir = try self.slotsDir();
-            return try slot_dir.isSet(key);
+            const slot_index = std.math.cast(usize, key) orelse return error.OutOfBounds;
+            return try slot_dir.isSet(slot_index);
         }
 
         pub fn free(self: *Self, key: KeyT) ErrorSet!void {
             var slot_dir = try self.slotsDirMut();
-            try slot_dir.free(key);
+            const slot_index = std.math.cast(usize, key) orelse return error.OutOfBounds;
+            try slot_dir.free(slot_index);
         }
 
         pub fn setParent(self: *Self, parent_id: ?PageIdT) ErrorSet!void {

@@ -9,6 +9,7 @@ const Device32 = fullaz.device.MemoryBlock(u32);
 const Log32 = fullaz.device.MemoryLog(u32);
 const MemoryDatabase = fullaz_db.MemoryDatabase(lab.Schema);
 const StaticDatabase = fullaz_db.StaticDatabaseWithWal(lab.Schema, Device32, Log32);
+const DynamicDatabase = fullaz_db.DynamicSchemaDatabaseWithWal(lab.Schema, Device32, Log32);
 // Browser WASM is wasm32, so both namespaces use u32 here. They remain
 // separate address spaces: the VPM still maps a stable VID to a physical PID.
 const VirtualDatabase = fullaz_db.VirtualStaticDatabaseWithWal(lab.Schema, Device32, Log32);
@@ -16,7 +17,16 @@ const VirtualDatabase = fullaz_db.VirtualStaticDatabaseWithWal(lab.Schema, Devic
 const Database = union(enum) {
     memory: MemoryDatabase,
     static: StaticDatabase,
+    dynamic: DynamicDatabase,
     virtual: VirtualDatabase,
+};
+
+const GcStatus = enum(u32) {
+    unsupported,
+    idle,
+    marking,
+    ready_to_sweep,
+    complete,
 };
 
 pub const panic = std.debug.FullPanic(struct {
@@ -28,9 +38,20 @@ pub const panic = std.debug.FullPanic(struct {
 var database: ?Database = null;
 var rows: std.ArrayList(lab.Row) = .empty;
 var last_error: []const u8 = "";
+var gc_status: GcStatus = .unsupported;
+var gc_page_count: usize = 0;
+var gc_free_page_count: usize = 0;
+var gc_free_pages_before_sweep: usize = 0;
+var gc_reclaimed_page_count: usize = 0;
+var gc_step_count: usize = 0;
 
 const static_options: StaticDatabase.InitOptions = .{
     .image_id = [_]u8{0x53} ** 16,
+    .components = .{ .catalog = .{ .owner_0 = .{} } },
+};
+const dynamic_options: DynamicDatabase.InitOptions = .{
+    .image_id = [_]u8{0x44} ** 16,
+    .cache_frames = 32,
     .components = .{ .catalog = .{ .owner_0 = .{} } },
 };
 const virtual_options: VirtualDatabase.InitOptions = .{
@@ -60,6 +81,16 @@ fn teardown() void {
     }
     rows.deinit(allocator);
     rows = .empty;
+    resetGcStats(false);
+}
+
+fn resetGcStats(supported: bool) void {
+    gc_status = if (supported) .idle else .unsupported;
+    gc_page_count = 0;
+    gc_free_page_count = 0;
+    gc_free_pages_before_sweep = 0;
+    gc_reclaimed_page_count = 0;
+    gc_step_count = 0;
 }
 
 fn makeDevice(comptime BlockIdT: type, bytes: []const u8) !fullaz.device.MemoryBlock(BlockIdT) {
@@ -83,7 +114,7 @@ export fn freeAllocation(ptr: usize, len: usize) void {
     allocator.free(bytes[0..len]);
 }
 
-/// `kind`: 0 memory, 1 static WAL, 2 virtual WAL.
+/// `kind`: 0 memory, 1 static WAL, 2 virtual WAL, 3 dynamic WAL with GC.
 export fn format(kind: u32) u32 {
     teardown();
     switch (kind) {
@@ -100,6 +131,14 @@ export fn format(kind: u32) u32 {
             };
             database = .{ .static = StaticDatabase.format(allocator, device, log, static_options) catch |err| return fail(err) };
         },
+        3 => {
+            var device = Device32.init(allocator, page_size) catch |err| return fail(err);
+            const log = Log32.init(allocator) catch |err| {
+                device.deinit();
+                return fail(err);
+            };
+            database = .{ .dynamic = DynamicDatabase.format(allocator, device, log, dynamic_options) catch |err| return fail(err) };
+        },
         2 => {
             var device = Device32.init(allocator, page_size) catch |err| return fail(err);
             const log = Log32.init(allocator) catch |err| {
@@ -113,11 +152,12 @@ export fn format(kind: u32) u32 {
             return 0;
         },
     }
+    resetGcStats(kind == 3);
     last_error = "";
     return 1;
 }
 
-/// Imports static or virtual images. Memory backend deliberately has no image
+/// Imports static, dynamic, or virtual images. Memory deliberately has no image
 /// format to make its lack of persistence visible in the lab.
 export fn importImage(kind: u32, ptr: usize, len: usize) u32 {
     if (kind == 0 or len == 0 or len % page_size != 0) {
@@ -135,6 +175,14 @@ export fn importImage(kind: u32, ptr: usize, len: usize) u32 {
             };
             database = .{ .static = StaticDatabase.open(allocator, device, log, static_options) catch |err| return fail(err) };
         },
+        3 => {
+            var device = makeDevice(u32, bytes) catch |err| return fail(err);
+            const log = Log32.init(allocator) catch |err| {
+                device.deinit();
+                return fail(err);
+            };
+            database = .{ .dynamic = DynamicDatabase.open(allocator, device, log, dynamic_options) catch |err| return fail(err) };
+        },
         2 => {
             var device = makeDevice(u32, bytes) catch |err| return fail(err);
             const log = Log32.init(allocator) catch |err| {
@@ -148,6 +196,7 @@ export fn importImage(kind: u32, ptr: usize, len: usize) u32 {
             return 0;
         },
     }
+    resetGcStats(kind == 3);
     last_error = "";
     return 1;
 }
@@ -178,6 +227,12 @@ fn removeAction(value: anytype, table: []const u8, key: []const u8, _: []const u
     }
 }
 
+fn deleteTableAction(value: anytype, table: []const u8, _: []const u8, _: []const u8) !void {
+    if (!try lab.deleteTable(value, table)) {
+        return error.TableNotFound;
+    }
+}
+
 fn generateExamplesAction(value: anytype, _: []const u8, _: []const u8, _: []const u8) !void {
     return lab.generateExamples(value);
 }
@@ -199,8 +254,115 @@ export fn remove(table_ptr: usize, table_len: usize, key_ptr: usize, key_len: us
     return mutate(removeAction, input(table_ptr, table_len), input(key_ptr, key_len), &.{});
 }
 
+export fn deleteTable(table_ptr: usize, table_len: usize) u32 {
+    return mutate(deleteTableAction, input(table_ptr, table_len), &.{}, &.{});
+}
+
 export fn generateExamples() u32 {
     return mutate(generateExamplesAction, &.{}, &.{}, &.{});
+}
+
+fn requireDynamicDatabase() !*DynamicDatabase {
+    const current = &(database orelse return error.NotReady);
+    return switch (current.*) {
+        .dynamic => |*value| value,
+        else => error.GarbageCollectionUnsupported,
+    };
+}
+
+fn countFreePages(value: *DynamicDatabase) !usize {
+    const cache = value.cache();
+    const page_count = cache.pageCount();
+    var count: usize = 0;
+    var index: usize = 0;
+    while (index < page_count) : (index += 1) {
+        const page_id: u32 = std.math.cast(u32, index) orelse return error.PageIdTooLarge;
+        if (try cache.isFree(page_id)) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn captureGcStats(value: *DynamicDatabase) !void {
+    gc_page_count = value.cache().pageCount();
+    gc_free_page_count = try countFreePages(value);
+}
+
+/// Completes prepare and mark work, then stops before the first sweep step.
+export fn markGarbageCollection() u32 {
+    const value = requireDynamicDatabase() catch |err| return fail(err);
+    const phase = value.garbageCollectionPhase() catch |err| return fail(err);
+    if (phase == .idle) {
+        resetGcStats(true);
+        value.startGarbageCollection() catch |err| return fail(err);
+    }
+
+    gc_status = .marking;
+    while (true) {
+        const active_phase = value.garbageCollectionPhase() catch |err| return fail(err);
+        switch (active_phase) {
+            .preparing, .marking => {
+                _ = value.stepGarbageCollection(32) catch |err| return fail(err);
+                gc_step_count += 1;
+            },
+            .sweeping => {
+                captureGcStats(value) catch |err| return fail(err);
+                gc_free_pages_before_sweep = gc_free_page_count;
+                gc_status = .ready_to_sweep;
+                last_error = "";
+                return 1;
+            },
+            .idle => {
+                return fail(error.GarbageCollectionStopped);
+            },
+        }
+    }
+}
+
+/// Reclaims every page that the completed mark phase did not reach.
+export fn sweepGarbageCollection() u32 {
+    const value = requireDynamicDatabase() catch |err| return fail(err);
+    const phase = value.garbageCollectionPhase() catch |err| return fail(err);
+    if (phase != .sweeping) {
+        return fail(error.GarbageCollectionMarkRequired);
+    }
+
+    while (true) {
+        const status = value.stepGarbageCollection(32) catch |err| return fail(err);
+        gc_step_count += 1;
+        if (status == .complete) {
+            break;
+        }
+    }
+    captureGcStats(value) catch |err| return fail(err);
+    gc_reclaimed_page_count = if (gc_free_page_count >= gc_free_pages_before_sweep)
+        gc_free_page_count - gc_free_pages_before_sweep
+    else
+        0;
+    gc_status = .complete;
+    last_error = "";
+    return 1;
+}
+
+export fn gcStatus() u32 {
+    return @intFromEnum(gc_status);
+}
+
+export fn gcPageCount() usize {
+    return gc_page_count;
+}
+
+export fn gcFreePageCount() usize {
+    return gc_free_page_count;
+}
+
+export fn gcReclaimedPageCount() usize {
+    return gc_reclaimed_page_count;
+}
+
+export fn gcStepCount() usize {
+    return gc_step_count;
 }
 
 export fn snapshotRows() u32 {
@@ -249,6 +411,7 @@ export fn currentEngine() u32 {
         .memory => 0,
         .static => 1,
         .virtual => 2,
+        .dynamic => 3,
     };
 }
 

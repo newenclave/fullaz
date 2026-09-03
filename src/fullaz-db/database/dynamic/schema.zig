@@ -404,6 +404,11 @@ fn DynamicSchemaDatabaseImpl(
             return self.corePtr().database.cache();
         }
 
+        /// The full in-memory device image, in page order (memory-backed devices only).
+        pub fn deviceBytes(self: *const Self) []const u8 {
+            return self.coreConstPtr().database.deviceBytes();
+        }
+
         /// Starts the only mutable access scope. Active transactions roll back on deinit.
         /// Catalog rename and drop operations belong to the raw control plane:
         /// this facade's runtimes are bound to compile-time schema field names.
@@ -457,6 +462,16 @@ fn DynamicSchemaDatabaseImpl(
             const status = try session.step(maximum_pages);
             try session.commit();
             return status;
+        }
+
+        /// Returns the durable collector phase without changing it.
+        pub fn garbageCollectionPhase(self: *Self) Error!fullaz.gc.Phase {
+            const core = self.corePtr();
+            var session = try core.database.beginGcSession();
+            defer session.deinit();
+            const phase = try session.phase();
+            try session.rollback();
+            return phase;
         }
 
         pub fn cancelGarbageCollection(self: *Self) Error!void {
