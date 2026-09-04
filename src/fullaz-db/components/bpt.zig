@@ -857,6 +857,13 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                             }
                         }
 
+                        pub fn reclaimPersistent(runtime: *StorageRuntimeT) StorageError!void {
+                            if (runtime.active_editor) {
+                                return error.ValueEditorActive;
+                            }
+                            try runtime.tree.destroy();
+                        }
+
                         pub fn proxy(runtime: *StorageRuntimeT) StorageProxyT {
                             return StorageProxyT.init(
                                 &runtime.tree,

@@ -313,6 +313,16 @@ pub fn OwnedMutableChild(
             return ChildBindingT.proxy(self.runtime);
         }
 
+        /// Recursively reclaims persistent pages owned by this embedded child.
+        /// The caller must finish the handle before changing its parent entry.
+        pub fn reclaimPersistent(self: *Self) Error!void {
+            if (self.closed) {
+                return error.EditorInvalidated;
+            }
+            try ChildBindingT.requireTransactionIdle(self.runtime);
+            try ChildBindingT.reclaimPersistent(self.runtime);
+        }
+
         pub fn formatRaw(
             _: *const Self,
             metadata: value_envelope.Metadata,

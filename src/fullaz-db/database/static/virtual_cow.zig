@@ -5,6 +5,7 @@ const page_cache = @import("fullaz").storage.page_cache;
 const slot_queue = @import("fullaz").storage.slot_queue;
 const virtual_page_map = @import("fullaz").storage.virtual_page_map;
 const PackedInt = @import("fullaz").core.packed_int.PackedInt;
+const component = @import("../../component/component.zig");
 const schema_fingerprint = @import("../../component/fingerprint.zig");
 const shape = @import("../../component/shape.zig");
 const system_kinds = @import("../../file/system_kinds.zig");
@@ -396,6 +397,21 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
                 return Binding.proxyConst(&@field(core.components, name));
             }
 
+            /// Recursively reclaims pages owned by a component while retaining
+            /// its fixed schema slot for subsequent reuse.
+            pub fn reclaim(self: *TransactionSelf, comptime name: []const u8) Error!void {
+                const core = try self.activeCore();
+                const Binding = bindingType(name);
+                comptime component.assertReclamation(Binding);
+                try requireTransactionIdle(core);
+                var mutated = false;
+                errdefer if (mutated) {
+                    core.logical_cache.markTransactionFailed();
+                };
+                mutated = true;
+                try Binding.reclaimPersistent(&@field(core.components, name));
+            }
+
             pub fn commit(self: *TransactionSelf) Error!void {
                 const core = try self.activeCore();
                 try requireTransactionIdle(core);
@@ -573,6 +589,8 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
                     Metadata,
                     &core.components,
                     logicalFreeRoot(core),
+                    .{},
+                    false,
                 ),
             );
         }

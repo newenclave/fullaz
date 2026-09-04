@@ -2175,6 +2175,10 @@ pub fn hierarchyCore(
                                 return self.inner.proxy();
                             }
 
+                            pub fn reclaimPersistent(self: *HandleSelf) HandleSelf.Error!void {
+                                return self.inner.reclaimPersistent();
+                            }
+
                             pub fn finish(self: *HandleSelf) HandleSelf.Error!void {
                                 return self.inner.finish();
                             }

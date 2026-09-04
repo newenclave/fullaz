@@ -105,6 +105,7 @@ fn resetGcStatsForCurrentDatabase() void {
         return;
     });
     resetGcStats(switch (current.*) {
+        .static, .virtual => true,
         .dynamic => true,
         else => false,
     });
@@ -251,6 +252,12 @@ fn deleteTableAction(value: anytype, table: []const u8, _: []const u8, _: []cons
     }
 }
 
+fn deleteTableAndReclaimAction(value: anytype, table: []const u8) !void {
+    if (!try lab.deleteTableAndReclaim(value, table)) {
+        return error.TableNotFound;
+    }
+}
+
 export fn createTable(ptr: usize, len: usize) u32 {
     return mutate(createTableAction, input(ptr, len), &.{}, &.{});
 }
@@ -269,7 +276,16 @@ export fn remove(table_ptr: usize, table_len: usize, key_ptr: usize, key_len: us
 }
 
 export fn deleteTable(table_ptr: usize, table_len: usize) u32 {
-    return mutate(deleteTableAction, input(table_ptr, table_len), &.{}, &.{});
+    const current = &(database orelse {
+        last_error = "NotReady";
+        return 0;
+    });
+    switch (current.*) {
+        inline else => |*value| deleteTableAction(value, input(table_ptr, table_len), &.{}, &.{}) catch |err| return fail(err),
+    }
+    resetGcStatsForCurrentDatabase();
+    last_error = "";
+    return 1;
 }
 
 export fn generateExamples() u32 {
@@ -320,15 +336,7 @@ export fn generatedPlanetCount() usize {
     return generation_completed;
 }
 
-fn requireDynamicDatabase() !*DynamicDatabase {
-    const current = &(database orelse return error.NotReady);
-    return switch (current.*) {
-        .dynamic => |*value| value,
-        else => error.GarbageCollectionUnsupported,
-    };
-}
-
-fn countFreePages(value: *DynamicDatabase) !usize {
+fn countFreePages(value: anytype) !usize {
     const cache = value.cache();
     const page_count = cache.pageCount();
     var count: usize = 0;
@@ -342,64 +350,83 @@ fn countFreePages(value: *DynamicDatabase) !usize {
     return count;
 }
 
-fn captureGcStats(value: *DynamicDatabase) !void {
+fn captureGcStats(value: anytype) !void {
     gc_page_count = value.cache().pageCount();
     gc_free_page_count = try countFreePages(value);
 }
 
 /// Completes prepare and mark work, then stops before the first sweep step.
-export fn markGarbageCollection() u32 {
-    const value = requireDynamicDatabase() catch |err| return fail(err);
-    const phase = value.garbageCollectionPhase() catch |err| return fail(err);
+fn markGarbageCollectionFor(value: anytype) !void {
+    const phase = try value.garbageCollectionPhase();
     if (phase == .idle) {
         resetGcStats(true);
-        value.startGarbageCollection() catch |err| return fail(err);
+        try value.startGarbageCollection();
     }
 
     gc_status = .marking;
     while (true) {
-        const active_phase = value.garbageCollectionPhase() catch |err| return fail(err);
+        const active_phase = try value.garbageCollectionPhase();
         switch (active_phase) {
             .preparing, .marking => {
-                _ = value.stepGarbageCollection(32) catch |err| return fail(err);
+                _ = try value.stepGarbageCollection(32);
                 gc_step_count += 1;
             },
             .sweeping => {
-                captureGcStats(value) catch |err| return fail(err);
+                try captureGcStats(value);
                 gc_free_pages_before_sweep = gc_free_page_count;
                 gc_status = .ready_to_sweep;
                 last_error = "";
-                return 1;
+                return;
             },
             .idle => {
-                return fail(error.GarbageCollectionStopped);
+                return error.GarbageCollectionStopped;
             },
         }
     }
 }
 
+export fn markGarbageCollection() u32 {
+    const current = &(database orelse return fail(error.NotReady));
+    switch (current.*) {
+        .static => |*value| markGarbageCollectionFor(value) catch |err| return fail(err),
+        .virtual => |*value| markGarbageCollectionFor(value) catch |err| return fail(err),
+        .dynamic => |*value| markGarbageCollectionFor(value) catch |err| return fail(err),
+        .memory => return fail(error.GarbageCollectionUnsupported),
+    }
+    return 1;
+}
+
 /// Reclaims every page that the completed mark phase did not reach.
-export fn sweepGarbageCollection() u32 {
-    const value = requireDynamicDatabase() catch |err| return fail(err);
-    const phase = value.garbageCollectionPhase() catch |err| return fail(err);
+fn sweepGarbageCollectionFor(value: anytype) !void {
+    const phase = try value.garbageCollectionPhase();
     if (phase != .sweeping) {
-        return fail(error.GarbageCollectionMarkRequired);
+        return error.GarbageCollectionMarkRequired;
     }
 
     while (true) {
-        const status = value.stepGarbageCollection(32) catch |err| return fail(err);
+        const status = try value.stepGarbageCollection(32);
         gc_step_count += 1;
         if (status == .complete) {
             break;
         }
     }
-    captureGcStats(value) catch |err| return fail(err);
+    try captureGcStats(value);
     gc_reclaimed_page_count = if (gc_free_page_count >= gc_free_pages_before_sweep)
         gc_free_page_count - gc_free_pages_before_sweep
     else
         0;
     gc_status = .complete;
     last_error = "";
+}
+
+export fn sweepGarbageCollection() u32 {
+    const current = &(database orelse return fail(error.NotReady));
+    switch (current.*) {
+        .static => |*value| sweepGarbageCollectionFor(value) catch |err| return fail(err),
+        .virtual => |*value| sweepGarbageCollectionFor(value) catch |err| return fail(err),
+        .dynamic => |*value| sweepGarbageCollectionFor(value) catch |err| return fail(err),
+        .memory => return fail(error.GarbageCollectionUnsupported),
+    }
     return 1;
 }
 

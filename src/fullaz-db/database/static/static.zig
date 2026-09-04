@@ -1,7 +1,9 @@
 const std = @import("std");
 const device_interfaces = @import("fullaz").device.interfaces;
 const page_cache = @import("fullaz").storage.page_cache;
+const gc = @import("fullaz").gc;
 const StaticDatabaseCommon = @import("common.zig").StaticDatabaseCommon;
+const component = @import("../../component/component.zig");
 const schema_fingerprint = @import("../../component/fingerprint.zig");
 const shape = @import("../../component/shape.zig");
 
@@ -28,6 +30,39 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
     const Metadata = Common.MetadataType;
     const Superblock = Common.SuperblockType;
     const Options = Common.InitOptions;
+    const GcState = gc.models.paged.State(SchemaT.PageId);
+    const GcStore = struct {
+        pub const PageId = SchemaT.PageId;
+        pub const Error = Cache.Error;
+        pub const StateLeaseType = struct {
+            pub const Error = error{};
+            value: *GcState,
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return std.mem.asBytes(@as(*const GcState, self.value));
+            }
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return std.mem.asBytes(self.value);
+            }
+            pub fn finish(_: *@This()) void {}
+            pub fn deinit(_: *@This()) void {}
+        };
+        state_value: *GcState,
+        cache: *Cache,
+        pub fn state(self: *@This()) Error!StateLeaseType {
+            return .{ .value = self.state_value };
+        }
+        pub fn isReserved(_: *const @This(), page_id: PageId) bool {
+            return page_id == 0;
+        }
+        pub fn isFree(self: *const @This(), page_id: PageId) Error!bool {
+            return @constCast(self.cache).isFree(page_id);
+        }
+        pub fn destroyPage(self: *@This(), page_id: PageId) Error!void {
+            return self.cache.free(page_id);
+        }
+    };
+    const GcModel = gc.models.PagedWithKinds(Cache, GcStore, 0x0008, 0x0009, 0x000a, 0x000b);
+    const GcCollector = gc.Gc(GcModel);
     const Core = struct {
         allocator: std.mem.Allocator,
         device: DeviceT,
@@ -37,6 +72,8 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
         cache: Cache,
         backend: Backend,
         components: Components,
+        gc_state: GcState,
+        gc_cycle_active: bool,
         transaction_active: bool,
         transaction_generation: u64,
         transaction_cache_batch: Cache.WriteBatch,
@@ -56,11 +93,13 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
         pub const ComponentInitOptionsType = ComponentOptions;
         pub const MetadataType = Metadata;
         pub const SuperblockType = Superblock;
+        pub const GcCollectorType = GcCollector;
         pub const InitOptions = Options;
         pub const Error = DeviceT.Error ||
             RawCache.Error ||
             Cache.Error ||
             Superblock.Error ||
+            GcCollector.Error ||
             shape.componentErrors(bindings, 0) ||
             shape.staticMetadataErrors(bindings, 0) ||
             error{
@@ -71,9 +110,78 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
                 PageCountMismatch,
                 DirtyDatabase,
                 InvalidSuperblockPage,
+                GarbageCollectionActive,
+                BadGcState,
             };
 
         core_: *align(@alignOf(Core)) anyopaque,
+
+        pub const GcSession = struct {
+            raw: Transaction,
+            store: GcStore = undefined,
+            model: GcModel = undefined,
+            collector_state: GcCollector = undefined,
+            initialized: bool = false,
+            active: bool = true,
+            const SessionSelf = @This();
+            const SessionError = Self.Error || GcCollector.Error;
+            fn corePtr(self: *const SessionSelf) *Core {
+                return self.raw.corePtr();
+            }
+            fn collector(self: *SessionSelf) SessionError!*GcCollector {
+                if (!self.initialized) {
+                    const core = self.corePtr();
+                    self.store = .{ .state_value = &core.gc_state, .cache = &core.cache };
+                    self.model = try GcModel.init(core.allocator, &core.cache, &self.store);
+                    self.collector_state = GcCollector.init(&self.model);
+                    self.initialized = true;
+                }
+                return &self.collector_state;
+            }
+            fn start(self: *SessionSelf, roots: []const SchemaT.PageId) SessionError!void {
+                const core = self.corePtr();
+                if (core.gc_cycle_active) return error.GarbageCollectionActive;
+                try (try self.collector()).start(roots);
+                core.gc_cycle_active = true;
+            }
+            fn step(self: *SessionSelf, maximum_pages: usize) SessionError!gc.StepStatus {
+                const core = self.corePtr();
+                if (!core.gc_cycle_active) return error.BadGcState;
+                const status = try (try self.collector()).step(maximum_pages);
+                if (status == .complete) core.gc_cycle_active = false;
+                return status;
+            }
+            fn phase(self: *SessionSelf) SessionError!gc.Phase {
+                _ = try self.collector();
+                return self.model.phase();
+            }
+            fn abort(self: *SessionSelf) SessionError!void {
+                const core = self.corePtr();
+                if (!core.gc_cycle_active) return error.BadGcState;
+                try (try self.collector()).abortCycle();
+                core.gc_cycle_active = false;
+            }
+            fn commit(self: *SessionSelf) SessionError!void {
+                if (self.initialized) {
+                    self.collector_state.deinit();
+                    self.model.deinit();
+                }
+                try self.raw.commit();
+                self.active = false;
+            }
+            fn rollback(self: *SessionSelf) SessionError!void {
+                if (self.initialized) {
+                    self.collector_state.deinit();
+                    self.model.deinit();
+                }
+                try self.raw.rollback();
+                self.active = false;
+            }
+            fn deinit(self: *SessionSelf) void {
+                if (self.active) self.rollback() catch @panic("StaticDatabase GC session rollback failed");
+                self.* = undefined;
+            }
+        };
 
         pub const Transaction = struct {
             const TransactionSelf = @This();
@@ -103,6 +211,21 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
                 const core = self.activeCore() catch @panic("StaticDatabase transaction is inactive");
                 const Binding = bindingType(name);
                 return Binding.proxyConst(&@field(core.components, name));
+            }
+
+            /// Recursively reclaims pages owned by a component while retaining
+            /// its fixed schema slot for subsequent reuse.
+            pub fn reclaim(self: *TransactionSelf, comptime name: []const u8) Error!void {
+                const core = try self.activeCore();
+                const Binding = bindingType(name);
+                comptime component.assertReclamation(Binding);
+                try requireTransactionIdle(core);
+                var mutated = false;
+                errdefer if (mutated) {
+                    core.cache.markTransactionFailed();
+                };
+                mutated = true;
+                try Binding.reclaimPersistent(&@field(core.components, name));
             }
 
             pub fn commit(self: *TransactionSelf) Error!void {
@@ -221,7 +344,7 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
                 core.device.blockSize(),
                 core.device.blocksCount(),
                 core.identity,
-                shape.captureStaticMetadata(SchemaT, bindings, Metadata, &core.components, freeRoot(core)),
+                shape.captureStaticMetadata(SchemaT, bindings, Metadata, &core.components, freeRoot(core), core.gc_state, core.gc_cycle_active),
                 clean,
             );
         }
@@ -247,6 +370,8 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
             core.backend = Common.initBackend(allocator, &core.cache);
             core.transaction_active = false;
             core.transaction_generation = 0;
+            core.gc_state = .{};
+            core.gc_cycle_active = false;
             return core;
         }
 
@@ -275,7 +400,7 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
                     core.device.blockSize(),
                     core.device.blocksCount(),
                     core.identity,
-                    shape.captureStaticMetadata(SchemaT, bindings, Metadata, &core.components, null),
+                    shape.captureStaticMetadata(SchemaT, bindings, Metadata, &core.components, null, .{}, false),
                     true,
                 );
             }
@@ -323,12 +448,20 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
                 &core.components,
                 &storage.metadata,
             ) orelse std.math.maxInt(SchemaT.PageId));
+            core.gc_state = storage.metadata.gc_state;
+            core.gc_cycle_active = storage.metadata.gc_cycle_active != 0;
             try core.cache.validateFreeList();
             return .{ .core_ = core };
         }
 
         /// Starts the only mutable access scope. Active transactions roll back on deinit.
         pub fn begin(self: *Self) Error!Transaction {
+            const core = self.corePtr();
+            if (core.gc_cycle_active) return error.GarbageCollectionActive;
+            return self.beginInternal();
+        }
+
+        fn beginInternal(self: *Self) Error!Transaction {
             const core = self.corePtr();
             if (core.transaction_active) {
                 return Error.BatchActive;
@@ -347,6 +480,52 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
             try core.device.writeBlock(0, @constCast(try page.data()));
             try core.device.sync();
             return .{ .core_ = core, .generation_ = core.transaction_generation };
+        }
+
+        pub fn startGarbageCollection(self: *Self) Error!void {
+            var session = GcSession{ .raw = try self.beginInternal() };
+            defer session.deinit();
+            var roots: std.ArrayList(SchemaT.PageId) = .empty;
+            defer roots.deinit(self.corePtr().allocator);
+            const collector = try session.collector();
+            inline for (SchemaT.fields, 0..) |field, index| {
+                const Binding = bindings[index];
+                comptime component.assertGc(Binding, GcCollector);
+                const Capability = Binding.Gc(GcCollector);
+                const runtime: *const Binding.Runtime = &@field(self.corePtr().components, field.name);
+                try Capability.appendRoots(runtime, self.corePtr().allocator, &roots);
+                try Capability.registerScanners(runtime, collector);
+            }
+            try session.start(roots.items);
+            try session.commit();
+        }
+        pub fn stepGarbageCollection(self: *Self, maximum_pages: usize) Error!gc.StepStatus {
+            var session = GcSession{ .raw = try self.beginInternal() };
+            defer session.deinit();
+            const collector = try session.collector();
+            inline for (SchemaT.fields, 0..) |field, index| {
+                const Binding = bindings[index];
+                comptime component.assertGc(Binding, GcCollector);
+                const Capability = Binding.Gc(GcCollector);
+                const runtime: *const Binding.Runtime = &@field(self.corePtr().components, field.name);
+                try Capability.registerScanners(runtime, collector);
+            }
+            const status = try session.step(maximum_pages);
+            try session.commit();
+            return status;
+        }
+        pub fn garbageCollectionPhase(self: *Self) Error!gc.Phase {
+            var session = GcSession{ .raw = try self.beginInternal() };
+            defer session.deinit();
+            const phase = try session.phase();
+            try session.rollback();
+            return phase;
+        }
+        pub fn cancelGarbageCollection(self: *Self) Error!void {
+            var session = GcSession{ .raw = try self.beginInternal() };
+            defer session.deinit();
+            try session.abort();
+            try session.commit();
         }
 
         pub fn getConst(self: *const Self, comptime name: []const u8) *const constProxyType(name) {

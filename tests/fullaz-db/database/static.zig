@@ -227,6 +227,74 @@ test "fullaz-db: static database formats, opens, and persists reclaimed BPT page
     }
 }
 
+test "fullaz-db: static database reclaims a component tree for reuse" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
+        "index",
+        fullaz_db.bpt(.{
+            .compare = compare,
+            .CompareContext = void,
+            .comparator_id = 1,
+            .maximum_key_size = 4,
+            .maximum_value_size = 256,
+            .rebalance_policy = .force_split,
+        }),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz_db.StaticDatabase(Schema, Device);
+    const io = std.testing.io;
+    const path = ".zig-cache/static_database_component_reclaim.img";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{8} ** 16,
+        .components = .{ .index = .{} },
+    };
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    var value: [256]u8 = undefined;
+    @memset(&value, 0xA5);
+    var page_count: usize = undefined;
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+
+        var insert_transaction = try database.begin();
+        for ([_][]const u8{ "0001", "0002", "0003", "0004" }) |key| {
+            try std.testing.expect(try insert_transaction.get("index").insert(key, &value));
+        }
+        try insert_transaction.commit();
+        page_count = database.diagnostics().page_count;
+
+        var reclaim_transaction = try database.begin();
+        try reclaim_transaction.reclaim("index");
+        try reclaim_transaction.commit();
+        try std.testing.expect(database.diagnostics().free_root != null);
+        try std.testing.expect((try database.getConst("index").find("0001")) == null);
+
+        var reuse_transaction = try database.begin();
+        try std.testing.expect(try reuse_transaction.get("index").insert("next", &value));
+        try reuse_transaction.commit();
+        try std.testing.expectEqual(page_count, database.diagnostics().page_count);
+    }
+
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        try std.testing.expect((try database.getConst("index").find("0001")) == null);
+        var iterator = (try database.getConst("index").find("next")).?;
+        defer iterator.deinit();
+        const entry = (try iterator.get()).?;
+        try std.testing.expectEqualSlices(u8, &value, entry.value);
+    }
+}
+
 test "fullaz-db: static database reopens an R-tree root" {
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
         "spatial",

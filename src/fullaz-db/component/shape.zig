@@ -107,22 +107,28 @@ pub fn requireTransactionIdle(
 /// Component metadata must be externally laid out because this structure is
 /// copied directly into the static database superblock.
 pub fn staticMetadata(comptime SchemaT: type, comptime bindings_: anytype) type {
-    const field_count = SchemaT.fields.len + 1;
+    const field_count = SchemaT.fields.len + 3;
     comptime var names: [field_count][]const u8 = undefined;
     comptime var types: [field_count]type = undefined;
     comptime var attributes: [field_count]std.builtin.Type.StructField.Attributes = undefined;
     names[0] = "free_root";
     types[0] = PackedInt(SchemaT.PageId, .little);
     attributes[0] = .{};
+    names[1] = "gc_state";
+    types[1] = @import("fullaz").gc.models.paged.State(SchemaT.PageId);
+    attributes[1] = .{};
+    names[2] = "gc_cycle_active";
+    types[2] = u8;
+    attributes[2] = .{};
     inline for (SchemaT.fields, 0..) |field, index| {
         const Binding = bindings_[index];
         if (!@hasDecl(Binding, "StaticMetadata")) {
             @compileError("StaticDatabase component binding requires StaticMetadata");
         }
         component.assertStaticMetadata(Binding, Binding.StaticMetadata);
-        names[index + 1] = field.name;
-        types[index + 1] = Binding.StaticMetadata.Storage;
-        attributes[index + 1] = .{};
+        names[index + 3] = field.name;
+        types[index + 3] = Binding.StaticMetadata.Storage;
+        attributes[index + 3] = .{};
     }
     return @Struct(.@"extern", null, &names, &types, &attributes);
 }
@@ -133,9 +139,13 @@ pub fn captureStaticMetadata(
     comptime MetadataT: type,
     runtimes_: *const runtimes(SchemaT, bindings_),
     free_root: ?SchemaT.PageId,
+    gc_state: @import("fullaz").gc.models.paged.State(SchemaT.PageId),
+    gc_cycle_active: bool,
 ) MetadataT {
     var metadata: MetadataT = undefined;
     metadata.free_root = PackedInt(SchemaT.PageId, .little).init(free_root orelse 0);
+    metadata.gc_state = gc_state;
+    metadata.gc_cycle_active = @intFromBool(gc_cycle_active);
     inline for (SchemaT.fields, 0..) |field, index| {
         @field(metadata, field.name) = bindings_[index].StaticMetadata.capture(
             &@field(runtimes_.*, field.name),
@@ -171,6 +181,16 @@ pub fn validateStaticMetadata(
     const free_root = metadata.free_root.get();
     if (free_root != 0) {
         const root_index = std.math.cast(usize, free_root) orelse return error.BadMetadata;
+        if (root_index >= page_count) {
+            return error.BadMetadata;
+        }
+    }
+    if (metadata.gc_cycle_active > 1) {
+        return error.BadMetadata;
+    }
+    const gc_state_root = metadata.gc_state.state_page_root.get();
+    if (gc_state_root != std.math.maxInt(SchemaT.PageId)) {
+        const root_index = std.math.cast(usize, gc_state_root) orelse return error.BadMetadata;
         if (root_index >= page_count) {
             return error.BadMetadata;
         }

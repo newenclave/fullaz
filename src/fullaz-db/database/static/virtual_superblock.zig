@@ -55,7 +55,8 @@ pub fn VirtualStaticSuperblock(
         };
 
         pub const magic = "FULLZVDB";
-        pub const version = 1;
+        // Version 2 adds durable static GC state to schema metadata.
+        pub const version = 2;
         pub const superblock_page_id: PhysicalPageIdT = 0;
         pub const vpm_state_page_id: PhysicalPageIdT = 1;
         pub const placeholder_page_id: PhysicalPageIdT = 2;

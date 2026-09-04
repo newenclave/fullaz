@@ -108,6 +108,62 @@ test "db-lab marks then sweeps a disconnected table in dynamic WAL" {
     try std.testing.expect((try countFreePages(&database)) > free_pages_before_sweep + 10);
 }
 
+test "db-lab marks then sweeps a disconnected table in static WAL" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Log = fullaz.device.MemoryLog(u32);
+    const Database = fullaz_db.StaticDatabaseWithWal(lab.Schema, Device, Log);
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        try Log.init(std.testing.allocator),
+        .{
+            .image_id = [_]u8{0xD4} ** 16,
+            .cache_frames = 32,
+            .components = .{ .catalog = .{ .owner_0 = .{} } },
+        },
+    );
+    defer database.deinit();
+
+    var committed_planets: usize = 0;
+    try lab.generateExamplesWithCount(&database, std.testing.allocator, 64, &committed_planets);
+    try std.testing.expect(try lab.deleteTable(&database, "planets"));
+
+    var rows = try lab.snapshot(&database, std.testing.allocator);
+    defer rows.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 5), rows.items.len);
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(32) != .complete) {}
+    try std.testing.expect((try countFreePages(&database)) > 10);
+}
+
+test "db-lab marks then sweeps a disconnected table in virtual static WAL" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Log = fullaz.device.MemoryLog(u32);
+    const Database = fullaz_db.VirtualStaticDatabaseWithWal(lab.Schema, Device, Log);
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        try Log.init(std.testing.allocator),
+        .{
+            .image_id = [_]u8{0xD5} ** 16,
+            .cache_frames = 32,
+            .components = .{ .catalog = .{ .owner_0 = .{} } },
+        },
+    );
+    defer database.deinit();
+
+    var committed_planets: usize = 0;
+    try lab.generateExamplesWithCount(&database, std.testing.allocator, 64, &committed_planets);
+    try std.testing.expect(try lab.deleteTable(&database, "planets"));
+
+    var rows = try lab.snapshot(&database, std.testing.allocator);
+    defer rows.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 5), rows.items.len);
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(32) != .complete) {}
+    try std.testing.expect((try countFreePages(&database)) > 10);
+}
+
 test "db-lab generates a bounded deterministic planet catalog in batches" {
     const Database = fullaz_db.MemoryDatabase(lab.Schema);
     var database = try Database.init(std.testing.allocator, .{

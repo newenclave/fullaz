@@ -39,7 +39,8 @@ pub fn StaticSuperblock(comptime MetadataT: type) type {
         };
 
         pub const magic = "FULLAZDB";
-        pub const version = 1;
+        // Version 2 adds durable static GC state to schema metadata.
+        pub const version = 2;
 
         comptime {
             if (@sizeOf(Storage) > std.math.maxInt(u16)) {
