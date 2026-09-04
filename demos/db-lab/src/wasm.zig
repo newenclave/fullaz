@@ -44,9 +44,12 @@ var gc_free_page_count: usize = 0;
 var gc_free_pages_before_sweep: usize = 0;
 var gc_reclaimed_page_count: usize = 0;
 var gc_step_count: usize = 0;
+var generation_target: usize = 0;
+var generation_completed: usize = 0;
 
 const static_options: StaticDatabase.InitOptions = .{
     .image_id = [_]u8{0x53} ** 16,
+    .cache_frames = 32,
     .components = .{ .catalog = .{ .owner_0 = .{} } },
 };
 const dynamic_options: DynamicDatabase.InitOptions = .{
@@ -56,6 +59,7 @@ const dynamic_options: DynamicDatabase.InitOptions = .{
 };
 const virtual_options: VirtualDatabase.InitOptions = .{
     .image_id = [_]u8{0x56} ** 16,
+    .cache_frames = 32,
     .components = .{ .catalog = .{ .owner_0 = .{} } },
 };
 
@@ -82,6 +86,8 @@ fn teardown() void {
     rows.deinit(allocator);
     rows = .empty;
     resetGcStats(false);
+    generation_target = 0;
+    generation_completed = 0;
 }
 
 fn resetGcStats(supported: bool) void {
@@ -91,6 +97,17 @@ fn resetGcStats(supported: bool) void {
     gc_free_pages_before_sweep = 0;
     gc_reclaimed_page_count = 0;
     gc_step_count = 0;
+}
+
+fn resetGcStatsForCurrentDatabase() void {
+    const current = &(database orelse {
+        resetGcStats(false);
+        return;
+    });
+    resetGcStats(switch (current.*) {
+        .dynamic => true,
+        else => false,
+    });
 }
 
 fn makeDevice(comptime BlockIdT: type, bytes: []const u8) !fullaz.device.MemoryBlock(BlockIdT) {
@@ -209,6 +226,7 @@ fn mutate(comptime action: anytype, first: []const u8, second: []const u8, third
     switch (current.*) {
         inline else => |*value| action(value, first, second, third) catch |err| return fail(err),
     }
+    resetGcStatsForCurrentDatabase();
     last_error = "";
     return 1;
 }
@@ -233,10 +251,6 @@ fn deleteTableAction(value: anytype, table: []const u8, _: []const u8, _: []cons
     }
 }
 
-fn generateExamplesAction(value: anytype, _: []const u8, _: []const u8, _: []const u8) !void {
-    return lab.generateExamples(value);
-}
-
 export fn createTable(ptr: usize, len: usize) u32 {
     return mutate(createTableAction, input(ptr, len), &.{}, &.{});
 }
@@ -259,7 +273,51 @@ export fn deleteTable(table_ptr: usize, table_len: usize) u32 {
 }
 
 export fn generateExamples() u32 {
-    return mutate(generateExamplesAction, &.{}, &.{}, &.{});
+    return generateExamplesWithCount(@intCast(lab.default_planet_count));
+}
+
+export fn generateExamplesWithCount(count: u32) u32 {
+    const planet_count: usize = std.math.cast(usize, count) orelse return fail(error.InvalidExampleCount);
+    if (planet_count < lab.minimum_planet_count or planet_count > lab.maximum_planet_count) {
+        return fail(error.InvalidExampleCount);
+    }
+    const current = &(database orelse {
+        last_error = "NotReady";
+        return 0;
+    });
+    generation_target = planet_count;
+    generation_completed = 0;
+    switch (current.*) {
+        inline else => |*value| lab.generateExamplesWithCount(
+            value,
+            allocator,
+            planet_count,
+            &generation_completed,
+        ) catch |err| return fail(err),
+    }
+    resetGcStatsForCurrentDatabase();
+    last_error = "";
+    return 1;
+}
+
+export fn minimumPlanetCount() usize {
+    return lab.minimum_planet_count;
+}
+
+export fn defaultPlanetCount() usize {
+    return lab.default_planet_count;
+}
+
+export fn maximumPlanetCount() usize {
+    return lab.maximum_planet_count;
+}
+
+export fn generatedPlanetTarget() usize {
+    return generation_target;
+}
+
+export fn generatedPlanetCount() usize {
+    return generation_completed;
 }
 
 fn requireDynamicDatabase() !*DynamicDatabase {

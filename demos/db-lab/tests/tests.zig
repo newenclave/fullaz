@@ -83,13 +83,14 @@ test "db-lab marks then sweeps a disconnected table in dynamic WAL" {
     );
     defer database.deinit();
 
-    try lab.createTable(&database, "users");
-    try lab.put(&database, "users", "ada", "first");
-    try std.testing.expect(try lab.deleteTable(&database, "users"));
+    var committed_planets: usize = 0;
+    try lab.generateExamplesWithCount(&database, std.testing.allocator, 64, &committed_planets);
+    try std.testing.expectEqual(@as(usize, 64), committed_planets);
+    try std.testing.expect(try lab.deleteTable(&database, "planets"));
 
     var rows = try lab.snapshot(&database, std.testing.allocator);
     defer rows.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 0), rows.items.len);
+    try std.testing.expectEqual(@as(usize, 5), rows.items.len);
 
     try database.startGarbageCollection();
     var phase = try database.garbageCollectionPhase();
@@ -104,10 +105,10 @@ test "db-lab marks then sweeps a disconnected table in dynamic WAL" {
     while (status != .complete) {
         status = try database.stepGarbageCollection(32);
     }
-    try std.testing.expect((try countFreePages(&database)) > free_pages_before_sweep);
+    try std.testing.expect((try countFreePages(&database)) > free_pages_before_sweep + 10);
 }
 
-test "db-lab generates several embedded table trees" {
+test "db-lab generates a bounded deterministic planet catalog in batches" {
     const Database = fullaz_db.MemoryDatabase(lab.Schema);
     var database = try Database.init(std.testing.allocator, .{
         .page_size = 1024,
@@ -116,13 +117,46 @@ test "db-lab generates several embedded table trees" {
     });
     defer database.deinit();
 
-    try lab.generateExamples(&database);
+    var committed_planets: usize = 99;
+    try std.testing.expectError(
+        error.InvalidExampleCount,
+        lab.generateExamplesWithCount(
+            &database,
+            std.testing.allocator,
+            lab.minimum_planet_count - 1,
+            &committed_planets,
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), committed_planets);
+
+    try lab.generateExamplesWithCount(
+        &database,
+        std.testing.allocator,
+        lab.default_planet_count,
+        &committed_planets,
+    );
+    try std.testing.expectEqual(lab.default_planet_count, committed_planets);
     var rows = try lab.snapshot(&database, std.testing.allocator);
     defer rows.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 5), rows.items.len);
+    try std.testing.expectEqual(lab.default_planet_count + 5, rows.items.len);
     try std.testing.expectEqualStrings("events", rows.items[0].table[0..rows.items[0].table_len]);
-    try std.testing.expectEqualStrings("users", rows.items[4].table[0..rows.items[4].table_len]);
-    try std.testing.expectError(error.TableAlreadyExists, lab.generateExamples(&database));
+    try std.testing.expectEqualStrings("planet-000", rows.items[3].key[0..rows.items[3].key_len]);
+    try std.testing.expect(rows.items[3].value_len > 0);
+    for (rows.items) |row| {
+        try std.testing.expect(row.table_len <= 32);
+        try std.testing.expect(row.key_len <= 32);
+        try std.testing.expect(row.value_len <= 64);
+    }
+    try std.testing.expect(database.diagnostics().device_page_count > 32);
+    try std.testing.expectError(
+        error.TableAlreadyExists,
+        lab.generateExamplesWithCount(
+            &database,
+            std.testing.allocator,
+            lab.default_planet_count,
+            &committed_planets,
+        ),
+    );
 }
 
 test "db-lab can replace a populated virtual database" {
@@ -131,6 +165,7 @@ test "db-lab can replace a populated virtual database" {
     const Database = fullaz_db.VirtualStaticDatabaseWithWal(lab.Schema, Device, Log);
     const options: Database.InitOptions = .{
         .image_id = [_]u8{0xD2} ** 16,
+        .cache_frames = 32,
         .components = .{ .catalog = .{ .owner_0 = .{} } },
     };
     var database = try Database.format(
