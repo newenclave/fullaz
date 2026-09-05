@@ -16,6 +16,7 @@ Choose one guide:
 More local guides:
 
 - [Components and hierarchies](getting-started/08-components-and-hierarchy.md)
+- [Reclaim unreachable pages](getting-started/09-garbage-collection.md)
 
 Each quick start has two commands:
 

@@ -215,4 +215,4 @@ Removing a hierarchy parent removes an ownership edge but does not immediately
 free every child page. Use staged GC on a supported persistent typed database
 when reclamation is needed.
 
-[Previous: common errors](07-common-errors.md) | [fullaz-db documentation](../README.md)
+[Previous: common errors](07-common-errors.md) | [Next: reclaim unreachable pages](09-garbage-collection.md)

@@ -32,18 +32,7 @@ After an interruption or terminal WAL error, call `open`. A successful WAL
 commit is durable. A failed commit has an unknown final result until recovery:
 the commit record may already be durable even if later work failed.
 
-## Run Garbage Collection
-
-Persistent typed Static, Virtual Static WAL, and Dynamic Schema databases have
-a staged graph-GC API. It blocks normal writes while a cycle is active.
-
-```zig
-try database.startGarbageCollection();
-while (try database.stepGarbageCollection(64) != .complete) {}
-```
-
-Use `garbageCollectionPhase()` to inspect a cycle. Call
-`cancelGarbageCollection()` to cancel it. Custom components must implement the
-required GC capability.
+Read [Reclaim unreachable pages](09-garbage-collection.md) when a persistent
+database removes hierarchy parents or needs a maintenance GC cycle.
 
 [Previous: transactions](05-transactions-ownership-and-lifetimes.md) | [Next: common errors](07-common-errors.md)

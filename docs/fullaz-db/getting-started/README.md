@@ -17,6 +17,7 @@ the component names.
 7. [Prepare persistent storage](06-persistence-and-recovery.md)
 8. [Diagnose common errors](07-common-errors.md)
 9. [Use components and hierarchies](08-components-and-hierarchy.md)
+10. [Reclaim unreachable pages](09-garbage-collection.md)
 
 ## Persistent Quick Starts
 
