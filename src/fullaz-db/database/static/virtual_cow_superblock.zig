@@ -55,7 +55,8 @@ pub fn VirtualCowSuperblock(
         };
 
         pub const magic = "FULLZCOW";
-        pub const version = 2;
+        // Version 3 adds GC state to the static metadata payload.
+        pub const version = 3;
         pub const first_superblock_page_id: PhysicalPageIdT = 0;
         pub const second_superblock_page_id: PhysicalPageIdT = 1;
 

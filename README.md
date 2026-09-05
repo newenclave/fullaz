@@ -1,5 +1,7 @@
 # fullaz
 
+Database documentation: [fullaz-db](docs/fullaz-db/README.md).
+
 **Demos built on it:** see [`demos/README.md`](demos/README.md).
 
 **fullaz** is a low-level storage and indexing library written in Zig.

@@ -550,7 +550,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
             const BindingT = struct {
                 pub const Manager = ManagerT;
                 pub const State = StateT;
-                pub const value_capacity = configured_fixed_value_size;
+                pub const value_capacity: ?usize = configured_fixed_value_size;
                 pub const Model = PagedModelT;
                 pub const Tree = BptT;
                 pub const Proxy = MutableProxyT;
@@ -794,7 +794,7 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
                         pub const InitOptions = StorageInitOptions;
                         pub const Error = StorageError;
                         pub const Runtime = StorageRuntimeT;
-                        pub const value_capacity = configured_fixed_value_size;
+                        pub const value_capacity: ?usize = configured_fixed_value_size;
 
                         pub fn emptyState() StateT {
                             return .{};

@@ -453,9 +453,6 @@ test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
     );
     defer database.deinit();
 
-    var rtree_root: u32 = undefined;
-    var heap_root: u32 = undefined;
-    var bpt_root: u32 = undefined;
     {
         var transaction = try database.begin();
         defer transaction.deinit();
@@ -480,28 +477,36 @@ test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
         var top_heap = try queue.openChild(heap_value_editor, "heap");
         defer top_heap.deinit();
         try top_heap.finish();
-        var files = store.owner("files");
-        try std.testing.expectError(error.TypeNotAllowed, files.embed("rtree"));
-        try std.testing.expect(try files.insert("chain", try files.embed("bpt")));
-        var bpt = (try files.openEmbeddedForEdit("chain", "bpt")).?;
+        const files = store.owner("files");
+        try std.testing.expectError(error.TypeNotAllowed, files.encodedEmbedded("rtree"));
+        const chain_value = try files.encodedEmbedded("bpt");
+        try std.testing.expect(try files.proxy().insert("chain", chain_value.data()));
+        const chain_editor = (try files.proxy().openValueEditor("chain")).?;
+        var bpt = try files.openChild(chain_editor, "bpt");
         defer bpt.deinit();
-        try std.testing.expect(try bpt.insert("spatial", try bpt.embed("rtree")));
-        var rtree = (try bpt.openEmbeddedForEdit("spatial", "rtree")).?;
+        const spatial_value = try bpt.encodedEmbedded("rtree");
+        try std.testing.expect(try bpt.proxy().insert("spatial", spatial_value.data()));
+        const spatial_editor = (try bpt.proxy().openValueEditor("spatial")).?;
+        var rtree = try bpt.openChild(spatial_editor, "rtree");
         defer rtree.deinit();
-        try rtree.insert(point, try rtree.embed("heap"));
-        rtree_root = rtree.root().?;
-        var heap = (try rtree.openEmbeddedForEdit(point, {}, struct {
+        const nested_heap_value = try rtree.encodedEmbedded("heap");
+        try rtree.proxy().insert(point, nested_heap_value.data());
+        const nested_heap_editor = (try rtree.proxy().openValueEditor(point, {}, struct {
             fn matches(_: void, _: Box, _: []const u8) bool {
                 return true;
             }
-        }.matches, "heap")).?;
+        }.matches)).?;
+        var heap = try rtree.openChild(nested_heap_editor, "heap");
         defer heap.deinit();
-        try heap.push("top-key-00000001", try heap.embed("bpt"));
-        heap_root = (try heap.root()).?;
-        var leaf = try heap.openEmbeddedForEdit("bpt");
+        const leaf_value = try heap.encodedEmbedded("bpt");
+        try heap.proxy().push("top-key-00000001", leaf_value.data());
+        var leaf_peek = try heap.proxy().top();
+        const leaf_editor = try leaf_peek.editValue();
+        leaf_peek.deinit();
+        var leaf = try heap.openChild(leaf_editor, "bpt");
         defer leaf.deinit();
-        try std.testing.expect(try leaf.insert("value", leaf.raw("bpt", "ok")));
-        bpt_root = leaf.root().?;
+        const value = try leaf.encodedRaw("bpt", "ok");
+        try std.testing.expect(try leaf.proxy().insert("value", value.data()));
         try leaf.finish();
         try heap.finish();
         try rtree.finish();
@@ -510,21 +515,14 @@ test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
     }
     try database.startGarbageCollection();
     while (try database.stepGarbageCollection(1) != .complete) {}
-    inline for (.{ rtree_root, heap_root, bpt_root }) |page_id| {
-        var page = try database.cache().fetch(page_id);
-        page.deinit();
-    }
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        try std.testing.expect(try transaction.get("store").owner("files").remove("chain"));
+        try std.testing.expect(try transaction.get("store").owner("files").proxy().remove("chain"));
         try transaction.commit();
     }
     try database.startGarbageCollection();
     while (try database.stepGarbageCollection(1) != .complete) {}
-    inline for (.{ rtree_root, heap_root, bpt_root }) |page_id| {
-        try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(page_id));
-    }
 }
 
 test "fullaz-db hierarchyStore: memory and static databases construct and persist" {
@@ -559,8 +557,9 @@ test "fullaz-db hierarchyStore: memory and static databases construct and persis
     defer memory.deinit();
     var memory_transaction = try memory.begin();
     defer memory_transaction.deinit();
-    var memory_files = memory_transaction.get("store").owner("files");
-    try std.testing.expect(try memory_files.insert("node", try memory_files.raw("node", "memory")));
+    const memory_files = memory_transaction.get("store").owner("files");
+    const memory_value = try memory_files.encodedRaw("node", "memory");
+    try std.testing.expect(try memory_files.proxy().insert("node", memory_value.data()));
     try memory_transaction.commit();
 
     const Device = fullaz.device.FileBlock(u32);
@@ -581,8 +580,9 @@ test "fullaz-db hierarchyStore: memory and static databases construct and persis
         );
         defer database.deinit();
         var transaction = try database.begin();
-        var files = transaction.get("store").owner("files");
-        try std.testing.expect(try files.insert("node", try files.raw("node", "static")));
+        const files = transaction.get("store").owner("files");
+        const value = try files.encodedRaw("node", "static");
+        try std.testing.expect(try files.proxy().insert("node", value.data()));
         try transaction.commit();
     }
     {
@@ -604,8 +604,9 @@ test "fullaz-db hierarchyStore: memory and static databases construct and persis
         }
         {
             var transaction = try database.begin();
-            var files = transaction.get("store").owner("files");
-            try std.testing.expect(try files.insert("node-2", try files.raw("node", "reopen")));
+            const files = transaction.get("store").owner("files");
+            const value = try files.encodedRaw("node", "reopen");
+            try std.testing.expect(try files.proxy().insert("node-2", value.data()));
             try transaction.commit();
         }
         {

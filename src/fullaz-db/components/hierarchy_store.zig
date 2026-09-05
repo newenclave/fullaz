@@ -232,13 +232,6 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
                     return &runtime.const_proxy;
                 }
 
-                pub fn reclaimPersistent(runtime: *Runtime) Error!void {
-                    try requireTransactionIdle(runtime);
-                    inline for (options.owners, 0..) |_, index| {
-                        try Bindings[index].reclaimPersistent(&@field(runtime.owners, ownerField(index)));
-                    }
-                }
-
                 pub fn Gc(comptime CollectorT: type) type {
                     return struct {
                         pub const RootsError = std.mem.Allocator.Error;
@@ -269,7 +262,6 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
             comptime component.assertStaticMetadata(AggregateBinding, AggregateBinding.StaticMetadata);
             comptime component.assertDynamicMetadata(AggregateBinding, AggregateBinding.DynamicMetadata);
             comptime component.assertBinding(AggregateBinding, BackendT);
-            comptime component.assertReclamation(AggregateBinding);
             return AggregateBinding;
         }
     };

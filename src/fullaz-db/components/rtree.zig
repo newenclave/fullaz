@@ -644,7 +644,7 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
             const BindingT = struct {
                 pub const Manager = ManagerT;
                 pub const State = StateT;
-                pub const value_capacity = configured_maximum_value_size;
+                pub const value_capacity: ?usize = configured_maximum_value_size;
                 pub const Model = ModelT;
                 pub const Tree = TreeT;
                 pub const Proxy = MutableProxyT;
@@ -865,7 +865,7 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
                         pub const InitOptions = StorageInitOptionsT;
                         pub const Error = StorageError;
                         pub const Runtime = StorageRuntimeT;
-                        pub const value_capacity = configured_maximum_value_size;
+                        pub const value_capacity: ?usize = configured_maximum_value_size;
 
                         pub fn emptyState() StateT {
                             return .{};

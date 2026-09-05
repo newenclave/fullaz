@@ -154,6 +154,28 @@ test "fullaz-db: WAL static database syncs each file once per commit" {
     try std.testing.expectEqual(@as(usize, 1), counts.log);
 }
 
+test "fullaz-db: WAL static GC phase does not sync either file" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 });
+    const Database = fullaz_db.StaticDatabaseWithWal(
+        Schema,
+        CountingMemoryDevice,
+        CountingMemoryLog,
+    );
+    var counts = SyncCounts{};
+    var database = try Database.format(
+        std.testing.allocator,
+        try CountingMemoryDevice.init(std.testing.allocator, 1024, &counts),
+        try CountingMemoryLog.init(std.testing.allocator, &counts),
+        .{ .image_id = [_]u8{5} ** 16, .components = .{} },
+    );
+    defer database.deinit();
+    counts = .{};
+
+    try std.testing.expectEqual(.idle, try database.garbageCollectionPhase());
+    try std.testing.expectEqual(@as(usize, 0), counts.device);
+    try std.testing.expectEqual(@as(usize, 0), counts.log);
+}
+
 test "fullaz-db: WAL dynamic database defers sync until commit" {
     const Database = fullaz_db.DynamicDatabaseWithWal(
         CountingMemoryDevice,

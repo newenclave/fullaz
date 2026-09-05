@@ -89,10 +89,13 @@ fn ownerDescriptor(
         pub fn Binding(comptime BackendT: type) type {
             const Parent = ParentTrait.Binding(BackendT);
             const Core = CoreDescriptor.Trait.Binding(BackendT);
+            const value_capacity = if (kind == .bpt)
+                ParentTrait.fixed_value_size orelse @compileError("hierarchy BPT owner requires fixed_value_size")
+            else
+                ParentTrait.maximum_value_size;
 
             const ProxyImpl = struct {
                 const Self = @This();
-                pub const Value = Core.Proxy.EnvelopeValue;
                 pub const BoundingBox = if (kind == .rtree) Parent.Proxy.BoundingBox else void;
                 pub const Error = Parent.Error || Core.Error || error{TypeNotAllowed};
 
@@ -106,44 +109,31 @@ fn ownerDescriptor(
                     );
                 }
 
-                pub fn raw(self: *const Self, comptime tag: []const u8, payload: []const u8) error{TypeNotAllowed}!Value {
-                    if (comptime !allows(HierarchyT, allowed_ids, tag)) {
-                        return error.TypeNotAllowed;
-                    }
-                    return self.envelope.raw(tag, payload);
-                }
-
                 pub fn encodedRaw(
                     self: *const Self,
                     comptime tag: []const u8,
                     payload: []const u8,
-                ) Error!embedded.EncodedValue(ParentTrait.maximum_value_size) {
+                ) Error!embedded.EncodedValue(value_capacity) {
+                    try self.envelope.requireTransaction();
                     if (comptime !allows(HierarchyT, allowed_ids, tag)) {
                         return error.TypeNotAllowed;
                     }
-                    return embedded.EncodedValue(ParentTrait.maximum_value_size).formatRaw(
+                    return embedded.EncodedValue(value_capacity).formatRaw(
                         self.nextMetadata(tag),
                         payload,
                     );
                 }
 
-                pub fn embed(self: *const Self, comptime tag: []const u8) error{TypeNotAllowed}!Value {
-                    if (comptime !allows(HierarchyT, allowed_ids, tag)) {
-                        return error.TypeNotAllowed;
-                    }
-                    return self.envelope.embed(tag);
-                }
-
                 pub fn encodedEmbedded(
                     self: *const Self,
                     comptime tag: []const u8,
-                ) Error!embedded.EncodedValue(ParentTrait.maximum_value_size) {
+                ) Error!embedded.EncodedValue(value_capacity) {
+                    try self.envelope.requireTransaction();
                     if (comptime !allows(HierarchyT, allowed_ids, tag)) {
                         return error.TypeNotAllowed;
                     }
-                    const ChildBinding = ChildBindingForTag(tag);
-                    var state: ChildBinding.State = .{};
-                    return embedded.EncodedValue(ParentTrait.maximum_value_size).formatEmbedded(
+                    var state = self.envelope.emptyChildState(tag);
+                    return embedded.EncodedValue(value_capacity).formatEmbedded(
                         self.nextMetadata(tag),
                         std.mem.asBytes(&state),
                     );
@@ -160,88 +150,6 @@ fn ownerDescriptor(
                     return self.envelope.nextMetadata(tag);
                 }
 
-                pub fn insert(self: *const Self, first: anytype, value: Value) Error!switch (kind) {
-                    .bpt => bool,
-                    .rtree, .slot_heap => void,
-                } {
-                    if (comptime kind == .bpt) {
-                        return self.envelope.insert(first, value);
-                    }
-                    var bytes: [ParentTrait.maximum_value_size]u8 = undefined;
-                    try self.envelope.formatValue(&bytes, value);
-                    return switch (kind) {
-                        .bpt => unreachable,
-                        .rtree => self.parent.insert(first, &bytes),
-                        .slot_heap => self.parent.push(first, &bytes),
-                    };
-                }
-
-                pub fn push(self: *const Self, key: []const u8, value: Value) Error!void {
-                    if (comptime kind != .slot_heap) {
-                        @compileError("push is only available on hierarchy SlotHeap owners");
-                    }
-                    return self.insert(key, value);
-                }
-
-                pub fn remove(self: *const Self, key: []const u8) Error!bool {
-                    if (comptime kind != .bpt) {
-                        @compileError("remove is only available on hierarchy BPT owners");
-                    }
-                    return self.envelope.remove(key);
-                }
-
-                pub fn openEmbeddedForEdit(
-                    self: *const Self,
-                    first: anytype,
-                    comptime tag: []const u8,
-                ) Error!?Core.Proxy.EditorForTag(tag) {
-                    if (comptime kind == .bpt) {
-                        return self.envelope.openEmbeddedForEdit(first, tag);
-                    }
-                    if (comptime kind == .slot_heap) {
-                        var peek = try self.parent.top();
-                        defer peek.deinit();
-                        var editor = try peek.editValue();
-                        var transferred = false;
-                        errdefer if (!transferred) {
-                            editor.deinit();
-                        };
-                        var envelope_editor = try value_envelope.openEmbeddedMut(
-                            try editor.valueMut(),
-                            HierarchyT.entryByTag(tag).type_identity,
-                        );
-                        errdefer envelope_editor.invalidate();
-                        var lease = try Core.Proxy.ValueLease.init(
-                            Parent.Proxy.ValueEditor,
-                            self.envelope.runtime.backend.allocator(),
-                            editor,
-                        );
-                        transferred = true;
-                        errdefer {
-                            lease.rollback();
-                            lease.deinit();
-                        }
-                        return try self.envelope.openEmbeddedForEditLease(
-                            lease,
-                            envelope_editor,
-                            try envelope_editor.payloadMut(),
-                            tag,
-                        );
-                    }
-                    @compileError("R-tree hierarchy owner needs query, context, predicate, and type tag");
-                }
-
-                pub fn openEmbeddedStorageForEdit(
-                    self: *const Self,
-                    key: []const u8,
-                    comptime tag: []const u8,
-                ) @TypeOf(self.envelope.openEmbeddedStorageForEdit(key, tag)) {
-                    if (comptime kind != .bpt) {
-                        @compileError("openEmbeddedStorageForEdit currently requires a hierarchy BPT owner");
-                    }
-                    return self.envelope.openEmbeddedStorageForEdit(key, tag);
-                }
-
                 /// Transfers a native owner value editor into a generic embedded
                 /// child handle. The native proxy chooses the parent value.
                 pub fn openChild(
@@ -250,54 +158,11 @@ fn ownerDescriptor(
                     comptime tag: []const u8,
                 ) Error!@typeInfo(@TypeOf(self.envelope.openChild(parent_editor, tag))).error_union.payload {
                     if (comptime !allows(HierarchyT, allowed_ids, tag)) {
+                        var rejected_editor = parent_editor;
+                        rejected_editor.deinit();
                         return error.TypeNotAllowed;
                     }
                     return self.envelope.openChild(parent_editor, tag);
-                }
-
-                pub fn openEmbeddedHitForEdit(
-                    self: *const Self,
-                    query: Parent.Proxy.BoundingBox,
-                    context: anytype,
-                    matches: anytype,
-                    comptime tag: []const u8,
-                ) Error!?Core.Proxy.EditorForTag(tag) {
-                    if (comptime kind != .rtree) {
-                        @compileError("openEmbeddedHitForEdit is only available on hierarchy R-tree owners");
-                    }
-                    var editor = (try self.parent.openValueEditor(query, context, matches)) orelse return null;
-                    var transferred = false;
-                    errdefer if (!transferred) {
-                        editor.deinit();
-                    };
-                    var envelope_editor = try value_envelope.openEmbeddedMut(
-                        try editor.valueMut(),
-                        HierarchyT.entryByTag(tag).type_identity,
-                    );
-                    errdefer envelope_editor.invalidate();
-                    var lease = try Core.Proxy.ValueLease.init(
-                        Parent.Proxy.ValueEditor,
-                        self.envelope.runtime.backend.allocator(),
-                        editor,
-                    );
-                    transferred = true;
-                    errdefer {
-                        lease.rollback();
-                        lease.deinit();
-                    }
-                    return try self.envelope.openEmbeddedForEditLease(
-                        lease,
-                        envelope_editor,
-                        try envelope_editor.payloadMut(),
-                        tag,
-                    );
-                }
-
-                pub fn top(self: *const Self) Error!Parent.Proxy.MutablePeek {
-                    if (comptime kind != .slot_heap) {
-                        @compileError("top is only available on hierarchy SlotHeap owners");
-                    }
-                    return self.parent.top();
                 }
             };
 
@@ -446,14 +311,6 @@ fn ownerDescriptor(
                         return &runtime.const_proxy;
                     }
                     return Parent.proxyConst(&runtime.parent);
-                }
-                pub fn reclaimPersistent(runtime: *Runtime) Error!void {
-                    try requireTransactionIdle(runtime);
-                    if (comptime kind == .bpt) {
-                        try Parent.reclaimPersistent(&runtime.envelope.parent);
-                    } else {
-                        try Parent.reclaimPersistent(&runtime.parent);
-                    }
                 }
                 pub fn registerTypeScanners(runtime: *const Runtime, collector: anytype) @TypeOf(collector.*).Error!void {
                     try Core.registerTypeScanners(&runtime.envelope, collector);

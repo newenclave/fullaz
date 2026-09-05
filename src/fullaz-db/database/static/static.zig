@@ -78,6 +78,8 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
         transaction_generation: u64,
         transaction_cache_batch: Cache.WriteBatch,
         transaction_component_states: TransactionStates,
+        transaction_gc_state: GcState,
+        transaction_gc_cycle_active: bool,
     };
 
     return struct {
@@ -161,19 +163,20 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
                 try (try self.collector()).abortCycle();
                 core.gc_cycle_active = false;
             }
-            fn commit(self: *SessionSelf) SessionError!void {
+            fn deinitCollector(self: *SessionSelf) void {
                 if (self.initialized) {
                     self.collector_state.deinit();
                     self.model.deinit();
+                    self.initialized = false;
                 }
+            }
+            fn commit(self: *SessionSelf) SessionError!void {
+                self.deinitCollector();
                 try self.raw.commit();
                 self.active = false;
             }
             fn rollback(self: *SessionSelf) SessionError!void {
-                if (self.initialized) {
-                    self.collector_state.deinit();
-                    self.model.deinit();
-                }
+                self.deinitCollector();
                 try self.raw.rollback();
                 self.active = false;
             }
@@ -242,6 +245,8 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
                 try requireTransactionIdle(core);
                 try core.transaction_cache_batch.discard();
                 restoreTransactionStates(core, core.transaction_component_states);
+                core.gc_state = core.transaction_gc_state;
+                core.gc_cycle_active = core.transaction_gc_cycle_active;
                 try writeSuperblock(core, true);
                 try core.raw_cache.flush(0);
                 try core.device.sync();
@@ -467,6 +472,8 @@ pub fn StaticDatabase(comptime SchemaT: type, comptime DeviceT: type) type {
                 return Error.BatchActive;
             }
             core.transaction_component_states = captureTransactionStates(core);
+            core.transaction_gc_state = core.gc_state;
+            core.transaction_gc_cycle_active = core.gc_cycle_active;
             core.transaction_cache_batch = try core.cache.begin();
             core.transaction_generation +%= 1;
             core.transaction_active = true;

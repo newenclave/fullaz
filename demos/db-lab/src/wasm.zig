@@ -170,7 +170,7 @@ export fn format(kind: u32) u32 {
             return 0;
         },
     }
-    resetGcStats(kind == 3);
+    resetGcStatsForCurrentDatabase();
     last_error = "";
     return 1;
 }
@@ -214,7 +214,7 @@ export fn importImage(kind: u32, ptr: usize, len: usize) u32 {
             return 0;
         },
     }
-    resetGcStats(kind == 3);
+    resetGcStatsForCurrentDatabase();
     last_error = "";
     return 1;
 }

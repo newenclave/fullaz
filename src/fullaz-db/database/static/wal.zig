@@ -97,6 +97,8 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
         transaction_generation: u64,
         transaction_cache_batch: Cache.WriteBatch,
         transaction_component_states: TransactionStates,
+        transaction_gc_state: GcState,
+        transaction_gc_cycle_active: bool,
     };
 
     return struct {
@@ -140,7 +142,7 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
 
         core_: *align(@alignOf(Core)) anyopaque,
 
-        pub const GcSession = struct {
+        const GcSession = struct {
             const SessionSelf = @This();
 
             raw: Transaction,
@@ -206,20 +208,22 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
                 core.gc_cycle_active = false;
             }
 
-            pub fn commit(self: *SessionSelf) SessionError!void {
+            fn deinitCollector(self: *SessionSelf) void {
                 if (self.initialized) {
                     self.collector_state.deinit();
                     self.model.deinit();
+                    self.initialized = false;
                 }
+            }
+
+            pub fn commit(self: *SessionSelf) SessionError!void {
+                self.deinitCollector();
                 try self.raw.commit();
                 self.active = false;
             }
 
             pub fn rollback(self: *SessionSelf) SessionError!void {
-                if (self.initialized) {
-                    self.collector_state.deinit();
-                    self.model.deinit();
-                }
+                self.deinitCollector();
                 try self.raw.rollback();
                 self.active = false;
             }
@@ -290,9 +294,20 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
                 try requireTransactionIdle(core);
                 try core.transaction_cache_batch.discard();
                 restoreTransactionStates(core, core.transaction_component_states);
+                core.gc_state = core.transaction_gc_state;
+                core.gc_cycle_active = core.transaction_gc_cycle_active;
                 try writeSuperblock(core, true);
                 try core.raw_cache.flush(0);
                 try core.device.sync();
+                core.transaction_active = false;
+            }
+
+            fn rollbackReadOnly(self: *TransactionSelf) Error!void {
+                const core = try self.activeCore();
+                try core.transaction_cache_batch.discard();
+                restoreTransactionStates(core, core.transaction_component_states);
+                core.gc_state = core.transaction_gc_state;
+                core.gc_cycle_active = core.transaction_gc_cycle_active;
                 core.transaction_active = false;
             }
 
@@ -544,6 +559,8 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
                 return Error.BatchActive;
             }
             core.transaction_component_states = captureTransactionStates(core);
+            core.transaction_gc_state = core.gc_state;
+            core.transaction_gc_cycle_active = core.gc_cycle_active;
             core.transaction_cache_batch = try core.cache.begin();
             core.transaction_generation +%= 1;
             core.transaction_active = true;
@@ -556,13 +573,15 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
                 return Error.BatchActive;
             }
             core.transaction_component_states = captureTransactionStates(core);
+            core.transaction_gc_state = core.gc_state;
+            core.transaction_gc_cycle_active = core.gc_cycle_active;
             core.transaction_cache_batch = try core.cache.begin();
             core.transaction_generation +%= 1;
             core.transaction_active = true;
             return .{ .core_ = core, .generation_ = core.transaction_generation };
         }
 
-        pub fn beginGcSession(self: *Self) Error!GcSession {
+        fn beginGcSession(self: *Self) Error!GcSession {
             return .{ .raw = try self.beginInternal() };
         }
 
@@ -604,7 +623,9 @@ pub fn StaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: type, com
             var session = try self.beginGcSession();
             defer session.deinit();
             const phase = try session.phase();
-            try session.rollback();
+            session.deinitCollector();
+            try session.raw.rollbackReadOnly();
+            session.active = false;
             return phase;
         }
 

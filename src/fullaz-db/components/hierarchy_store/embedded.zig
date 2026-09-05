@@ -306,21 +306,14 @@ pub fn OwnedMutableChild(
             };
         }
 
+        /// Returns a proxy borrowed from this child handle. Deinitialize every
+        /// iterator and value editor from it before `finish` or `deinit`; both
+        /// operations destroy the child runtime.
         pub fn proxy(self: *Self) ChildBindingT.Proxy {
             if (self.closed) {
                 @panic("embedded child proxy requested after close");
             }
             return ChildBindingT.proxy(self.runtime);
-        }
-
-        /// Recursively reclaims persistent pages owned by this embedded child.
-        /// The caller must finish the handle before changing its parent entry.
-        pub fn reclaimPersistent(self: *Self) Error!void {
-            if (self.closed) {
-                return error.EditorInvalidated;
-            }
-            try ChildBindingT.requireTransactionIdle(self.runtime);
-            try ChildBindingT.reclaimPersistent(self.runtime);
         }
 
         pub fn formatRaw(
@@ -435,6 +428,8 @@ pub fn OwnedConstChild(
             };
         }
 
+        /// Returns a proxy borrowed from this child handle. Deinitialize every
+        /// iterator from it before `deinit`, which destroys the child runtime.
         pub fn proxy(self: *const Self) *const ChildBindingT.ConstProxy {
             if (self.closed) {
                 @panic("embedded child proxy requested after close");

@@ -364,7 +364,7 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                 pub const Model = ModelT;
                 pub const Heap = HeapT;
                 pub const State = StateT;
-                pub const value_capacity = configured_maximum_value_size;
+                pub const value_capacity: ?usize = configured_maximum_value_size;
                 pub const Proxy = MutableProxy;
                 pub const ConstProxy = ReadProxy;
                 pub const InitOptions = if (CompareContextT == void) struct {
@@ -841,7 +841,7 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                         };
 
                         pub const Runtime = StorageRuntime;
-                        pub const value_capacity = configured_maximum_value_size;
+                        pub const value_capacity: ?usize = configured_maximum_value_size;
 
                         pub fn emptyState() StateT {
                             return .{};

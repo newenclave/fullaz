@@ -265,6 +265,8 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
         transaction_generation: u64,
         transaction_cache_batch: LogicalCache.WriteBatch,
         transaction_component_states: TransactionStates,
+        transaction_gc_state: GcState,
+        transaction_gc_cycle_active: bool,
         layers_initialized: bool,
         initialized_components: usize,
     };
@@ -317,7 +319,7 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
 
         core_: *align(@alignOf(Core)) anyopaque,
 
-        pub const GcSession = struct {
+        const GcSession = struct {
             const SessionSelf = @This();
 
             raw: Transaction,
@@ -369,20 +371,22 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
                 core.gc_cycle_active = false;
             }
 
-            pub fn commit(self: *SessionSelf) Error!void {
+            fn deinitCollector(self: *SessionSelf) void {
                 if (self.initialized) {
                     self.collector_state.deinit();
                     self.model.deinit();
+                    self.initialized = false;
                 }
+            }
+
+            pub fn commit(self: *SessionSelf) Error!void {
+                self.deinitCollector();
                 try self.raw.commit();
                 self.active = false;
             }
 
             pub fn rollback(self: *SessionSelf) Error!void {
-                if (self.initialized) {
-                    self.collector_state.deinit();
-                    self.model.deinit();
-                }
+                self.deinitCollector();
                 try self.raw.rollback();
                 self.active = false;
             }
@@ -458,6 +462,17 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
                 try requireTransactionIdle(core);
                 try core.transaction_cache_batch.discard();
                 restoreTransactionStates(core, core.transaction_component_states);
+                core.gc_state = core.transaction_gc_state;
+                core.gc_cycle_active = core.transaction_gc_cycle_active;
+                core.transaction_active = false;
+            }
+
+            fn rollbackReadOnly(self: *TransactionSelf) Error!void {
+                const core = try self.activeCore();
+                try core.transaction_cache_batch.discard();
+                restoreTransactionStates(core, core.transaction_component_states);
+                core.gc_state = core.transaction_gc_state;
+                core.gc_cycle_active = core.transaction_gc_cycle_active;
                 core.transaction_active = false;
             }
 
@@ -801,6 +816,8 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
                 return error.BatchActive;
             }
             core.transaction_component_states = captureTransactionStates(core);
+            core.transaction_gc_state = core.gc_state;
+            core.transaction_gc_cycle_active = core.gc_cycle_active;
             core.transaction_cache_batch = try core.logical_cache.begin();
             core.transaction_generation +%= 1;
             core.transaction_active = true;
@@ -811,6 +828,8 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
             const core = self.corePtr();
             if (core.transaction_active) return error.BatchActive;
             core.transaction_component_states = captureTransactionStates(core);
+            core.transaction_gc_state = core.gc_state;
+            core.transaction_gc_cycle_active = core.gc_cycle_active;
             core.transaction_cache_batch = try core.logical_cache.begin();
             core.transaction_generation +%= 1;
             core.transaction_active = true;
@@ -855,7 +874,9 @@ pub fn VirtualStaticDatabaseWithWal(comptime SchemaT: type, comptime DeviceT: ty
             var session = GcSession{ .raw = try self.beginInternal() };
             defer session.deinit();
             const phase = try session.phase();
-            try session.rollback();
+            session.deinitCollector();
+            try session.raw.rollbackReadOnly();
+            session.active = false;
             return phase;
         }
 
