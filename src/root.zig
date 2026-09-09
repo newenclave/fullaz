@@ -4,6 +4,7 @@ pub const gc = @import("fullaz/gc/gc.zig");
 pub const bpt = @import("fullaz/bpt/bpt.zig");
 pub const weighted_bpt = @import("fullaz/weighted_bpt/weighted_bpt.zig");
 pub const radix_tree = @import("fullaz/radix_tree/radix_tree.zig");
+pub const range_aggregate = @import("fullaz/range_aggregate/range_aggregate.zig");
 
 pub const slots = @import("fullaz/slots/slots.zig");
 

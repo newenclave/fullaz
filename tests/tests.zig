@@ -63,6 +63,10 @@ test {
 
     _ = @import("radix/memory_model.zig");
     _ = @import("radix/paged_model.zig");
+    _ = @import("range_aggregate/types.zig");
+    _ = @import("range_aggregate/geometry.zig");
+    _ = @import("range_aggregate/float_geometry.zig");
+    _ = @import("range_aggregate/tree.zig");
 
     _ = @import("skip_list/memory.zig");
     _ = @import("skip_list/paged.zig");
