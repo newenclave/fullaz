@@ -93,6 +93,13 @@ test "SSTable footer formats and validates its regions" {
 
     try std.testing.expectEqual(info.comparator_id, restored.comparator_id);
     try std.testing.expectEqual(info.entry_count, restored.entry_count);
+    try std.testing.expectEqual(@as(u64, 0), info.keys_count);
+    try std.testing.expectEqual(info.entry_count, restored.keys_count);
+    try std.testing.expectEqual(@as(usize, 142), @sizeOf(Footer.Header));
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(Footer.Trailer));
+    try std.testing.expectEqual(@as(usize, 28), @offsetOf(Footer.Header, "min_lsn"));
+    try std.testing.expectEqual(@as(u16, 2), actual.header().version.get());
+    try std.testing.expectEqual(@as(u16, 142), actual.header().header_size.get());
     try std.testing.expectEqual(info.index_root_page_id, restored.index_root_page_id);
     try std.testing.expectEqual(info.settings, restored.settings);
 
@@ -329,6 +336,18 @@ test "SSTable merger selects versions across all sizing strategies" {
         try expectMergeEntry(&output, &scratch, "eel", "e", .value, 3);
         try expectMergeEntry(&output, &scratch, "fox", "f", .value, 2);
         try std.testing.expectEqual(@as(u64, 6), output.footer.entry_count);
+        try std.testing.expectEqual(@as(u64, 6), output.footer.keys_count);
+        const bloom_keys: usize = switch (strategy) {
+            .upper_bound => newest_entries.len + middle_entries.len + oldest_entries.len,
+            .exact_two_pass => 6,
+            .estimate => |count| count,
+        };
+        const params = @import("fullaz").core.bloom.Bloom.calculateBloomParams(
+            bloom_keys,
+            merge_output_settings.bloom_false_positive_rate,
+        );
+        try std.testing.expectEqual(params.bitset_bits, output.footer.bloom_bit_count);
+        try std.testing.expectEqual(params.hash_count, output.footer.bloom_hash_count);
         try std.testing.expectEqual(@as(u16, 2), output.footer.min_lsn);
         try std.testing.expectEqual(@as(u16, 11), output.footer.max_lsn);
         try std.testing.expectEqual(
@@ -392,6 +411,13 @@ test "SSTable merger can drop winning tombstones" {
     try expectMergeEntry(&output, &scratch, "bee", "b", .value, 1);
     try expectMergeEntry(&output, &scratch, "cat", "c", .value, 3);
     try std.testing.expectEqual(@as(u64, 2), output.footer.entry_count);
+    try std.testing.expectEqual(@as(u64, 2), output.footer.keys_count);
+    const params = @import("fullaz").core.bloom.Bloom.calculateBloomParams(
+        2,
+        merge_output_settings.bloom_false_positive_rate,
+    );
+    try std.testing.expectEqual(params.bitset_bits, output.footer.bloom_bit_count);
+    try std.testing.expectEqual(params.hash_count, output.footer.bloom_hash_count);
 }
 
 test "SSTable merger leaves no output when cleanup drops every entry" {
@@ -520,6 +546,7 @@ test "SSTable writer appends a validated footer to FileLog" {
 
     try std.testing.expectEqual(@as(u32, 42), info.comparator_id);
     try std.testing.expectEqual(@as(u64, 3), info.entry_count);
+    try std.testing.expectEqual(@as(u64, 3), info.keys_count);
     try std.testing.expectEqual(@as(u32, 1), info.data_page_count);
     try std.testing.expect(info.data_length < info.settings.data_page_bytes);
     try std.testing.expect(info.index_page_count > 0);
@@ -564,6 +591,7 @@ test "SSTable writer permits an estimated entry count" {
     const footer = try Footer.View(true).init(&footer_bytes);
     const info = try footer.validate(footer_offset);
     try std.testing.expectEqual(@as(u64, 2), info.entry_count);
+    try std.testing.expectEqual(@as(u64, 2), info.keys_count);
 }
 
 test "SSTable merger rejects empty inputs" {

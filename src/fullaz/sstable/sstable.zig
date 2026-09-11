@@ -29,6 +29,8 @@ pub const Settings = struct {
 
 pub const BuildOptions = struct {
     entry_count: usize,
+    /// Bloom sizing hint; null uses entry_count.
+    keys_count: ?usize = null,
     enforce_entry_count: bool = true,
     comparator_id: u32,
     settings: Settings = .{},
@@ -55,6 +57,27 @@ pub fn SstableFormatWithLsn(
     comptime LsnT: type,
     comptime endian: std.builtin.Endian,
 ) type {
+    return makeFormat(OffsetT, PageIdT, DataIndexT, LsnT, endian, false);
+}
+
+pub fn SstableFormatVersionedWithLsn(
+    comptime OffsetT: type,
+    comptime PageIdT: type,
+    comptime DataIndexT: type,
+    comptime LsnT: type,
+    comptime endian: std.builtin.Endian,
+) type {
+    return makeFormat(OffsetT, PageIdT, DataIndexT, LsnT, endian, true);
+}
+
+fn makeFormat(
+    comptime OffsetT: type,
+    comptime PageIdT: type,
+    comptime DataIndexT: type,
+    comptime LsnT: type,
+    comptime endian: std.builtin.Endian,
+    comptime versioned: bool,
+) type {
     comptime {
         interfaces.assertUnsignedInt(OffsetT, "OffsetT");
         interfaces.assertUnsignedInt(PageIdT, "PageIdT");
@@ -68,6 +91,13 @@ pub fn SstableFormatWithLsn(
         pub const DataIndex = DataIndexT;
         pub const Lsn = LsnT;
         pub const Endian = endian;
+        pub const versioned_keys = versioned;
+
+        pub fn internalKeyBytes(user_key_bytes: usize) error{CountOverflow}!usize {
+            return std.math.add(usize, user_key_bytes, if (versioned) @sizeOf(Lsn) else 0) catch {
+                return error.CountOverflow;
+            };
+        }
     };
 }
 

@@ -14,7 +14,7 @@ pub fn Footer(comptime Format: type) type {
     const PackedF64 = PackedFloat(f64, Format.Endian);
 
     const magic: u32 = 0x5353_5446;
-    const version: u16 = 2;
+    const version: u16 = if (Format.versioned_keys) 4 else 2;
     const entry_metadata_bytes = 1 + @sizeOf(Format.Lsn);
 
     const HeaderImpl = extern struct {
@@ -25,6 +25,7 @@ pub fn Footer(comptime Format: type) type {
         checksum: PackedU32,
         comparator_id: PackedU32,
         entry_count: PackedOffset,
+        keys_count: if (Format.versioned_keys) PackedOffset else extern struct {},
         min_lsn: PackedLsn,
         max_lsn: PackedLsn,
         data_offset: PackedOffset,
@@ -98,6 +99,7 @@ pub fn Footer(comptime Format: type) type {
         pub const Info = struct {
             comparator_id: u32,
             entry_count: Format.Offset,
+            keys_count: Format.Offset = 0,
             min_lsn: Format.Lsn = 0,
             max_lsn: Format.Lsn = 0,
             data_offset: Format.Offset,
@@ -155,6 +157,9 @@ pub fn Footer(comptime Format: type) type {
                     hdr.checksum.set(0);
                     hdr.comparator_id.set(footer_info.comparator_id);
                     hdr.entry_count.set(footer_info.entry_count);
+                    if (Format.versioned_keys) {
+                        hdr.keys_count.set(footer_info.keys_count);
+                    }
                     hdr.min_lsn.set(footer_info.min_lsn);
                     hdr.max_lsn.set(footer_info.max_lsn);
                     hdr.data_offset.set(footer_info.data_offset);
@@ -211,6 +216,10 @@ pub fn Footer(comptime Format: type) type {
                     return .{
                         .comparator_id = hdr.comparator_id.get(),
                         .entry_count = hdr.entry_count.get(),
+                        .keys_count = if (Format.versioned_keys)
+                            hdr.keys_count.get()
+                        else
+                            hdr.entry_count.get(),
                         .min_lsn = hdr.min_lsn.get(),
                         .max_lsn = hdr.max_lsn.get(),
                         .data_offset = hdr.data_offset.get(),
@@ -252,6 +261,14 @@ pub fn Footer(comptime Format: type) type {
         }
 
         fn validateInfo(info: Info, footer_size: usize) Error!void {
+            if (Format.versioned_keys) {
+                if (info.keys_count == 0 or info.keys_count > info.entry_count) {
+                    return Error.BadSettings;
+                }
+            } else if (info.keys_count != 0 and info.keys_count != info.entry_count) {
+                return Error.BadSettings;
+            }
+            _ = Format.internalKeyBytes(info.settings.max_key_bytes) catch return Error.BadSettings;
             if (footer_size < @sizeOf(Header)) {
                 return Error.BufferTooSmall;
             }

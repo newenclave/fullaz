@@ -24,10 +24,17 @@ pub fn Merger(
             comparator_id: u32,
             settings: sstable.Settings = .{},
             entry_count_strategy: EntryCountStrategy = .upper_bound,
+            /// Optional override for the Bloom sizing hint.
+            keys_count: ?usize = null,
             drop_winning_tombstones: bool = false,
         };
 
         pub const Error = ReaderT.Error || WriterT.Error || errors.Merger;
+
+        const Counts = struct {
+            entry_count: usize = 0,
+            keys_count: usize = 0,
+        };
 
         const Cursor = struct {
             reader: *ReaderT,
@@ -48,7 +55,10 @@ pub fn Merger(
                     reader.footer.settings.data_page_bytes,
                 );
                 errdefer allocator.free(self.data_page);
-                self.key = try allocator.alloc(u8, reader.footer.settings.max_key_bytes);
+                self.key = try allocator.alloc(
+                    u8,
+                    reader.scratchRequirements().key_bytes,
+                );
                 errdefer allocator.free(self.key);
                 self.scratch = .{
                     .data_page = self.data_page,
@@ -76,42 +86,51 @@ pub fn Merger(
             ctx: CtxT,
         ) Error!void {
             try validateInputs(inputs, options);
-            const target_entry_count = switch (options.entry_count_strategy) {
+            var target_counts: Counts = switch (options.entry_count_strategy) {
                 .exact_two_pass => try runPass(
                     allocator,
                     inputs,
                     null,
                     output_log,
                     options,
-                    0,
+                    .{},
                     ctx,
                 ),
-                .upper_bound => try entryCountUpperBound(inputs),
+                .upper_bound => try countsUpperBound(inputs),
                 .estimate => |count| if (count == 0) {
                     return Error.InvalidEstimate;
-                } else count,
+                } else .{ .entry_count = count, .keys_count = count },
             };
+            if (options.keys_count) |keys_count| {
+                target_counts.keys_count = keys_count;
+            }
 
             var writer: ?WriterT = null;
             defer if (writer) |*owned_writer| {
                 owned_writer.deinit();
             };
-            const output_count = try runPass(
+            const output_counts = try runPass(
                 allocator,
                 inputs,
                 &writer,
                 output_log,
                 options,
-                target_entry_count,
+                target_counts,
                 ctx,
             );
-            if (output_count == 0) {
+            if (output_counts.entry_count == 0) {
                 return Error.EmptyOutput;
             }
             try writer.?.finish();
         }
 
         fn validateInputs(inputs: []const *ReaderT, options: Options) Error!void {
+            if (options.keys_count == 0) {
+                return Error.InvalidSettings;
+            }
+            if (Format.versioned_keys and options.drop_winning_tombstones) {
+                return Error.InvalidSettings;
+            }
             if (inputs.len == 0) {
                 return Error.NoInputs;
             }
@@ -128,17 +147,23 @@ pub fn Merger(
             }
         }
 
-        fn entryCountUpperBound(inputs: []const *ReaderT) Error!usize {
-            var count: usize = 0;
+        fn countsUpperBound(inputs: []const *ReaderT) Error!Counts {
+            var counts: Counts = .{};
             for (inputs) |reader| {
                 const entry_count = std.math.cast(usize, reader.footer.entry_count) orelse {
                     return Error.CountOverflow;
                 };
-                count = std.math.add(usize, count, entry_count) catch {
+                const keys_count = std.math.cast(usize, reader.footer.keys_count) orelse {
+                    return Error.CountOverflow;
+                };
+                counts.entry_count = std.math.add(usize, counts.entry_count, entry_count) catch {
+                    return Error.CountOverflow;
+                };
+                counts.keys_count = std.math.add(usize, counts.keys_count, keys_count) catch {
                     return Error.CountOverflow;
                 };
             }
-            return count;
+            return counts;
         }
 
         fn runPass(
@@ -147,9 +172,9 @@ pub fn Merger(
             writer: ?*?WriterT,
             output_log: *LogT,
             options: Options,
-            target_entry_count: usize,
+            target_counts: Counts,
             ctx: CtxT,
-        ) Error!usize {
+        ) Error!Counts {
             const cursors = try allocator.alloc(Cursor, inputs.len);
             defer allocator.free(cursors);
             var initialized: usize = 0;
@@ -163,13 +188,16 @@ pub fn Merger(
                 initialized += 1;
             }
 
-            var output_count: usize = 0;
+            var output_counts: Counts = .{};
+            // Cursor keys are borrowed and change on advance.
+            var previous_key: std.ArrayList(u8) = .empty;
+            defer previous_key.deinit(allocator);
             while (try smallestCursor(cursors, ctx)) |smallest_index| {
-                const key = cursors[smallest_index].current.?.key;
+                const smallest_entry = cursors[smallest_index].current.?;
                 var winner_index = smallest_index;
                 for (cursors, 0..) |*cursor, index| {
                     const entry = cursor.current orelse continue;
-                    const order = cmp(ctx, entry.key, key);
+                    const order = compareEntries(ctx, entry, smallest_entry);
                     if (order == .lt) {
                         return Error.UnorderedKey;
                     } else if (order == .eq) {
@@ -183,13 +211,31 @@ pub fn Merger(
                 }
                 const winner = cursors[winner_index].current.?;
                 if (!options.drop_winning_tombstones or winner.metadata.flags != .tombstone) {
+                    const new_key = output_counts.entry_count == 0 or
+                        cmp(ctx, previous_key.items, winner.key) != .eq;
+                    const entry_count = std.math.add(usize, output_counts.entry_count, 1) catch {
+                        return Error.CountOverflow;
+                    };
+                    const keys_count = std.math.add(
+                        usize,
+                        output_counts.keys_count,
+                        @intFromBool(new_key),
+                    ) catch return Error.CountOverflow;
+                    _ = std.math.cast(Format.Offset, entry_count) orelse return Error.CountOverflow;
+                    _ = std.math.cast(Format.Offset, keys_count) orelse return Error.CountOverflow;
+                    if (new_key) {
+                        try previous_key.ensureTotalCapacity(allocator, winner.key.len);
+                        previous_key.clearRetainingCapacity();
+                        previous_key.appendSliceAssumeCapacity(winner.key);
+                    }
                     if (writer) |writer_slot| {
                         if (writer_slot.* == null) {
                             writer_slot.* = try WriterT.init(
                                 allocator,
                                 output_log,
                                 .{
-                                    .entry_count = target_entry_count,
+                                    .entry_count = target_counts.entry_count,
+                                    .keys_count = target_counts.keys_count,
                                     .enforce_entry_count = switch (options.entry_count_strategy) {
                                         .exact_two_pass => true,
                                         .upper_bound, .estimate => false,
@@ -206,16 +252,14 @@ pub fn Merger(
                             winner.metadata,
                         );
                     }
-                    output_count = std.math.add(usize, output_count, 1) catch {
-                        return Error.CountOverflow;
-                    };
+                    output_counts = .{ .entry_count = entry_count, .keys_count = keys_count };
                 }
                 for (cursors, 0..) |*cursor, index| {
                     if (index == smallest_index) {
                         continue;
                     }
                     const entry = cursor.current orelse continue;
-                    const order = cmp(ctx, entry.key, key);
+                    const order = compareEntries(ctx, entry, smallest_entry);
                     if (order == .lt) {
                         return Error.UnorderedKey;
                     } else if (order == .eq) {
@@ -226,7 +270,7 @@ pub fn Merger(
                 }
                 try cursors[smallest_index].advance();
             }
-            return output_count;
+            return output_counts;
         }
 
         fn smallestCursor(cursors: []const Cursor, ctx: CtxT) Error!?usize {
@@ -238,7 +282,7 @@ pub fn Merger(
                     continue;
                 };
                 const smallest_entry = cursors[smallest].current.?;
-                const order = cmp(ctx, entry.key, smallest_entry.key);
+                const order = compareEntries(ctx, entry, smallest_entry);
                 if (order == .lt) {
                     smallest_index = index;
                 } else if (order != .eq and order != .gt) {
@@ -246,6 +290,14 @@ pub fn Merger(
                 }
             }
             return smallest_index;
+        }
+
+        fn compareEntries(ctx: CtxT, a: ReaderT.ScanEntry, b: ReaderT.ScanEntry) std.math.Order {
+            const order = cmp(ctx, a.key, b.key);
+            if (!Format.versioned_keys or order != .eq) {
+                return order;
+            }
+            return std.math.order(b.metadata.lsn, a.metadata.lsn);
         }
     };
 }

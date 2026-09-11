@@ -26,6 +26,7 @@ pub const DataPage = error{
 
 pub const Writer = error{
     EmptyTable,
+    InvalidSettings,
     Finished,
     EntryCountMismatch,
     DuplicateKey,

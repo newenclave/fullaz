@@ -19,6 +19,7 @@ pub fn Writer(
     comptime CtxT: type,
 ) type {
     comptime {
+        @setEvalBranchQuota(10_000);
         device.interfaces.assertLogDevice(LogT);
         if (LogT.Offset != Format.Offset) {
             @compileError("SSTable Writer LogT.Offset must equal Format.Offset");
@@ -26,6 +27,7 @@ pub fn Writer(
     }
 
     const PackedOffset = core.packed_int.PackedInt(Format.Offset, Format.Endian);
+    const InternalKey = @import("internal_key.zig").InternalKey(Format, cmp, CtxT);
 
     const ByteCmp = struct {
         fn compare(_: void, a: u8, b: u8) core.algorithm.PartialOrder {
@@ -105,7 +107,7 @@ pub fn Writer(
         pub fn destroyPage(_: *Self, _: PageId) Error!void {}
     };
 
-    const IndexModel = bpt.models.PagedModel(IndexCache, IndexStorage, cmp, CtxT);
+    const IndexModel = bpt.models.PagedModel(IndexCache, IndexStorage, InternalKey.compare, CtxT);
     const IndexTree = bpt.Bpt(IndexModel);
     const Location = extern struct { offset: PackedOffset, length: PackedOffset };
 
@@ -115,7 +117,7 @@ pub fn Writer(
         const Error = std.mem.Allocator.Error ||
             IndexDevice.Error ||
             IndexCache.Error ||
-            IndexModel.Error;
+            IndexModel.Error || error{CountOverflow};
 
         device: IndexDevice,
         cache: IndexCache,
@@ -139,7 +141,7 @@ pub fn Writer(
                 &state.cache,
                 &state.storage,
                 .{
-                    .maximum_key_size = settings.max_key_bytes,
+                    .maximum_key_size = try Format.internalKeyBytes(settings.max_key_bytes),
                     .maximum_value_size = @sizeOf(Location),
                 },
                 ctx,
@@ -175,6 +177,7 @@ pub fn Writer(
         ctx: CtxT,
         block_bytes: []u8,
         block_scratch: []u8,
+        key_scratch: []u8,
         block_builder: CodedBlock.Builder,
         last_key: std.ArrayList(u8),
         data_page_last_key: std.ArrayList(u8),
@@ -189,6 +192,7 @@ pub fn Writer(
         data_length: Format.Offset = 0,
         data_page_count: Format.DataIndex = 0,
         entry_count: usize = 0,
+        keys_count: usize = 0,
         min_lsn: Format.Lsn = 0,
         max_lsn: Format.Lsn = 0,
         block_entry_count: usize = 0,
@@ -202,22 +206,37 @@ pub fn Writer(
         ) Error!Self {
             try validateOptions(options);
 
-            const bloom_params = core.bloom.Bloom.calculateBloomParams(
-                options.entry_count,
-                options.settings.bloom_false_positive_rate,
-            );
+            const bloom_keys_count = options.keys_count orelse options.entry_count;
+            // Check the float conversion and word rounding before sizing the Bloom filter.
+            const ln2: f64 = 0.6931471805599453;
+            const bits = @ceil(-@as(f64, @floatFromInt(bloom_keys_count)) *
+                @log(options.settings.bloom_false_positive_rate) / (ln2 * ln2));
+            if (!std.math.isFinite(bits) or bits >= @as(f64, @floatFromInt(std.math.maxInt(usize)))) {
+                return Error.CountOverflow;
+            }
+            const bloom_words = (std.math.add(usize, @max(1, @as(usize, @intFromFloat(bits))), 63) catch {
+                return Error.CountOverflow;
+            }) / 64;
+            const bloom_bit_count = bloom_words * 64;
+            const bloom_hash_count = core.bloom.probeCount(bloom_bit_count, bloom_keys_count);
+            _ = std.math.cast(Format.Offset, bloom_bit_count) orelse return Error.CountOverflow;
+            _ = std.math.cast(u32, bloom_hash_count) orelse return Error.CountOverflow;
 
             const bloom_bytes_len = std.math.mul(
                 usize,
-                bloom_params.bitset_words,
+                bloom_words,
                 @sizeOf(u64),
             ) catch return Error.CountOverflow;
 
             const block_bytes = try allocator.alloc(u8, options.settings.max_coded_block_bytes);
             errdefer allocator.free(block_bytes);
 
-            const block_scratch = try allocator.alloc(u8, options.settings.max_key_bytes);
+            const internal_key_bytes = try Format.internalKeyBytes(options.settings.max_key_bytes);
+            const block_scratch = try allocator.alloc(u8, internal_key_bytes);
             errdefer allocator.free(block_scratch);
+
+            const key_scratch = try allocator.alloc(u8, if (Format.versioned_keys) internal_key_bytes else 0);
+            errdefer allocator.free(key_scratch);
 
             const data_page_bytes = try allocator.alloc(u8, options.settings.data_page_bytes);
             errdefer allocator.free(data_page_bytes);
@@ -247,6 +266,7 @@ pub fn Writer(
                 .ctx = ctx,
                 .block_bytes = block_bytes,
                 .block_scratch = block_scratch,
+                .key_scratch = key_scratch,
                 .block_builder = block_builder,
                 .last_key = .empty,
                 .data_page_last_key = .empty,
@@ -255,8 +275,8 @@ pub fn Writer(
                 .data_page = data_page,
                 .index_state = index_state,
                 .bloom_bytes = bloom_bytes,
-                .bloom_bit_count = bloom_params.bitset_bits,
-                .bloom_hash_count = bloom_params.hash_count,
+                .bloom_bit_count = bloom_bit_count,
+                .bloom_hash_count = bloom_hash_count,
                 .data_offset = log.size(),
             };
         }
@@ -286,17 +306,31 @@ pub fn Writer(
             if (self.options.enforce_entry_count and self.entry_count >= self.options.entry_count) {
                 return Error.EntryCountMismatch;
             }
-            if (self.last_key.items.len != 0) {
-                const order = cmp(self.ctx, self.last_key.items, key);
+            const stored_key = InternalKey.encode(key, metadata.lsn, self.key_scratch);
+            var new_key = true;
+            if (self.entry_count != 0) {
+                const order = InternalKey.compare(self.ctx, self.last_key.items, stored_key);
                 if (order == .eq) {
                     return Error.DuplicateKey;
                 }
                 if (order != .lt) {
                     return Error.UnorderedKey;
                 }
+                const last_user_key = InternalKey.userKey(self.last_key.items) catch unreachable;
+                new_key = cmp(self.ctx, last_user_key, key) != .eq;
             }
+            const entry_count = std.math.add(usize, self.entry_count, 1) catch {
+                return Error.CountOverflow;
+            };
+            const keys_count = std.math.add(usize, self.keys_count, @intFromBool(new_key)) catch {
+                return Error.CountOverflow;
+            };
+            _ = std.math.cast(Format.Offset, entry_count) orelse return Error.CountOverflow;
+            _ = std.math.cast(Format.Offset, keys_count) orelse return Error.CountOverflow;
+            var bloom = try BloomBits.initMutable(self.bloom_bytes, self.bloom_bit_count);
+            try self.last_key.ensureTotalCapacity(self.allocator, stored_key.len);
             const metadata_bytes = metadata.toBytes();
-            if (!self.block_builder.canAddWithMetadata(key, value, &metadata_bytes) or
+            if (!self.block_builder.canAddWithMetadata(stored_key, value, &metadata_bytes) or
                 self.block_entry_count >= self.options.settings.max_entries_per_coded_block)
             {
                 if (self.block_entry_count == 0) {
@@ -304,7 +338,7 @@ pub fn Writer(
                 }
                 try self.sealBlock();
             }
-            try self.block_builder.addWithMetadata(key, value, &metadata_bytes);
+            try self.block_builder.addWithMetadata(stored_key, value, &metadata_bytes);
             if (self.entry_count == 0) {
                 self.min_lsn = metadata.lsn;
                 self.max_lsn = metadata.lsn;
@@ -314,10 +348,12 @@ pub fn Writer(
             }
             self.block_entry_count += 1;
             self.last_key.clearRetainingCapacity();
-            try self.last_key.appendSlice(self.allocator, key);
-            var bloom = try BloomBits.initMutable(self.bloom_bytes, self.bloom_bit_count);
-            core.bloom.add(&bloom, key, self.bloom_hash_count);
-            self.entry_count += 1;
+            self.last_key.appendSliceAssumeCapacity(stored_key);
+            if (new_key) {
+                core.bloom.add(&bloom, key, self.bloom_hash_count);
+            }
+            self.entry_count = entry_count;
+            self.keys_count = keys_count;
         }
 
         pub fn addTombstone(self: *Self, key: []const u8, lsn: Format.Lsn) Error!void {
@@ -337,6 +373,12 @@ pub fn Writer(
             if (self.options.enforce_entry_count and self.entry_count != self.options.entry_count) {
                 return Error.EntryCountMismatch;
             }
+            const entry_count = std.math.cast(Format.Offset, self.entry_count) orelse {
+                return Error.CountOverflow;
+            };
+            const keys_count = std.math.cast(Format.Offset, self.keys_count) orelse {
+                return Error.CountOverflow;
+            };
             try self.sealBlock();
             try self.flushDataPage();
             const bloom_offset = self.log.size();
@@ -348,7 +390,8 @@ pub fn Writer(
             var footer = try FooterType.View(false).init(footer_bytes);
             try footer.format(.{
                 .comparator_id = self.options.comparator_id,
-                .entry_count = @intCast(self.entry_count),
+                .entry_count = entry_count,
+                .keys_count = keys_count,
                 .min_lsn = self.min_lsn,
                 .max_lsn = self.max_lsn,
                 .data_offset = self.data_offset,
@@ -380,6 +423,7 @@ pub fn Writer(
             self.block_builder.deinit();
             self.allocator.free(self.block_bytes);
             self.allocator.free(self.block_scratch);
+            self.allocator.free(self.key_scratch);
             self.allocator.free(self.data_page_bytes);
             self.allocator.free(self.compact_page_bytes);
             self.allocator.free(self.bloom_bytes);
@@ -415,11 +459,20 @@ pub fn Writer(
             const offset = self.log.size();
             const encoded_bytes = try self.data_page.encodedBytes();
             const compact_page = self.compact_page_bytes[0..encoded_bytes];
+            const page_length = std.math.cast(Format.Offset, compact_page.len) orelse {
+                return Error.CountOverflow;
+            };
+            const data_length = std.math.add(Format.Offset, self.data_length, page_length) catch {
+                return Error.CountOverflow;
+            };
+            const data_page_count = std.math.add(Format.DataIndex, self.data_page_count, 1) catch {
+                return Error.CountOverflow;
+            };
             try self.data_page.copyTo(compact_page);
             try self.log.append(compact_page);
             const packed_location = Location{
                 .offset = PackedOffset.init(offset),
-                .length = PackedOffset.init(@intCast(compact_page.len)),
+                .length = PackedOffset.init(page_length),
             };
             if (!try self.index_state.tree.insert(
                 self.data_page_last_key.items,
@@ -427,16 +480,8 @@ pub fn Writer(
             )) {
                 return Error.DuplicateKey;
             }
-            self.data_length = std.math.add(
-                Format.Offset,
-                self.data_length,
-                @intCast(compact_page.len),
-            ) catch return Error.CountOverflow;
-            self.data_page_count = std.math.add(
-                Format.DataIndex,
-                self.data_page_count,
-                1,
-            ) catch return Error.CountOverflow;
+            self.data_length = data_length;
+            self.data_page_count = data_page_count;
         }
 
         fn writeIndex(self: *Self) Error!struct {
@@ -456,6 +501,9 @@ pub fn Writer(
             };
         }
         fn validateOptions(options: BuildOptions) Error!void {
+            if (options.keys_count == 0) {
+                return Error.InvalidSettings;
+            }
             const settings = options.settings;
             if (options.entry_count == 0 or
                 settings.max_entries_per_coded_block == 0 or

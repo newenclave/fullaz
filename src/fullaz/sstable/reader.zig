@@ -19,6 +19,7 @@ pub fn Reader(
     comptime CtxT: type,
 ) type {
     comptime {
+        @setEvalBranchQuota(10_000);
         device.interfaces.assertLogDevice(LogT);
         if (LogT.Offset != Format.Offset) {
             @compileError("SSTable Reader LogT.Offset must equal Format.Offset");
@@ -28,6 +29,7 @@ pub fn Reader(
     const PackedOffset = core.packed_int.PackedInt(Format.Offset, Format.Endian);
     const BlockView = codec.bounded_buffer.MemoryBlockView(u8);
     const EntryMetadata = sstable.EntryMetadata(Format);
+    const InternalKey = @import("internal_key.zig").InternalKey(Format, cmp, CtxT);
 
     const CodedBlock = codec.front_coded_block.FrontCodedBlockWithMetadata(
         Format.DataIndex,
@@ -37,7 +39,7 @@ pub fn Reader(
         BlockView,
         Format.Endian,
         true,
-        cmp,
+        InternalKey.compare,
         CtxT,
         EntryMetadata.byte_len,
     );
@@ -156,7 +158,7 @@ pub fn Reader(
         const Self = @This();
 
         pub const BlockId = Format.PageId;
-        pub const Error = MemoryIndexDevice.Error || LogBlock.Error;
+        pub const Error = MemoryIndexDevice.Error || LogBlock.Error || error{BadIndex};
 
         file: LogBlock,
         memory: MemoryIndexDevice,
@@ -190,10 +192,37 @@ pub fn Reader(
         }
 
         pub fn readBlock(self: *const Self, id: BlockId, output: []u8) Error!void {
-            return switch (self.*) {
+            switch (self.*) {
                 .memory => |*b| try b.readBlock(id, output),
                 .file => |*b| try b.readBlock(id, output),
-            };
+            }
+            if (Format.versioned_keys) {
+                const IndexView = bpt.models.paged.View(Format.PageId, u16, .little, true);
+                const index_settings: bpt.models.paged.Settings = .{};
+                const bytes = output[0..self.blockSize()];
+                const page = IndexView.PageViewType.init(bytes);
+                page.validateTyped() catch return Error.BadIndex;
+                const kind = page.header().kind.get();
+                if (kind == index_settings.leaf_page_kind) {
+                    const leaf = IndexView.LeafSubheaderView.init(bytes);
+                    leaf.validatePage(id, kind, bytes.len, @sizeOf(Location)) catch return Error.BadIndex;
+                    const slots = leaf.slotsDir() catch return Error.BadIndex;
+                    for (0..slots.size()) |i| {
+                        const entry = leaf.get(i) catch return Error.BadIndex;
+                        _ = InternalKey.userKey(entry.key) catch return Error.BadIndex;
+                    }
+                } else if (kind == index_settings.inode_page_kind) {
+                    const inode = IndexView.InodeSubheaderView.init(bytes);
+                    inode.validatePage(id, kind, bytes.len) catch return Error.BadIndex;
+                    const slots = inode.slotsDir() catch return Error.BadIndex;
+                    for (0..slots.size()) |i| {
+                        const entry = inode.get(i) catch return Error.BadIndex;
+                        _ = InternalKey.userKey(entry.key) catch return Error.BadIndex;
+                    }
+                } else {
+                    return Error.BadIndex;
+                }
+            }
         }
 
         pub fn writeBlock(self: *Self, id: BlockId, output: []u8) Error!void {
@@ -225,7 +254,7 @@ pub fn Reader(
     };
 
     const IndexCache = storage.page_cache.PageCache(IndexDevice);
-    const IndexModel = bpt.models.PagedModel(IndexCache, IndexStorage, cmp, CtxT);
+    const IndexModel = bpt.models.PagedModel(IndexCache, IndexStorage, InternalKey.compare, CtxT);
     const IndexTree = bpt.Bpt(IndexModel);
 
     const IndexState = struct {
@@ -239,7 +268,7 @@ pub fn Reader(
 
         const Error = std.mem.Allocator.Error ||
             IndexCache.Error ||
-            IndexModel.Error;
+            IndexModel.Error || error{CountOverflow};
 
         fn init(
             allocator: std.mem.Allocator,
@@ -261,7 +290,7 @@ pub fn Reader(
                 &state.cache,
                 &state.storage,
                 .{
-                    .maximum_key_size = settings.max_key_bytes,
+                    .maximum_key_size = try Format.internalKeyBytes(settings.max_key_bytes),
                     .maximum_value_size = @sizeOf(Location),
                 },
                 ctx,
@@ -303,6 +332,11 @@ pub fn Reader(
             key: []u8,
         };
 
+        pub const ScratchRequirements = struct {
+            data_page_bytes: usize,
+            key_bytes: usize,
+        };
+
         pub const Error = std.mem.Allocator.Error ||
             LogT.Error ||
             FooterType.Error ||
@@ -313,6 +347,7 @@ pub fn Reader(
             MemoryIndexDevice.Error ||
             IndexCache.Error ||
             IndexModel.Error ||
+            error{CountOverflow} ||
             errors.Reader;
 
         allocator: std.mem.Allocator,
@@ -321,6 +356,7 @@ pub fn Reader(
         footer: FooterType.Info,
         bloom_bytes: []u8,
         index_state: *IndexState,
+        scratch_key_bytes: usize,
 
         pub const Iterator = struct {
             const IteratorSelf = @This();
@@ -345,13 +381,7 @@ pub fn Reader(
                         }
                         if (!coded_iterator.done()) {
                             self.advance_current = true;
-                            return .{
-                                .key = coded_iterator.scratchKey(),
-                                .value = try coded_iterator.value(),
-                                .metadata = try EntryMetadata.fromBytes(
-                                    try coded_iterator.metadata(),
-                                ),
-                            };
+                            return try self.reader.scanEntry(coded_iterator);
                         }
                         coded_iterator.deinit();
                         self.coded_iterator = null;
@@ -367,7 +397,9 @@ pub fn Reader(
                                 BlockView.init(try page.codedBlock(self.block_index)),
                             );
                             self.coded_iterator = try self.coded_reader.?.iterator(
-                                self.scratch.key,
+                                self.scratch.key[0..try Format.internalKeyBytes(
+                                    self.reader.footer.settings.max_key_bytes,
+                                )],
                             );
                             continue;
                         }
@@ -410,6 +442,7 @@ pub fn Reader(
                 );
                 const page = try DataPageConst.init(self.scratch.data_page[0..page_size]);
                 try page.validate();
+                try self.reader.validateFences(&page);
                 self.page = page;
                 self.block_index = 0;
                 self.next_page_offset = page_end;
@@ -460,6 +493,11 @@ pub fn Reader(
             if (info.comparator_id != options.comparator_id) {
                 return Error.ComparatorMismatch;
             }
+            const scratch_key_bytes = std.math.mul(
+                usize,
+                try Format.internalKeyBytes(info.settings.max_key_bytes),
+                if (Format.versioned_keys) 2 else 1,
+            ) catch return Error.BadSettings;
             const bloom_len = std.math.cast(
                 usize,
                 info.bloom_length,
@@ -518,12 +556,20 @@ pub fn Reader(
                 .footer = info,
                 .bloom_bytes = bloom_bytes,
                 .index_state = index_state,
+                .scratch_key_bytes = scratch_key_bytes,
             };
         }
 
         pub fn deinit(self: *Self) void {
             self.index_state.deinit(self.allocator);
             self.allocator.free(self.bloom_bytes);
+        }
+
+        pub fn scratchRequirements(self: *const Self) ScratchRequirements {
+            return .{
+                .data_page_bytes = self.footer.settings.data_page_bytes,
+                .key_bytes = self.scratch_key_bytes,
+            };
         }
 
         pub fn iterator(self: *Self, scratch: *ReadScratchType) Error!Iterator {
@@ -546,6 +592,25 @@ pub fn Reader(
             key: []const u8,
             scratch: *ReadScratchType,
         ) Error!?Entry {
+            return self.findAt(key, std.math.maxInt(Format.Lsn), scratch);
+        }
+
+        pub fn findVersion(
+            self: *Self,
+            key: []const u8,
+            lsn: Format.Lsn,
+            scratch: *ReadScratchType,
+        ) Error!?Entry {
+            const entry = (try self.findAt(key, lsn, scratch)) orelse return null;
+            return if (entry.metadata.lsn == lsn) entry else null;
+        }
+
+        pub fn findAt(
+            self: *Self,
+            key: []const u8,
+            snapshot_lsn: Format.Lsn,
+            scratch: *ReadScratchType,
+        ) Error!?Entry {
             try self.validateScratch(scratch);
             const bloom = try BloomBits.initConst(
                 self.bloom_bytes,
@@ -558,11 +623,55 @@ pub fn Reader(
             )) {
                 return null;
             }
+            const target = try self.queryKey(key, snapshot_lsn, scratch);
+            const found = (try self.lowerBoundStored(target, scratch)) orelse return null;
+            if (cmp(self.ctx, found.key, try InternalKey.userKey(target)) != .eq or
+                found.metadata.lsn > snapshot_lsn)
+            {
+                return null;
+            }
+            return .{ .value = found.value, .metadata = found.metadata };
+        }
+
+        pub fn lowerBound(
+            self: *Self,
+            key: []const u8,
+            lsn: Format.Lsn,
+            scratch: *ReadScratchType,
+        ) Error!?ScanEntry {
+            const target = try self.queryKey(key, lsn, scratch);
+            return self.lowerBoundStored(target, scratch);
+        }
+
+        fn queryKey(
+            self: *const Self,
+            key: []const u8,
+            lsn: Format.Lsn,
+            scratch: *ReadScratchType,
+        ) Error![]const u8 {
+            try self.validateScratch(scratch);
+            if (!Format.versioned_keys) {
+                return key;
+            }
+            const internal_key_bytes = try Format.internalKeyBytes(self.footer.settings.max_key_bytes);
+            const query_bytes = try Format.internalKeyBytes(key.len);
+            if (query_bytes > scratch.key.len - internal_key_bytes) {
+                return Error.BadScratch;
+            }
+            return InternalKey.encode(key, lsn, scratch.key[internal_key_bytes..]);
+        }
+
+        fn lowerBoundStored(
+            self: *Self,
+            key: []const u8,
+            scratch: *ReadScratchType,
+        ) Error!?ScanEntry {
             var index_iterator = (try self.index_state.tree.lowerBound(key)) orelse return null;
             defer index_iterator.deinit();
             const entry = (try index_iterator.get()) orelse
                 (try index_iterator.next()) orelse
                 return null;
+            _ = InternalKey.userKey(entry.key) catch return Error.BadIndex;
             if (entry.value.len != @sizeOf(Location)) {
                 return Error.BadIndex;
             }
@@ -596,27 +705,53 @@ pub fn Reader(
             try self.log.readAt(offset, data_page);
             const page = try DataPageConst.init(data_page);
             try page.validate();
-            const block_index = try page.lowerBound(key, cmp, self.ctx);
+            try self.validateFences(&page);
+            const block_index = try page.lowerBound(key, InternalKey.compare, self.ctx);
             if (block_index == page.blockCount()) {
                 return null;
             }
             const coded = try page.codedBlock(block_index);
             var coded_reader = try CodedBlock.Reader.init(BlockView.init(coded));
             defer coded_reader.deinit();
-            const found = try coded_reader.find(
-                key,
-                scratch.key,
-                cmp,
-                self.ctx,
-            ) orelse return null;
-            return .{
-                .value = try found.value(),
-                .metadata = try EntryMetadata.fromBytes(try found.metadata()),
-            };
+            var found = try coded_reader.iterator(scratch.key[0..try Format.internalKeyBytes(
+                self.footer.settings.max_key_bytes,
+            )]);
+            defer found.deinit();
+            while (!found.done()) {
+                const scanned = try self.scanEntry(&found);
+                switch (InternalKey.compare(self.ctx, found.scratchKey(), key)) {
+                    .lt => try found.next(),
+                    .eq, .gt => return scanned,
+                }
+            }
+            return null;
+        }
+
+        fn scanEntry(self: *const Self, found: *const CodedBlock.Reader.Iterator) Error!ScanEntry {
+            const key = try InternalKey.userKey(found.scratchKey());
+            if (key.len > self.footer.settings.max_key_bytes) {
+                return Error.BadData;
+            }
+            const metadata = try EntryMetadata.fromBytes(try found.metadata());
+            if (Format.versioned_keys and try InternalKey.sequence(found.scratchKey()) != metadata.lsn) {
+                return Error.InvalidMetadata;
+            }
+            return .{ .key = key, .value = try found.value(), .metadata = metadata };
+        }
+
+        fn validateFences(self: *const Self, page: *const DataPageConst) Error!void {
+            if (Format.versioned_keys) {
+                for (0..page.blockCount()) |i| {
+                    const key = try InternalKey.userKey(try page.fenceKey(i));
+                    if (key.len > self.footer.settings.max_key_bytes) {
+                        return Error.BadData;
+                    }
+                }
+            }
         }
         fn validateScratch(self: *const Self, scratch: *ReadScratchType) Error!void {
             if (scratch.data_page.len != self.footer.settings.data_page_bytes or
-                scratch.key.len < self.footer.settings.max_key_bytes)
+                scratch.key.len < self.scratch_key_bytes)
             {
                 return Error.BadScratch;
             }

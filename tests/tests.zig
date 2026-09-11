@@ -101,6 +101,7 @@ test {
 
     _ = @import("codec/fron_coded_block.zig");
     _ = @import("sstable/sstable.zig");
+    _ = @import("sstable/versioned.zig");
 
     _ = @import("spatial/geometry.zig");
     _ = @import("spatial/orthtree/orthtree.zig");
