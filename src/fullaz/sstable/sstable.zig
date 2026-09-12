@@ -144,3 +144,4 @@ pub fn EntryMetadata(comptime Format: type) type {
 pub const Writer = @import("writer.zig").Writer;
 pub const Reader = @import("reader.zig").Reader;
 pub const Merger = @import("merge.zig").Merger;
+pub const SstableManager = @import("manager.zig").SstableManager;
