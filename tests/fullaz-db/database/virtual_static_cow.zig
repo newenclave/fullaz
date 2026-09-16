@@ -104,6 +104,84 @@ const CrashDevice = struct {
     }
 };
 
+test "fullaz-db: virtual COW superblock persists and validates retired queue counts" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 });
+    const Device = fullaz.device.MemoryBlock(u64);
+    const Database = fullaz_db.VirtualStaticDatabaseWithCow(Schema, Device);
+    const Superblock = Database.SuperblockType;
+    const identity: Superblock.Identity = .{
+        .image_id = [_]u8{47} ** 16,
+        .schema_digest = [_]u8{53} ** 32,
+    };
+    const metadata = std.mem.zeroes(Database.MetadataType);
+    var page: [512]u8 = undefined;
+
+    try Superblock.format(
+        &page,
+        page.len,
+        7,
+        12,
+        null,
+        0,
+        6,
+        4,
+        5,
+        3,
+        1,
+        identity,
+        metadata,
+    );
+    const storage = try Superblock.read(&page, page.len, identity);
+    try std.testing.expectEqual(@as(u64, 3), storage.retired_queue_elements_count.get());
+    try std.testing.expectEqual(@as(u64, 1), storage.retired_queue_tombstone_count.get());
+
+    try std.testing.expectError(error.BadSuperblock, Superblock.format(
+        &page,
+        page.len,
+        7,
+        12,
+        null,
+        0,
+        6,
+        null,
+        null,
+        1,
+        0,
+        identity,
+        metadata,
+    ));
+    try std.testing.expectError(error.BadSuperblock, Superblock.format(
+        &page,
+        page.len,
+        7,
+        12,
+        null,
+        0,
+        6,
+        4,
+        5,
+        1,
+        2,
+        identity,
+        metadata,
+    ));
+    try std.testing.expectError(error.BadSuperblock, Superblock.format(
+        &page,
+        page.len,
+        7,
+        12,
+        null,
+        0,
+        6,
+        4,
+        5,
+        0,
+        0,
+        identity,
+        metadata,
+    ));
+}
+
 test "fullaz-db: virtual static CoW database keeps logical roots across reopen" {
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
         "blob",
@@ -111,6 +189,7 @@ test "fullaz-db: virtual static CoW database keeps logical roots across reopen" 
     );
     const Device = fullaz.device.FileBlock(u64);
     const Database = fullaz_db.VirtualStaticDatabaseWithCow(Schema, Device);
+    try std.testing.expectEqual(@as(u16, 4), Database.SuperblockType.version);
     const io = std.testing.io;
     const image_path = ".zig-cache/virtual_static_cow_chain_store.img";
     const options: Database.InitOptions = .{

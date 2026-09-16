@@ -140,6 +140,48 @@ test "SlotChain: create" {
     try std.testing.expect(c.view.getPrev() == null);
 }
 
+test "SlotChain: state has physical and tombstone counters" {
+    const View = slot_chain.View(u32, u16, .little, false);
+    const state = TailState{};
+
+    try std.testing.expectEqual(@as(u32, 0), state.elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), state.tombstone_count.get());
+    try std.testing.expectEqual(@as(u16, 1), View.SlotsDir.FlagsMask);
+}
+
+test "SlotChain: counter overflow is rejected before inserting" {
+    const SmallState = slot_chain.State(u32, u8, u32, .little);
+    const Manager = struct {
+        pub const PageId = u32;
+        pub const Error = error{};
+        pub const StateLeaseType = TestStateLease(SmallState);
+
+        state_value: SmallState = .{},
+
+        pub fn state(self: *@This()) Error!StateLeaseType {
+            return .{ .value = &self.state_value };
+        }
+
+        pub fn destroyPage(_: *@This(), _: PageId) Error!void {}
+    };
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, Manager, u8, u32, .little);
+
+    var manager = Manager{};
+    manager.state_value.elements_count.set(std.math.maxInt(u8));
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var handle = try Handle.init(&cache, &manager, .{});
+    defer handle.deinit();
+
+    try std.testing.expectError(error.BadData, handle.append("not inserted"));
+    try std.testing.expect(manager.state_value.page_chain.first.isMax());
+    try std.testing.expect(manager.state_value.page_chain.last.isMax());
+}
+
 test "SlotChain: handle" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
@@ -159,20 +201,36 @@ test "SlotChain: handle" {
     _ = try hdl.append("Hello");
     _ = try hdl.append("World");
 
+    try std.testing.expectEqual(@as(usize, 2), try hdl.elementsCount());
+    try std.testing.expectEqual(@as(usize, 0), try hdl.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 2), try hdl.size());
+
+    var itr = (try hdl.iterator()).?;
+    defer itr.deinit();
+    _ = (try itr.next()).?;
+    _ = (try itr.next()).?;
+    try itr.markTombstone();
+    try itr.markTombstone();
+
+    try std.testing.expectEqual(@as(usize, 2), try hdl.elementsCount());
+    try std.testing.expectEqual(@as(usize, 1), try hdl.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 1), try hdl.size());
+
     var p = try hdl.loadPage(1);
     defer p.deinit();
-
-    try p.setTombstone(1);
 
     try std.testing.expect(try p.id() == 1);
     try std.testing.expect(try p.size() == 2);
     try std.testing.expect(try p.isTombstone(1));
     try std.testing.expect(!try p.isTombstone(0));
 
-    const removed = try p.removeTombstones();
+    const removed = try hdl.removePageTombstones(1);
     try std.testing.expect(removed == 1);
     try std.testing.expect(try p.size() == 1);
     try std.testing.expect(!try p.isTombstone(0));
+    try std.testing.expectEqual(@as(usize, 1), try hdl.elementsCount());
+    try std.testing.expectEqual(@as(usize, 0), try hdl.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 1), try hdl.size());
 }
 
 test "SlotChain: iterator" {
@@ -194,15 +252,14 @@ test "SlotChain: iterator" {
     _ = try hdl.append("first");
     _ = try hdl.append("second");
 
-    var page = try hdl.loadPage(1);
-    defer page.deinit();
-    try page.setTombstone(0);
-
     var itr = (try hdl.iterator()).?;
     defer itr.deinit();
 
-    const first = (try itr.next()).?;
-    try std.testing.expectEqualStrings("second", first.value);
+    try std.testing.expectEqualStrings("first", (try itr.next()).?.value);
+    try itr.markTombstone();
+    try std.testing.expectEqual(@as(usize, 1), try hdl.size());
+    const second = (try itr.next()).?;
+    try std.testing.expectEqualStrings("second", second.value);
     try std.testing.expect((try itr.next()) == null);
 
     const last = (try itr.prev()).?;
@@ -456,7 +513,13 @@ test "SlotChain: pending removal keeps marked data alive" {
     const first = (try itr.next()).?;
     var pending = try itr.markForRemoval();
     defer pending.deinit();
+    var repeated = try itr.markForRemoval();
+    defer repeated.deinit();
+    try std.testing.expectEqual(@as(usize, 2), try hdl.elementsCount());
+    try std.testing.expectEqual(@as(usize, 1), try hdl.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 1), try hdl.size());
     try std.testing.expectEqualStrings("first", try pending.value());
+    try std.testing.expectEqualStrings("first", try repeated.value());
 
     try std.testing.expectEqualStrings("second", (try itr.next()).?.value);
     itr.deinit();
@@ -488,9 +551,16 @@ test "SlotChain: pending removal cleans one slot idempotently" {
     var pending = try itr.markForRemoval();
     defer pending.deinit();
 
+    try std.testing.expectEqual(@as(usize, 3), try hdl.elementsCount());
+    try std.testing.expectEqual(@as(usize, 1), try hdl.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 2), try hdl.size());
+
     try std.testing.expect(try pending.clean());
     try std.testing.expect(!(try pending.clean()));
     try std.testing.expectError(error.InvalidIterator, pending.value());
+    try std.testing.expectEqual(@as(usize, 2), try hdl.elementsCount());
+    try std.testing.expectEqual(@as(usize, 0), try hdl.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 2), try hdl.size());
 
     var page = try hdl.loadPage(storedPageId(&mgr.state_value.page_chain.first).?);
     defer page.deinit();
@@ -528,11 +598,16 @@ test "SlotChain: pending removal destroys an empty page" {
     var pending = try itr.markForRemoval();
     defer pending.deinit();
 
+    try std.testing.expectEqual(@as(usize, 1), try hdl.elementsCount());
+    try std.testing.expectEqual(@as(usize, 1), try hdl.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 0), try hdl.size());
+
     try std.testing.expect(try pending.clean());
     try std.testing.expectEqual(@as(?u32, page_id), mgr.destroyed_page_id);
     try std.testing.expect(storedPageId(&mgr.state_value.page_chain.first) == null);
     try std.testing.expect(storedPageId(&mgr.state_value.page_chain.last) == null);
-    try std.testing.expectEqual(@as(u32, 0), mgr.state_value.total_size.get());
+    try std.testing.expectEqual(@as(u32, 0), mgr.state_value.elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), mgr.state_value.tombstone_count.get());
     try std.testing.expect((try hdl.iterator()) == null);
 }
 
@@ -559,7 +634,9 @@ test "SlotChain: markTombstonesIf skips marked slots until cleanup" {
     };
     try std.testing.expectEqual(@as(usize, 1), try handle.markTombstonesIf({}, Match.call));
     try std.testing.expectEqual(@as(usize, 0), try handle.markTombstonesIf({}, Match.call));
-    try std.testing.expectEqual(@as(usize, 3), try handle.size());
+    try std.testing.expectEqual(@as(usize, 3), try handle.elementsCount());
+    try std.testing.expectEqual(@as(usize, 1), try handle.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 2), try handle.size());
 
     var iterator = (try handle.iterator()).?;
     defer iterator.deinit();
@@ -568,6 +645,8 @@ test "SlotChain: markTombstonesIf skips marked slots until cleanup" {
     try std.testing.expect((try iterator.next()) == null);
 
     try std.testing.expectEqual(@as(usize, 1), try handle.removeTombstones());
+    try std.testing.expectEqual(@as(usize, 2), try handle.elementsCount());
+    try std.testing.expectEqual(@as(usize, 0), try handle.tombstoneCount());
     try std.testing.expectEqual(@as(usize, 2), try handle.size());
 }
 
@@ -589,6 +668,10 @@ test "SlotChain bidirectional iterator: markTombstone marks the current slot" {
     defer iterator.deinit();
     _ = (try iterator.next()).?;
     try iterator.markTombstone();
+    try iterator.markTombstone();
+    try std.testing.expectEqual(@as(usize, 1), try handle.elementsCount());
+    try std.testing.expectEqual(@as(usize, 1), try handle.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 0), try handle.size());
     try std.testing.expect((try iterator.next()) == null);
 }
 
@@ -610,7 +693,53 @@ test "SlotChain forward iterator: markTombstone marks the current slot" {
     defer iterator.deinit();
     _ = (try iterator.next()).?;
     try iterator.markTombstone();
+    try iterator.markTombstone();
+    try std.testing.expectEqual(@as(usize, 1), try handle.elementsCount());
+    try std.testing.expectEqual(@as(usize, 1), try handle.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 0), try handle.size());
     try std.testing.expect((try iterator.next()) == null);
+}
+
+test "SlotChain: bulk tombstone cleanup removes every empty page" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, TrackingStorageManager, u32, u32, .little);
+
+    var manager = TrackingStorageManager{};
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var handle = try Handle.init(&cache, &manager, .{});
+    defer handle.deinit();
+
+    var first: [3000]u8 = undefined;
+    @memset(&first, 'a');
+    var second: [3000]u8 = undefined;
+    @memset(&second, 'b');
+    var third: [3000]u8 = undefined;
+    @memset(&third, 'c');
+    _ = try handle.append(&first);
+    _ = try handle.append(&second);
+    _ = try handle.append(&third);
+
+    const Match = struct {
+        fn call(_: void, _: u32, _: usize, _: []const u8) error{}!bool {
+            return true;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 3), try handle.markTombstonesIf({}, Match.call));
+    try std.testing.expectEqual(@as(usize, 3), try handle.elementsCount());
+    try std.testing.expectEqual(@as(usize, 3), try handle.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 0), try handle.size());
+
+    try std.testing.expectEqual(@as(usize, 3), try handle.removeTombstones());
+    try std.testing.expectEqual(@as(usize, 0), try handle.elementsCount());
+    try std.testing.expectEqual(@as(usize, 0), try handle.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 0), try handle.size());
+    try std.testing.expect(storedPageId(&manager.state_value.page_chain.first) == null);
+    try std.testing.expect(storedPageId(&manager.state_value.page_chain.last) == null);
+    try std.testing.expect((try handle.iterator()) == null);
 }
 
 test "SlotChain: removeIf removes matching slots across pages" {
@@ -642,6 +771,8 @@ test "SlotChain: removeIf removes matching slots across pages" {
     };
     try std.testing.expectEqual(@as(usize, 1), try handle.removeIf(first_page_id, Match.call));
     try std.testing.expectEqual(@as(?u32, first_page_id), manager.destroyed_page_id);
+    try std.testing.expectEqual(@as(usize, 1), try handle.elementsCount());
+    try std.testing.expectEqual(@as(usize, 0), try handle.tombstoneCount());
     try std.testing.expectEqual(@as(usize, 1), try handle.size());
 
     var iterator = (try handle.iterator()).?;
@@ -650,7 +781,46 @@ test "SlotChain: removeIf removes matching slots across pages" {
     try std.testing.expect((try iterator.next()) == null);
 }
 
-test "SlotChain: pending removal updates FSM and total size" {
+test "SlotChain: removeIf preserves tombstone count" {
+    const Device = devices.MemoryBlock(u32);
+    const Cache = page_cache.PageCache(Device);
+    const Handle = slot_chain.Handle(Cache, NoneStorageManager, u32, u32, .little);
+
+    var manager = NoneStorageManager{};
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var cache = try Cache.init(&device, std.testing.allocator, 8);
+    defer cache.deinit();
+    var handle = try Handle.init(&cache, &manager, .{});
+    defer handle.deinit();
+
+    _ = try handle.append("remove");
+    _ = try handle.append("marked");
+    _ = try handle.append("keep");
+
+    var iterator = (try handle.iterator()).?;
+    _ = (try iterator.next()).?;
+    _ = (try iterator.next()).?;
+    try iterator.markTombstone();
+    iterator.deinit();
+
+    const Match = struct {
+        fn call(_: void, _: u32, _: usize, value: []const u8) error{}!bool {
+            return std.mem.eql(u8, value, "remove");
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), try handle.removeIf({}, Match.call));
+    try std.testing.expectEqual(@as(usize, 2), try handle.elementsCount());
+    try std.testing.expectEqual(@as(usize, 1), try handle.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 1), try handle.size());
+
+    try std.testing.expectEqual(@as(usize, 1), try handle.removeTombstones());
+    try std.testing.expectEqual(@as(usize, 1), try handle.elementsCount());
+    try std.testing.expectEqual(@as(usize, 0), try handle.tombstoneCount());
+    try std.testing.expectEqual(@as(usize, 1), try handle.size());
+}
+
+test "SlotChain: pending removal updates FSM and counters" {
     const Device = devices.MemoryBlock(u32);
     const Cache = page_cache.PageCache(Device);
     const FsmModel = fsm.models.Memory(u32, u16);
@@ -692,6 +862,8 @@ test "SlotChain: pending removal updates FSM and total size" {
     defer pending.deinit();
 
     try std.testing.expect(try pending.clean());
+    try std.testing.expectEqual(@as(usize, 0), try hdl.elementsCount());
+    try std.testing.expectEqual(@as(usize, 0), try hdl.tombstoneCount());
     try std.testing.expectEqual(@as(usize, 0), try hdl.size());
     try std.testing.expect((try hdl.findFreeSlot(700)) == null);
 }
@@ -737,9 +909,14 @@ test "SlotChain: appendRef survives later appends and payload compaction" {
     const second = try handle.appendRef("second");
     _ = try handle.append("third");
 
+    var iterator = (try handle.iterator()).?;
+    _ = (try iterator.next()).?;
+    _ = (try iterator.next()).?;
+    try iterator.markTombstone();
+    iterator.deinit();
+
     var first_page = try handle.loadPage(first.page_id);
     defer first_page.deinit();
-    try first_page.setTombstone(second.slot_id);
     var scratch = [_]u8{undefined} ** 4096;
     try first_page.compact(&scratch);
 

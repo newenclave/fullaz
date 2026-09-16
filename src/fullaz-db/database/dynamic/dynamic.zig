@@ -402,7 +402,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         }
 
         fn catalogRecordCount(state: *const CatalogState) u64 {
-            return state.total_size.get();
+            return state.elements_count.get() - state.tombstone_count.get();
         }
 
         fn gcRoot(state: *const GcState) ?DevicePageId {
@@ -427,7 +427,8 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     std.math.cast(DevicePageId, page_id) orelse return error.PageIdTooLarge,
                 );
             }
-            catalog.total_size.set(state.catalog_record_count);
+            catalog.elements_count.set(state.catalog_elements_count);
+            catalog.tombstone_count.set(state.catalog_tombstone_count);
             var id_radix: RadixState = .{};
             if (state.id_radix_root) |root| {
                 id_radix.root.set(
@@ -493,7 +494,8 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
                     std.math.cast(u64, page_id) orelse return error.PageIdTooLarge
                 else
                     null,
-                .catalog_record_count = catalogRecordCount(&state.catalog),
+                .catalog_elements_count = state.catalog.elements_count.get(),
+                .catalog_tombstone_count = state.catalog.tombstone_count.get(),
                 .live_component_count = state.live_component_count,
                 .id_radix_root = if (radixRoot(&state.id_radix)) |root|
                     std.math.cast(u64, root) orelse return error.PageIdTooLarge

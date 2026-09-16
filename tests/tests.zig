@@ -9,6 +9,7 @@ test {
     _ = @import("fullaz-db/components/bpt.zig");
     _ = @import("fullaz-db/components/rtree.zig");
     _ = @import("fullaz-db/components/slot_heap.zig");
+    _ = @import("fullaz-db/components/slot_sequence.zig");
     _ = @import("fullaz-db/components/chain_store.zig");
     _ = @import("fullaz-db/components/weighted_sequence.zig");
     _ = @import("fullaz-db/database/memory.zig");

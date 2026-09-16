@@ -478,7 +478,7 @@ pub fn PagedModelImpl(
             node: *Self,
 
             pub fn data(self: *const @This()) @This().Error![]const u8 {
-                const node_view = try self.node.readView();
+                const node_view = try self.node.readStateView();
                 const first = &node_view.subheader().entries_first;
                 const bytes: [*]const u8 = @ptrCast(first);
                 return bytes[0..@sizeOf(State)];
@@ -510,10 +510,12 @@ pub fn PagedModelImpl(
             const Subheader = OrthtreePage.NodeSlotSubheader;
             if (@offsetOf(Subheader, "entries_last") !=
                 @offsetOf(Subheader, "entries_first") + @sizeOf(OrthtreePage.PageId) or
-                @offsetOf(Subheader, "entries_count") !=
+                @offsetOf(Subheader, "entries_elements_count") !=
                     @offsetOf(Subheader, "entries_first") + 2 * @sizeOf(OrthtreePage.PageId) or
+                @offsetOf(Subheader, "entries_tombstone_count") !=
+                    @offsetOf(Subheader, "entries_elements_count") + @sizeOf(OrthtreePage.EntryCount) or
                 @sizeOf(State) != 2 * @sizeOf(OrthtreePage.PageId) +
-                    @sizeOf(OrthtreePage.EntryCount))
+                    2 * @sizeOf(OrthtreePage.EntryCount))
             {
                 @compileError("Orthtree embedded SlotChain state layout changed");
             }
@@ -538,11 +540,16 @@ pub fn PagedModelImpl(
         }
 
         fn readView(self: *const Self) Error!ReadNodeSlot {
-            const page = ReadNodePage.init(try self.handle.data());
-            try page.validatePage(self.self_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
-            const slot = try page.slot(self.self_id.slot_id);
+            const slot = try self.readStateView();
             try slot.validate();
             return slot;
+        }
+
+        // SlotChain changes counts and endpoints in separate state leases.
+        fn readStateView(self: *const Self) Error!ReadNodeSlot {
+            const page = ReadNodePage.init(try self.handle.data());
+            try page.validatePage(self.self_id.page_id, self.settings.node_page_kind, self.settings.node_layout_id);
+            return page.slot(self.self_id.slot_id);
         }
 
         fn readViewUnchecked(self: *const Self) ReadNodeSlot {
@@ -575,7 +582,8 @@ pub fn PagedModelImpl(
         }
 
         pub fn size(self: *const Self) usize {
-            return self.readViewUnchecked().entryChain().count;
+            const chain = self.readViewUnchecked().entryChain();
+            return chain.elements_count - chain.tombstone_count;
         }
 
         pub fn isLeaf(self: *const Self) bool {

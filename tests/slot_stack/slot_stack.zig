@@ -53,6 +53,8 @@ test "SlotStack: push, top, pop, and iterate" {
     try stack.push("second");
     try stack.push("third");
     try std.testing.expectEqual(@as(usize, 3), try stack.size());
+    try std.testing.expectEqual(@as(u32, 3), manager.state_value.elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), manager.state_value.tombstone_count.get());
 
     var top = try stack.top();
     defer top.deinit();
@@ -67,11 +69,15 @@ test "SlotStack: push, top, pop, and iterate" {
 
     try stack.pop();
     try stack.pop();
+    try std.testing.expectEqual(@as(u32, 1), manager.state_value.elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), manager.state_value.tombstone_count.get());
     var remaining = try stack.top();
     defer remaining.deinit();
     try std.testing.expectEqualStrings("first", try remaining.value());
     try stack.pop();
     try std.testing.expect(try stack.isEmpty());
+    try std.testing.expectEqual(@as(u32, 0), manager.state_value.elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), manager.state_value.tombstone_count.get());
     try std.testing.expectError(error.EmptySet, stack.pop());
 }
 

@@ -103,7 +103,7 @@ test "GC: method adapter separates page and value contexts" {
     const owner = Owner{};
     const value_context = ValueContext{ .target = 2 };
 
-    try collector.registerWithContexts(
+    try collector.registerForCycleWithContexts(
         1,
         1,
         &owner,

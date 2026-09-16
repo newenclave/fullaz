@@ -12,6 +12,8 @@ test "fullaz-db: static superblock detects identity and CRC corruption" {
     var page = [_]u8{0} ** 512;
     try Superblock.format(&page, page.len, 7, identity, .{ .root = 4 }, true);
     const storage = try Superblock.read(&page, page.len, identity);
+    try std.testing.expectEqual(@as(u16, 3), Superblock.version);
+    try std.testing.expectEqual(@as(u16, 3), storage.version.get());
     try std.testing.expectEqual(@as(u64, 7), storage.page_count.get());
     try std.testing.expectEqual(@as(u32, 4), storage.metadata.root);
 

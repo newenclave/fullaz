@@ -37,7 +37,7 @@ pub fn PagedWithKinds(
 ) type {
     const state_magic = 0x4743_5354; // "GCST"
     const page_magic = 0x4743_5047; // "GCPG"
-    const version = 2;
+    const version = 3;
     const common_len = 16;
     const PackedPageId = PackedInt(PageCacheT.Pid, .little);
     const PackedCursor = PackedPageId;
@@ -95,7 +95,7 @@ pub fn PagedWithKinds(
         {
             @compileError("GC metadata page layout changed");
         }
-        if (@alignOf(StatePage) != 1 or state_len != 10 + 2 * @sizeOf(PackedU64) + 7 * @sizeOf(PackedPageId) or
+        if (@alignOf(StatePage) != 1 or state_len != 10 + 3 * @sizeOf(PackedU64) + 7 * @sizeOf(PackedPageId) or
             @offsetOf(StatePage, "kind") != 0 or
             @offsetOf(StatePage, "magic") != @sizeOf(PackedPageKind) or
             @offsetOf(StatePage, "phase") != 8 or
@@ -104,8 +104,10 @@ pub fn PagedWithKinds(
             @compileError("GC state layout changed");
         }
         if (@offsetOf(QueueState, "page_chain") != 0 or
-            @offsetOf(QueueState, "total_size") != 2 * @sizeOf(PackedPageId) or
-            @sizeOf(QueueState) != 2 * @sizeOf(PackedPageId) + @sizeOf(PackedU64))
+            @offsetOf(QueueState, "elements_count") != 2 * @sizeOf(PackedPageId) or
+            @offsetOf(QueueState, "tombstone_count") !=
+                2 * @sizeOf(PackedPageId) + @sizeOf(PackedU64) or
+            @sizeOf(QueueState) != 2 * @sizeOf(PackedPageId) + 2 * @sizeOf(PackedU64))
         {
             @compileError("GC queue state layout changed");
         }
@@ -374,6 +376,7 @@ pub fn PagedWithKinds(
 
         pub fn dequeue(self: *Self) Error!?PageId {
             try self.requireTransaction();
+            try self.validateStableQueueState();
             var manager = QueueManager{ .model = self };
             var queue = try Queue.init(
                 self.cache,
@@ -428,7 +431,7 @@ pub fn PagedWithKinds(
             var page = try self.cache.fetch(state_page_id);
             defer page.deinit();
             const bytes = try page.data();
-            try self.validateStateBytes(bytes);
+            try self.validateStableQueueStateBytes(bytes);
             const state = try self.stateView(bytes);
             return state.sweep_cursor.get();
         }
@@ -566,6 +569,40 @@ pub fn PagedWithKinds(
             if (state.kind.get() != state_page_kind or
                 state.magic.get() != state_magic or
                 state.role != @intFromEnum(Role.state) or state.version != version)
+            {
+                return error.InvalidState;
+            }
+            const endpoints_empty = state.queue.page_chain.first.get() == nil_page_id and
+                state.queue.page_chain.last.get() == nil_page_id;
+            const elements_count = state.queue.elements_count.get();
+            const tombstone_count = state.queue.tombstone_count.get();
+            if (tombstone_count > elements_count or
+                (endpoints_empty and (elements_count != 0 or tombstone_count != 0)))
+            {
+                return error.InvalidState;
+            }
+        }
+
+        fn validateStableQueueState(self: *const Self) BaseError!void {
+            const state_page_id = try self.statePageId();
+            var page = try self.cache.fetch(state_page_id);
+            defer page.deinit();
+            try self.validateStableQueueStateBytes(try page.data());
+        }
+
+        // SlotChain may temporarily update these endpoints through separate state leases.
+        fn validateStableQueueStateBytes(self: *const Self, bytes: []const u8) BaseError!void {
+            try self.validateStateBytes(bytes);
+            const state = try self.stateView(bytes);
+            const first_empty = state.queue.page_chain.first.get() == nil_page_id;
+            const last_empty = state.queue.page_chain.last.get() == nil_page_id;
+            const elements_count = state.queue.elements_count.get();
+            const tombstone_count = state.queue.tombstone_count.get();
+            const endpoints_empty = first_empty and last_empty;
+            if (first_empty != last_empty or
+                endpoints_empty != (elements_count == 0) or
+                tombstone_count != 0 or
+                (state.phase == @intFromEnum(gc.Phase.sweeping) and !endpoints_empty))
             {
                 return error.InvalidState;
             }

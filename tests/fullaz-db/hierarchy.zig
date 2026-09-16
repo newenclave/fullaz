@@ -6,6 +6,19 @@ fn compare(_: void, left: []const u8, right: []const u8) std.math.Order {
     return std.mem.order(u8, left, right);
 }
 
+fn embeddedState(
+    comptime StateT: type,
+    bytes: []const u8,
+    expected_type: fullaz_db.value_envelope.TypeIdentity,
+) !StateT {
+    const value = try fullaz_db.value_envelope.readEmbedded(bytes, expected_type);
+    if (value.payload.len != @sizeOf(StateT)) {
+        return error.BadState;
+    }
+    const state: *const StateT = @ptrCast(value.payload.ptr);
+    return state.*;
+}
+
 const FolderTrait = struct {
     pub const kind_name: []const u8 = "test.hierarchy.folder";
     pub const format_version: u32 = 3;
@@ -241,17 +254,17 @@ test "fullaz-db hierarchyStore: composes BPT, R-tree, and SlotHeap owners" {
     var transaction = try database.begin();
     defer transaction.deinit();
     var store = transaction.get("store");
-    const names = store.owner("names");
+    const names = try store.owner("names");
     const name_value = try names.encodedRaw("node", "value");
     try std.testing.expect(try names.proxy().insert("one", name_value.data()));
     const Box = fullaz.spatial.BoundingBox(i32, 2);
-    const places = store.owner("places");
+    const places = try store.owner("places");
     const place_value = try places.encodedRaw("node", "place");
     try places.proxy().insert(
         Box.initWith(.{ 1, 1 }, .{ 2, 2 }),
         place_value.data(),
     );
-    const queue = store.owner("queue");
+    const queue = try store.owner("queue");
     const queue_value = try queue.encodedRaw("node", "value");
     try queue.proxy().push("queue-key-000001", queue_value.data());
     try transaction.commit();
@@ -296,7 +309,7 @@ test "fullaz-db hierarchyStore: BPT owner edits recursive embedded envelopes" {
     var transaction = try database.begin();
     defer transaction.deinit();
     var store = transaction.get("store");
-    var files = store.owner("files");
+    var files = try store.owner("files");
     const raw_value = try files.encodedRaw("folder", "plain");
     try std.testing.expect(try files.proxy().insert("raw", raw_value.data()));
     const root_value = try files.encodedEmbedded("folder");
@@ -374,7 +387,7 @@ test "fullaz-db hierarchyStore: const proxy opens an embedded BPT handle" {
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const tree = transaction.get("tree").owner("files");
+        const tree = try transaction.get("tree").owner("files");
         const root_value = try tree.encodedEmbedded("folder");
         try std.testing.expect(try tree.proxy().insert("root", root_value.data()));
         const root_value_editor = (try tree.proxy().openValueEditor("root")).?;
@@ -398,6 +411,49 @@ test "fullaz-db hierarchyStore: const proxy opens an embedded BPT handle" {
         Types.typeIdentityByTag("folder"),
     );
     try std.testing.expectEqualStrings("value", value.payload);
+}
+
+test "fullaz-db hierarchyStore: aggregate proxy cannot enter a later transaction" {
+    const Bpt = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 23,
+        .maximum_key_size = 16,
+        .maximum_value_size = 96,
+        .fixed_value_size = 96,
+    });
+    const Types = fullaz_db.Hierarchy(.{ .registry_id = 0x77ac, .types = &.{.{
+        .tag = "node",
+        .type_id = 1,
+        .type_version = 1,
+        .metadata_format_version = 1,
+        .descriptor = Bpt,
+        .allowed_child_type_ids = &.{},
+    }} });
+    const Store = fullaz_db.hierarchyStore(Types, .{ .owners = &.{.{
+        .tag = "files",
+        .owner_id = 1,
+        .descriptor = Bpt,
+        .allowed_type_ids = &.{1},
+    }} });
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("store", Store);
+    const Database = fullaz_db.MemoryDatabase(Schema);
+    var database = try Database.init(std.testing.allocator, .{
+        .page_size = 1024,
+        .components = .{ .store = .{ .owner_0 = .{} } },
+    });
+    defer database.deinit();
+
+    var first_transaction = try database.begin();
+    defer first_transaction.deinit();
+    var stale_store = first_transaction.get("store");
+    _ = try stale_store.owner("files");
+    try first_transaction.commit();
+
+    var second_transaction = try database.begin();
+    defer second_transaction.deinit();
+    try std.testing.expectError(error.TransactionInactive, stale_store.owner("files"));
+    _ = try second_transaction.get("store").owner("files");
 }
 
 test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
@@ -457,7 +513,7 @@ test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
         var transaction = try database.begin();
         defer transaction.deinit();
         var store = transaction.get("store");
-        const places = store.owner("places");
+        const places = try store.owner("places");
         const rtree_value = try places.encodedEmbedded("rtree");
         try places.proxy().insert(point, rtree_value.data());
         const rtree_value_editor = (try places.proxy().openValueEditor(point, {}, struct {
@@ -468,7 +524,7 @@ test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
         var top_rtree = try places.openChild(rtree_value_editor, "rtree");
         defer top_rtree.deinit();
         try top_rtree.finish();
-        const queue = store.owner("queue");
+        const queue = try store.owner("queue");
         const heap_value = try queue.encodedEmbedded("heap");
         try queue.proxy().push("queue-key-000001", heap_value.data());
         var top = try queue.proxy().top();
@@ -477,7 +533,7 @@ test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
         var top_heap = try queue.openChild(heap_value_editor, "heap");
         defer top_heap.deinit();
         try top_heap.finish();
-        const files = store.owner("files");
+        const files = try store.owner("files");
         try std.testing.expectError(error.TypeNotAllowed, files.encodedEmbedded("rtree"));
         const chain_value = try files.encodedEmbedded("bpt");
         try std.testing.expect(try files.proxy().insert("chain", chain_value.data()));
@@ -518,7 +574,8 @@ test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        try std.testing.expect(try transaction.get("store").owner("files").proxy().remove("chain"));
+        const files = try transaction.get("store").owner("files");
+        try std.testing.expect(try files.proxy().remove("chain"));
         try transaction.commit();
     }
     try database.startGarbageCollection();
@@ -557,7 +614,7 @@ test "fullaz-db hierarchyStore: memory and static databases construct and persis
     defer memory.deinit();
     var memory_transaction = try memory.begin();
     defer memory_transaction.deinit();
-    const memory_files = memory_transaction.get("store").owner("files");
+    const memory_files = try memory_transaction.get("store").owner("files");
     const memory_value = try memory_files.encodedRaw("node", "memory");
     try std.testing.expect(try memory_files.proxy().insert("node", memory_value.data()));
     try memory_transaction.commit();
@@ -580,7 +637,7 @@ test "fullaz-db hierarchyStore: memory and static databases construct and persis
         );
         defer database.deinit();
         var transaction = try database.begin();
-        const files = transaction.get("store").owner("files");
+        const files = try transaction.get("store").owner("files");
         const value = try files.encodedRaw("node", "static");
         try std.testing.expect(try files.proxy().insert("node", value.data()));
         try transaction.commit();
@@ -604,7 +661,7 @@ test "fullaz-db hierarchyStore: memory and static databases construct and persis
         }
         {
             var transaction = try database.begin();
-            const files = transaction.get("store").owner("files");
+            const files = try transaction.get("store").owner("files");
             const value = try files.encodedRaw("node", "reopen");
             try std.testing.expect(try files.proxy().insert("node-2", value.data()));
             try transaction.commit();
@@ -619,5 +676,197 @@ test "fullaz-db hierarchyStore: memory and static databases construct and persis
                 (try fullaz_db.value_envelope.readAny(value)).metadata.instance_id,
             );
         }
+    }
+}
+
+test "fullaz-db hierarchyStore: slot-sequence children nest and tombstones release descendants" {
+    const List = fullaz_db.slotList(.{ .maximum_value_size = 128 });
+    const Queue = fullaz_db.slotQueue(.{ .maximum_value_size = 128 });
+    const Stack = fullaz_db.slotStack(.{ .maximum_value_size = 128 });
+    const Types = fullaz_db.Hierarchy(.{
+        .registry_id = 0x77dd,
+        .types = &.{
+            .{
+                .tag = "list",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = List,
+                .allowed_child_type_ids = &.{2},
+            },
+            .{
+                .tag = "queue",
+                .type_id = 2,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = Queue,
+                .allowed_child_type_ids = &.{3},
+            },
+            .{
+                .tag = "stack",
+                .type_id = 3,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = Stack,
+                .allowed_child_type_ids = &.{2},
+            },
+        },
+    });
+    const OwnerDescriptor = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 51,
+        .maximum_key_size = 16,
+        .maximum_value_size = 128,
+        .fixed_value_size = 128,
+    });
+    const Store = fullaz_db.hierarchyStore(Types, .{ .owners = &.{.{
+        .tag = "items",
+        .owner_id = 1,
+        .descriptor = OwnerDescriptor,
+        .allowed_type_ids = &.{1},
+    }} });
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("store", Store);
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        .{ .image_id = [_]u8{0x7d} ** 16, .components = .{ .store = .{ .owner_0 = .{} } } },
+    );
+    defer database.deinit();
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const owner = try transaction.get("store").owner("items");
+        const list_value = try owner.encodedEmbedded("list");
+        try std.testing.expect(try owner.proxy().insert("root", list_value.data()));
+
+        const list_editor = (try owner.proxy().openValueEditor("root")).?;
+        var list = try owner.openChild(list_editor, "list");
+        defer list.deinit();
+        const queue_value = try list.encodedEmbedded("queue");
+        try list.proxy().append(queue_value.data());
+
+        var list_iterator = (try list.proxy().iterator()).?;
+        _ = (try list_iterator.next()).?;
+        const queue_editor = (try list_iterator.editValue()).?;
+        list_iterator.deinit();
+        var queue = try list.openChild(queue_editor, "queue");
+        defer queue.deinit();
+        const stack_value = try queue.encodedEmbedded("stack");
+        try queue.proxy().enqueue(stack_value.data());
+
+        var queue_front = try queue.proxy().front();
+        const stack_editor = try queue_front.editValue();
+        queue_front.deinit();
+        var stack = try queue.openChild(stack_editor, "stack");
+        defer stack.deinit();
+        const inner_queue_value = try stack.encodedEmbedded("queue");
+        try stack.proxy().push(inner_queue_value.data());
+
+        var stack_top = try stack.proxy().top();
+        const inner_queue_editor = try stack_top.editValue();
+        stack_top.deinit();
+        var inner_queue = try stack.openChild(inner_queue_editor, "queue");
+        defer inner_queue.deinit();
+        const leaf_value = try inner_queue.encodedRaw("queue", "leaf");
+        try inner_queue.proxy().enqueue(leaf_value.data());
+
+        try inner_queue.finish();
+        try stack.finish();
+        try queue.finish();
+        try list.finish();
+        try transaction.commit();
+    }
+
+    var list_root: u32 = undefined;
+    var queue_root: u32 = undefined;
+    var stack_root: u32 = undefined;
+    var inner_queue_root: u32 = undefined;
+    {
+        const owner = database.getConst("store").owner("items");
+        var root_entry = (try owner.find("root")).?;
+        const list_state = try embeddedState(
+            List.Trait.Binding(Database.BackendType).State,
+            (try root_entry.get()).?.value,
+            Types.typeIdentityByTag("list"),
+        );
+        list_root = list_state.page_chain.first.get();
+        root_entry.deinit();
+
+        var list = (try owner.openEmbedded("root", "list")).?;
+        defer list.deinit();
+        var list_iterator = (try list.proxy().iterator()).?;
+        const queue_bytes = (try list_iterator.next()).?;
+        const queue_state = try embeddedState(
+            Queue.Trait.Binding(Database.BackendType).State,
+            queue_bytes,
+            Types.typeIdentityByTag("queue"),
+        );
+        queue_root = queue_state.page_chain.first.get();
+        var queue = try list.openChild(list_iterator, queue_bytes, "queue");
+        defer queue.deinit();
+
+        var queue_front = try queue.proxy().front();
+        const stack_bytes = try queue_front.value();
+        const stack_state = try embeddedState(
+            Stack.Trait.Binding(Database.BackendType).State,
+            stack_bytes,
+            Types.typeIdentityByTag("stack"),
+        );
+        stack_root = stack_state.page_chain.first.get();
+        var stack = try queue.openChild(queue_front, stack_bytes, "stack");
+        defer stack.deinit();
+
+        var stack_top = try stack.proxy().top();
+        const inner_queue_bytes = try stack_top.value();
+        const inner_queue_state = try embeddedState(
+            Queue.Trait.Binding(Database.BackendType).State,
+            inner_queue_bytes,
+            Types.typeIdentityByTag("queue"),
+        );
+        inner_queue_root = inner_queue_state.page_chain.first.get();
+        var inner_queue = try stack.openChild(stack_top, inner_queue_bytes, "queue");
+        defer inner_queue.deinit();
+
+        var inner_queue_front = try inner_queue.proxy().front();
+        defer inner_queue_front.deinit();
+        const leaf = try fullaz_db.value_envelope.readRaw(
+            try inner_queue_front.value(),
+            Types.typeIdentityByTag("queue"),
+        );
+        try std.testing.expectEqualStrings("leaf", leaf.payload);
+    }
+
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    inline for (.{ list_root, queue_root, stack_root, inner_queue_root }) |page_id| {
+        var retained = try database.cache().fetch(page_id);
+        retained.deinit();
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const owner = try transaction.get("store").owner("items");
+        const list_editor = (try owner.proxy().openValueEditor("root")).?;
+        var list = try owner.openChild(list_editor, "list");
+        defer list.deinit();
+        var list_iterator = (try list.proxy().iterator()).?;
+        _ = (try list_iterator.next()).?;
+        try list_iterator.markTombstone();
+        list_iterator.deinit();
+        try list.finish();
+        try transaction.commit();
+    }
+
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    var retained_list = try database.cache().fetch(list_root);
+    retained_list.deinit();
+    inline for (.{ queue_root, stack_root, inner_queue_root }) |page_id| {
+        try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(page_id));
     }
 }

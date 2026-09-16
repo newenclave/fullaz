@@ -182,6 +182,12 @@ fn HandleDirectionalImpl(
         tombstone = 1 << 0,
     };
 
+    comptime {
+        if (SlotsDir.FlagsMask != @intFromEnum(SlotsFlags.tombstone)) {
+            @compileError("SlotChain slots must keep alignment 2 and tombstone flag bit 0");
+        }
+    }
+
     const SlotCleaner = struct {
         const Self = @This();
         fn cb(self: *const Self, slot_id: usize, flags: IndexT, data: []const u8) bool {
@@ -240,18 +246,13 @@ fn HandleDirectionalImpl(
             return try self.ph.id();
         }
 
-        pub fn setTombstone(self: *Self, index: IndexT) Error!void {
-            var sd = try self.slotsDirMut();
-            try sd.setFlags(index, @intCast(@intFromEnum(SlotsFlags.tombstone)));
-        }
-
         pub fn isTombstone(self: *const Self, index: IndexT) Error!bool {
             const sd = try self.slotsDir();
             const flags = try sd.getFlags(index);
             return (flags & @intFromEnum(SlotsFlags.tombstone)) != 0;
         }
 
-        pub fn removeTombstones(self: *Self) Error!usize {
+        fn removeTombstones(self: *Self) Error!usize {
             var sd = try self.slotsDirMut();
             const sc = SlotCleaner{};
             return try sd.removeIf(SlotCleaner.cb, &sc);
@@ -305,9 +306,21 @@ fn HandleDirectionalImpl(
                     return false;
                 }
 
+                var state_lease = try self.manager.state();
+                defer state_lease.deinit();
+                const state = try StateView.viewMut(&state_lease);
+                const elements = state.elements_count.get();
+                const tombstones = state.tombstone_count.get();
+                if (elements == 0 or tombstones == 0 or tombstones > elements) {
+                    return Error.BadData;
+                }
+
                 try sd.remove(self.slot_id);
                 errdefer self.deinitPage();
                 const page_empty = sd.size() == 0;
+                state.elements_count.set(elements - 1);
+                state.tombstone_count.set(tombstones - 1);
+                state_lease.finish();
                 if (comptime FsmT != void) {
                     if (self.fsm) |fsm| {
                         if (page_empty) {
@@ -317,15 +330,6 @@ fn HandleDirectionalImpl(
                         }
                     }
                 }
-                var state_lease = try self.manager.state();
-                defer state_lease.deinit();
-                const state = try StateView.viewMut(&state_lease);
-                const total = state.total_size.get();
-                if (total == 0) {
-                    return Error.BadData;
-                }
-                state.total_size.set(total - 1);
-                state_lease.finish();
                 self.deinitPage();
                 if (page_empty) {
                     try self.removeEmptyPage();
@@ -375,18 +379,46 @@ fn HandleDirectionalImpl(
         fn forIterator(comptime IteratorT: type) type {
             return struct {
                 const Error = IteratorT.Error;
-                fn markTombstone(self: *IteratorT) Error!void {
+                fn markPageTombstone(
+                    self: *IteratorT,
+                    page: *PageChainHandle.Chunk,
+                    slot_id: usize,
+                ) Error!bool {
+                    var slots_dir = try SlotsDir.init(try page.dataMut());
+                    const flags = try slots_dir.getFlags(slot_id);
+                    if ((flags & @intFromEnum(SlotsFlags.tombstone)) != 0) {
+                        return false;
+                    }
+
+                    var state_lease = try self.manager.state();
+                    defer state_lease.deinit();
+                    const state = try StateView.viewMut(&state_lease);
+                    const elements = state.elements_count.get();
+                    const tombstones = state.tombstone_count.get();
+                    if (tombstones >= elements) {
+                        return Error.BadData;
+                    }
+                    const next_tombstones = std.math.add(SizeT, tombstones, 1) catch {
+                        return Error.BadData;
+                    };
+
+                    try slots_dir.setFlags(
+                        slot_id,
+                        @intCast(@intFromEnum(SlotsFlags.tombstone)),
+                    );
+                    state.tombstone_count.set(next_tombstones);
+                    state_lease.finish();
+                    return true;
+                }
+
+                fn markTombstone(self: *IteratorT) Error!bool {
                     const slot_id = switch (self.cursor) {
                         .on => |index| index,
                         else => return Error.InvalidIterator,
                     };
                     var page = (try self.page_itr.cloneChunk()) orelse return Error.InvalidIterator;
                     defer page.deinit();
-                    var slots_dir = try SlotsDir.init(try page.dataMut());
-                    const flags = try slots_dir.getFlags(slot_id);
-                    if ((flags & @intFromEnum(SlotsFlags.tombstone)) == 0) {
-                        try slots_dir.setFlags(slot_id, @intCast(@intFromEnum(SlotsFlags.tombstone)));
-                    }
+                    return markPageTombstone(self, &page, slot_id);
                 }
             };
         }
@@ -639,8 +671,11 @@ fn HandleDirectionalImpl(
             var page = (try self.page_itr.cloneChunk()) orelse return Error.InvalidIterator;
             errdefer page.deinit();
 
-            var sd = try SlotsDir.init(try page.dataMut());
-            try sd.setFlags(slot_id, @intCast(@intFromEnum(SlotsFlags.tombstone)));
+            _ = try TombstoneMarker.forIterator(Self).markPageTombstone(
+                self,
+                &page,
+                slot_id,
+            );
             return .{
                 .page_id = try page.id(),
                 .slot_id = slot_id,
@@ -656,7 +691,7 @@ fn HandleDirectionalImpl(
         pub fn markTombstone(self: *Self) Error!void {
             var mutation = try self.coordinator.beginStructuralMutation();
             defer mutation.deinit();
-            return TombstoneMarker.forIterator(Self).markTombstone(self);
+            _ = try TombstoneMarker.forIterator(Self).markTombstone(self);
         }
 
         pub fn editValue(self: *Self) Error!?ValueEditorImpl {
@@ -815,8 +850,11 @@ fn HandleDirectionalImpl(
             var page = (try self.page_itr.cloneChunk()) orelse return Error.InvalidIterator;
             errdefer page.deinit();
 
-            var sd = try SlotsDir.init(try page.dataMut());
-            try sd.setFlags(slot_id, @intCast(@intFromEnum(SlotsFlags.tombstone)));
+            _ = try TombstoneMarker.forIterator(Self).markPageTombstone(
+                self,
+                &page,
+                slot_id,
+            );
             return .{
                 .page_id = try page.id(),
                 .slot_id = slot_id,
@@ -832,7 +870,7 @@ fn HandleDirectionalImpl(
         pub fn markTombstone(self: *Self) Error!void {
             var mutation = try self.coordinator.beginStructuralMutation();
             defer mutation.deinit();
-            return TombstoneMarker.forIterator(Self).markTombstone(self);
+            _ = try TombstoneMarker.forIterator(Self).markTombstone(self);
         }
 
         pub fn editValue(self: *Self) Error!?ValueEditorImpl {
@@ -1026,37 +1064,79 @@ fn HandleDirectionalImpl(
             return if (last == std.math.maxInt(PageId)) null else last;
         }
 
-        fn totalSize(self: *const Self) Error!Size {
+        fn readCounts(self: *const Self) Error!struct { elements: Size, tombstones: Size } {
             var lease = try self.ctx.storage_manager.state();
             defer lease.deinit();
-            return (try StateView.view(&lease)).total_size.get();
+            const state = try StateView.view(&lease);
+            return .{
+                .elements = state.elements_count.get(),
+                .tombstones = state.tombstone_count.get(),
+            };
         }
 
-        fn setTotalSize(self: *Self, total_size: Size) Error!void {
+        fn incrementElementsCount(self: *Self) Error!void {
             var lease = try self.ctx.storage_manager.state();
             defer lease.deinit();
-            (try StateView.viewMut(&lease)).total_size.set(total_size);
+            const state = try StateView.viewMut(&lease);
+            const elements = state.elements_count.get();
+            const tombstones = state.tombstone_count.get();
+            if (tombstones > elements) {
+                return Error.BadData;
+            }
+            state.elements_count.set(std.math.add(Size, elements, 1) catch {
+                return Error.BadData;
+            });
             lease.finish();
         }
 
-        fn incrementTotalSize(self: *Self) Error!void {
-            const total = try self.totalSize();
-            try self.setTotalSize(std.math.add(Size, total, 1) catch return Error.BadData);
-        }
-
-        fn decrementTotalSize(self: *Self, removed_slots: usize) Error!void {
-            const removed = std.math.cast(Size, removed_slots) orelse return Error.BadData;
-            const total = try self.totalSize();
-            if (removed > total) {
+        fn ensureCanIncrementElementsCount(self: *const Self) Error!void {
+            const counts = try self.readCounts();
+            if (counts.tombstones > counts.elements or counts.elements == std.math.maxInt(Size)) {
                 return Error.BadData;
             }
-            try self.setTotalSize(total - removed);
+        }
+
+        fn decrementCounts(
+            self: *Self,
+            removed_elements: usize,
+            removed_tombstones: usize,
+        ) Error!void {
+            const removed_element_count = std.math.cast(Size, removed_elements) orelse {
+                return Error.BadData;
+            };
+            const removed_tombstone_count = std.math.cast(Size, removed_tombstones) orelse {
+                return Error.BadData;
+            };
+            if (removed_tombstone_count > removed_element_count) {
+                return Error.BadData;
+            }
+
+            var lease = try self.ctx.storage_manager.state();
+            defer lease.deinit();
+            const state = try StateView.viewMut(&lease);
+            const elements = state.elements_count.get();
+            const tombstones = state.tombstone_count.get();
+            if (tombstones > elements or
+                removed_element_count > elements or
+                removed_tombstone_count > tombstones)
+            {
+                return Error.BadData;
+            }
+            const remaining_elements = elements - removed_element_count;
+            const remaining_tombstones = tombstones - removed_tombstone_count;
+            if (remaining_tombstones > remaining_elements) {
+                return Error.BadData;
+            }
+            state.elements_count.set(remaining_elements);
+            state.tombstone_count.set(remaining_tombstones);
+            lease.finish();
         }
 
         fn finishPageRemoval(
             self: *Self,
             page_id: PageId,
             removed_slots: usize,
+            removed_tombstones: usize,
             remaining_slots: usize,
             free_space: usize,
         ) Error!void {
@@ -1064,7 +1144,7 @@ fn HandleDirectionalImpl(
                 return;
             }
 
-            try self.decrementTotalSize(removed_slots);
+            try self.decrementCounts(removed_slots, removed_tombstones);
 
             if (comptime FsmT != void) {
                 if (self.ctx.fsm) |fsm| {
@@ -1107,6 +1187,7 @@ fn HandleDirectionalImpl(
         pub fn insertUnordered(self: *Self, val: ValueIn) Error!void {
             var mutation = try self.ctx.coordinator.beginStructuralMutation();
             defer mutation.deinit();
+            try self.ensureCanIncrementElementsCount();
             if (try self.findFreeSlot(val.len)) |page_id| {
                 var page = try self.loadPage(page_id);
                 defer page.deinit();
@@ -1126,7 +1207,7 @@ fn HandleDirectionalImpl(
                 }
 
                 _ = try sd.insert(val);
-                try self.incrementTotalSize();
+                try self.incrementElementsCount();
                 try self.updatePageInFsm(page_id, sd.availableSpace());
             } else {
                 _ = try self.appendRefInner(val);
@@ -1142,6 +1223,7 @@ fn HandleDirectionalImpl(
         pub fn appendRef(self: *Self, val: ValueIn) Error!SlotRef {
             var mutation = try self.ctx.coordinator.beginStructuralMutation();
             defer mutation.deinit();
+            try self.ensureCanIncrementElementsCount();
             return self.appendRefInner(val);
         }
 
@@ -1163,7 +1245,7 @@ fn HandleDirectionalImpl(
                         const slot_id: Index = @intCast(try next_sd.insert(val));
 
                         try self.ctx.page_chain.insertLast(&next.ph);
-                        try self.incrementTotalSize();
+                        try self.incrementElementsCount();
 
                         last_c.deinit();
                         self.last_chunk = next;
@@ -1174,7 +1256,7 @@ fn HandleDirectionalImpl(
                 }
 
                 const slot_id: Index = @intCast(try sd.insert(val));
-                try self.incrementTotalSize();
+                try self.incrementElementsCount();
                 try self.updatePageInFsm(try last_c.id(), sd.availableSpace());
                 return .{
                     .page_id = try self.last_chunk.?.id(),
@@ -1189,7 +1271,7 @@ fn HandleDirectionalImpl(
                 const slot_id: Index = @intCast(try sd.insert(val));
 
                 try self.ctx.page_chain.insertFirst(&page.ph);
-                try self.setTotalSize(1);
+                try self.incrementElementsCount();
                 try self.updatePageInFsm(page_id, sd.availableSpace());
                 self.last_chunk = page;
                 return .{ .page_id = page_id, .slot_id = slot_id };
@@ -1250,7 +1332,29 @@ fn HandleDirectionalImpl(
         }
 
         pub fn size(self: *const Self) Error!usize {
-            return @intCast(try self.totalSize());
+            const counts = try self.readCounts();
+            if (counts.tombstones > counts.elements) {
+                return Error.BadData;
+            }
+            return std.math.cast(usize, counts.elements - counts.tombstones) orelse {
+                return Error.BadData;
+            };
+        }
+
+        pub fn elementsCount(self: *const Self) Error!usize {
+            const counts = try self.readCounts();
+            if (counts.tombstones > counts.elements) {
+                return Error.BadData;
+            }
+            return std.math.cast(usize, counts.elements) orelse return Error.BadData;
+        }
+
+        pub fn tombstoneCount(self: *const Self) Error!usize {
+            const counts = try self.readCounts();
+            if (counts.tombstones > counts.elements) {
+                return Error.BadData;
+            }
+            return std.math.cast(usize, counts.tombstones) orelse return Error.BadData;
         }
 
         /// Releases the optional append cache before external page reclamation.
@@ -1309,8 +1413,9 @@ fn HandleDirectionalImpl(
             var marked: usize = 0;
             while (try chain_iterator.next()) |result| {
                 if (try predicate(context, result.page_id, result.pos, result.value)) {
-                    try TombstoneMarker.forIterator(Iterator).markTombstone(&chain_iterator);
-                    marked += 1;
+                    if (try TombstoneMarker.forIterator(Iterator).markTombstone(&chain_iterator)) {
+                        marked += 1;
+                    }
                 }
             }
             return marked;
@@ -1321,25 +1426,32 @@ fn HandleDirectionalImpl(
             var mutation = try self.ctx.coordinator.beginStructuralMutation();
             defer mutation.deinit();
             self.preparePageChain();
-            var chain_iterator = try self.ctx.page_chain.iterator();
-            defer chain_iterator.deinit();
 
             var removed_total: usize = 0;
-            while (try chain_iterator.get()) |page_result| {
-                var page = try self.loadPage(page_result.page_id);
-                const removed_slots = try page.removeTombstones();
-                const remaining_slots = try page.size();
-                const free_space = (try page.slotsDir()).availableSpace();
-                page.deinit();
+            var current_page_id = try self.firstId();
+            while (current_page_id) |page_id| {
+                const page_result = blk: {
+                    var page = try self.loadPage(page_id);
+                    defer page.deinit();
+                    const next_page_id = (try page.view()).getNext();
+                    const removed_slots = try page.removeTombstones();
+                    break :blk .{
+                        .next_page_id = next_page_id,
+                        .removed_slots = removed_slots,
+                        .remaining_slots = try page.size(),
+                        .free_space = (try page.slotsDir()).availableSpace(),
+                    };
+                };
 
                 try self.finishPageRemoval(
-                    page_result.page_id,
-                    removed_slots,
-                    remaining_slots,
-                    free_space,
+                    page_id,
+                    page_result.removed_slots,
+                    page_result.removed_slots,
+                    page_result.remaining_slots,
+                    page_result.free_space,
                 );
-                removed_total += removed_slots;
-                try chain_iterator.next();
+                removed_total += page_result.removed_slots;
+                current_page_id = page_result.next_page_id;
             }
             return removed_total;
         }
@@ -1348,14 +1460,24 @@ fn HandleDirectionalImpl(
         pub fn removePageTombstones(self: *Self, page_id: PageId) Error!usize {
             var mutation = try self.ctx.coordinator.beginStructuralMutation();
             defer mutation.deinit();
-            var page = try self.loadPage(page_id);
-            const removed_slots = try page.removeTombstones();
-            const remaining_slots = try page.size();
-            const free_space = (try page.slotsDir()).availableSpace();
-            page.deinit();
+            const page_result = blk: {
+                var page = try self.loadPage(page_id);
+                defer page.deinit();
+                break :blk .{
+                    .removed_slots = try page.removeTombstones(),
+                    .remaining_slots = try page.size(),
+                    .free_space = (try page.slotsDir()).availableSpace(),
+                };
+            };
 
-            try self.finishPageRemoval(page_id, removed_slots, remaining_slots, free_space);
-            return removed_slots;
+            try self.finishPageRemoval(
+                page_id,
+                page_result.removed_slots,
+                page_result.removed_slots,
+                page_result.remaining_slots,
+                page_result.free_space,
+            );
+            return page_result.removed_slots;
         }
 
         /// Physically removes live slots selected by `predicate` and returns their count.
@@ -1382,33 +1504,42 @@ fn HandleDirectionalImpl(
                 }
             };
 
-            var chain_iterator = try self.ctx.page_chain.iterator();
-            defer chain_iterator.deinit();
-
             var removed_total: usize = 0;
-            while (try chain_iterator.get()) |page_result| {
-                var page = try self.loadPage(page_result.page_id);
-                var slots_dir = try page.slotsDirMut();
+            var current_page_id = try self.firstId();
+            while (current_page_id) |page_id| {
                 var predicate_context = PredicateContext{
                     .context = context,
-                    .page_id = page_result.page_id,
+                    .page_id = page_id,
                 };
-                const removed_slots = try slots_dir.removeIf(PredicateContext.call, &predicate_context);
-                const remaining_slots = try page.size();
-                const free_space = (try page.slotsDir()).availableSpace();
-                page.deinit();
+                const page_result = blk: {
+                    var page = try self.loadPage(page_id);
+                    defer page.deinit();
+                    const next_page_id = (try page.view()).getNext();
+                    var slots_dir = try page.slotsDirMut();
+                    const removed_slots = try slots_dir.removeIf(
+                        PredicateContext.call,
+                        &predicate_context,
+                    );
+                    break :blk .{
+                        .next_page_id = next_page_id,
+                        .removed_slots = removed_slots,
+                        .remaining_slots = try page.size(),
+                        .free_space = (try page.slotsDir()).availableSpace(),
+                    };
+                };
 
                 try self.finishPageRemoval(
-                    page_result.page_id,
-                    removed_slots,
-                    remaining_slots,
-                    free_space,
+                    page_id,
+                    page_result.removed_slots,
+                    0,
+                    page_result.remaining_slots,
+                    page_result.free_space,
                 );
-                removed_total += removed_slots;
+                removed_total += page_result.removed_slots;
                 if (predicate_context.callback_error) |err| {
                     return err;
                 }
-                try chain_iterator.next();
+                current_page_id = page_result.next_page_id;
             }
             return removed_total;
         }

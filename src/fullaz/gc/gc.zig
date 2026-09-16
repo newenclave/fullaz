@@ -131,20 +131,42 @@ pub fn Gc(comptime ModelT: type) type {
             scan: Scanner,
             value_scan: ?ValueScanner,
         ) Error!void {
-            if (self.model.isCycleActive()) {
-                return self.registerResumed(
-                    page_kind,
-                    version,
-                    context,
-                    scan,
-                    value_scan,
-                );
-            }
-            return self.register(
+            return self.registerForCycleWithContexts(
                 page_kind,
                 version,
                 context,
                 scan,
+                context,
+                value_scan,
+            );
+        }
+
+        /// Registers or rebuilds a scanner with separate caller-owned contexts.
+        pub fn registerForCycleWithContexts(
+            self: *Self,
+            page_kind: PageKind,
+            version: ScannerVersion,
+            scan_context: ?*const anyopaque,
+            scan: Scanner,
+            value_context: ?*const anyopaque,
+            value_scan: ?ValueScanner,
+        ) Error!void {
+            if (self.model.isCycleActive()) {
+                return self.registerResumedWithContexts(
+                    page_kind,
+                    version,
+                    scan_context,
+                    scan,
+                    value_context,
+                    value_scan,
+                );
+            }
+            return self.registerWithContexts(
+                page_kind,
+                version,
+                scan_context,
+                scan,
+                value_context,
                 value_scan,
             );
         }

@@ -272,9 +272,10 @@ fn ownerDescriptor(
                     runtime.* = undefined;
                 }
                 pub fn requireTransactionIdle(runtime: *const Runtime) Error!void {
-                    if (comptime kind != .bpt) {
-                        try Parent.requireTransactionIdle(&runtime.parent);
+                    if (comptime kind == .bpt) {
+                        return Core.requireTransactionIdle(&runtime.envelope);
                     }
+                    try Parent.requireTransactionIdle(&runtime.parent);
                     if (runtime.envelope.active_editor) {
                         return error.EditorActive;
                     }
@@ -328,13 +329,13 @@ fn ownerDescriptor(
                         pub fn registerScanners(runtime: *const Runtime, collector: *CollectorT) RegisterError!void {
                             const kinds = if (comptime kind == .bpt) runtime.envelope.parent.page_kinds else runtime.parent.page_kinds;
                             if (comptime kind == .bpt) {
-                                try collector.registerForCycle(kinds.kindAt(0).?, 1, &runtime.envelope.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanLeafRefs), Core.hierarchyValueScanner(CollectorT));
+                                try collector.registerForCycleWithContexts(kinds.kindAt(0).?, 1, &runtime.envelope.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanLeafRefs), &runtime.envelope, Core.hierarchyValueScanner(CollectorT));
                                 try collector.registerForCycle(kinds.kindAt(1).?, 1, &runtime.envelope.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanInodeRefs), null);
                             } else if (comptime kind == .rtree) {
-                                try collector.registerForCycle(kinds.kindAt(0).?, 1, &runtime.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanLeafRefs), Core.hierarchyValueScanner(CollectorT));
+                                try collector.registerForCycleWithContexts(kinds.kindAt(0).?, 1, &runtime.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanLeafRefs), &runtime.envelope, Core.hierarchyValueScanner(CollectorT));
                                 try collector.registerForCycle(kinds.kindAt(1).?, 1, &runtime.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanInodeRefs), null);
                             } else {
-                                try collector.registerForCycle(kinds.kindAt(0).?, 1, &runtime.parent.heap, gc.scanners.method(CollectorT, Parent.Heap, Parent.Heap.scanLeafRefs), Core.hierarchyValueScanner(CollectorT));
+                                try collector.registerForCycleWithContexts(kinds.kindAt(0).?, 1, &runtime.parent.heap, gc.scanners.method(CollectorT, Parent.Heap, Parent.Heap.scanLeafRefs), &runtime.envelope, Core.hierarchyValueScanner(CollectorT));
                                 try collector.registerForCycle(kinds.kindAt(1).?, 1, &runtime.parent.heap, gc.scanners.method(CollectorT, Parent.Heap, Parent.Heap.scanInodeRefs), null);
                                 try collector.registerForCycle(kinds.kindAt(2).?, 1, &runtime.parent.fsm, gc.scanners.method(CollectorT, @TypeOf(runtime.parent.fsm), @TypeOf(runtime.parent.fsm).scanSlabRefs), null);
                             }

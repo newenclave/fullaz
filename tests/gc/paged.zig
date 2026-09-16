@@ -216,6 +216,129 @@ test "GC: paged model requires an active transaction to open state" {
     try std.testing.expectError(error.TransactionInactive, Model.init(std.testing.allocator, &cache, &manager));
 }
 
+test "GC: paged model validates persisted queue counts" {
+    const Model = fullaz.gc.models.Paged(Cache, StorageManager);
+    const queue_offset = 10 + @sizeOf(u64) + 5 * @sizeOf(usize);
+    const elements_count_offset = queue_offset + 2 * @sizeOf(usize);
+    const tombstone_count_offset = elements_count_offset + @sizeOf(u64);
+
+    var store = try Store.init(std.testing.allocator, 1);
+    defer store.deinit();
+    var cache = Cache{ .store = &store, .active = true };
+    var manager = StorageManager{ .store = &store };
+    var model = try Model.init(std.testing.allocator, &cache, &manager);
+    defer model.deinit();
+
+    _ = try model.beginCycle(0);
+    const state_page_id = store.gc_state.state_page_root.get();
+    const state_page = store.entries[state_page_id].bytes[0..];
+    try std.testing.expectEqual(@as(u8, 3), state_page[7]);
+
+    std.mem.writeInt(u64, state_page[elements_count_offset..][0..@sizeOf(u64)], 1, .little);
+    try std.testing.expectError(error.InvalidState, model.registryDigest());
+    std.mem.writeInt(u64, state_page[elements_count_offset..][0..@sizeOf(u64)], 0, .little);
+    std.mem.writeInt(u64, state_page[tombstone_count_offset..][0..@sizeOf(u64)], 1, .little);
+    try std.testing.expectError(error.InvalidState, model.registryDigest());
+}
+
+test "GC: paged model rejects half-linked persisted queue before dequeue and sweep" {
+    const Model = fullaz.gc.models.Paged(Cache, StorageManager);
+    const Collector = fullaz.gc.Gc(Model);
+    const queue_offset = 10 + @sizeOf(u64) + 5 * @sizeOf(usize);
+    const first_offset = queue_offset;
+    const last_offset = first_offset + @sizeOf(usize);
+    const elements_count_offset = queue_offset + 2 * @sizeOf(usize);
+    const nil_page_id = std.math.maxInt(usize);
+
+    var store = try Store.init(std.testing.allocator, 1);
+    defer store.deinit();
+    var cache = Cache{ .store = &store, .active = true };
+    var manager = StorageManager{ .store = &store };
+
+    var queue_page_id: usize = undefined;
+    {
+        var model = try Model.init(std.testing.allocator, &cache, &manager);
+        defer model.deinit();
+        _ = try model.beginCycle(0);
+
+        // Appending to an empty queue temporarily writes last before first.
+        try model.enqueue(0);
+        try model.setPhase(.marking);
+        const state_page_id = store.gc_state.state_page_root.get();
+        const state_page = store.entries[state_page_id].bytes[0..];
+        queue_page_id = std.mem.readInt(
+            usize,
+            state_page[first_offset..][0..@sizeOf(usize)],
+            .little,
+        );
+        try std.testing.expect(queue_page_id != nil_page_id);
+    }
+
+    const state_page_id = store.gc_state.state_page_root.get();
+    const state_page = store.entries[state_page_id].bytes[0..];
+    std.mem.writeInt(
+        usize,
+        state_page[first_offset..][0..@sizeOf(usize)],
+        nil_page_id,
+        .little,
+    );
+    {
+        var reopened = try Model.init(std.testing.allocator, &cache, &manager);
+        defer reopened.deinit();
+        try std.testing.expectError(error.InvalidState, reopened.dequeue());
+    }
+
+    std.mem.writeInt(
+        usize,
+        state_page[first_offset..][0..@sizeOf(usize)],
+        queue_page_id,
+        .little,
+    );
+    std.mem.writeInt(
+        u64,
+        state_page[elements_count_offset..][0..@sizeOf(u64)],
+        0,
+        .little,
+    );
+    {
+        var reopened = try Model.init(std.testing.allocator, &cache, &manager);
+        defer reopened.deinit();
+        try std.testing.expectError(error.InvalidState, reopened.dequeue());
+    }
+    std.mem.writeInt(
+        u64,
+        state_page[elements_count_offset..][0..@sizeOf(u64)],
+        1,
+        .little,
+    );
+    {
+        var model = try Model.init(std.testing.allocator, &cache, &manager);
+        defer model.deinit();
+        try model.setPhase(.sweeping);
+    }
+    {
+        var reopened = try Model.init(std.testing.allocator, &cache, &manager);
+        defer reopened.deinit();
+        var collector = Collector.init(&reopened);
+        defer collector.deinit();
+        try std.testing.expectError(error.InvalidState, collector.step(1));
+    }
+    std.mem.writeInt(
+        usize,
+        state_page[last_offset..][0..@sizeOf(usize)],
+        nil_page_id,
+        .little,
+    );
+    {
+        var reopened = try Model.init(std.testing.allocator, &cache, &manager);
+        defer reopened.deinit();
+        var collector = Collector.init(&reopened);
+        defer collector.deinit();
+        try std.testing.expectError(error.InvalidState, collector.step(1));
+    }
+    try std.testing.expect(!store.entries[0].free);
+}
+
 test "GC: paged model uses configured private kinds and validates private pages" {
     const state_kind = 0x9101;
     const mark_bitmap_kind = 0x9102;

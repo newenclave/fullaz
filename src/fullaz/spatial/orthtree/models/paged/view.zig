@@ -74,7 +74,8 @@ pub fn View(
         pub const EntryChain = struct {
             first: ?PageIdT,
             last: ?PageIdT,
-            count: usize,
+            elements_count: usize,
+            tombstone_count: usize,
         };
 
         page_view: HeaderPageView,
@@ -122,7 +123,13 @@ pub fn View(
 
             const first_unlinked = node_subheader.entries_first.isMax();
             const last_unlinked = node_subheader.entries_last.isMax();
-            if (first_unlinked != last_unlinked) {
+            const elements_count = node_subheader.entries_elements_count.get();
+            const tombstone_count = node_subheader.entries_tombstone_count.get();
+            if (first_unlinked != last_unlinked or
+                tombstone_count > elements_count or
+                (first_unlinked and (elements_count != 0 or tombstone_count != 0)) or
+                (!first_unlinked and elements_count == 0))
+            {
                 return Error.BadData;
             }
             if (self.isLeaf()) {
@@ -196,19 +203,37 @@ pub fn View(
             return .{
                 .first = idOrNull(&node_subheader.entries_first),
                 .last = idOrNull(&node_subheader.entries_last),
-                .count = @intCast(node_subheader.entries_count.get()),
+                .elements_count = @intCast(node_subheader.entries_elements_count.get()),
+                .tombstone_count = @intCast(node_subheader.entries_tombstone_count.get()),
             };
         }
 
-        pub fn setEntryChain(self: *Self, first: ?PageIdT, last: ?PageIdT, count: usize) Error!void {
-            if ((first == null) != (last == null)) {
+        pub fn setEntryChain(
+            self: *Self,
+            first: ?PageIdT,
+            last: ?PageIdT,
+            elements_count: usize,
+            tombstone_count: usize,
+        ) Error!void {
+            if ((first == null) != (last == null) or
+                tombstone_count > elements_count or
+                (first == null and (elements_count != 0 or tombstone_count != 0)) or
+                (first != null and elements_count == 0))
+            {
                 return Error.BadData;
             }
-            try self.setEntryChainUnchecked(first, last, count);
+            try self.setEntryChainUnchecked(first, last, elements_count, tombstone_count);
         }
 
-        pub fn setEntryChainUnchecked(self: *Self, first: ?PageIdT, last: ?PageIdT, count: usize) Error!void {
-            const stored_count = std.math.cast(u32, count) orelse return Error.BadData;
+        pub fn setEntryChainUnchecked(
+            self: *Self,
+            first: ?PageIdT,
+            last: ?PageIdT,
+            elements_count: usize,
+            tombstone_count: usize,
+        ) Error!void {
+            const stored_elements_count = std.math.cast(u32, elements_count) orelse return Error.BadData;
+            const stored_tombstone_count = std.math.cast(u32, tombstone_count) orelse return Error.BadData;
             const node_subheader = self.subheaderMut();
             if (first) |page_id| {
                 node_subheader.entries_first.set(page_id);
@@ -220,7 +245,8 @@ pub fn View(
             } else {
                 node_subheader.entries_last.setMax();
             }
-            node_subheader.entries_count.set(stored_count);
+            node_subheader.entries_elements_count.set(stored_elements_count);
+            node_subheader.entries_tombstone_count.set(stored_tombstone_count);
         }
 
         pub fn isLeaf(self: *const Self) bool {
@@ -363,7 +389,8 @@ pub fn PackedView(
         pub const EntryChain = struct {
             first: ?PageIdT,
             last: ?PageIdT,
-            count: usize,
+            elements_count: usize,
+            tombstone_count: usize,
         };
 
         data: DataType,
@@ -398,7 +425,14 @@ pub fn PackedView(
             if (node_subheader.parent.page_id.isMax() != node_subheader.parent.slot_id.isMax()) {
                 return Error.BadData;
             }
-            if (node_subheader.entries_first.isMax() != node_subheader.entries_last.isMax()) {
+            const endpoints_empty = node_subheader.entries_first.isMax();
+            const elements_count = node_subheader.entries_elements_count.get();
+            const tombstone_count = node_subheader.entries_tombstone_count.get();
+            if (endpoints_empty != node_subheader.entries_last.isMax() or
+                tombstone_count > elements_count or
+                (endpoints_empty and (elements_count != 0 or tombstone_count != 0)) or
+                (!endpoints_empty and elements_count == 0))
+            {
                 return Error.BadData;
             }
             inline for (0..OrthtreePage.children_per_node) |index| {
@@ -466,19 +500,37 @@ pub fn PackedView(
             return .{
                 .first = pageIdOrNull(&node_subheader.entries_first),
                 .last = pageIdOrNull(&node_subheader.entries_last),
-                .count = @intCast(node_subheader.entries_count.get()),
+                .elements_count = @intCast(node_subheader.entries_elements_count.get()),
+                .tombstone_count = @intCast(node_subheader.entries_tombstone_count.get()),
             };
         }
 
-        pub fn setEntryChain(self: *Self, first: ?PageIdT, last: ?PageIdT, count: usize) Error!void {
-            if ((first == null) != (last == null)) {
+        pub fn setEntryChain(
+            self: *Self,
+            first: ?PageIdT,
+            last: ?PageIdT,
+            elements_count: usize,
+            tombstone_count: usize,
+        ) Error!void {
+            if ((first == null) != (last == null) or
+                tombstone_count > elements_count or
+                (first == null and (elements_count != 0 or tombstone_count != 0)) or
+                (first != null and elements_count == 0))
+            {
                 return Error.BadData;
             }
-            try self.setEntryChainUnchecked(first, last, count);
+            try self.setEntryChainUnchecked(first, last, elements_count, tombstone_count);
         }
 
-        pub fn setEntryChainUnchecked(self: *Self, first: ?PageIdT, last: ?PageIdT, count: usize) Error!void {
-            const stored_count = std.math.cast(u32, count) orelse return Error.BadData;
+        pub fn setEntryChainUnchecked(
+            self: *Self,
+            first: ?PageIdT,
+            last: ?PageIdT,
+            elements_count: usize,
+            tombstone_count: usize,
+        ) Error!void {
+            const stored_elements_count = std.math.cast(u32, elements_count) orelse return Error.BadData;
+            const stored_tombstone_count = std.math.cast(u32, tombstone_count) orelse return Error.BadData;
             const node_subheader = self.subheaderMut();
             if (first) |page_id| {
                 node_subheader.entries_first.set(page_id);
@@ -490,7 +542,8 @@ pub fn PackedView(
             } else {
                 node_subheader.entries_last.setMax();
             }
-            node_subheader.entries_count.set(stored_count);
+            node_subheader.entries_elements_count.set(stored_elements_count);
+            node_subheader.entries_tombstone_count.set(stored_tombstone_count);
         }
 
         pub fn isLeaf(self: *const Self) bool {

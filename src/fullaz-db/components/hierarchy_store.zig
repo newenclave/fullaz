@@ -50,16 +50,27 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
 
                 pub const Proxy = struct {
                     runtime: *Runtime,
+                    transaction_generation: ?u64,
 
-                    pub fn owner(self: *const @This(), comptime tag: []const u8) bindingForTag(options, Bindings, tag).Proxy {
+                    pub fn owner(self: *const @This(), comptime tag: []const u8) Error!bindingForTag(options, Bindings, tag).Proxy {
+                        try self.requireTransaction();
                         const index = comptime ownerIndex(options, tag);
                         return Bindings[index].proxy(&@field(self.runtime.owners, ownerField(index)));
                     }
 
                     pub fn nextInstanceId(self: *const @This()) Error!u64 {
+                        try self.requireTransaction();
                         const id = self.runtime.next_instance_id;
                         self.runtime.next_instance_id = std.math.add(u64, id, 1) catch return error.InstanceIdExhausted;
                         return id;
+                    }
+
+                    fn requireTransaction(self: *const @This()) Error!void {
+                        if (self.transaction_generation == null or
+                            self.runtime.backend.cache().transactionGeneration() != self.transaction_generation)
+                        {
+                            return error.TransactionInactive;
+                        }
                     }
                 };
                 pub const ConstProxy = struct {
@@ -225,7 +236,10 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
                 }
 
                 pub fn proxy(runtime: *Runtime) Proxy {
-                    return .{ .runtime = runtime };
+                    return .{
+                        .runtime = runtime,
+                        .transaction_generation = runtime.backend.cache().transactionGeneration(),
+                    };
                 }
 
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {

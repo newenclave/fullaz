@@ -68,6 +68,8 @@ test "fullaz-db catalog store: appends, loads, and bounds scans" {
     var first_scratch: [256]u8 = undefined;
     const first = try encodeRecord(&first_bytes, &first_scratch, 1, "first");
     const ref = try store.append(first);
+    try std.testing.expectEqual(@as(u64, 1), manager.state_value.elements_count.get());
+    try std.testing.expectEqual(@as(u64, 0), manager.state_value.tombstone_count.get());
 
     var loaded = try store.load(ref);
     defer loaded.deinit();

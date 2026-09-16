@@ -119,7 +119,8 @@ pub fn Orthtree(
         parent: PackedPageId,
         entries_first: PackedPageId,
         entries_last: PackedPageId,
-        entries_count: EntryCountType,
+        entries_elements_count: EntryCountType,
+        entries_tombstone_count: EntryCountType,
         level: u8,
         flags: u8,
         reserved: [2]u8,
@@ -130,7 +131,8 @@ pub fn Orthtree(
             self.parent.setMax();
             self.entries_first.setMax();
             self.entries_last.setMax();
-            self.entries_count.set(0);
+            self.entries_elements_count.set(0);
+            self.entries_tombstone_count.set(0);
             self.level = 0;
             self.flags = 0;
             self.reserved = .{0} ** 2;
@@ -144,7 +146,7 @@ pub fn Orthtree(
         }
     };
 
-    const node_page_format_version_v: u8 = 1;
+    const node_page_format_version_v: u8 = 2;
 
     const NodePageSubheaderType = extern struct {
         const Self = @This();
@@ -170,7 +172,8 @@ pub fn Orthtree(
         parent: NodeRefType,
         entries_first: PackedPageId,
         entries_last: PackedPageId,
-        entries_count: EntryCountType,
+        entries_elements_count: EntryCountType,
+        entries_tombstone_count: EntryCountType,
         level: u8,
         flags: u8,
         reserved: [2]u8,
@@ -181,7 +184,8 @@ pub fn Orthtree(
             self.parent.format();
             self.entries_first.setMax();
             self.entries_last.setMax();
-            self.entries_count.set(0);
+            self.entries_elements_count.set(0);
+            self.entries_tombstone_count.set(0);
             self.level = 0;
             self.flags = 0;
             self.reserved = .{0} ** 2;

@@ -461,6 +461,8 @@ test "OrthTree paged model: center-crossing entries span entry chunks" {
     const first_entry_page = entry_state.page_chain.first.get();
     const last_entry_page = entry_state.page_chain.last.get();
     try std.testing.expect(first_entry_page != last_entry_page);
+    try std.testing.expectEqual(@as(u32, 10), entry_state.elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), entry_state.tombstone_count.get());
 
     var counter = Counter{};
     try tree.query(Box.create(.{ 0, 0 }, .{ 100, 100 }), Counter.collect, &counter);
@@ -762,7 +764,7 @@ const Cube = struct {
 test "OrthTree paged model: three dimensional f32 nodes round-trip through pages" {
     const C = Cube;
 
-    try std.testing.expectEqual(@as(usize, 94), @sizeOf(C.Format.NodeSlotSubheader));
+    try std.testing.expectEqual(@as(usize, 98), @sizeOf(C.Format.NodeSlotSubheader));
     try std.testing.expectEqual(@as(usize, 8), C.Tree.child_count);
 
     var device = try Device.init(std.testing.allocator, C.page_size);

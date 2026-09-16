@@ -145,7 +145,7 @@ pub fn createTable(database: anytype, name: []const u8) !void {
     }
     var transaction = try database.begin();
     defer transaction.deinit();
-    const owner = transaction.get("catalog").owner("tables");
+    const owner = try transaction.get("catalog").owner("tables");
     try insertTable(owner, name);
     try transaction.commit();
 }
@@ -158,7 +158,7 @@ pub fn deleteTable(database: anytype, name: []const u8) !bool {
     }
     var transaction = try database.begin();
     defer transaction.deinit();
-    const owner = transaction.get("catalog").owner("tables");
+    const owner = try transaction.get("catalog").owner("tables");
     const removed = try owner.proxy().remove(name);
     try transaction.commit();
     return removed;
@@ -172,7 +172,7 @@ pub fn deleteTableAndReclaim(database: anytype, name: []const u8) !bool {
     }
     var transaction = try database.begin();
     defer transaction.deinit();
-    const owner = transaction.get("catalog").owner("tables");
+    const owner = try transaction.get("catalog").owner("tables");
     const editor = (try owner.proxy().openValueEditor(name)) orelse return false;
     var child = try owner.openChild(editor, "table");
     defer child.deinit();
@@ -192,7 +192,7 @@ pub fn put(database: anytype, table: []const u8, key: []const u8, value: []const
     try validateTableAndKey(table, key);
     var transaction = try database.begin();
     defer transaction.deinit();
-    const owner = transaction.get("catalog").owner("tables");
+    const owner = try transaction.get("catalog").owner("tables");
     const editor = (try owner.proxy().openValueEditor(table)) orelse return error.TableNotFound;
     var child = try owner.openChild(editor, "table");
     defer child.deinit();
@@ -211,7 +211,7 @@ pub fn remove(database: anytype, table: []const u8, key: []const u8) !bool {
     try validateTableAndKey(table, key);
     var transaction = try database.begin();
     defer transaction.deinit();
-    const owner = transaction.get("catalog").owner("tables");
+    const owner = try transaction.get("catalog").owner("tables");
     const editor = (try owner.proxy().openValueEditor(table)) orelse return error.TableNotFound;
     var child = try owner.openChild(editor, "table");
     defer child.deinit();
@@ -302,7 +302,7 @@ fn insertExampleRow(owner: anytype, table: []const u8, key: []const u8, value: [
 fn createExampleTables(database: anytype) !void {
     var transaction = try database.begin();
     defer transaction.deinit();
-    const owner = transaction.get("catalog").owner("tables");
+    const owner = try transaction.get("catalog").owner("tables");
 
     inline for (example_tables) |table| {
         try insertTable(owner, table);
@@ -316,7 +316,7 @@ fn createExampleTables(database: anytype) !void {
 fn insertPlanetBatch(database: anytype, planets: []const PlanetRow) !void {
     var transaction = try database.begin();
     defer transaction.deinit();
-    const owner = transaction.get("catalog").owner("tables");
+    const owner = try transaction.get("catalog").owner("tables");
     const editor = (try owner.proxy().openValueEditor("planets")) orelse unreachable;
     var child = try owner.openChild(editor, "table");
     defer child.deinit();

@@ -1786,7 +1786,7 @@ test "fullaz-db: dynamic schema embedded BPT hierarchy edits and collects child 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const folder_value = try owner.encodedEmbedded("folder");
         try std.testing.expect(try owner.proxy().insert("folder", folder_value.data()));
         const raw_value = try owner.encodedRaw("folder", "plain");
@@ -1812,7 +1812,7 @@ test "fullaz-db: dynamic schema embedded BPT hierarchy edits and collects child 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const folder_value = try owner.encodedEmbedded("folder");
         try std.testing.expect(try owner.proxy().insert("folder", folder_value.data()));
         const folder_editor = (try owner.proxy().openValueEditor("folder")).?;
@@ -1849,7 +1849,7 @@ test "fullaz-db: dynamic schema embedded BPT hierarchy edits and collects child 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         try std.testing.expect(try owner.proxy().remove("folder"));
         try transaction.commit();
     }
@@ -1927,7 +1927,7 @@ test "fullaz-db: dynamic schema recursive embedded BPT hierarchy retains nested 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const root_value = try owner.encodedEmbedded("folder");
         try std.testing.expect(try owner.proxy().insert("root", root_value.data()));
         const root_editor = (try owner.proxy().openValueEditor("root")).?;
@@ -1970,7 +1970,7 @@ test "fullaz-db: dynamic schema recursive embedded BPT hierarchy retains nested 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const root_editor = (try owner.proxy().openValueEditor("root")).?;
         var folder = try owner.openChild(root_editor, "folder");
         defer folder.deinit();
@@ -2030,7 +2030,7 @@ test "fullaz-db: dynamic schema recursive embedded BPT hierarchy retains nested 
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         try std.testing.expect(try owner.proxy().remove("root"));
         try transaction.commit();
     }
@@ -2084,7 +2084,7 @@ test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and c
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const sequence_value = try owner.encodedEmbedded("sequence");
         try std.testing.expect(try owner.proxy().insert("sequence", sequence_value.data()));
         const sequence_editor = (try owner.proxy().openValueEditor("sequence")).?;
@@ -2098,7 +2098,7 @@ test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and c
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const sequence_value = try owner.encodedEmbedded("sequence");
         try std.testing.expect(try owner.proxy().insert("sequence", sequence_value.data()));
         const sequence_editor = (try owner.proxy().openValueEditor("sequence")).?;
@@ -2138,7 +2138,7 @@ test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and c
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const sequence_editor = (try owner.proxy().openValueEditor("sequence")).?;
         var editor = try owner.openChild(sequence_editor, "sequence");
         defer editor.deinit();
@@ -2152,7 +2152,7 @@ test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and c
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         try std.testing.expect(try owner.proxy().remove("sequence"));
         try transaction.commit();
     }
@@ -2220,7 +2220,7 @@ test "fullaz-db: dynamic schema embedded ChainStore hierarchy traces and collect
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const folder_value = try owner.encodedEmbedded("folder");
         try std.testing.expect(try owner.proxy().insert("folder", folder_value.data()));
         const blob_value = try owner.encodedEmbedded("blob");
@@ -2270,7 +2270,7 @@ test "fullaz-db: dynamic schema embedded ChainStore hierarchy traces and collect
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         try std.testing.expect(try owner.proxy().remove("blob"));
         try transaction.commit();
     }
@@ -2329,7 +2329,7 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const queue_value = try owner.encodedEmbedded("queue");
         try std.testing.expect(try owner.proxy().insert("queue", queue_value.data()));
         const queue_editor = (try owner.proxy().openValueEditor("queue")).?;
@@ -2345,7 +2345,7 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const queue_value = try owner.encodedEmbedded("queue");
         try std.testing.expect(try owner.proxy().insert("queue", queue_value.data()));
         const queue_editor = (try owner.proxy().openValueEditor("queue")).?;
@@ -2385,7 +2385,7 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
         retained.deinit();
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const queue_editor = (try owner.proxy().openValueEditor("queue")).?;
         var editor = try owner.openChild(queue_editor, "queue");
         defer editor.deinit();
@@ -2402,7 +2402,7 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         try std.testing.expect(try owner.proxy().remove("queue"));
         try transaction.commit();
     }
@@ -2469,7 +2469,7 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const spatial_value = try owner.encodedEmbedded("spatial");
         try std.testing.expect(try owner.proxy().insert("spatial", spatial_value.data()));
         const spatial_editor = (try owner.proxy().openValueEditor("spatial")).?;
@@ -2485,7 +2485,7 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const spatial_value = try owner.encodedEmbedded("spatial");
         try std.testing.expect(try owner.proxy().insert("spatial", spatial_value.data()));
         const spatial_editor = (try owner.proxy().openValueEditor("spatial")).?;
@@ -2527,7 +2527,7 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         const spatial_editor = (try owner.proxy().openValueEditor("spatial")).?;
         var editor = try owner.openChild(spatial_editor, "spatial");
         defer editor.deinit();
@@ -2541,7 +2541,7 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     {
         var transaction = try database.begin();
         defer transaction.deinit();
-        const owner = transaction.get("tree").owner("nodes");
+        const owner = try transaction.get("tree").owner("nodes");
         try std.testing.expect(try owner.proxy().remove("spatial"));
         try transaction.commit();
     }

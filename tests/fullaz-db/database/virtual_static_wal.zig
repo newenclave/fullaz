@@ -14,6 +14,7 @@ test "fullaz-db: virtual static WAL database keeps logical roots across reopen" 
     const Device = fullaz.device.FileBlock(u64);
     const Log = fullaz.device.FileLog(u64);
     const Database = fullaz_db.VirtualStaticDatabaseWithWal(Schema, Device, Log);
+    try std.testing.expectEqual(@as(u16, 3), Database.SuperblockType.version);
     const io = std.testing.io;
     const image_path = ".zig-cache/virtual_static_chain_store.img";
     const log_path = ".zig-cache/virtual_static_chain_store.log";

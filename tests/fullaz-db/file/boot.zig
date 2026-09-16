@@ -13,7 +13,8 @@ fn state() boot.State {
         .free_root = null,
         .catalog_first = null,
         .catalog_last = null,
-        .catalog_record_count = 0,
+        .catalog_elements_count = 0,
+        .catalog_tombstone_count = 0,
         .live_component_count = 0,
         .id_radix_root = null,
         .id_radix_free_leaf_root = null,
@@ -37,6 +38,10 @@ test "fullaz-db file boot: round-trips state and validates identity" {
     var initial = state();
     initial.free_root = 5;
     initial.id_radix_free_leaf_root = 7;
+    initial.catalog_first = 8;
+    initial.catalog_last = 9;
+    initial.catalog_elements_count = 5;
+    initial.catalog_tombstone_count = 2;
     var page = [_]u8{0} ** 512;
     var scratch = [_]u8{undefined} ** 512;
     try boot.format(&page, &scratch, initial, &.{});
@@ -47,7 +52,10 @@ test "fullaz-db file boot: round-trips state and validates identity" {
     try std.testing.expectEqual(initial.next_component_page_kind, view.state.next_component_page_kind);
     try std.testing.expectEqual(initial.id_radix_free_leaf_root, view.state.id_radix_free_leaf_root);
     try std.testing.expectEqual(initial.free_root, view.state.free_root);
+    try std.testing.expectEqual(initial.catalog_elements_count, view.state.catalog_elements_count);
+    try std.testing.expectEqual(initial.catalog_tombstone_count, view.state.catalog_tombstone_count);
     try std.testing.expect(view.state.clean);
+    try std.testing.expectEqual(@as(u16, 4), boot.format_version);
 
     var wrong = expected(initial);
     wrong.image_id[0] ^= 1;
@@ -98,6 +106,21 @@ test "fullaz-db file boot: rejects CRC, malformed state, and page mismatch" {
 
     var invalid = initial;
     invalid.next_component_id = 0;
+    try std.testing.expectError(error.BadBoot, boot.format(&page, &scratch, invalid, &.{}));
+
+    invalid = initial;
+    invalid.catalog_elements_count = 1;
+    try std.testing.expectError(error.BadBoot, boot.format(&page, &scratch, invalid, &.{}));
+
+    invalid.catalog_first = 2;
+    invalid.catalog_last = 2;
+    invalid.catalog_elements_count = 1;
+    invalid.catalog_tombstone_count = 2;
+    try std.testing.expectError(error.BadBoot, boot.format(&page, &scratch, invalid, &.{}));
+
+    invalid = initial;
+    invalid.catalog_first = 2;
+    invalid.catalog_last = 2;
     try std.testing.expectError(error.BadBoot, boot.format(&page, &scratch, invalid, &.{}));
 
     var mismatched = initial;

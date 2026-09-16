@@ -30,7 +30,7 @@ test "OrthTree paged view: formats and validates structural node metadata" {
     try std.testing.expectEqualDeep(trait, view.trait().*);
 
     view.setParent(4);
-    try view.setEntryChain(8, 9, 2);
+    try view.setEntryChain(8, 9, 3, 1);
     try view.setLevel(3);
     view.setInternal();
     try view.setChild(0, 10);
@@ -43,8 +43,35 @@ test "OrthTree paged view: formats and validates structural node metadata" {
     const chain = read_view.entryChain();
     try std.testing.expectEqual(@as(?u32, 8), chain.first);
     try std.testing.expectEqual(@as(?u32, 9), chain.last);
-    try std.testing.expectEqual(@as(usize, 2), chain.count);
+    try std.testing.expectEqual(@as(usize, 3), chain.elements_count);
+    try std.testing.expectEqual(@as(usize, 1), chain.tombstone_count);
     try std.testing.expectError(error.BadData, read_view.validatePage(8));
+}
+
+test "OrthTree paged view: validates entry chain counts" {
+    const MutableView = fullaz.spatial.orthtree.models.paged.PackedView(u32, u16, i32, 2, TraitStorage, .little, false);
+    const Box = MutableView.Box;
+    const trait = TraitStorage{ .bytes = .{ 1, 2, 3, 4 } };
+    var page: [512]u8 = undefined;
+    var view = MutableView.NodePage.init(&page);
+    try view.formatPage(0x71, 7, 0x12345678);
+    const slot_id = (try view.allocateSlot()).?;
+    var node = try view.slotMut(slot_id);
+    node.formatSlot(Box.create(.{ 0, 0 }, .{ 1, 1 }), &trait);
+
+    try std.testing.expectError(error.BadData, node.setEntryChain(null, null, 1, 0));
+    try std.testing.expectError(error.BadData, node.setEntryChain(8, 9, 1, 2));
+    try std.testing.expectError(error.BadData, node.setEntryChain(8, 9, 0, 0));
+
+    node.subheaderMut().entries_elements_count.set(1);
+    try std.testing.expectError(error.BadData, node.validate());
+    node.subheaderMut().entries_elements_count.set(0);
+    node.subheaderMut().entries_tombstone_count.set(1);
+    try std.testing.expectError(error.BadData, node.validate());
+    node.subheaderMut().entries_tombstone_count.set(0);
+    node.subheaderMut().entries_first.set(8);
+    node.subheaderMut().entries_last.set(9);
+    try std.testing.expectError(error.BadData, node.validate());
 }
 
 test "OrthTree packed view: node slots share a page and preserve node references" {

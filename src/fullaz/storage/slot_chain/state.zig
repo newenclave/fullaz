@@ -2,7 +2,7 @@ const std = @import("std");
 const PackedInt = @import("../../core/packed_int.zig").PackedInt;
 const page_chain = @import("../page_chain/page_chain.zig");
 
-/// Durable slot-chain endpoints and live entry count.
+/// Durable slot-chain endpoints, physical entry count, and tombstone count.
 pub fn State(
     comptime PageIdT: type,
     comptime SizeT: type,
@@ -14,13 +14,16 @@ pub fn State(
 
     const StateT = extern struct {
         page_chain: PageChainState = .{},
-        total_size: PackedSize = .init(0),
+        elements_count: PackedSize = .init(0),
+        tombstone_count: PackedSize = .init(0),
     };
     comptime {
         if (@alignOf(StateT) != 1 or
             @offsetOf(StateT, "page_chain") != 0 or
-            @offsetOf(StateT, "total_size") != @sizeOf(PageChainState) or
-            @sizeOf(StateT) != @sizeOf(PageChainState) + @sizeOf(PackedSize))
+            @offsetOf(StateT, "elements_count") != @sizeOf(PageChainState) or
+            @offsetOf(StateT, "tombstone_count") !=
+                @sizeOf(PageChainState) + @sizeOf(PackedSize) or
+            @sizeOf(StateT) != @sizeOf(PageChainState) + 2 * @sizeOf(PackedSize))
         {
             @compileError("SlotChain state layout changed");
         }

@@ -169,8 +169,12 @@ pub fn ParentEditorLease(comptime LeaseError: type) type {
             allocator: std.mem.Allocator,
             editor: EditorT,
         ) std.mem.Allocator.Error!Self {
-            const ptr = try allocator.create(EditorT);
-            ptr.* = editor;
+            var owned_editor = editor;
+            const ptr = allocator.create(EditorT) catch |err| {
+                owned_editor.deinit();
+                return err;
+            };
+            ptr.* = owned_editor;
             return .{
                 .ptr = ptr,
                 .allocator = allocator,

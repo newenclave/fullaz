@@ -12,7 +12,7 @@ pub const Error = tagged.Error || error{
 };
 
 pub const magic = "FULLAZFD";
-pub const format_version: u16 = 3;
+pub const format_version: u16 = 4;
 const U16 = PackedInt(u16, .little);
 const U32 = PackedInt(u32, .little);
 
@@ -49,7 +49,7 @@ pub const Tag = struct {
     pub const free_root: u16 = 7;
     pub const catalog_first: u16 = 8;
     pub const catalog_last: u16 = 9;
-    pub const catalog_record_count: u16 = 10;
+    pub const catalog_elements_count: u16 = 10;
     pub const live_component_count: u16 = 11;
     pub const id_radix_root: u16 = 12;
     pub const name_bpt_root: u16 = 13;
@@ -61,6 +61,7 @@ pub const Tag = struct {
     pub const gc_state_root: u16 = 19;
     pub const gc_cycle_active: u16 = 20;
     pub const gc_cycle_generation: u16 = 21;
+    pub const catalog_tombstone_count: u16 = 22;
 };
 
 const known_tags = [_]u16{
@@ -73,7 +74,7 @@ const known_tags = [_]u16{
     Tag.free_root,
     Tag.catalog_first,
     Tag.catalog_last,
-    Tag.catalog_record_count,
+    Tag.catalog_elements_count,
     Tag.live_component_count,
     Tag.id_radix_root,
     Tag.name_bpt_root,
@@ -85,6 +86,7 @@ const known_tags = [_]u16{
     Tag.gc_state_root,
     Tag.gc_cycle_active,
     Tag.gc_cycle_generation,
+    Tag.catalog_tombstone_count,
 };
 
 pub const State = struct {
@@ -97,7 +99,8 @@ pub const State = struct {
     free_root: ?u64,
     catalog_first: ?u64,
     catalog_last: ?u64,
-    catalog_record_count: u64,
+    catalog_elements_count: u64,
+    catalog_tombstone_count: u64,
     live_component_count: u64,
     id_radix_root: ?u64,
     id_radix_free_leaf_root: ?u64,
@@ -205,7 +208,7 @@ fn appendState(writer: *tagged.Writer, state: State) Error!void {
     try appendInt(writer, Tag.free_root, u64, state.free_root orelse 0);
     try appendInt(writer, Tag.catalog_first, u64, state.catalog_first orelse 0);
     try appendInt(writer, Tag.catalog_last, u64, state.catalog_last orelse 0);
-    try appendInt(writer, Tag.catalog_record_count, u64, state.catalog_record_count);
+    try appendInt(writer, Tag.catalog_elements_count, u64, state.catalog_elements_count);
     try appendInt(writer, Tag.live_component_count, u64, state.live_component_count);
     try appendInt(writer, Tag.id_radix_root, u64, state.id_radix_root orelse 0);
     try appendInt(writer, Tag.id_radix_free_leaf_root, u64, state.id_radix_free_leaf_root orelse 0);
@@ -217,6 +220,7 @@ fn appendState(writer: *tagged.Writer, state: State) Error!void {
     try appendInt(writer, Tag.gc_state_root, u64, state.gc_state_root orelse 0);
     try appendInt(writer, Tag.gc_cycle_active, u8, @intFromBool(state.gc_cycle_active));
     try appendInt(writer, Tag.gc_cycle_generation, u64, state.gc_cycle_generation);
+    try appendInt(writer, Tag.catalog_tombstone_count, u64, state.catalog_tombstone_count);
 }
 
 fn appendInt(writer: *tagged.Writer, tag: u16, comptime T: type, value: T) Error!void {
@@ -281,9 +285,9 @@ fn decodeState(payload: []const u8) Error!State {
                 found[8] = true;
                 state.catalog_last = decodeOptionalPid(try readInt(field.value, u64));
             },
-            Tag.catalog_record_count => {
+            Tag.catalog_elements_count => {
                 found[9] = true;
-                state.catalog_record_count = try readInt(field.value, u64);
+                state.catalog_elements_count = try readInt(field.value, u64);
             },
             Tag.live_component_count => {
                 found[10] = true;
@@ -333,6 +337,10 @@ fn decodeState(payload: []const u8) Error!State {
                 found[20] = true;
                 state.gc_cycle_generation = try readInt(field.value, u64);
             },
+            Tag.catalog_tombstone_count => {
+                found[21] = true;
+                state.catalog_tombstone_count = try readInt(field.value, u64);
+            },
             else => {},
         }
     }
@@ -357,11 +365,21 @@ fn decodeOptionalPid(value: u64) ?u64 {
 }
 
 fn validateState(state: State) Error!void {
+    const catalog_empty = state.catalog_first == null;
+    if (catalog_empty != (state.catalog_last == null) or
+        state.catalog_tombstone_count > state.catalog_elements_count or
+        (catalog_empty and
+            (state.catalog_elements_count != 0 or state.catalog_tombstone_count != 0)) or
+        (!catalog_empty and state.catalog_elements_count == 0))
+    {
+        return error.BadBoot;
+    }
+    const catalog_record_count = state.catalog_elements_count - state.catalog_tombstone_count;
     if (std.mem.allEqual(u8, &state.image_id, 0) or
         state.page_size < envelope_byte_size or
         state.page_id_bits == 0 or state.page_id_bits % 8 != 0 or
         state.page_count == 0 or
-        state.live_component_count > state.catalog_record_count or
+        state.live_component_count > catalog_record_count or
         (state.gc_cycle_active and state.gc_state_root == null) or
         state.next_component_id == 0 or
         state.next_component_page_kind < system_kinds.first_component or

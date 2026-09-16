@@ -48,15 +48,16 @@ pub fn VirtualCowSuperblock(
             vpm_root_page_id: PackedPhysicalPageId,
             retired_queue_first: PackedVirtualPageId,
             retired_queue_last: PackedVirtualPageId,
-            retired_queue_size: U64,
+            retired_queue_elements_count: U64,
+            retired_queue_tombstone_count: U64,
             identity: Identity,
             metadata: MetadataT,
             crc: U32,
         };
 
         pub const magic = "FULLZCOW";
-        // Version 3 adds GC state to the static metadata payload.
-        pub const version = 3;
+        // Version 4 stores both retired slot-queue counters.
+        pub const version = 4;
         pub const first_superblock_page_id: PhysicalPageIdT = 0;
         pub const second_superblock_page_id: PhysicalPageIdT = 1;
 
@@ -76,13 +77,19 @@ pub fn VirtualCowSuperblock(
             next_virtual_page_id: VirtualPageIdT,
             retired_queue_first: ?VirtualPageIdT,
             retired_queue_last: ?VirtualPageIdT,
-            retired_queue_size: u64,
+            retired_queue_elements_count: u64,
+            retired_queue_tombstone_count: u64,
             identity: Identity,
             metadata: MetadataT,
         ) Error!void {
             if (page.len < @sizeOf(Storage) or
                 std.math.cast(u32, page_size) == null or
-                std.math.cast(u64, physical_page_count) == null)
+                std.math.cast(u64, physical_page_count) == null or
+                (retired_queue_first == null) != (retired_queue_last == null) or
+                retired_queue_tombstone_count > retired_queue_elements_count or
+                (retired_queue_first == null and
+                    (retired_queue_elements_count != 0 or retired_queue_tombstone_count != 0)) or
+                (retired_queue_first != null and retired_queue_elements_count == 0))
             {
                 return error.BadSuperblock;
             }
@@ -101,7 +108,8 @@ pub fn VirtualCowSuperblock(
                 .vpm_root_page_id = .init(root_page_id orelse 0),
                 .retired_queue_first = .init(retired_queue_first orelse 0),
                 .retired_queue_last = .init(retired_queue_last orelse 0),
-                .retired_queue_size = .init(retired_queue_size),
+                .retired_queue_elements_count = .init(retired_queue_elements_count),
+                .retired_queue_tombstone_count = .init(retired_queue_tombstone_count),
                 .identity = identity,
                 .metadata = metadata,
                 .crc = .init(0),
@@ -132,6 +140,17 @@ pub fn VirtualCowSuperblock(
                 storage.virtual_page_id_bits != @bitSizeOf(VirtualPageIdT))
             {
                 return error.PageIdWidthMismatch;
+            }
+            const retired_queue_empty = storage.retired_queue_first.get() == 0;
+            const retired_queue_elements_count = storage.retired_queue_elements_count.get();
+            const retired_queue_tombstone_count = storage.retired_queue_tombstone_count.get();
+            if (retired_queue_empty != (storage.retired_queue_last.get() == 0) or
+                retired_queue_tombstone_count > retired_queue_elements_count or
+                (retired_queue_empty and
+                    (retired_queue_elements_count != 0 or retired_queue_tombstone_count != 0)) or
+                (!retired_queue_empty and retired_queue_elements_count == 0))
+            {
+                return error.BadSuperblock;
             }
             if (!std.mem.eql(u8, &storage.identity.image_id, &identity.image_id) or
                 !std.mem.eql(u8, &storage.identity.schema_digest, &identity.schema_digest))

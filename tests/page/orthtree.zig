@@ -9,7 +9,8 @@ test "OrthTree page: node subheader format initializes links and children" {
     try std.testing.expect(node.parent.isMax());
     try std.testing.expect(node.entries_first.isMax());
     try std.testing.expect(node.entries_last.isMax());
-    try std.testing.expectEqual(@as(u32, 0), node.entries_count.get());
+    try std.testing.expectEqual(@as(u32, 0), node.entries_elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), node.entries_tombstone_count.get());
     try std.testing.expectEqual(@as(u8, 0), node.level);
     try std.testing.expectEqual(@as(u8, 0), node.flags);
     try std.testing.expectEqual([_]u8{ 0, 0 }, node.reserved);
@@ -55,7 +56,8 @@ test "OrthTree page: packed node slot format initializes references" {
     try std.testing.expect(node.parent.slot_id.isMax());
     try std.testing.expect(node.entries_first.isMax());
     try std.testing.expect(node.entries_last.isMax());
-    try std.testing.expectEqual(@as(u32, 0), node.entries_count.get());
+    try std.testing.expectEqual(@as(u32, 0), node.entries_elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), node.entries_tombstone_count.get());
     try std.testing.expectEqual(@as(u8, 0), node.level);
     try std.testing.expectEqual(@as(u8, 0), node.flags);
     try std.testing.expectEqual([_]u8{ 0, 0 }, node.reserved);
@@ -75,13 +77,14 @@ test "OrthTree page: node page header stores layout and slot format" {
     try std.testing.expectEqual(@as(u32, 0x12345678), page.layout_id.get());
     try std.testing.expectEqual(@as(u16, @sizeOf(Format.NodeSlotSubheader)), page.slot_size.get());
     try std.testing.expectEqual(Format.node_page_format_version, page.format_version);
+    try std.testing.expectEqual(@as(u8, 2), Format.node_page_format_version);
     try std.testing.expectEqual(@as(u8, 0), page.reserved);
 }
 
 test "OrthTree page: three dimensional f64 slot has expected fixed size" {
     const Format = Orthtree(u32, u16, f64, 3, .little);
 
-    try std.testing.expectEqual(@as(usize, 118), @sizeOf(Format.NodeSlotSubheader));
+    try std.testing.expectEqual(@as(usize, 122), @sizeOf(Format.NodeSlotSubheader));
     try std.testing.expectEqual(@as(usize, 14), @sizeOf(Format.NodePageSubheader));
     const id: Format.NodeId = .{ .page_id = 7, .slot_id = 3 };
     try std.testing.expectEqual(@as(u32, 7), id.page_id);

@@ -53,6 +53,8 @@ test "SlotQueue: enqueue, front, dequeue, and iterate" {
     try queue.enqueue("second");
     try queue.enqueue("third");
     try std.testing.expectEqual(@as(usize, 3), try queue.size());
+    try std.testing.expectEqual(@as(u32, 3), manager.state_value.elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), manager.state_value.tombstone_count.get());
 
     var front = try queue.front();
     defer front.deinit();
@@ -67,11 +69,15 @@ test "SlotQueue: enqueue, front, dequeue, and iterate" {
 
     try queue.dequeue();
     try queue.dequeue();
+    try std.testing.expectEqual(@as(u32, 1), manager.state_value.elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), manager.state_value.tombstone_count.get());
     var remaining = try queue.front();
     defer remaining.deinit();
     try std.testing.expectEqualStrings("third", try remaining.value());
     try queue.dequeue();
     try std.testing.expect(try queue.isEmpty());
+    try std.testing.expectEqual(@as(u32, 0), manager.state_value.elements_count.get());
+    try std.testing.expectEqual(@as(u32, 0), manager.state_value.tombstone_count.get());
     try std.testing.expectError(error.EmptySet, queue.dequeue());
 }
 

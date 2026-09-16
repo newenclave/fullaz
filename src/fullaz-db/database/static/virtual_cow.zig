@@ -245,8 +245,10 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
 
     comptime {
         if (@offsetOf(RetiredQueueState, "page_chain") != 0 or
-            @offsetOf(RetiredQueueState, "total_size") != 2 * @sizeOf(VirtualPageId) or
-            @sizeOf(RetiredQueueState) != 2 * @sizeOf(VirtualPageId) + @sizeOf(u64))
+            @offsetOf(RetiredQueueState, "elements_count") != 2 * @sizeOf(VirtualPageId) or
+            @offsetOf(RetiredQueueState, "tombstone_count") !=
+                2 * @sizeOf(VirtualPageId) + @sizeOf(u64) or
+            @sizeOf(RetiredQueueState) != 2 * @sizeOf(VirtualPageId) + 2 * @sizeOf(u64))
         {
             @compileError("Virtual COW retired queue state layout changed");
         }
@@ -547,6 +549,10 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
             return if (root.isMax()) null else root.get();
         }
 
+        fn retiredQueueCount(state: *const RetiredQueueState) u64 {
+            return state.elements_count.get() - state.tombstone_count.get();
+        }
+
         fn slotPageId(slot: Slot) PhysicalPageId {
             return switch (slot) {
                 .first => Superblock.first_superblock_page_id,
@@ -581,7 +587,8 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
                     null
                 else
                     core.retired_queue_state.page_chain.last.get(),
-                core.retired_queue_state.total_size.get(),
+                core.retired_queue_state.elements_count.get(),
+                core.retired_queue_state.tombstone_count.get(),
                 core.identity,
                 shape.captureStaticMetadata(
                     SchemaT,
@@ -970,7 +977,8 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
             if (Superblock.retiredQueueLast(&storage)) |page_id| {
                 core.retired_queue_state.page_chain.last.set(page_id);
             }
-            core.retired_queue_state.total_size.set(storage.retired_queue_size.get());
+            core.retired_queue_state.elements_count.set(storage.retired_queue_elements_count.get());
+            core.retired_queue_state.tombstone_count.set(storage.retired_queue_tombstone_count.get());
             core.active_slot = selected.slot;
             core.commit_generation = storage.commit_generation.get();
             return .{ .core_ = core };
@@ -1034,7 +1042,7 @@ pub fn VirtualStaticDatabaseWithCow(comptime SchemaT: type, comptime DeviceT: ty
                 .reusable_physical_pages = core.physical_pool.free_pages.items.len,
                 .quarantined_physical_pages = std.math.cast(
                     usize,
-                    core.retired_queue_state.total_size.get(),
+                    retiredQueueCount(&core.retired_queue_state),
                 ) orelse std.math.maxInt(usize),
             };
         }

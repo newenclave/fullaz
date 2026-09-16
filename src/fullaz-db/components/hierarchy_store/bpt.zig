@@ -15,13 +15,14 @@ const ChildKind = enum {
     rtree,
     weighted_sequence,
     slot_heap,
+    slot_sequence,
 };
 
 /// A fixed-value BPT whose values are tagged raw bytes or embedded child roots.
 ///
-/// `parent_descriptor` and every `HierarchyT` type must be descriptors returned
-/// by `bpt`. The parent must configure `fixed_value_size`; that complete value
-/// is the durable inline envelope for every entry.
+/// `parent_descriptor` must be a BPT with `fixed_value_size`; that complete
+/// value is the durable inline envelope for every parent entry. `HierarchyT`
+/// supplies the supported embedded child descriptors.
 pub fn hierarchyCore(
     comptime HierarchyT: type,
     comptime parent_descriptor: component.Descriptor,
@@ -56,7 +57,7 @@ pub fn hierarchyCore(
                 {
                     @compileError("fullaz-db hierarchyStore parent fixed_value_size cannot hold an embedded child envelope");
                 }
-                validateBptChildEnvelopeCapacities(HierarchyT, PageIdT);
+                validateChildEnvelopeCapacities(HierarchyT, PageIdT);
             }
 
             // Builds a temporary native child runtime for page scanning. The
@@ -117,6 +118,27 @@ pub fn hierarchyCore(
                 }
             };
 
+            const ChildStateValidator = struct {
+                fn validate(
+                    comptime tag: []const u8,
+                    backend: *BackendT,
+                    payload: []const u8,
+                ) error{InvalidChildState}!void {
+                    const ChildBinding = component.bindingFor(
+                        HierarchyT.entryByTag(tag).descriptor,
+                        BackendT,
+                    );
+                    if (payload.len != @sizeOf(ChildBinding.State)) {
+                        return error.InvalidChildState;
+                    }
+                    const state: *const ChildBinding.State = @ptrCast(payload.ptr);
+                    ChildBinding.StaticMetadata.validate(
+                        state,
+                        backend.cache().pageCount(),
+                    ) catch return error.InvalidChildState;
+                }
+            };
+
             const ConstRuntime = struct {
                 parent: *const ParentBinding.Runtime,
                 backend: *BackendT,
@@ -138,7 +160,7 @@ pub fn hierarchyCore(
                     ChildError ||
                     value_envelope.Error ||
                     std.mem.Allocator.Error ||
-                    error{ReadOnly};
+                    error{ InvalidChildState, ReadOnly };
                 pub const Iterator = ParentBinding.ConstProxy.Iterator;
                 pub const ConstIterator = Iterator;
 
@@ -153,6 +175,52 @@ pub fn hierarchyCore(
 
                 fn init(runtime: *const ConstRuntime) Self {
                     return .{ .runtime = runtime };
+                }
+
+                fn ConstChildHandle(comptime parent_tag: []const u8, comptime ParentPinT: type) type {
+                    @setEvalBranchQuota(10_000);
+                    const ParentBindingT = ChildBindingForTag(parent_tag);
+                    const StorageChild = embedded.OwnedConstChild(
+                        BackendT,
+                        ParentBindingT,
+                        ParentPinT,
+                    );
+
+                    return struct {
+                        const HandleSelf = @This();
+
+                        inner: StorageChild,
+                        owner: Self,
+
+                        pub fn proxy(self: *const HandleSelf) @TypeOf(self.inner.proxy()) {
+                            return self.inner.proxy();
+                        }
+
+                        /// Transfers a native value pin and its borrowed value
+                        /// into one of this component's registered children.
+                        pub fn openChild(
+                            self: *const HandleSelf,
+                            parent_pin: anytype,
+                            value: []const u8,
+                            comptime child_tag: []const u8,
+                        ) @TypeOf(self.owner.openNestedChild(
+                            parent_tag,
+                            parent_pin,
+                            value,
+                            child_tag,
+                        )) {
+                            return self.owner.openNestedChild(
+                                parent_tag,
+                                parent_pin,
+                                value,
+                                child_tag,
+                            );
+                        }
+
+                        pub fn deinit(self: *HandleSelf) void {
+                            self.inner.deinit();
+                        }
+                    };
                 }
 
                 fn parent(self: *const Self) *const ParentBinding.ConstProxy {
@@ -181,36 +249,71 @@ pub fn hierarchyCore(
                     self: *const Self,
                     key: []const u8,
                     comptime tag: []const u8,
-                ) Error!?embedded.OwnedConstChild(
-                    BackendT,
-                    ChildBindingForTag(tag),
-                    ParentBinding.ConstProxy.Iterator,
-                ) {
+                ) Error!?ConstChildHandle(tag, ParentBinding.ConstProxy.Iterator) {
                     var parent_iterator = (try self.find(key)) orelse return null;
                     var transferred = false;
                     errdefer if (!transferred) {
                         parent_iterator.deinit();
                     };
                     const entry = (try parent_iterator.get()) orelse return null;
+                    transferred = true;
+                    return try self.openChildValue(parent_iterator, entry.value, tag);
+                }
+
+                fn openChildValue(
+                    self: *const Self,
+                    parent_pin: anytype,
+                    bytes: []const u8,
+                    comptime tag: []const u8,
+                ) Error!ConstChildHandle(tag, @TypeOf(parent_pin)) {
+                    var owned_parent_pin = parent_pin;
+                    var transferred = false;
+                    errdefer if (!transferred) {
+                        owned_parent_pin.deinit();
+                    };
                     const value = try value_envelope.readEmbedded(
-                        entry.value,
+                        bytes,
                         HierarchyT.entryByTag(tag).type_identity,
                     );
                     const ChildBinding = ChildBindingForTag(tag);
+                    try ChildStateValidator.validate(tag, self.runtime.backend, value.payload);
                     const Child = embedded.OwnedConstChild(
                         BackendT,
                         ChildBinding,
-                        ParentBinding.ConstProxy.Iterator,
+                        @TypeOf(parent_pin),
                     );
                     const child = try Child.init(
                         self.runtime.backend,
                         value.payload,
-                        parent_iterator,
+                        owned_parent_pin,
                         self.runtime.childPageKinds(HierarchyT.indexOfTag(tag)),
                         .{},
                     );
                     transferred = true;
-                    return child;
+                    return .{
+                        .inner = child,
+                        .owner = self.*,
+                    };
+                }
+
+                fn openNestedChild(
+                    self: *const Self,
+                    comptime parent_tag: []const u8,
+                    parent_pin: anytype,
+                    value: []const u8,
+                    comptime child_tag: []const u8,
+                ) (Error || error{ChildTypeNotAllowed})!ConstChildHandle(
+                    child_tag,
+                    @TypeOf(parent_pin),
+                ) {
+                    const parent_type_id = HierarchyT.entryByTag(parent_tag).type_identity.type_id;
+                    const child_type_id = HierarchyT.entryByTag(child_tag).type_identity.type_id;
+                    if (comptime !HierarchyT.allowsChild(parent_type_id, child_type_id)) {
+                        var rejected_pin = parent_pin;
+                        rejected_pin.deinit();
+                        return error.ChildTypeNotAllowed;
+                    }
+                    return self.openChildValue(parent_pin, value, child_tag);
                 }
             };
 
@@ -342,6 +445,22 @@ pub fn hierarchyCore(
                     return child.runtime.blob.scanChunkRefs(page_id, page, visitor);
                 }
 
+                fn scanSlotSequenceChild(
+                    self: *const @This(),
+                    comptime index: usize,
+                    page_id: PageIdT,
+                    page: []const u8,
+                    visitor: anytype,
+                ) !void {
+                    var child: ChildRuntimeFactory.get(index) = undefined;
+                    try child.init(
+                        self.backend,
+                        self.childPageKinds(index),
+                    );
+                    defer child.deinit();
+                    return child.runtime.sequence.scanChunkRefs(page_id, page, visitor);
+                }
+
                 fn scanRtreeChildLeaf(
                     self: *const @This(),
                     comptime index: usize,
@@ -429,13 +548,12 @@ pub fn hierarchyCore(
                             bytes: []const u8,
                             sink: CollectorT.ReferenceSink,
                         ) CollectorT.Error!void {
-                            _ = @as(
-                                *const RuntimeSelf,
-                                @ptrCast(@alignCast(context orelse return error.InvalidScannerContext)),
-                            );
-                            // R-tree and SlotHeap descendants retain support for native
-                            // values. Only values carrying the envelope magic participate
-                            // in hierarchy root discovery; malformed envelopes are invalid.
+                            const runtime: *const RuntimeSelf = @ptrCast(@alignCast(
+                                context orelse return error.InvalidScannerContext,
+                            ));
+                            // Some descendants retain support for native values. Only values
+                            // carrying the envelope magic participate in hierarchy root
+                            // discovery; malformed envelopes are invalid.
                             if (bytes.len < value_envelope.magic.len or
                                 !std.mem.eql(u8, bytes[0..value_envelope.magic.len], value_envelope.magic))
                             {
@@ -457,6 +575,14 @@ pub fn hierarchyCore(
                                         return error.InvalidPage;
                                     }
                                     const state: *const Child.State = @ptrCast(value.payload.ptr);
+                                    const ChildBinding = component.bindingFor(
+                                        entry.descriptor,
+                                        BackendT,
+                                    );
+                                    ChildBinding.StaticMetadata.validate(
+                                        state,
+                                        runtime.backend.cache().pageCount(),
+                                    ) catch return error.InvalidPage;
                                     if (comptime childKind(HierarchyT, index) == .slot_heap) {
                                         if (!state.heap.root.isMax()) {
                                             try sink.visit(state.heap.root.get());
@@ -469,6 +595,10 @@ pub fn hierarchyCore(
                                     } else if (comptime childKind(HierarchyT, index) == .chain_store) {
                                         if (!state.first.isMax()) {
                                             try sink.visit(state.first.get());
+                                        }
+                                    } else if (comptime childKind(HierarchyT, index) == .slot_sequence) {
+                                        if (!state.page_chain.first.isMax()) {
+                                            try sink.visit(state.page_chain.first.get());
                                         }
                                     } else {
                                         if (!state.root.isMax()) {
@@ -574,6 +704,26 @@ pub fn hierarchyCore(
                             const runtime: *const RuntimeSelf = @ptrCast(@alignCast(context orelse return error.InvalidScannerContext));
                             var visitor = SinkVisitor(CollectorT){ .sink = sink };
                             runtime.scanChainStoreChild(index, page_id, page, &visitor) catch |err| {
+                                if (err == error.Abort) {
+                                    return visitor.sink_error.?;
+                                }
+                                return error.InvalidPage;
+                            };
+                        }
+                    }.scan;
+                }
+
+                fn slotSequenceChildScanner(comptime CollectorT: type, comptime index: usize) CollectorT.Scanner {
+                    return struct {
+                        fn scan(
+                            context: ?*const anyopaque,
+                            page_id: CollectorT.PageId,
+                            page: []const u8,
+                            sink: CollectorT.ReferenceSink,
+                        ) CollectorT.Error!void {
+                            const runtime: *const RuntimeSelf = @ptrCast(@alignCast(context orelse return error.InvalidScannerContext));
+                            var visitor = SinkVisitor(CollectorT){ .sink = sink };
+                            runtime.scanSlotSequenceChild(index, page_id, page, &visitor) catch |err| {
                                 if (err == error.Abort) {
                                     return visitor.sink_error.?;
                                 }
@@ -690,7 +840,7 @@ pub fn hierarchyCore(
                 pub const Error = ParentBinding.Error ||
                     ChildError ||
                     value_envelope.Error ||
-                    error{EditorActive};
+                    error{ EditorActive, InvalidChildState };
                 runtime: *RuntimeImpl,
                 transaction_generation: ?u64,
 
@@ -864,23 +1014,26 @@ pub fn hierarchyCore(
                         try owned_parent_editor.valueMut(),
                         HierarchyT.entryByTag(tag).type_identity,
                     );
-                    errdefer envelope_editor.invalidate();
+                    errdefer if (!transferred) {
+                        envelope_editor.invalidate();
+                    };
                     const ChildBinding = ChildBindingForTag(tag);
                     const Child = embedded.OwnedMutableChild(
                         BackendT,
                         ChildBinding,
                         parentEditorError(@TypeOf(parent_editor)),
                     );
-                    const child = try Child.init(
+                    const payload = try envelope_editor.payloadMut();
+                    try ChildStateValidator.validate(tag, self.runtime.backend, payload);
+                    transferred = true;
+                    return Child.init(
                         self.runtime.backend,
-                        try envelope_editor.payloadMut(),
+                        payload,
                         envelope_editor,
                         owned_parent_editor,
                         self.runtime.childPageKinds(HierarchyT.indexOfTag(tag)),
                         .{},
                     );
-                    transferred = true;
-                    return child;
                 }
 
                 /// Opens a registered root child through its component-owned
@@ -932,7 +1085,10 @@ pub fn hierarchyCore(
                     parent: ParentBinding.TransactionState,
                     next_instance_id: u64,
                 };
-                pub const Error = ParentBinding.Error || ChildError || value_envelope.Error || error{EditorActive};
+                pub const Error = ParentBinding.Error ||
+                    ChildError ||
+                    value_envelope.Error ||
+                    error{ EditorActive, InvalidChildState };
                 pub const StaticMetadata = struct {
                     pub const Storage = extern struct {
                         parent: ParentBinding.StaticMetadata.Storage,
@@ -1110,6 +1266,8 @@ pub fn hierarchyCore(
                             try collector.registerForCycle(kinds.kindAt(1).?, 1, runtime, RuntimeImpl.bptChildInodeScanner(CollectorT, index), null);
                         } else if (comptime childKind(HierarchyT, index) == .chain_store) {
                             try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.chainStoreChildScanner(CollectorT, index), null);
+                        } else if (comptime childKind(HierarchyT, index) == .slot_sequence) {
+                            try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.slotSequenceChildScanner(CollectorT, index), RuntimeImpl.valueScanner(CollectorT));
                         } else if (comptime childKind(HierarchyT, index) == .rtree) {
                             try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.rtreeChildLeafScanner(CollectorT, index), RuntimeImpl.valueScanner(CollectorT));
                             try collector.registerForCycle(kinds.kindAt(1).?, 1, runtime, RuntimeImpl.rtreeChildInodeScanner(CollectorT, index), null);
@@ -1180,6 +1338,14 @@ pub fn hierarchyCore(
                                         runtime,
                                         RuntimeImpl.chainStoreChildScanner(CollectorT, index),
                                         null,
+                                    );
+                                } else if (comptime childKind(HierarchyT, index) == .slot_sequence) {
+                                    try collector.registerForCycle(
+                                        kinds.kindAt(0).?,
+                                        1,
+                                        runtime,
+                                        RuntimeImpl.slotSequenceChildScanner(CollectorT, index),
+                                        RuntimeImpl.valueScanner(CollectorT),
                                     );
                                 } else if (comptime childKind(HierarchyT, index) == .rtree) {
                                     try collector.registerForCycle(
@@ -1306,6 +1472,14 @@ fn validate(comptime HierarchyT: type, comptime parent_descriptor: component.Des
                     @compileError("fullaz-db hierarchyStore currently requires void SlotHeap child compare contexts");
                 }
             },
+            .slot_sequence => {
+                if (@TypeOf(Trait.maximum_value_size) != usize) {
+                    @compileError("fullaz-db hierarchyStore slot-sequence child maximum_value_size must be usize");
+                }
+                if (Trait.maximum_value_size == 0) {
+                    @compileError("fullaz-db hierarchyStore slot-sequence child maximum_value_size must be non-zero");
+                }
+            },
         }
     }
 }
@@ -1322,16 +1496,25 @@ fn maximumChildPayloadSize(comptime HierarchyT: type, comptime PageIdT: type) us
     return maximum;
 }
 
-fn validateBptChildEnvelopeCapacities(comptime HierarchyT: type, comptime PageIdT: type) void {
+fn validateChildEnvelopeCapacities(comptime HierarchyT: type, comptime PageIdT: type) void {
     inline for (HierarchyT.types, 0..) |entry, parent_index| {
         const Trait = entry.descriptor.Trait;
-        if (childKindForTrait(Trait) != .bpt) {
-            continue;
-        }
         const required = value_envelope.envelope_byte_size +
             maximumAllowedChildPayloadSize(HierarchyT, parent_index, PageIdT);
-        if (Trait.fixed_value_size.? < required) {
-            @compileError("fullaz-db Hierarchy BPT fixed_value_size cannot hold every allowed child envelope");
+        switch (childKindForTrait(Trait)) {
+            .bpt => {
+                if (Trait.fixed_value_size.? < required) {
+                    @compileError("fullaz-db Hierarchy BPT fixed_value_size cannot hold every allowed child envelope");
+                }
+            },
+            .rtree, .slot_heap, .slot_sequence => {
+                if (entry.allowed_child_type_ids.len != 0 and
+                    Trait.maximum_value_size < required)
+                {
+                    @compileError("fullaz-db Hierarchy maximum_value_size cannot hold every allowed child envelope");
+                }
+            },
+            .chain_store, .weighted_sequence => {},
         }
     }
 }
@@ -1359,6 +1542,12 @@ fn childPayloadSize(comptime Trait: type, comptime PageIdT: type) usize {
         .chain_store => 2 * @sizeOf(PackedPageId) + @sizeOf(u64),
         .slot_heap => (2 + Trait.maximum_level + 1 + Trait.size_class_count) * @sizeOf(PackedPageId) +
             @sizeOf(u16) + @sizeOf(u64),
+        .slot_sequence => @sizeOf(fullaz.storage.slot_chain.State(
+            PageIdT,
+            u64,
+            PageIdT,
+            .little,
+        )),
     };
 }
 
@@ -1403,7 +1592,15 @@ fn childKindForTrait(comptime Trait: type) ChildKind {
     {
         return .slot_heap;
     }
-    @compileError("fullaz-db hierarchyStore supports BPT, ChainStore, R-tree, WeightedSequence, and SlotHeap child types only");
+    if (comptime (std.mem.eql(u8, Trait.kind_name, "fullaz.slot-list.paged") or
+        std.mem.eql(u8, Trait.kind_name, "fullaz.slot-queue.paged") or
+        std.mem.eql(u8, Trait.kind_name, "fullaz.slot-stack.paged")) and
+        Trait.page_kind_count == 1 and
+        @hasDecl(Trait, "maximum_value_size"))
+    {
+        return .slot_sequence;
+    }
+    @compileError("fullaz-db hierarchyStore supports BPT, ChainStore, R-tree, WeightedSequence, SlotHeap, SlotList, SlotQueue, and SlotStack child types only");
 }
 
 fn childPageKindCount(comptime HierarchyT: type) usize {
