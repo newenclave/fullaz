@@ -49,12 +49,12 @@ pub fn main(init: std.process.Init) !void {
     const options: Database.InitOptions = .{
         .image_id = [_]u8{0x44} ** 16,
         .components = .{
+            .simulation = .{},
             .orders = .{},
-            .by_status_due = .{},
             .service_areas = .{},
-            .dispatch_queue = .{},
-            .audit_log = .{},
-            .runbook = .{},
+            .pending = .{},
+            .suspended = .{},
+            .history = .{},
         },
     };
 

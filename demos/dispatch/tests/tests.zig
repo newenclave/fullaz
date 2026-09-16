@@ -8,316 +8,276 @@ fn memoryDatabase() !dispatch.MemoryDatabase {
     });
 }
 
-test "dispatch scenario commits every component and rolls back atomically" {
-    try dispatch.runMemory(std.testing.allocator);
+fn initializedDatabase() !dispatch.MemoryDatabase {
+    var database = try memoryDatabase();
+    errdefer database.deinit();
+    try dispatch.initializeSimulation(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1699,
+        .longitude = 24.9384,
+    });
+    return database;
 }
 
-test "addOrder inserts and nextDue returns the earliest due id" {
+fn completeActive(database: *dispatch.MemoryDatabase) !void {
+    for (0..dispatch.service_seconds / dispatch.tick_seconds + 1) |_| {
+        try dispatch.stepSimulation(dispatch.MemoryDatabase, database);
+    }
+}
+
+fn expectSequence(actual: []const [8]u8, expected: []const [8]u8) !void {
+    try std.testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |expected_id, actual_id| {
+        try std.testing.expectEqual(expected_id, actual_id);
+    }
+}
+
+fn findOrder(orders: []const dispatch.OrderSnapshot, id: [8]u8) ?dispatch.OrderSnapshot {
+    for (orders) |order| {
+        if (std.mem.eql(u8, &order.id, &id)) {
+            return order;
+        }
+    }
+    return null;
+}
+
+test "initialization creates an idle simulation at its base" {
     var database = try memoryDatabase();
     defer database.deinit();
 
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "20260010".*,
-        .value = "open|high|north pump",
-        .low = .{ 10, 10 },
-        .high = .{ 20, 20 },
-    });
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "20260005".*,
-        .value = "open|medium|west valve",
-        .low = .{ 30, 10 },
-        .high = .{ 40, 20 },
-    });
+    const base = dispatch.Position{ .latitude = 60.1699, .longitude = 24.9384 };
+    try dispatch.initializeSimulation(dispatch.MemoryDatabase, &database, base);
 
-    try std.testing.expectEqual(
-        @as(u64, 2),
-        try database.getConst("dispatch_queue").count(),
+    const snapshot = try dispatch.snapshotSimulation(dispatch.MemoryDatabase, &database);
+    try std.testing.expectEqual(@as(u8, 1), snapshot.configured);
+    try std.testing.expectEqual(@as(u8, 0), snapshot.auto_orders);
+    try std.testing.expectEqual(@intFromEnum(dispatch.Phase.idle), snapshot.phase);
+    try std.testing.expectEqual(@as([2]f32, .{ base.latitude, base.longitude }), snapshot.base);
+    try std.testing.expectEqual(snapshot.base, snapshot.crew);
+    try std.testing.expectEqual(@as(u64, 0), snapshot.model_seconds);
+    try std.testing.expectEqual(@as(u32, 0), snapshot.pending_count);
+    try std.testing.expectEqual(@as(u32, 0), snapshot.suspended_count);
+    try std.testing.expectError(
+        error.SimulationAlreadyConfigured,
+        dispatch.initializeSimulation(dispatch.MemoryDatabase, &database, base),
     );
-
-    const next = (try dispatch.nextDue(dispatch.MemoryDatabase, &database)).?;
-    try std.testing.expectEqualStrings("20260005", &next);
+    try dispatch.validateSimulation(dispatch.MemoryDatabase, &database, std.testing.allocator);
 }
 
-test "ordersInArea returns only ids overlapping the query window" {
-    var database = try memoryDatabase();
+test "normal orders retain FIFO request order regardless of descriptions" {
+    var database = try initializedDatabase();
     defer database.deinit();
 
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "00000001".*,
-        .value = "open|high|north pump",
-        .low = .{ 10, 10 },
-        .high = .{ 20, 20 },
-    });
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "00000002".*,
-        .value = "open|medium|west valve",
-        .low = .{ 30, 10 },
-        .high = .{ 40, 20 },
-    });
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "00000003".*,
-        .value = "open|critical|river sensor",
-        .low = .{ 10, 30 },
-        .high = .{ 20, 40 },
-    });
+    const first = try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1700,
+        .longitude = 24.9384,
+    }, "zebra request");
+    const second = try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1701,
+        .longitude = 24.9384,
+    }, "aardvark request");
+    const third = try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1702,
+        .longitude = 24.9384,
+    }, "same description");
 
-    var found = try dispatch.ordersInArea(
+    var pending = try dispatch.snapshotSequence(
         dispatch.MemoryDatabase,
         &database,
+        "pending",
         std.testing.allocator,
-        .{ 0, 0 },
-        .{ 25, 25 },
     );
-    defer found.deinit(std.testing.allocator);
+    defer pending.deinit(std.testing.allocator);
+    try expectSequence(pending.items, &.{ second, third });
 
-    try std.testing.expectEqual(@as(usize, 1), found.items.len);
-    try std.testing.expectEqualStrings("00000001", &found.items[0]);
-}
+    try completeActive(&database);
+    const snapshot = try dispatch.snapshotSimulation(dispatch.MemoryDatabase, &database);
+    try std.testing.expectEqual(second, snapshot.active_id);
 
-test "nextDue returns null when the queue is empty" {
-    var database = try memoryDatabase();
-    defer database.deinit();
-
-    try std.testing.expectEqual(
-        @as(?[8]u8, null),
-        try dispatch.nextDue(dispatch.MemoryDatabase, &database),
-    );
-}
-
-test "completeNext removes the earliest order and records it" {
-    var database = try memoryDatabase();
-    defer database.deinit();
-
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "00000010".*,
-        .value = "open|medium|west valve",
-        .low = .{ 30, 10 },
-        .high = .{ 40, 20 },
-    });
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "00000005".*,
-        .value = "open|high|north pump",
-        .low = .{ 10, 10 },
-        .high = .{ 20, 20 },
-    });
-
-    const done = (try dispatch.completeNext(dispatch.MemoryDatabase, &database)).?;
-    try std.testing.expectEqualStrings("00000005", &done);
-
-    try std.testing.expectEqual(
-        @as(u64, 1),
-        try database.getConst("dispatch_queue").count(),
-    );
-
-    const remaining = (try dispatch.nextDue(dispatch.MemoryDatabase, &database)).?;
-    try std.testing.expectEqualStrings("00000010", &remaining);
-
-    try std.testing.expect(
-        (try database.getConst("orders").find("00000005")) == null,
-    );
-
-    var found = try dispatch.ordersInArea(
+    var remaining = try dispatch.snapshotSequence(
         dispatch.MemoryDatabase,
         &database,
+        "pending",
         std.testing.allocator,
-        .{ 0, 0 },
-        .{ 100, 100 },
     );
-    defer found.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 1), found.items.len);
-    try std.testing.expectEqualStrings("00000010", &found.items[0]);
-
-    var audit: [64]u8 = undefined;
-    const audit_len = try database.getConst("audit_log").readAt(0, &audit);
-    try std.testing.expectEqualStrings("completed:00000005\n", audit[0..audit_len]);
+    defer remaining.deinit(std.testing.allocator);
+    try expectSequence(remaining.items, &.{third});
+    try std.testing.expect(!std.mem.eql(u8, &first, &second));
 }
 
-test "snapshotOrders returns added orders with areas, sorted by id" {
-    var database = try memoryDatabase();
+test "nested emergencies suspend and resume work in LIFO order" {
+    var database = try initializedDatabase();
     defer database.deinit();
 
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "00000002".*,
-        .value = "open|medium|west valve",
-        .low = .{ 30, 10 },
-        .high = .{ 40, 20 },
-    });
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "00000001".*,
-        .value = "open|high|north pump",
-        .low = .{ 10, 10 },
-        .high = .{ 20, 20 },
-    });
+    const normal = try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1699,
+        .longitude = 24.9384,
+    }, "normal work");
+    try dispatch.stepSimulation(dispatch.MemoryDatabase, &database);
+    try dispatch.stepSimulation(dispatch.MemoryDatabase, &database);
+
+    var before = try dispatch.snapshotOrders(dispatch.MemoryDatabase, &database, std.testing.allocator);
+    defer before.deinit(std.testing.allocator);
+    const remaining_before_suspension = findOrder(before.items, normal).?.remaining_service_seconds;
+
+    const first_emergency = try dispatch.addEmergency(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1700,
+        .longitude = 24.9384,
+    }, "first emergency");
+    const second_emergency = try dispatch.addEmergency(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1701,
+        .longitude = 24.9384,
+    }, "second emergency");
+
+    var suspended = try dispatch.snapshotSequence(
+        dispatch.MemoryDatabase,
+        &database,
+        "suspended",
+        std.testing.allocator,
+    );
+    defer suspended.deinit(std.testing.allocator);
+    try expectSequence(suspended.items, &.{ first_emergency, normal });
 
     var orders = try dispatch.snapshotOrders(dispatch.MemoryDatabase, &database, std.testing.allocator);
     defer orders.deinit(std.testing.allocator);
+    const normal_status = findOrder(orders.items, normal).?.status;
+    const first_emergency_status = findOrder(orders.items, first_emergency).?.status;
+    const second_emergency_status = findOrder(orders.items, second_emergency).?.status;
+    try std.testing.expect(normal_status != second_emergency_status);
+    try std.testing.expectEqual(normal_status, first_emergency_status);
 
-    try std.testing.expectEqual(@as(usize, 2), orders.items.len);
-    try std.testing.expectEqualStrings("00000001", &orders.items[0].id);
-    try std.testing.expectEqualStrings("00000002", &orders.items[1].id);
-    try std.testing.expectEqual(@as(f32, 10), orders.items[0].low[0]);
-    try std.testing.expectEqual(@as(f32, 20), orders.items[0].high[0]);
-    try std.testing.expectEqualStrings(
-        "open|high|north pump",
-        orders.items[0].value[0..orders.items[0].value_len],
-    );
-    for (orders.items[0].value[orders.items[0].value_len..]) |byte| {
-        try std.testing.expectEqual(@as(u8, 0), byte);
+    try completeActive(&database);
+    var after_first_resume = try dispatch.snapshotSimulation(dispatch.MemoryDatabase, &database);
+    try std.testing.expectEqual(first_emergency, after_first_resume.active_id);
+
+    try completeActive(&database);
+    after_first_resume = try dispatch.snapshotSimulation(dispatch.MemoryDatabase, &database);
+    try std.testing.expectEqual(normal, after_first_resume.active_id);
+
+    var resumed_orders = try dispatch.snapshotOrders(dispatch.MemoryDatabase, &database, std.testing.allocator);
+    defer resumed_orders.deinit(std.testing.allocator);
+    const resumed = findOrder(resumed_orders.items, normal).?;
+    try std.testing.expectEqual(remaining_before_suspension, resumed.remaining_service_seconds);
+    try std.testing.expectEqual(second_emergency_status, resumed.status);
+}
+
+test "a new order diverts the crew while it is returning to base" {
+    var database = try initializedDatabase();
+    defer database.deinit();
+
+    _ = try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1700,
+        .longitude = 24.9384,
+    }, "distant work");
+    try completeActive(&database);
+
+    const returning = try dispatch.snapshotSimulation(dispatch.MemoryDatabase, &database);
+    try std.testing.expectEqual(@intFromEnum(dispatch.Phase.returning), returning.phase);
+    try std.testing.expect(returning.crew[0] != returning.base[0]);
+
+    const diversion = try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1710,
+        .longitude = 24.9384,
+    }, "diversion");
+    const diverted = try dispatch.snapshotSimulation(dispatch.MemoryDatabase, &database);
+    try std.testing.expectEqual(@intFromEnum(dispatch.Phase.travelling), diverted.phase);
+    try std.testing.expectEqual(diversion, diverted.active_id);
+}
+
+test "automatic orders remain disabled until enabled and advance on ticks" {
+    var database = try initializedDatabase();
+    defer database.deinit();
+
+    for (0..dispatch.auto_order_interval_seconds / dispatch.tick_seconds) |_| {
+        try dispatch.stepSimulation(dispatch.MemoryDatabase, &database);
     }
+    var snapshot = try dispatch.snapshotSimulation(dispatch.MemoryDatabase, &database);
+    try std.testing.expectEqual(@as(u64, dispatch.auto_order_interval_seconds), snapshot.model_seconds);
+    try std.testing.expectEqual(@as(u32, 0), snapshot.pending_count);
+    var orders = try dispatch.snapshotOrders(dispatch.MemoryDatabase, &database, std.testing.allocator);
+    defer orders.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), orders.items.len);
+
+    try dispatch.setAutoOrders(dispatch.MemoryDatabase, &database, true);
+    for (0..dispatch.auto_order_interval_seconds / dispatch.tick_seconds - 1) |_| {
+        try dispatch.stepSimulation(dispatch.MemoryDatabase, &database);
+    }
+    snapshot = try dispatch.snapshotSimulation(dispatch.MemoryDatabase, &database);
+    try std.testing.expectEqual(@as(u8, 1), snapshot.auto_orders);
+    try std.testing.expectEqual(@as(u32, dispatch.tick_seconds), snapshot.auto_remaining_seconds);
+
+    try dispatch.stepSimulation(dispatch.MemoryDatabase, &database);
+    snapshot = try dispatch.snapshotSimulation(dispatch.MemoryDatabase, &database);
+    try std.testing.expectEqual(@as(u64, dispatch.auto_order_interval_seconds * 2), snapshot.model_seconds);
+    try std.testing.expectEqual(@as(u32, dispatch.auto_order_interval_seconds), snapshot.auto_remaining_seconds);
+    try std.testing.expect(!std.mem.allEqual(u8, &snapshot.active_id, 0));
 }
 
-test "addOrder rejects non-finite and inverted service areas" {
+test "invalid positions and requests outside the service zone are rejected" {
     var database = try memoryDatabase();
     defer database.deinit();
 
     try std.testing.expectError(
-        error.InvalidArea,
-        dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-            .id = "00000001".*,
-            .value = "open|high|bad bounds",
-            .low = .{ 2, 2 },
-            .high = .{ 1, 3 },
+        error.InvalidPosition,
+        dispatch.initializeSimulation(dispatch.MemoryDatabase, &database, .{
+            .latitude = std.math.nan(f32),
+            .longitude = 0,
         }),
     );
-    try std.testing.expectError(
-        error.InvalidArea,
-        dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-            .id = "00000002".*,
-            .value = "open|high|nan bounds",
-            .low = .{ std.math.nan(f32), 2 },
-            .high = .{ 3, 4 },
-        }),
-    );
-    try std.testing.expectEqual(@as(u64, 0), try database.getConst("dispatch_queue").count());
-}
-
-test "inspectPages classifies pages and deviceBytes matches the image size" {
-    var database = try memoryDatabase();
-    defer database.deinit();
-
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "00000001".*,
-        .value = "open|high|north pump",
-        .low = .{ 10, 10 },
-        .high = .{ 20, 20 },
+    try dispatch.initializeSimulation(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1699,
+        .longitude = 24.9384,
     });
-
-    const diag = database.diagnostics();
-    try std.testing.expectEqual(
-        diag.device_page_count * diag.page_size,
-        database.deviceBytes().len,
+    try std.testing.expectError(
+        error.InvalidPosition,
+        dispatch.addOrder(dispatch.MemoryDatabase, &database, .{ .latitude = 91, .longitude = 0 }, "bad latitude"),
     );
+    try std.testing.expectError(
+        error.OutsideServiceArea,
+        dispatch.addOrder(dispatch.MemoryDatabase, &database, .{ .latitude = 61, .longitude = 24.9384 }, "too far"),
+    );
+    try std.testing.expectError(
+        error.InvalidArea,
+        dispatch.ordersInArea(dispatch.MemoryDatabase, &database, std.testing.allocator, .{
+            .latitude = 61,
+            .longitude = 25,
+        }, .{
+            .latitude = 60,
+            .longitude = 24,
+        }),
+    );
+}
 
+test "snapshots, history, and page inspection describe public dispatch state" {
+    var database = try initializedDatabase();
+    defer database.deinit();
+
+    const id = try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
+        .latitude = 60.1700,
+        .longitude = 24.9384,
+    }, "snapshot request");
+    var orders = try dispatch.snapshotOrders(dispatch.MemoryDatabase, &database, std.testing.allocator);
+    defer orders.deinit(std.testing.allocator);
+    const order = findOrder(orders.items, id).?;
+    try std.testing.expectEqualStrings("snapshot request", order.description[0..order.description_length]);
+    try std.testing.expectEqual(@as([2]f32, .{ 60.1700, 24.9384 }), order.position);
+
+    var history = try dispatch.snapshotHistory(dispatch.MemoryDatabase, &database, std.testing.allocator);
+    defer history.deinit(std.testing.allocator);
+    try std.testing.expect(history.items.len >= 4);
+    try std.testing.expectEqual(id, history.items[history.items.len - 1].order_id);
+
+    const diagnostics = database.diagnostics();
+    try std.testing.expectEqual(diagnostics.device_page_count * diagnostics.page_size, database.deviceBytes().len);
     var pages = try dispatch.inspectPages(
         database.deviceBytes(),
-        database.diagnostics().page_size,
+        diagnostics.page_size,
         database.freePageIds(),
         std.testing.allocator,
     );
     defer pages.deinit(std.testing.allocator);
-
-    try std.testing.expectEqual(diag.device_page_count, pages.items.len);
-
-    var classified = false;
+    try std.testing.expectEqual(diagnostics.device_page_count, pages.items.len);
     for (pages.items) |page| {
-        if (page.component != 0xFF) {
-            classified = true;
-        }
+        try std.testing.expectEqual(diagnostics.page_size, page.capacity);
     }
-    try std.testing.expect(classified);
-}
-
-test "inspectPages marks free pages after completing orders" {
-    var database = try memoryDatabase();
-    defer database.deinit();
-
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "00000001".*,
-        .value = "open|high|north pump",
-        .low = .{ 10, 10 },
-        .high = .{ 20, 20 },
-    });
-    try dispatch.addOrder(dispatch.MemoryDatabase, &database, .{
-        .id = "00000002".*,
-        .value = "open|medium|west valve",
-        .low = .{ 30, 10 },
-        .high = .{ 40, 20 },
-    });
-    _ = try dispatch.completeNext(dispatch.MemoryDatabase, &database);
-
-    var pages = try dispatch.inspectPages(
-        database.deviceBytes(),
-        database.diagnostics().page_size,
-        database.freePageIds(),
-        std.testing.allocator,
-    );
-    defer pages.deinit(std.testing.allocator);
-
-    for (database.freePageIds()) |free_pid| {
-        var matched = false;
-        for (pages.items) |page| {
-            if (page.pid == free_pid) {
-                try std.testing.expectEqual(@as(u8, 0xFF), page.component);
-                matched = true;
-            }
-        }
-        try std.testing.expect(matched);
-    }
-}
-
-const Collector = struct {
-    buf: [4096]u8 = undefined,
-    len: usize = 0,
-
-    pub fn writeAll(self: *Collector, bytes: []const u8) !void {
-        @memcpy(self.buf[self.len..][0..bytes.len], bytes);
-        self.len += bytes.len;
-    }
-
-    pub fn print(self: *Collector, comptime fmt: []const u8, args: anytype) !void {
-        const s = try std.fmt.bufPrint(self.buf[self.len..], fmt, args);
-        self.len += s.len;
-    }
-};
-
-test "cli commands drive the dispatch database" {
-    var database = try memoryDatabase();
-    defer database.deinit();
-
-    var cli = dispatch.cli.Cli(dispatch.MemoryDatabase).init(&database, std.testing.allocator);
-    var col = Collector{};
-
-    try cli.execTokens(&.{ "add", "00000001", "60", "24", "0.5", "open|high|north pump" }, &col);
-    try cli.execTokens(&.{ "add", "00000002", "61", "25", "0.5", "open|medium|west valve" }, &col);
-    try std.testing.expectError(
-        error.OrderAlreadyExists,
-        cli.execTokens(&.{ "add", "00000001", "60", "24", "0.5", "duplicate" }, &col),
-    );
-
-    col.len = 0;
-    try cli.execTokens(&.{"top"}, &col);
-    try std.testing.expectEqualStrings("next due: 00000001\n", col.buf[0..col.len]);
-
-    col.len = 0;
-    try cli.execTokens(&.{"complete"}, &col);
-    try std.testing.expectEqualStrings("completed: 00000001\n", col.buf[0..col.len]);
-
-    col.len = 0;
-    try cli.execTokens(&.{"list"}, &col);
-    try std.testing.expectEqualStrings(
-        "00000002  open|medium|west valve  [60.50,24.50]..[61.50,25.50]\n",
-        col.buf[0..col.len],
-    );
-
-    col.len = 0;
-    try cli.execTokens(&.{ "area", "61", "25", "0.5" }, &col);
-    try std.testing.expectEqualStrings("00000002\n", col.buf[0..col.len]);
-
-    col.len = 0;
-    try cli.execTokens(&.{ "area", "10", "10", "0.5" }, &col);
-    try std.testing.expectEqualStrings("no orders\n", col.buf[0..col.len]);
-
-    col.len = 0;
-    try cli.execTokens(&.{"bogus"}, &col);
-    try std.testing.expectEqualStrings("unknown command: bogus\n", col.buf[0..col.len]);
+    try dispatch.validateSimulation(dispatch.MemoryDatabase, &database, std.testing.allocator);
 }

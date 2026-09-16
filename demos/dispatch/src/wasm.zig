@@ -19,12 +19,12 @@ const page_size: usize = 512;
 const options: Database.InitOptions = .{
     .image_id = [_]u8{0x44} ** 16,
     .components = .{
+        .simulation = .{},
         .orders = .{},
-        .by_status_due = .{},
         .service_areas = .{},
-        .dispatch_queue = .{},
-        .audit_log = .{},
-        .runbook = .{},
+        .pending = .{},
+        .suspended = .{},
+        .history = .{},
     },
 };
 
@@ -32,10 +32,12 @@ var database: Database = undefined;
 var ready = false;
 var last_error: []const u8 = "";
 
-var next_due_id: [8]u8 = undefined;
-var complete_id: [8]u8 = undefined;
+var simulation_snapshot: dispatch.SimulationSnapshot = std.mem.zeroes(dispatch.SimulationSnapshot);
 var area_ids: std.ArrayList([8]u8) = .empty;
 var order_snapshots: std.ArrayList(dispatch.OrderSnapshot) = .empty;
+var pending_ids: std.ArrayList([8]u8) = .empty;
+var suspended_ids: std.ArrayList([8]u8) = .empty;
+var history_snapshots: std.ArrayList(dispatch.HistorySnapshot) = .empty;
 var page_infos: std.ArrayList(dispatch.PageInfo) = .empty;
 
 fn fail(err: anyerror) u32 {
@@ -51,21 +53,29 @@ fn input(ptr: usize, len: usize) []const u8 {
     return bytes[0..len];
 }
 
+fn clearBuffers() void {
+    simulation_snapshot = std.mem.zeroes(dispatch.SimulationSnapshot);
+    area_ids.deinit(allocator);
+    area_ids = .empty;
+    order_snapshots.deinit(allocator);
+    order_snapshots = .empty;
+    pending_ids.deinit(allocator);
+    pending_ids = .empty;
+    suspended_ids.deinit(allocator);
+    suspended_ids = .empty;
+    history_snapshots.deinit(allocator);
+    history_snapshots = .empty;
+    page_infos.deinit(allocator);
+    page_infos = .empty;
+}
+
 fn teardown() void {
+    clearBuffers();
     if (!ready) {
         return;
     }
     database.deinit();
     ready = false;
-}
-
-fn clearBuffers() void {
-    area_ids.deinit(allocator);
-    area_ids = .empty;
-    order_snapshots.deinit(allocator);
-    order_snapshots = .empty;
-    page_infos.deinit(allocator);
-    page_infos = .empty;
 }
 
 export fn allocate(len: usize) usize {
@@ -84,13 +94,16 @@ export fn freeAllocation(ptr: usize, len: usize) void {
 /// Starts a fresh, empty database.
 export fn format() u32 {
     teardown();
-    clearBuffers();
     var device = Device.init(allocator, page_size) catch |err| return fail(err);
-    const log = Log.init(allocator) catch |err| {
+    var log = Log.init(allocator) catch |err| {
         device.deinit();
         return fail(err);
     };
-    database = Database.format(allocator, device, log, options) catch |err| return fail(err);
+    database = Database.format(allocator, device, log, options) catch |err| {
+        log.deinit();
+        device.deinit();
+        return fail(err);
+    };
     ready = true;
     last_error = "";
     return 1;
@@ -103,115 +116,102 @@ export fn importImage(ptr: usize, len: usize) u32 {
         return 0;
     }
     teardown();
-    clearBuffers();
     var device = Device.init(allocator, page_size) catch |err| return fail(err);
     device.storage.resize(allocator, len) catch |err| {
         device.deinit();
         return fail(err);
     };
     @memcpy(device.storage.items, input(ptr, len));
-    const log = Log.init(allocator) catch |err| {
+    var log = Log.init(allocator) catch |err| {
         device.deinit();
         return fail(err);
     };
-    database = Database.open(allocator, device, log, options) catch |err| return fail(err);
+    const open = Database.open(allocator, device, log, options) catch |err| {
+        log.deinit();
+        device.deinit();
+        return fail(err);
+    };
+    database = open;
     ready = true;
     last_error = "";
     return 1;
 }
 
-export fn addOrder(
-    id_ptr: usize,
-    id_len: usize,
-    value_ptr: usize,
-    value_len: usize,
-    low0: f32,
-    low1: f32,
-    high0: f32,
-    high1: f32,
-) u32 {
+export fn initializeSimulation(latitude: f32, longitude: f32) u32 {
     if (!ready) {
         last_error = "NotReady";
         return 0;
     }
-    if (id_len != 8) {
-        last_error = "InvalidId";
-        return 0;
-    }
-    var id: [8]u8 = undefined;
-    @memcpy(&id, input(id_ptr, id_len));
-    dispatch.addOrder(Database, &database, .{
-        .id = id,
-        .value = input(value_ptr, value_len),
-        .low = .{ low0, low1 },
-        .high = .{ high0, high1 },
+    dispatch.initializeSimulation(Database, &database, .{
+        .latitude = latitude,
+        .longitude = longitude,
     }) catch |err| return fail(err);
     last_error = "";
     return 1;
 }
 
-export fn nextDue() u32 {
+export fn addOrder(latitude: f32, longitude: f32, description_ptr: usize, description_len: usize) u32 {
     if (!ready) {
         last_error = "NotReady";
         return 0;
     }
-    const due = dispatch.nextDue(Database, &database) catch |err| return fail(err);
-    if (due == null) {
-        last_error = "Empty";
-        return 0;
-    }
-    next_due_id = due.?;
+    _ = dispatch.addOrder(Database, &database, .{
+        .latitude = latitude,
+        .longitude = longitude,
+    }, input(description_ptr, description_len)) catch |err| return fail(err);
     last_error = "";
     return 1;
 }
 
-export fn nextDuePtr() usize {
-    return @intFromPtr(&next_due_id);
-}
-
-export fn completeNext() u32 {
+export fn addEmergency(latitude: f32, longitude: f32, description_ptr: usize, description_len: usize) u32 {
     if (!ready) {
         last_error = "NotReady";
         return 0;
     }
-    const done = dispatch.completeNext(Database, &database) catch |err| return fail(err);
-    if (done == null) {
-        last_error = "Empty";
-        return 0;
-    }
-    complete_id = done.?;
+    _ = dispatch.addEmergency(Database, &database, .{
+        .latitude = latitude,
+        .longitude = longitude,
+    }, input(description_ptr, description_len)) catch |err| return fail(err);
     last_error = "";
     return 1;
 }
 
-export fn completePtr() usize {
-    return @intFromPtr(&complete_id);
-}
-
-export fn ordersInArea(low0: f32, low1: f32, high0: f32, high1: f32) u32 {
+export fn stepSimulation() u32 {
     if (!ready) {
         last_error = "NotReady";
         return 0;
     }
-    area_ids.deinit(allocator);
-    area_ids = .empty;
-    area_ids = dispatch.ordersInArea(
-        Database,
-        &database,
-        allocator,
-        .{ low0, low1 },
-        .{ high0, high1 },
-    ) catch |err| return fail(err);
+    dispatch.stepSimulation(Database, &database) catch |err| return fail(err);
     last_error = "";
     return 1;
 }
 
-export fn areaIdsPtr() usize {
-    return @intFromPtr(area_ids.items.ptr);
+export fn setAutoOrders(enabled: u32) u32 {
+    if (!ready) {
+        last_error = "NotReady";
+        return 0;
+    }
+    dispatch.setAutoOrders(Database, &database, enabled != 0) catch |err| return fail(err);
+    last_error = "";
+    return 1;
 }
 
-export fn areaCount() usize {
-    return area_ids.items.len;
+export fn snapshotSimulation() u32 {
+    if (!ready) {
+        last_error = "NotReady";
+        return 0;
+    }
+    simulation_snapshot = dispatch.snapshotSimulation(Database, &database) catch |err| return fail(err);
+    last_error = "";
+    return 1;
+}
+
+export fn simulationPtr() usize {
+    return @intFromPtr(&simulation_snapshot);
+}
+
+export fn simulationStride() usize {
+    return @sizeOf(dispatch.SimulationSnapshot);
 }
 
 export fn snapshotOrders() u32 {
@@ -221,11 +221,7 @@ export fn snapshotOrders() u32 {
     }
     order_snapshots.deinit(allocator);
     order_snapshots = .empty;
-    order_snapshots = dispatch.snapshotOrders(
-        Database,
-        &database,
-        allocator,
-    ) catch |err| return fail(err);
+    order_snapshots = dispatch.snapshotOrders(Database, &database, allocator) catch |err| return fail(err);
     last_error = "";
     return 1;
 }
@@ -240,6 +236,96 @@ export fn ordersCount() usize {
 
 export fn orderStride() usize {
     return @sizeOf(dispatch.OrderSnapshot);
+}
+
+export fn snapshotPending() u32 {
+    if (!ready) {
+        last_error = "NotReady";
+        return 0;
+    }
+    pending_ids.deinit(allocator);
+    pending_ids = .empty;
+    pending_ids = dispatch.snapshotSequence(Database, &database, "pending", allocator) catch |err| return fail(err);
+    last_error = "";
+    return 1;
+}
+
+export fn pendingPtr() usize {
+    return @intFromPtr(pending_ids.items.ptr);
+}
+
+export fn pendingCount() usize {
+    return pending_ids.items.len;
+}
+
+export fn snapshotSuspended() u32 {
+    if (!ready) {
+        last_error = "NotReady";
+        return 0;
+    }
+    suspended_ids.deinit(allocator);
+    suspended_ids = .empty;
+    suspended_ids = dispatch.snapshotSequence(Database, &database, "suspended", allocator) catch |err| return fail(err);
+    last_error = "";
+    return 1;
+}
+
+export fn suspendedPtr() usize {
+    return @intFromPtr(suspended_ids.items.ptr);
+}
+
+export fn suspendedCount() usize {
+    return suspended_ids.items.len;
+}
+
+export fn snapshotHistory() u32 {
+    if (!ready) {
+        last_error = "NotReady";
+        return 0;
+    }
+    history_snapshots.deinit(allocator);
+    history_snapshots = .empty;
+    history_snapshots = dispatch.snapshotHistory(Database, &database, allocator) catch |err| return fail(err);
+    last_error = "";
+    return 1;
+}
+
+export fn historyPtr() usize {
+    return @intFromPtr(history_snapshots.items.ptr);
+}
+
+export fn historyCount() usize {
+    return history_snapshots.items.len;
+}
+
+export fn historyStride() usize {
+    return @sizeOf(dispatch.HistorySnapshot);
+}
+
+export fn ordersInArea(low_latitude: f32, low_longitude: f32, high_latitude: f32, high_longitude: f32) u32 {
+    if (!ready) {
+        last_error = "NotReady";
+        return 0;
+    }
+    area_ids.deinit(allocator);
+    area_ids = .empty;
+    area_ids = dispatch.ordersInArea(Database, &database, allocator, .{
+        .latitude = low_latitude,
+        .longitude = low_longitude,
+    }, .{
+        .latitude = high_latitude,
+        .longitude = high_longitude,
+    }) catch |err| return fail(err);
+    last_error = "";
+    return 1;
+}
+
+export fn areaIdsPtr() usize {
+    return @intFromPtr(area_ids.items.ptr);
+}
+
+export fn areaCount() usize {
+    return area_ids.items.len;
 }
 
 export fn snapshotPages() u32 {
@@ -290,21 +376,6 @@ export fn pageSize() usize {
         return 0;
     }
     return database.diagnostics().page_size;
-}
-
-export fn queueCount() u64 {
-    if (!ready) {
-        return 0;
-    }
-    return database.getConst("dispatch_queue").count() catch return 0;
-}
-
-export fn auditLen() u32 {
-    if (!ready) {
-        return 0;
-    }
-    const size = database.getConst("audit_log").size() catch return 0;
-    return @intCast(size);
 }
 
 export fn lastErrorPtr() usize {

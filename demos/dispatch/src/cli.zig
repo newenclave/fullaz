@@ -32,12 +32,24 @@ pub fn Cli(comptime DatabaseT: type) type {
                 return;
             }
             const cmd = tokens[0];
-            if (std.mem.eql(u8, cmd, "add")) {
-                try self.cmdAdd(tokens, writer);
-            } else if (std.mem.eql(u8, cmd, "top")) {
-                try self.cmdTop(writer);
-            } else if (std.mem.eql(u8, cmd, "complete")) {
-                try self.cmdComplete(writer);
+            if (std.mem.eql(u8, cmd, "base")) {
+                try self.cmdBase(tokens, writer);
+            } else if (std.mem.eql(u8, cmd, "add")) {
+                try self.cmdAdd(tokens, writer, false);
+            } else if (std.mem.eql(u8, cmd, "urgent")) {
+                try self.cmdAdd(tokens, writer, true);
+            } else if (std.mem.eql(u8, cmd, "step")) {
+                try self.cmdStep(tokens, writer);
+            } else if (std.mem.eql(u8, cmd, "auto")) {
+                try self.cmdAuto(tokens, writer);
+            } else if (std.mem.eql(u8, cmd, "status")) {
+                try self.cmdStatus(writer);
+            } else if (std.mem.eql(u8, cmd, "queue")) {
+                try self.cmdSequence("pending", writer);
+            } else if (std.mem.eql(u8, cmd, "stack")) {
+                try self.cmdSequence("suspended", writer);
+            } else if (std.mem.eql(u8, cmd, "history")) {
+                try self.cmdHistory(writer);
             } else if (std.mem.eql(u8, cmd, "list")) {
                 try self.cmdList(writer);
             } else if (std.mem.eql(u8, cmd, "area")) {
@@ -53,111 +65,225 @@ pub fn Cli(comptime DatabaseT: type) type {
             return std.fmt.parseFloat(f32, token) catch return error.BadNumber;
         }
 
-        fn cmdAdd(self: *Self, tokens: []const []const u8, writer: anytype) !void {
-            if (tokens.len < 6) {
+        fn parsePosition(tokens: []const []const u8) !root.Position {
+            if (tokens.len < 3) {
                 return error.MissingArgs;
             }
-            const id = tokens[1];
-            if (id.len != 8) {
-                return error.BadId;
-            }
-            const lat = try parseCoord(tokens[2]);
-            const lng = try parseCoord(tokens[3]);
-            const radius = try parseCoord(tokens[4]);
-            if (radius < 0) {
-                return error.BadRadius;
-            }
+            return .{
+                .latitude = try parseCoord(tokens[1]),
+                .longitude = try parseCoord(tokens[2]),
+            };
+        }
 
+        fn cmdBase(self: *Self, tokens: []const []const u8, writer: anytype) !void {
+            if (tokens.len != 3) {
+                return error.MissingArgs;
+            }
+            try root.initializeSimulation(DatabaseT, self.db, try parsePosition(tokens));
+            try writer.writeAll("base configured\n");
+        }
+
+        fn cmdAdd(self: *Self, tokens: []const []const u8, writer: anytype, urgent: bool) !void {
+            if (tokens.len < 4) {
+                return error.MissingArgs;
+            }
+            const position = try parsePosition(tokens);
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
-            const value = try std.mem.join(arena.allocator(), " ", tokens[5..]);
-            if (value.len > 64) {
-                return error.ValueTooLong;
-            }
-
-            try root.addOrder(DatabaseT, self.db, .{
-                .id = id[0..8].*,
-                .value = value,
-                .low = .{ lat - radius, lng - radius },
-                .high = .{ lat + radius, lng + radius },
-            });
-            try writer.print("added {s}\n", .{id});
+            const description = try std.mem.join(arena.allocator(), " ", tokens[3..]);
+            const id = if (urgent)
+                try root.addEmergency(DatabaseT, self.db, position, description)
+            else
+                try root.addOrder(DatabaseT, self.db, position, description);
+            try writer.print("added {s}\n", .{id[0..]});
         }
 
-        fn cmdTop(self: *Self, writer: anytype) !void {
-            const due = try root.nextDue(DatabaseT, self.db);
-            if (due == null) {
-                try writer.writeAll("queue empty\n");
-            } else {
-                const id = due.?;
-                try writer.print("next due: {s}\n", .{id[0..]});
+        fn cmdStep(self: *Self, tokens: []const []const u8, writer: anytype) !void {
+            if (tokens.len > 2) {
+                return error.TooManyArgs;
+            }
+            const count = if (tokens.len == 2)
+                std.fmt.parseInt(u32, tokens[1], 10) catch return error.BadCount
+            else
+                1;
+            if (count == 0) {
+                return error.BadCount;
+            }
+            for (0..count) |_| {
+                try root.stepSimulation(DatabaseT, self.db);
+            }
+            try writer.print("stepped {d}\n", .{count});
+        }
+
+        fn cmdAuto(self: *Self, tokens: []const []const u8, writer: anytype) !void {
+            if (tokens.len != 2) {
+                return error.MissingArgs;
+            }
+            const enabled = if (std.mem.eql(u8, tokens[1], "on"))
+                true
+            else if (std.mem.eql(u8, tokens[1], "off"))
+                false
+            else
+                return error.BadAutoSetting;
+            try root.setAutoOrders(DatabaseT, self.db, enabled);
+            try writer.print("auto {s}\n", .{if (enabled) "on" else "off"});
+        }
+
+        fn cmdStatus(self: *Self, writer: anytype) !void {
+            const snapshot = try root.snapshotSimulation(DatabaseT, self.db);
+            const phase: root.Phase = @enumFromInt(snapshot.phase);
+            try writer.print(
+                "time: {d}s\nphase: {s}\nauto: {s}\nbase: {d:.5},{d:.5}\ncrew: {d:.5},{d:.5}\nactive: {s}\npending: {d}\nsuspended: {d}\n",
+                .{
+                    snapshot.model_seconds,
+                    @tagName(phase),
+                    if (snapshot.auto_orders != 0) "on" else "off",
+                    snapshot.base[0],
+                    snapshot.base[1],
+                    snapshot.crew[0],
+                    snapshot.crew[1],
+                    activeId(snapshot.active_id),
+                    snapshot.pending_count,
+                    snapshot.suspended_count,
+                },
+            );
+        }
+
+        fn cmdSequence(self: *Self, comptime component_name: []const u8, writer: anytype) !void {
+            var ids = try root.snapshotSequence(DatabaseT, self.db, component_name, self.allocator);
+            defer ids.deinit(self.allocator);
+            if (ids.items.len == 0) {
+                try writer.writeAll("empty\n");
+                return;
+            }
+            for (ids.items) |id| {
+                try writer.print("{s}\n", .{id[0..]});
             }
         }
 
-        fn cmdComplete(self: *Self, writer: anytype) !void {
-            const done = try root.completeNext(DatabaseT, self.db);
-            if (done == null) {
-                try writer.writeAll("queue empty\n");
-            } else {
-                const id = done.?;
-                try writer.print("completed: {s}\n", .{id[0..]});
+        fn cmdHistory(self: *Self, writer: anytype) !void {
+            var history = try root.snapshotHistory(DatabaseT, self.db, self.allocator);
+            defer history.deinit(self.allocator);
+            if (history.items.len == 0) {
+                try writer.writeAll("empty\n");
+                return;
+            }
+            for (history.items) |entry| {
+                try writer.print(
+                    "{d}s  {s}  {s}  {s}\n",
+                    .{
+                        entry.model_seconds,
+                        eventName(entry.event),
+                        activeId(entry.order_id),
+                        entry.description[0..entry.description_length],
+                    },
+                );
             }
         }
 
         fn cmdList(self: *Self, writer: anytype) !void {
-            var list = try root.snapshotOrders(DatabaseT, self.db, self.allocator);
-            defer list.deinit(self.allocator);
-            for (list.items) |snapshot| {
+            var orders = try root.snapshotOrders(DatabaseT, self.db, self.allocator);
+            defer orders.deinit(self.allocator);
+            if (orders.items.len == 0) {
+                try writer.writeAll("no orders\n");
+                return;
+            }
+            for (orders.items) |order| {
                 try writer.print(
-                    "{s}  {s}  [{d:.2},{d:.2}]..[{d:.2},{d:.2}]\n",
+                    "{s}  {s}  {s}  {s}  [{d:.5},{d:.5}]  {d}s\n",
                     .{
-                        snapshot.id[0..],
-                        snapshot.value[0..snapshot.value_len],
-                        snapshot.low[0],
-                        snapshot.low[1],
-                        snapshot.high[0],
-                        snapshot.high[1],
+                        order.id[0..],
+                        orderKindName(order.kind),
+                        orderStatusName(order.status),
+                        order.description[0..order.description_length],
+                        order.position[0],
+                        order.position[1],
+                        order.remaining_service_seconds,
                     },
                 );
             }
         }
 
         fn cmdArea(self: *Self, tokens: []const []const u8, writer: anytype) !void {
-            if (tokens.len < 4) {
+            if (tokens.len != 4) {
                 return error.MissingArgs;
             }
-            const lat = try parseCoord(tokens[1]);
-            const lng = try parseCoord(tokens[2]);
-            const radius = try parseCoord(tokens[3]);
-            if (radius < 0) {
+            const center = try parsePosition(tokens);
+            const radius_m = try parseCoord(tokens[3]);
+            if (!std.math.isFinite(radius_m) or radius_m < 0) {
                 return error.BadRadius;
             }
-
-            var ids = try root.ordersInArea(
-                DatabaseT,
-                self.db,
-                self.allocator,
-                .{ lat - radius, lng - radius },
-                .{ lat + radius, lng + radius },
-            );
+            const latitude_delta = radius_m / 111_000;
+            const longitude_delta = radius_m / (111_000 * @max(@abs(std.math.cos(center.latitude * std.math.pi / 180.0)), 0.01));
+            var ids = try root.ordersInArea(DatabaseT, self.db, self.allocator, .{
+                .latitude = center.latitude - latitude_delta,
+                .longitude = center.longitude - longitude_delta,
+            }, .{
+                .latitude = center.latitude + latitude_delta,
+                .longitude = center.longitude + longitude_delta,
+            });
             defer ids.deinit(self.allocator);
-
             if (ids.items.len == 0) {
                 try writer.writeAll("no orders\n");
-            } else {
-                for (ids.items) |id| {
-                    try writer.print("{s}\n", .{id[0..]});
-                }
+                return;
+            }
+            for (ids.items) |id| {
+                try writer.print("{s}\n", .{id[0..]});
             }
         }
 
+        fn activeId(id: [8]u8) []const u8 {
+            return if (std.mem.allEqual(u8, &id, 0)) "-" else &id;
+        }
+
+        fn orderKindName(kind: u8) []const u8 {
+            return switch (kind) {
+                0 => "normal",
+                1 => "emergency",
+                else => "unknown",
+            };
+        }
+
+        fn orderStatusName(status: u8) []const u8 {
+            return switch (status) {
+                0 => "pending",
+                1 => "active",
+                2 => "suspended",
+                else => "unknown",
+            };
+        }
+
+        fn eventName(event: u8) []const u8 {
+            return switch (event) {
+                1 => "created",
+                2 => "queued",
+                3 => "assigned",
+                4 => "suspended",
+                5 => "resumed",
+                6 => "arrived",
+                7 => "completed",
+                8 => "returning",
+                9 => "at_base",
+                10 => "auto_enabled",
+                11 => "auto_disabled",
+                else => "unknown",
+            };
+        }
+
         const help_text =
-            \\commands: add top complete list area help quit
-            \\  add <id> <lat> <lng> <radius> <value...>
-            \\  top                        show next due order
-            \\  complete                   execute the next due order
-            \\  list                       list every order with its area
-            \\  area <lat> <lng> <radius>  orders whose area intersects the box
+            \\commands: base add urgent step auto status queue stack history list area help quit
+            \\  base <lat> <lng>                         configure the dispatch base
+            \\  add <lat> <lng> <description...>          add a normal order
+            \\  urgent <lat> <lng> <description...>       add an emergency order
+            \\  step [count]                              advance simulation ticks
+            \\  auto on|off                               enable or disable automatic orders
+            \\  status                                    show simulation state
+            \\  queue                                     show pending order ids
+            \\  stack                                     show suspended order ids
+            \\  history                                   show simulation events
+            \\  list                                      show all orders
+            \\  area <lat> <lng> <radius_m>               show orders in an area
+            \\  help                                      show this help
             \\
         ;
     };

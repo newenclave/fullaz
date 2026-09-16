@@ -301,12 +301,9 @@ pub fn build(b: *std.Build) void {
         run_dispatch.addArgs(&.{
             ".zig-cache/dispatch-demo.img",
             "--format",
-            "add",
-            "00000001",
+            "base",
             "60.1699",
             "24.9384",
-            "0.01",
-            "open|high|Helsinki demo",
         });
     }
     b.step("run-dispatch", "Run the dispatch CLI demo").dependOn(&run_dispatch.step);
