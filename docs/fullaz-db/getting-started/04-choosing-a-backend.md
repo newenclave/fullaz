@@ -27,4 +27,9 @@ and initialization rules.
 Dynamic schema databases are not SQL `CREATE TABLE`. Their typed component
 names still come from the compiled `Schema`.
 
+Raw and typed Dynamic factories also have `openReadOnly()`. It returns a
+separate `Database.ReadOnly` type without transactions or GC mutations. WAL
+redo is applied in memory, so the source image and WAL stay unchanged. Use it
+only when no writer is using the same files.
+
 [Previous: memory database](03-first-memory-database.md) | [Next: transactions](05-transactions-ownership-and-lifetimes.md)

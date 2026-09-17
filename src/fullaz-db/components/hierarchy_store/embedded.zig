@@ -398,16 +398,27 @@ pub fn OwnedConstChild(
 
     return struct {
         const Self = @This();
+        const State = struct {
+            backend: *BackendT,
+            parent_pin: ParentPinT,
+            manager: *ManagerT,
+            runtime: *ChildBindingT.Runtime,
+            closed: bool = false,
+        };
 
         pub const Error = ChildBindingT.Error ||
             ManagerT.Error ||
             std.mem.Allocator.Error;
 
-        backend: *BackendT,
-        parent_pin: ParentPinT,
-        manager: *ManagerT,
-        runtime: *ChildBindingT.Runtime,
-        closed: bool = false,
+        state_storage: [@sizeOf(State)]u8 align(@alignOf(State)),
+
+        fn state(self: *Self) *State {
+            return @ptrCast(&self.state_storage);
+        }
+
+        fn stateConst(self: *const Self) *const State {
+            return @ptrCast(&self.state_storage);
+        }
 
         pub fn init(
             backend: *BackendT,
@@ -424,32 +435,36 @@ pub fn OwnedConstChild(
             errdefer allocator.destroy(runtime);
             try ChildBindingT.initRuntime(runtime, backend, manager, page_kinds, init_options);
             errdefer ChildBindingT.deinitRuntime(runtime);
-            return .{
+            var self: Self = undefined;
+            self.state().* = .{
                 .backend = backend,
                 .parent_pin = parent_pin,
                 .manager = manager,
                 .runtime = runtime,
             };
+            return self;
         }
 
         /// Returns a proxy borrowed from this child handle. Deinitialize every
         /// iterator from it before `deinit`, which destroys the child runtime.
         pub fn proxy(self: *const Self) *const ChildBindingT.ConstProxy {
-            if (self.closed) {
+            const value = self.stateConst();
+            if (value.closed) {
                 @panic("embedded child proxy requested after close");
             }
-            return ChildBindingT.proxyConst(self.runtime);
+            return ChildBindingT.proxyConst(value.runtime);
         }
 
         pub fn deinit(self: *Self) void {
-            if (self.closed) {
+            const value = self.state();
+            if (value.closed) {
                 return;
             }
-            ChildBindingT.deinitRuntime(self.runtime);
-            self.backend.allocator().destroy(self.runtime);
-            self.backend.allocator().destroy(self.manager);
-            self.parent_pin.deinit();
-            self.closed = true;
+            ChildBindingT.deinitRuntime(value.runtime);
+            value.backend.allocator().destroy(value.runtime);
+            value.backend.allocator().destroy(value.manager);
+            value.parent_pin.deinit();
+            value.closed = true;
         }
     };
 }

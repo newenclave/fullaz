@@ -74,11 +74,17 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
                     }
                 };
                 pub const ConstProxy = struct {
-                    runtime: *const Runtime,
+                    const ConstSelf = @This();
 
-                    pub fn owner(self: *const @This(), comptime tag: []const u8) *const bindingForTag(options, Bindings, tag).ConstProxy {
+                    runtime_ptr: *const anyopaque,
+
+                    fn runtime(self: *const ConstSelf) *const Runtime {
+                        return @ptrCast(@alignCast(self.runtime_ptr));
+                    }
+
+                    pub fn owner(self: *const ConstSelf, comptime tag: []const u8) *const bindingForTag(options, Bindings, tag).ConstProxy {
                         const index = comptime ownerIndex(options, tag);
-                        return Bindings[index].proxyConst(&@field(self.runtime.owners, ownerField(index)));
+                        return Bindings[index].proxyConst(&@field(self.runtime().owners, ownerField(index)));
                     }
                 };
                 pub const Runtime = struct {
@@ -200,7 +206,7 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
                         );
                         runtime.initialized = index + 1;
                     }
-                    runtime.const_proxy = .{ .runtime = runtime };
+                    runtime.const_proxy = .{ .runtime_ptr = runtime };
                 }
 
                 pub fn deinitRuntime(runtime: *Runtime) void {

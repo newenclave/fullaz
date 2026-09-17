@@ -99,6 +99,9 @@ test "fullaz-db: SlotHeap memory database commits and rolls back" {
     try std.testing.expect(@hasDecl(Binding.Proxy.MutablePeek, "editValue"));
     try std.testing.expect(!@hasDecl(Binding.ConstProxy.ConstPeek, "editValue"));
     try std.testing.expect(!@hasDecl(Binding.ConstProxy, "openValueEditor"));
+    try std.testing.expect(!@hasField(Binding.ConstProxy, "heap"));
+    try std.testing.expect(!@hasField(Binding.ConstProxy.ConstPeek, "model"));
+    try std.testing.expect(!@hasField(Binding.ConstProxy.ConstPeek, "leaf"));
     {
         var transaction = try database.begin();
         const heap = transaction.get("heap");

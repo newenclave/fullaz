@@ -193,6 +193,7 @@ pub fn PagedWithKinds(
         const Queue = SlotQueue(PageCacheT, QueueManager, u64, PageCacheT.Pid, .little);
 
         pub const Error = BaseError || Queue.Error;
+        pub const PhaseError = error{InvalidState};
 
         allocator_value: std.mem.Allocator,
         cache: *PageCacheT,
@@ -259,6 +260,36 @@ pub fn PagedWithKinds(
 
         pub fn phase(self: *const Self) gc.Phase {
             return self.phase_value;
+        }
+
+        /// Decodes and validates the phase from one persisted GC state page.
+        pub fn phaseFromPage(bytes: []const u8) PhaseError!gc.Phase {
+            if (bytes.len < state_len) {
+                return error.InvalidState;
+            }
+            const state: *const StatePage = @ptrCast(bytes.ptr);
+            if (state.kind.get() != state_page_kind or
+                state.magic.get() != state_magic or
+                state.role != @intFromEnum(Role.state) or state.version != version)
+            {
+                return error.InvalidState;
+            }
+            const endpoints_empty = state.queue.page_chain.first.get() == nil_page_id and
+                state.queue.page_chain.last.get() == nil_page_id;
+            const elements_count = state.queue.elements_count.get();
+            const tombstone_count = state.queue.tombstone_count.get();
+            if (tombstone_count > elements_count or
+                (endpoints_empty and (elements_count != 0 or tombstone_count != 0)))
+            {
+                return error.InvalidState;
+            }
+            return switch (state.phase) {
+                @intFromEnum(gc.Phase.idle) => .idle,
+                @intFromEnum(gc.Phase.preparing) => .preparing,
+                @intFromEnum(gc.Phase.marking) => .marking,
+                @intFromEnum(gc.Phase.sweeping) => .sweeping,
+                else => error.InvalidState,
+            };
         }
 
         pub fn setPhase(self: *Self, phase_value: gc.Phase) Error!void {
@@ -550,14 +581,7 @@ pub fn PagedWithKinds(
             var page = try self.cache.fetch(page_id);
             defer page.deinit();
             const bytes = try page.data();
-            try self.validateStateBytes(bytes);
-            return switch ((try self.stateView(bytes)).phase) {
-                @intFromEnum(gc.Phase.idle) => .idle,
-                @intFromEnum(gc.Phase.preparing) => .preparing,
-                @intFromEnum(gc.Phase.marking) => .marking,
-                @intFromEnum(gc.Phase.sweeping) => .sweeping,
-                else => error.InvalidState,
-            };
+            return phaseFromPage(bytes);
         }
 
         fn validateStatePage(self: *const Self, page_id: PageId) BaseError!void {

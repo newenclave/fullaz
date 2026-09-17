@@ -123,15 +123,19 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                     const Offset = u64;
                     pub const Error = BlobT.Error;
 
-                    blob: *BlobT,
+                    blob_ptr: *align(@alignOf(BlobT)) const anyopaque,
+
+                    fn blob(self: *const Self) *BlobT {
+                        return @ptrCast(@constCast(self.blob_ptr));
+                    }
 
                     pub fn size(self: *const Self) @This().Error!u64 {
-                        return self.blob.size();
+                        return self.blob().size();
                     }
 
                     pub fn readAt(self: *const Self, offset: Offset, out: []u8) @This().Error!usize {
                         const position = std.math.cast(usize, offset) orelse return @This().Error.OutOfBounds;
-                        return self.blob.readAt(position, out);
+                        return self.blob().readAt(position, out);
                     }
                 };
 
@@ -272,9 +276,7 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                         &runtime.manager,
                         .{ .chunk_page_kind = chunk_page_kind },
                     );
-                    runtime.const_proxy = .{
-                        .blob = &runtime.blob,
-                    };
+                    runtime.const_proxy = .{ .blob_ptr = &runtime.blob };
                 }
 
                 pub fn deinitRuntime(runtime: *Runtime) void {
@@ -393,15 +395,19 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
 
                         pub const Error = StorageBlobT.Error;
 
-                        blob: *StorageBlobT,
+                        blob_ptr: *align(@alignOf(StorageBlobT)) const anyopaque,
+
+                        fn blob(self: *const Self) *StorageBlobT {
+                            return @ptrCast(@constCast(self.blob_ptr));
+                        }
 
                         pub fn size(self: *const Self) Self.Error!u64 {
-                            return self.blob.size();
+                            return self.blob().size();
                         }
 
                         pub fn readAt(self: *const Self, offset: u64, out: []u8) Self.Error!usize {
                             const position = std.math.cast(usize, offset) orelse return Self.Error.OutOfBounds;
-                            return self.blob.readAt(position, out);
+                            return self.blob().readAt(position, out);
                         }
                     };
 
@@ -445,7 +451,7 @@ pub fn chainStore(comptime options: anytype) component.Descriptor {
                                 manager,
                                 .{ .chunk_page_kind = chunk_page_kind },
                             );
-                            runtime.const_proxy = .{ .blob = &runtime.blob };
+                            runtime.const_proxy = .{ .blob_ptr = &runtime.blob };
                         }
 
                         pub fn deinitRuntime(runtime: *StorageRuntimeT) void {

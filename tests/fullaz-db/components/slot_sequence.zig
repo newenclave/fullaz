@@ -49,6 +49,15 @@ test "fullaz-db: slot sequences preserve their public order" {
     try expectValues((try database.getConst("queue").iterator()).?, &.{ "a", "b", "c" });
     try expectValues((try database.getConst("stack").iterator()).?, &.{ "c", "b", "a" });
 
+    const ConstProxy = @TypeOf(database.getConst("list").*);
+    try std.testing.expect(!@hasField(ConstProxy, "sequence"));
+    try std.testing.expect(@typeInfo(@FieldType(ConstProxy, "active_iterators_ptr")).pointer.is_const);
+    try std.testing.expect(@typeInfo(@FieldType(ConstProxy, "active_peeks_ptr")).pointer.is_const);
+    try std.testing.expect(!@hasField(ConstProxy.Iterator, "inner"));
+    try std.testing.expect(!@hasField(ConstProxy.Iterator, "active_iterators"));
+    try std.testing.expect(!@hasField(ConstProxy.Peek, "inner"));
+    try std.testing.expect(!@hasField(ConstProxy.Peek, "active_peeks"));
+
     {
         var queue_front = try database.getConst("queue").front();
         defer queue_front.deinit();

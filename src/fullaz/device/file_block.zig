@@ -10,7 +10,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
         pub const BlockId = BlockIdT;
         pub const append_only_dense_block_ids: bool = true;
 
-        pub const Error = errors.PageError || errors.FileError;
+        pub const Error = errors.PageError || errors.FileError || error{ReadOnly};
         pub const Options = struct {
             start_position: usize = 0,
         };
@@ -22,6 +22,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
         physical_blocks: usize,
         start_position: usize,
         is_open_flag: bool,
+        read_only: bool,
 
         pub fn create(io: Io, path: []const u8, block_size: usize) Error!Self {
             return createWithOptions(io, path, block_size, .{});
@@ -50,6 +51,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
                 .physical_blocks = 0,
                 .start_position = options.start_position,
                 .is_open_flag = true,
+                .read_only = false,
             };
         }
 
@@ -58,12 +60,35 @@ pub fn FileBlock(comptime BlockIdT: type) type {
         }
 
         pub fn openWithOptions(io: Io, path: []const u8, block_size: usize, options: Options) Error!Self {
+            return openWithMode(io, path, block_size, options, false);
+        }
+
+        pub fn openReadOnly(io: Io, path: []const u8, block_size: usize) Error!Self {
+            return openReadOnlyWithOptions(io, path, block_size, .{});
+        }
+
+        pub fn openReadOnlyWithOptions(
+            io: Io,
+            path: []const u8,
+            block_size: usize,
+            options: Options,
+        ) Error!Self {
+            return openWithMode(io, path, block_size, options, true);
+        }
+
+        fn openWithMode(
+            io: Io,
+            path: []const u8,
+            block_size: usize,
+            options: Options,
+            read_only: bool,
+        ) Error!Self {
             if (block_size == 0) {
                 return Error.BadData;
             }
             const start_position = std.math.cast(u64, options.start_position) orelse return Error.BadData;
             const file = Io.Dir.cwd().openFile(io, path, .{
-                .mode = .read_write,
+                .mode = if (read_only) .read_only else .read_write,
             }) catch {
                 return Error.OpenFailed;
             };
@@ -88,6 +113,7 @@ pub fn FileBlock(comptime BlockIdT: type) type {
                 .physical_blocks = blocks,
                 .start_position = options.start_position,
                 .is_open_flag = true,
+                .read_only = read_only,
             };
         }
 
@@ -140,6 +166,9 @@ pub fn FileBlock(comptime BlockIdT: type) type {
         }
 
         pub fn appendBlock(self: *Self) Error!BlockId {
+            if (self.read_only) {
+                return error.ReadOnly;
+            }
             // Logical only: the file is not grown until the block is written.
             const new_id = self.block_count;
             self.block_count = new_id + 1;
@@ -147,6 +176,9 @@ pub fn FileBlock(comptime BlockIdT: type) type {
         }
 
         pub fn truncateBlocks(self: *Self, count: usize) Error!void {
+            if (self.read_only) {
+                return error.ReadOnly;
+            }
             if (count > self.block_count) {
                 return Error.InvalidId;
             }
@@ -178,6 +210,9 @@ pub fn FileBlock(comptime BlockIdT: type) type {
         }
 
         pub fn writeBlock(self: *Self, block_id: BlockId, output: []u8) Error!void {
+            if (self.read_only) {
+                return error.ReadOnly;
+            }
             const idx = @as(usize, @intCast(block_id));
             if (idx >= self.block_count) {
                 return Error.InvalidId;
@@ -202,6 +237,9 @@ pub fn FileBlock(comptime BlockIdT: type) type {
         }
 
         pub fn sync(self: *Self) Error!void {
+            if (self.read_only) {
+                return error.ReadOnly;
+            }
             self.file.sync(self.io) catch {
                 return Error.IoError;
             };

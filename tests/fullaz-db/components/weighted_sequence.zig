@@ -21,6 +21,9 @@ test "fullaz-db: weightedSequence edits byte offsets" {
 
     var output: [16]u8 = undefined;
     const sequence_read = database.getConst("sequence");
+    const ConstProxy = @TypeOf(sequence_read.*);
+    try std.testing.expect(!@hasField(ConstProxy, "sequence"));
+    try std.testing.expect(@typeInfo(@FieldType(ConstProxy, "sequence_ptr")).pointer.child == anyopaque);
     try std.testing.expectEqual(@as(usize, 6), try sequence_read.readAt(0, &output));
     try std.testing.expectEqualStrings("abXYZf", output[0..6]);
 

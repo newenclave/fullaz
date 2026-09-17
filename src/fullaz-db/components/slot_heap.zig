@@ -337,23 +337,28 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                     }
                 };
                 const ReadProxy = struct {
+                    const Self = @This();
                     pub const Error = HeapT.Error;
                     pub const ConstPeek = HeapT.Peek;
                     pub const Peek = ConstPeek;
 
-                    heap: *HeapT,
+                    heap_ptr: *align(@alignOf(HeapT)) const anyopaque,
 
-                    pub fn count(self: *const @This()) @This().Error!u64 {
-                        return self.heap.count();
+                    fn heap(self: *const Self) *HeapT {
+                        return @ptrCast(@constCast(self.heap_ptr));
                     }
 
-                    pub fn isEmpty(self: *const @This()) @This().Error!bool {
-                        return self.heap.isEmpty();
+                    pub fn count(self: *const Self) Self.Error!u64 {
+                        return self.heap().count();
+                    }
+
+                    pub fn isEmpty(self: *const Self) Self.Error!bool {
+                        return self.heap().isEmpty();
                     }
 
                     /// Returned key/value slices borrow a pinned leaf until Peek.deinit().
-                    pub fn top(self: *const @This()) @This().Error!ConstPeek {
-                        return self.heap.top();
+                    pub fn top(self: *const Self) Self.Error!ConstPeek {
+                        return self.heap().top();
                     }
                 };
 
@@ -561,7 +566,7 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                     );
                     runtime.heap = HeapT.init(&runtime.model);
                     runtime.active_editor = false;
-                    runtime.const_proxy = .{ .heap = &runtime.heap };
+                    runtime.const_proxy = .{ .heap_ptr = &runtime.heap };
                 }
 
                 pub fn deinitRuntime(runtime: *Runtime) void {
@@ -789,23 +794,28 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                             }
                         };
                         const StorageReadProxy = struct {
+                            const Self = @This();
                             pub const Error = StorageHeapT.Error;
                             pub const ConstPeek = StorageHeapT.Peek;
                             pub const Peek = ConstPeek;
 
-                            heap: *StorageHeapT,
+                            heap_ptr: *align(@alignOf(StorageHeapT)) const anyopaque,
 
-                            pub fn count(self: *const @This()) @This().Error!u64 {
-                                return self.heap.count();
+                            fn heap(self: *const Self) *StorageHeapT {
+                                return @ptrCast(@constCast(self.heap_ptr));
                             }
 
-                            pub fn isEmpty(self: *const @This()) @This().Error!bool {
-                                return self.heap.isEmpty();
+                            pub fn count(self: *const Self) Self.Error!u64 {
+                                return self.heap().count();
+                            }
+
+                            pub fn isEmpty(self: *const Self) Self.Error!bool {
+                                return self.heap().isEmpty();
                             }
 
                             /// Returned key/value slices borrow a pinned leaf until Peek.deinit().
-                            pub fn top(self: *const @This()) @This().Error!ConstPeek {
-                                return self.heap.top();
+                            pub fn top(self: *const Self) Self.Error!ConstPeek {
+                                return self.heap().top();
                             }
                         };
 
@@ -890,7 +900,7 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
                             );
                             runtime.heap = StorageHeapT.init(&runtime.model);
                             runtime.active_editor = false;
-                            runtime.const_proxy = .{ .heap = &runtime.heap };
+                            runtime.const_proxy = .{ .heap_ptr = &runtime.heap };
                         }
 
                         pub fn deinitRuntime(runtime: *StorageRuntime) void {

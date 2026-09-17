@@ -7,12 +7,13 @@ const Io = std.Io;
 pub fn FileLog(comptime OffsetT: type) type {
     return struct {
         const Self = @This();
-        pub const Error = errors.PageError || errors.FileError;
+        pub const Error = errors.PageError || errors.FileError || error{ReadOnly};
         pub const Offset = OffsetT;
 
         io: Io,
         file: Io.File,
         end: Offset,
+        read_only: bool,
 
         pub fn create(io: Io, path: []const u8) Error!Self {
             const file = Io.Dir.cwd().createFile(io, path, .{
@@ -21,18 +22,33 @@ pub fn FileLog(comptime OffsetT: type) type {
             }) catch {
                 return Error.CreateFailed;
             };
-            return .{ .io = io, .file = file, .end = 0 };
+            return .{ .io = io, .file = file, .end = 0, .read_only = false };
         }
 
         pub fn open(io: Io, path: []const u8) Error!Self {
-            const file = Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write }) catch {
+            return openWithMode(io, path, false);
+        }
+
+        pub fn openReadOnly(io: Io, path: []const u8) Error!Self {
+            return openWithMode(io, path, true);
+        }
+
+        fn openWithMode(io: Io, path: []const u8, read_only: bool) Error!Self {
+            const file = Io.Dir.cwd().openFile(io, path, .{
+                .mode = if (read_only) .read_only else .read_write,
+            }) catch {
                 return Error.OpenFailed;
             };
             errdefer file.close(io);
             const len = file.length(io) catch {
                 return Error.IoError;
             };
-            return .{ .io = io, .file = file, .end = @intCast(len) };
+            return .{
+                .io = io,
+                .file = file,
+                .end = @intCast(len),
+                .read_only = read_only,
+            };
         }
 
         pub fn deinit(self: *Self) void {
@@ -40,6 +56,9 @@ pub fn FileLog(comptime OffsetT: type) type {
         }
 
         pub fn append(self: *Self, bytes: []const u8) Error!void {
+            if (self.read_only) {
+                return error.ReadOnly;
+            }
             self.file.writePositionalAll(self.io, bytes, @intCast(self.end)) catch {
                 return Error.IoError;
             };
@@ -47,6 +66,9 @@ pub fn FileLog(comptime OffsetT: type) type {
         }
 
         pub fn sync(self: *Self) Error!void {
+            if (self.read_only) {
+                return error.ReadOnly;
+            }
             self.file.sync(self.io) catch {
                 return Error.IoError;
             };
@@ -58,6 +80,9 @@ pub fn FileLog(comptime OffsetT: type) type {
 
         /// Discards the suffix beginning at `end`.
         pub fn truncate(self: *Self, end: Offset) Error!void {
+            if (self.read_only) {
+                return error.ReadOnly;
+            }
             if (end > self.end) {
                 return Error.BadData;
             }

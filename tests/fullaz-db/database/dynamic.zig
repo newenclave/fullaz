@@ -14,6 +14,20 @@ fn slotCompare(_: void, left: []const u8, right: []const u8) std.math.Order {
     return std.mem.order(u8, left, right);
 }
 
+fn readFileAlloc(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    path: []const u8,
+) ![]u8 {
+    const handle = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_only });
+    defer handle.close(io);
+    const size = std.math.cast(usize, try handle.length(io)) orelse return error.FileTooLarge;
+    const bytes = try allocator.alloc(u8, size);
+    errdefer allocator.free(bytes);
+    _ = try handle.readPositionalAll(io, bytes, 0);
+    return bytes;
+}
+
 fn embeddedState(
     comptime StateT: type,
     bytes: []const u8,
@@ -452,6 +466,73 @@ test "fullaz-db: dynamic database formats and opens a memory block" {
     defer reopened.deinit();
     const diagnostics = reopened.diagnostics();
     try std.testing.expectEqual(@as(usize, 1), diagnostics.page_count);
+}
+
+test "fullaz-db: dynamic database opens a read-only memory block" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xA4} ** 16,
+        .cache_frames = 32,
+    };
+
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        options,
+    );
+    const device = try database.takeDevice();
+    var read_only_database = try Database.openReadOnly(
+        std.testing.allocator,
+        device,
+        options,
+    );
+    defer read_only_database.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), read_only_database.diagnostics().page_count);
+    try std.testing.expect(!@hasDecl(Database.ReadOnly, "begin"));
+    try std.testing.expect(!@hasDecl(Database.ReadOnly, "cache"));
+    try std.testing.expect(!@hasDecl(Database.ReadOnly, "rawCache"));
+    try std.testing.expect(!@hasDecl(Database.ReadOnly, "takeDevice"));
+    try std.testing.expect(!@hasField(Database.ReadOnly, "database"));
+    try std.testing.expect(
+        @typeInfo(@FieldType(Database.ReadOnly, "core_ptr")).pointer.child == anyopaque,
+    );
+}
+
+test "fullaz-db: read-only dynamic open rejects a wrong identity without changing the image" {
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz_db.DynamicDatabase(Device);
+    const io = std.testing.io;
+    const path = ".zig-cache/dynamic_read_only_wrong_identity.img";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xA3} ** 16,
+        .cache_frames = 32,
+    };
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+    }
+    const before = try readFileAlloc(std.testing.allocator, io, path);
+    defer std.testing.allocator.free(before);
+    try std.testing.expectError(
+        error.IdentityMismatch,
+        Database.openReadOnly(
+            std.testing.allocator,
+            try Device.openReadOnly(io, path, 1024),
+            .{ .image_id = [_]u8{0xA2} ** 16, .cache_frames = 32 },
+        ),
+    );
+    const after = try readFileAlloc(std.testing.allocator, io, path);
+    defer std.testing.allocator.free(after);
+    try std.testing.expectEqualSlices(u8, before, after);
 }
 
 test "fullaz-db: dynamic database reclaims a dropped component tombstone" {
@@ -1322,6 +1403,26 @@ test "fullaz-db: dynamic schema database restores a chainStore const proxy" {
         try std.testing.expectEqual(@as(usize, 11), try blob.readAt(0, &output));
         try std.testing.expectEqualStrings("hello world", output[0..11]);
     }
+    {
+        var database = try Database.openReadOnly(
+            std.testing.allocator,
+            try Device.openReadOnly(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        var output: [16]u8 = undefined;
+        const blob = database.getConst("blob");
+        try std.testing.expect(!@hasField(Database.ReadOnly, "database"));
+        try std.testing.expect(!@hasField(@TypeOf(blob.*), "blob"));
+        try std.testing.expectEqual(@as(u64, 11), try blob.size());
+        try std.testing.expectEqual(@as(usize, 11), try blob.readAt(0, &output));
+        try std.testing.expectEqualStrings("hello world", output[0..11]);
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "begin"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "cache"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "startGarbageCollection"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "stepGarbageCollection"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "cancelGarbageCollection"));
+    }
 }
 
 test "fullaz-db: dynamic schema database reuses reclaimed BPT pages after reopen" {
@@ -1661,6 +1762,21 @@ test "fullaz-db: WAL dynamic database commits and reopens" {
         defer loaded.deinit();
         try std.testing.expectEqualStrings("index", (try loaded.view()).name);
     }
+    {
+        var database = try Database.openReadOnly(
+            std.testing.allocator,
+            try Device.openReadOnly(io, image_path, 1024),
+            try Log.openReadOnly(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var loaded = (try database.getByName("index")).?;
+        defer loaded.deinit();
+        try std.testing.expectEqualStrings("index", (try loaded.view()).name);
+        try std.testing.expect(!@hasField(@TypeOf(loaded), "record"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "begin"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "beginGcSession"));
+    }
     var log = try Log.open(io, log_path);
     defer log.deinit();
     try std.testing.expectEqual(@as(u32, 0), log.size());
@@ -1706,6 +1822,140 @@ test "fullaz-db: WAL dynamic schema database commits and reopens" {
         defer database.deinit();
         try std.testing.expectEqual(@as(u64, 3), try database.getConst("blob").size());
     }
+    {
+        var database = try Database.openReadOnly(
+            std.testing.allocator,
+            try Device.openReadOnly(io, image_path, 1024),
+            try Log.openReadOnly(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        try std.testing.expectEqual(@as(u64, 3), try database.getConst("blob").size());
+        try std.testing.expectEqual(.idle, try database.garbageCollectionPhase());
+    }
+}
+
+test "fullaz-db: read-only dynamic WAL overlays committed pages without changing files" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("blob", fullaz_db.chainStore(.{}));
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz_db.DynamicSchemaDatabaseWithWal(Schema, Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/dynamic_schema_read_only_overlay.img";
+    const log_path = ".zig-cache/dynamic_schema_read_only_overlay.log";
+    const page_size = 1024;
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xD3} ** 16,
+        .components = .{ .blob = .{} },
+    };
+    std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, page_size),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        try transaction.get("blob").append("old");
+        try transaction.commit();
+    }
+    const base_image = try readFileAlloc(std.testing.allocator, io, image_path);
+    defer std.testing.allocator.free(base_image);
+
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, page_size),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        try transaction.get("blob").append("new");
+        try transaction.commit();
+    }
+    const updated_image = try readFileAlloc(std.testing.allocator, io, image_path);
+    defer std.testing.allocator.free(updated_image);
+    const base_page_count = base_image.len / page_size;
+    const updated_page_count = updated_image.len / page_size;
+
+    {
+        var device = try Device.open(io, image_path, page_size);
+        defer device.deinit();
+        if (device.blocksCount() > base_page_count) {
+            try device.truncateBlocks(device.blocksCount() - base_page_count);
+        }
+        for (0..base_page_count) |index| {
+            try device.writeBlock(
+                @intCast(index),
+                base_image[index * page_size ..][0..page_size],
+            );
+        }
+        while (device.blocksCount() <= updated_page_count) {
+            _ = try device.appendBlock();
+        }
+        var garbage = [_]u8{0xEE} ** page_size;
+        try device.writeBlock(@intCast(updated_page_count), &garbage);
+        try device.sync();
+    }
+    {
+        var log = try Log.open(io, log_path);
+        defer log.deinit();
+        const Wal = fullaz.storage.wal.Wal(Log, u32, .little);
+        var wal_value = try Wal.init(std.testing.allocator, &log, page_size);
+        defer wal_value.deinit();
+        var changed_page_count: u32 = 0;
+        for (0..updated_page_count) |index| {
+            const updated_page = updated_image[index * page_size ..][0..page_size];
+            const changed = index >= base_page_count or
+                !std.mem.eql(
+                    u8,
+                    base_image[index * page_size ..][0..page_size],
+                    updated_page,
+                );
+            if (changed) {
+                try wal_value.appendPage(@intCast(index), updated_page);
+                changed_page_count += 1;
+            }
+        }
+        try wal_value.sealCommit(changed_page_count);
+        try wal_value.appendPage(0, updated_image[0..page_size]);
+        try log.sync();
+    }
+
+    const image_before = try readFileAlloc(std.testing.allocator, io, image_path);
+    defer std.testing.allocator.free(image_before);
+    const log_before = try readFileAlloc(std.testing.allocator, io, log_path);
+    defer std.testing.allocator.free(log_before);
+    {
+        var database = try Database.openReadOnly(
+            std.testing.allocator,
+            try Device.openReadOnly(io, image_path, page_size),
+            try Log.openReadOnly(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var output: [8]u8 = undefined;
+        const blob = database.getConst("blob");
+        try std.testing.expectEqual(@as(u64, 6), try blob.size());
+        try std.testing.expectEqual(@as(usize, 6), try blob.readAt(0, &output));
+        try std.testing.expectEqualStrings("oldnew", output[0..6]);
+        try std.testing.expectEqual(updated_page_count, database.diagnostics().page_count);
+    }
+    const image_after = try readFileAlloc(std.testing.allocator, io, image_path);
+    defer std.testing.allocator.free(image_after);
+    const log_after = try readFileAlloc(std.testing.allocator, io, log_path);
+    defer std.testing.allocator.free(log_after);
+    try std.testing.expectEqualSlices(u8, image_before, image_after);
+    try std.testing.expectEqualSlices(u8, log_before, log_after);
 }
 
 test "fullaz-db: dynamic schema GC completes and releases its lease" {
@@ -1726,6 +1976,46 @@ test "fullaz-db: dynamic schema GC completes and releases its lease" {
     var transaction = try database.begin();
     defer transaction.deinit();
     try transaction.commit();
+}
+
+test "fullaz-db: read-only dynamic schema database reports an active GC phase" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 });
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    const io = std.testing.io;
+    const path = ".zig-cache/dynamic_schema_read_only_gc.img";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0x48} ** 16,
+        .cache_frames = 32,
+        .components = .{},
+    };
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        try database.startGarbageCollection();
+        try std.testing.expectEqual(.preparing, try database.garbageCollectionPhase());
+    }
+    const before = try readFileAlloc(std.testing.allocator, io, path);
+    defer std.testing.allocator.free(before);
+    {
+        var database = try Database.openReadOnly(
+            std.testing.allocator,
+            try Device.openReadOnly(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        try std.testing.expectEqual(.preparing, try database.garbageCollectionPhase());
+    }
+    const after = try readFileAlloc(std.testing.allocator, io, path);
+    defer std.testing.allocator.free(after);
+    try std.testing.expectEqualSlices(u8, before, after);
 }
 
 test "fullaz-db: dynamic schema embedded BPT hierarchy edits and collects child roots" {

@@ -164,7 +164,11 @@ pub fn hierarchyCore(
                 pub const Iterator = ParentBinding.ConstProxy.Iterator;
                 pub const ConstIterator = Iterator;
 
-                runtime: *const ConstRuntime,
+                runtime_ptr: *align(@alignOf(ConstRuntime)) const anyopaque,
+
+                fn runtime(self: *const Self) *const ConstRuntime {
+                    return @ptrCast(self.runtime_ptr);
+                }
 
                 fn ChildBindingForTag(comptime tag: []const u8) type {
                     return component.bindingFor(
@@ -173,8 +177,8 @@ pub fn hierarchyCore(
                     );
                 }
 
-                fn init(runtime: *const ConstRuntime) Self {
-                    return .{ .runtime = runtime };
+                fn init(runtime_value: *const ConstRuntime) Self {
+                    return .{ .runtime_ptr = runtime_value };
                 }
 
                 fn ConstChildHandle(comptime parent_tag: []const u8, comptime ParentPinT: type) type {
@@ -224,7 +228,7 @@ pub fn hierarchyCore(
                 }
 
                 fn parent(self: *const Self) *const ParentBinding.ConstProxy {
-                    return ParentBinding.proxyConst(self.runtime.parent);
+                    return ParentBinding.proxyConst(self.runtime().parent);
                 }
 
                 pub fn iterator(self: *const Self) ParentBinding.ConstProxy.Error!?Iterator {
@@ -276,17 +280,18 @@ pub fn hierarchyCore(
                         HierarchyT.entryByTag(tag).type_identity,
                     );
                     const ChildBinding = ChildBindingForTag(tag);
-                    try ChildStateValidator.validate(tag, self.runtime.backend, value.payload);
+                    const runtime_value = self.runtime();
+                    try ChildStateValidator.validate(tag, runtime_value.backend, value.payload);
                     const Child = embedded.OwnedConstChild(
                         BackendT,
                         ChildBinding,
                         @TypeOf(parent_pin),
                     );
                     const child = try Child.init(
-                        self.runtime.backend,
+                        runtime_value.backend,
                         value.payload,
                         owned_parent_pin,
-                        self.runtime.childPageKinds(HierarchyT.indexOfTag(tag)),
+                        runtime_value.childPageKinds(HierarchyT.indexOfTag(tag)),
                         .{},
                     );
                     transferred = true;

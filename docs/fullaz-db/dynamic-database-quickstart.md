@@ -53,6 +53,17 @@ fn openAndRead(allocator: std.mem.Allocator, io: std.Io) !void {
     std.debug.print("{s}", .{output[0..count]});
 }
 
+fn openReadOnly(allocator: std.mem.Allocator, io: std.Io) !void {
+    const device = try Device.openReadOnly(io, image_path, page_size);
+    const log = try Log.openReadOnly(io, wal_path);
+    var database = try Database.openReadOnly(allocator, device, log, options);
+    defer database.deinit();
+
+    var output: [128]u8 = undefined;
+    const count = try database.getConst("notes").readAt(0, &output);
+    std.debug.print("{s}", .{output[0..count]});
+}
+
 pub fn main(init: std.process.Init) !void {
     var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
     defer args.deinit();
@@ -63,6 +74,8 @@ pub fn main(init: std.process.Init) !void {
         try format(init.gpa, init.io);
     } else if (std.mem.eql(u8, command, "open")) {
         try openAndRead(init.gpa, init.io);
+    } else if (std.mem.eql(u8, command, "read-only")) {
+        try openReadOnly(init.gpa, init.io);
     } else {
         return error.InvalidArguments;
     }
@@ -77,6 +90,14 @@ Run `zig build run -- open` later. It prints:
 ```text
 catalog-backed note
 ```
+
+Run `zig build run -- read-only` for an offline read-only session. Committed WAL
+pages are applied in memory. The image and WAL are not changed or checkpointed.
+The returned `Database.ReadOnly` type has no `begin` or GC mutation methods.
+
+Do not run a writer against the same image and WAL during this session. The
+database has no file locking or snapshot protocol. The WAL overlay uses memory
+for each unique committed WAL page.
 
 Adding a field to `Schema` is valid when you format a new image. Opening an old
 catalog with that new compiled schema returns `MissingComponent`. Use an

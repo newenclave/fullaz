@@ -127,14 +127,18 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
                 const Self = @This();
 
                 pub const Error = SequenceT.Error;
-                sequence: *SequenceT,
+                sequence_ptr: *align(@alignOf(SequenceT)) const anyopaque,
+
+                fn sequence(self: *const Self) *SequenceT {
+                    return @ptrCast(@constCast(self.sequence_ptr));
+                }
 
                 pub fn size(self: *const Self) @This().Error!Offset {
-                    return self.sequence.size();
+                    return self.sequence().size();
                 }
 
                 pub fn readAt(self: *const Self, offset: u64, out: []u8) @This().Error!usize {
-                    return self.sequence.readAt(offset, out);
+                    return self.sequence().readAt(offset, out);
                 }
             };
 
@@ -273,7 +277,7 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
                     });
                     runtime.tree = TreeT.init(&runtime.model, .neighbor_share);
                     runtime.sequence = SequenceT.init(&runtime.tree);
-                    runtime.const_proxy = .{ .sequence = &runtime.sequence };
+                    runtime.const_proxy = .{ .sequence_ptr = &runtime.sequence };
                 }
 
                 pub fn deinitRuntime(runtime: *Runtime) void {
@@ -387,14 +391,18 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
 
                         pub const Error = StorageSequenceT.Error;
 
-                        sequence: *StorageSequenceT,
+                        sequence_ptr: *align(@alignOf(StorageSequenceT)) const anyopaque,
+
+                        fn sequence(self: *const Self) *StorageSequenceT {
+                            return @ptrCast(@constCast(self.sequence_ptr));
+                        }
 
                         pub fn size(self: *const Self) Self.Error!Offset {
-                            return self.sequence.size();
+                            return self.sequence().size();
                         }
 
                         pub fn readAt(self: *const Self, offset: u64, out: []u8) Self.Error!usize {
-                            return self.sequence.readAt(offset, out);
+                            return self.sequence().readAt(offset, out);
                         }
                     };
 
@@ -443,7 +451,7 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
                             });
                             runtime.tree = StorageTreeT.init(&runtime.model, .neighbor_share);
                             runtime.sequence = StorageSequenceT.init(&runtime.tree);
-                            runtime.const_proxy = .{ .sequence = &runtime.sequence };
+                            runtime.const_proxy = .{ .sequence_ptr = &runtime.sequence };
                         }
 
                         pub fn deinitRuntime(runtime: *StorageRuntimeT) void {

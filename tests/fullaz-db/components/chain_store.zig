@@ -24,6 +24,9 @@ test "fullaz-db: chainStore memory database commits and rolls back" {
     {
         var output: [16]u8 = undefined;
         const blob = database.getConst("blob");
+        const ConstProxy = @TypeOf(blob.*);
+        try std.testing.expect(!@hasField(ConstProxy, "blob"));
+        try std.testing.expect(@typeInfo(@FieldType(ConstProxy, "blob_ptr")).pointer.child == anyopaque);
         try std.testing.expectEqual(@as(u64, 11), try blob.size());
         try std.testing.expectEqual(@as(usize, 11), try blob.readAt(0, &output));
         try std.testing.expectEqualStrings("hello world", output[0..11]);

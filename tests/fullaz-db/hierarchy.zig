@@ -399,10 +399,17 @@ test "fullaz-db hierarchyStore: const proxy opens an embedded BPT handle" {
         try transaction.commit();
     }
 
-    const tree_const = database.getConst("tree").owner("files");
+    const store_const = database.getConst("tree");
+    try std.testing.expect(!@hasField(@TypeOf(store_const.*), "runtime"));
+    const tree_const = store_const.owner("files");
     try std.testing.expect(!@hasDecl(@TypeOf(tree_const.*), "insert"));
+    const CoreConstProxy = @typeInfo(@FieldType(@TypeOf(tree_const.*), "inner")).pointer.child;
+    try std.testing.expect(!@hasField(CoreConstProxy, "runtime"));
     var child_handle = (try tree_const.openEmbedded("root", "folder")).?;
     defer child_handle.deinit();
+    const OwnedConstChild = @TypeOf(child_handle.inner);
+    try std.testing.expect(!@hasField(OwnedConstChild, "backend"));
+    try std.testing.expect(!@hasField(OwnedConstChild, "runtime"));
     var reader = child_handle.proxy();
     var child = (try reader.find("child")).?;
     defer child.deinit();

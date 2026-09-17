@@ -32,6 +32,15 @@ After an interruption or terminal WAL error, call `open`. A successful WAL
 commit is durable. A failed commit has an unknown final result until recovery:
 the commit record may already be durable even if later work failed.
 
+## Open Dynamic Storage Read-Only
+
+Dynamic factories have `openReadOnly()`. For file storage, pass
+`FileBlock.openReadOnly()` and, for WAL, `FileLog.openReadOnly()`.
+
+The read-only type has no transaction or GC mutation methods. Committed Dynamic
+WAL pages are applied in memory. The source files stay unchanged. Do not use a
+concurrent writer with the same files.
+
 Read [Reclaim unreachable pages](09-garbage-collection.md) when a persistent
 database removes hierarchy parents or needs a maintenance GC cycle.
 

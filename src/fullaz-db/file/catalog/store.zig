@@ -32,17 +32,32 @@ pub fn CatalogStore(comptime CacheT: type, comptime ManagerT: type) type {
         pub const LoadedRecord = struct {
             const LrSelf = @This();
 
-            record: ChainT.Record,
+            record_storage: [@sizeOf(ChainT.Record)]u8 align(@alignOf(ChainT.Record)),
             expected_revision: u32,
 
+            fn init(record_value: ChainT.Record, expected_revision: u32) LrSelf {
+                var self: LrSelf = undefined;
+                self.record().* = record_value;
+                self.expected_revision = expected_revision;
+                return self;
+            }
+
+            fn record(self: *LrSelf) *ChainT.Record {
+                return @ptrCast(&self.record_storage);
+            }
+
+            fn recordConst(self: *const LrSelf) *const ChainT.Record {
+                return @ptrCast(&self.record_storage);
+            }
+
             pub fn deinit(self: *LrSelf) void {
-                self.record.deinit();
+                self.record().deinit();
                 self.* = undefined;
             }
 
             /// The returned view borrows the pinned catalog page until deinit().
             pub fn view(self: *const LrSelf) Error!catalog_record.View {
-                const value = try self.record.value();
+                const value = try self.recordConst().value();
                 const record_view = try catalog_record.read(value);
                 if (record_view.revision != self.expected_revision) {
                     return error.BadCatalogChain;
@@ -126,7 +141,7 @@ pub fn CatalogStore(comptime CacheT: type, comptime ManagerT: type) type {
             errdefer record.deinit();
             const view = try catalog_record.read(try record.value());
             if (view.revision != ref.getRecordRevision()) return error.BadCatalogChain;
-            return .{ .record = record, .expected_revision = ref.getRecordRevision() };
+            return LoadedRecord.init(record, ref.getRecordRevision());
         }
 
         pub fn iterator(self: *Self, record_count: u64) Error!Iterator {

@@ -9,6 +9,7 @@ const component = @import("../../component/component.zig");
 const component_fingerprint = @import("../../component/fingerprint.zig");
 const PageKindRange = component.PageKindRange;
 const file = @import("../../file/file.zig");
+const read_only = @import("read_only.zig");
 
 fn DirectIndexManager(
     comptime PageIdT: type,
@@ -50,16 +51,207 @@ fn DirectIndexManager(
 
 /// A page-zero boot database with persistent, dynamically cataloged components.
 pub fn DynamicDatabase(comptime DeviceT: type) type {
-    return DynamicDatabaseImpl(DeviceT, null);
+    return DynamicDatabaseImpl(DeviceT, null, true);
 }
 
 /// A WAL-backed page-zero boot database with persistent, dynamically cataloged components.
 pub fn DynamicDatabaseWithWal(comptime DeviceT: type, comptime LogDeviceT: type) type {
     comptime device_interfaces.assertLogDevice(LogDeviceT);
-    return DynamicDatabaseImpl(DeviceT, LogDeviceT);
+    return DynamicDatabaseImpl(DeviceT, LogDeviceT, true);
 }
 
-fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type {
+fn DisabledReadOnlyDatabase() type {
+    return struct {
+        pub const Error = error{};
+
+        fn openWithoutWal(
+            _: std.mem.Allocator,
+            _: anytype,
+            _: anytype,
+        ) Error!@This() {
+            unreachable;
+        }
+
+        fn openWithWal(
+            _: std.mem.Allocator,
+            _: anytype,
+            _: anytype,
+            _: anytype,
+        ) Error!@This() {
+            unreachable;
+        }
+    };
+}
+
+fn DynamicReadOnlyDatabase(
+    comptime DeviceT: type,
+    comptime LogDeviceT: ?type,
+) type {
+    const RecoveredDevice = read_only.RecoveredReadOnlyDevice(DeviceT, LogDeviceT);
+    const Database = DynamicDatabaseImpl(RecoveredDevice, null, false);
+    const Log = LogDeviceT orelse void;
+    const default_cache_frames: usize = 64;
+    const Core = struct {
+        allocator: std.mem.Allocator,
+        database: Database,
+    };
+
+    return struct {
+        const Self = @This();
+
+        pub const InitOptions = struct {
+            image_id: [16]u8,
+            cache_frames: usize = default_cache_frames,
+        };
+        pub const Error = Database.Error || RecoveredDevice.Error;
+        pub const Diagnostics = Database.Diagnostics;
+        pub const CatalogStoreType = Database.CatalogStoreType;
+        pub const CatalogIdIndexType = Database.CatalogIdIndexType;
+        pub const CatalogNameIndexType = Database.CatalogNameIndexType;
+
+        core_ptr: *align(@alignOf(Core)) const anyopaque,
+
+        fn core(self: *const Self) *Core {
+            return @ptrCast(@constCast(self.core_ptr));
+        }
+
+        fn expected(device: *const RecoveredDevice, options: InitOptions) Error!file.boot.Expected {
+            return .{
+                .image_id = options.image_id,
+                .page_size = std.math.cast(u32, device.blockSize()) orelse
+                    return error.PageSizeTooLarge,
+                .page_id_bits = @bitSizeOf(DeviceT.BlockId),
+            };
+        }
+
+        fn finishOpen(
+            allocator: std.mem.Allocator,
+            device_value: RecoveredDevice,
+            options: InitOptions,
+            recover_page_count: bool,
+        ) Error!Self {
+            var device = device_value;
+            var owns_device = true;
+            errdefer if (owns_device) {
+                device.deinit();
+            };
+            if (device.blocksCount() == 0) {
+                return error.MissingBoot;
+            }
+            if (std.mem.allEqual(u8, &options.image_id, 0)) {
+                return error.InvalidImageId;
+            }
+            if (recover_page_count) {
+                const bytes = try allocator.alloc(u8, device.blockSize());
+                defer allocator.free(bytes);
+                try device.readBlock(0, bytes);
+                const view = try file.boot.read(bytes, try expected(&device, options));
+                const page_count = std.math.cast(usize, view.state.page_count) orelse
+                    return error.PageCountMismatch;
+                device.setLogicalPageCount(page_count) catch |err| switch (err) {
+                    error.InvalidId => return error.PageCountMismatch,
+                    else => return err,
+                };
+            }
+            owns_device = false;
+            var database = try Database.open(allocator, device, .{
+                .image_id = options.image_id,
+                .cache_frames = options.cache_frames,
+            });
+            errdefer database.deinit();
+            const core_value = try allocator.create(Core);
+            core_value.* = .{ .allocator = allocator, .database = database };
+            return .{ .core_ptr = core_value };
+        }
+
+        fn openWithoutWal(
+            allocator: std.mem.Allocator,
+            device: DeviceT,
+            options: InitOptions,
+        ) Error!Self {
+            return finishOpen(
+                allocator,
+                try RecoveredDevice.init(allocator, device),
+                options,
+                false,
+            );
+        }
+
+        fn openWithWal(
+            allocator: std.mem.Allocator,
+            device: DeviceT,
+            log: Log,
+            options: InitOptions,
+        ) Error!Self {
+            return finishOpen(
+                allocator,
+                try RecoveredDevice.initWal(allocator, device, log),
+                options,
+                true,
+            );
+        }
+
+        pub fn getById(
+            self: *Self,
+            component_id: u64,
+        ) Error!?CatalogStoreType.LoadedRecord {
+            return self.core().database.getById(component_id);
+        }
+
+        pub fn getByName(
+            self: *Self,
+            name: []const u8,
+        ) Error!?CatalogStoreType.LoadedRecord {
+            return self.core().database.getByName(name);
+        }
+
+        pub fn preflightSchema(self: *Self, comptime SchemaT: type) Error!void {
+            return self.core().database.preflightSchema(SchemaT);
+        }
+
+        pub fn preflightKnownSchema(self: *Self, comptime SchemaT: type) Error!void {
+            return self.core().database.preflightKnownSchema(SchemaT);
+        }
+
+        pub fn restoreMetadata(
+            self: *Self,
+            comptime BindingT: type,
+            metadata_page_id: u64,
+            component_id: u64,
+            runtime: *BindingT.Runtime,
+        ) Error!void {
+            return self.core().database.restoreMetadata(
+                BindingT,
+                metadata_page_id,
+                component_id,
+                runtime,
+            );
+        }
+
+        pub fn diagnostics(self: *const Self) Diagnostics {
+            return self.core().database.diagnostics();
+        }
+
+        pub fn garbageCollectionPhase(self: *Self) Error!gc.Phase {
+            return self.core().database.garbageCollectionPhase();
+        }
+
+        pub fn deinit(self: *Self) void {
+            const core_value = self.core();
+            const allocator = core_value.allocator;
+            core_value.database.deinit();
+            allocator.destroy(core_value);
+            self.* = undefined;
+        }
+    };
+}
+
+fn DynamicDatabaseImpl(
+    comptime DeviceT: type,
+    comptime LogDeviceT: ?type,
+    comptime expose_read_only: bool,
+) type {
+    @setEvalBranchQuota(100_000);
     comptime device_interfaces.assertBlockDevice(DeviceT);
 
     const WalT = if (LogDeviceT) |LogT| wal.Wal(LogT, DeviceT.BlockId, .little) else wal.NoWal;
@@ -109,6 +301,10 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
     };
     const LogError = if (LogDeviceT) |LogT| LogT.Error else error{};
     const WalError = if (LogDeviceT != null) WalT.Error else error{};
+    const ReadOnlyDatabase = if (expose_read_only)
+        DynamicReadOnlyDatabase(DeviceT, LogDeviceT)
+    else
+        DisabledReadOnlyDatabase();
 
     const ReclaimStore = struct {
         const StoreSelf = @This();
@@ -295,6 +491,7 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         pub const State = RuntimeState;
         pub const GcModelType = GcModel;
         pub const GcCollectorType = GcCollector;
+        pub const ReadOnly = ReadOnlyDatabase;
 
         pub const CatalogCompactionResult = struct {
             records_before: u64,
@@ -821,10 +1018,38 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
             return openImpl(allocator, device_value, log_value, options);
         }
 
+        fn openReadOnlyWithoutWal(
+            allocator: std.mem.Allocator,
+            device_value: DeviceT,
+            options: InitOptions,
+        ) ReadOnly.Error!ReadOnly {
+            return ReadOnly.openWithoutWal(allocator, device_value, .{
+                .image_id = options.image_id,
+                .cache_frames = options.cache_frames,
+            });
+        }
+
+        fn openReadOnlyWithWal(
+            allocator: std.mem.Allocator,
+            device_value: DeviceT,
+            log_value: Log,
+            options: InitOptions,
+        ) ReadOnly.Error!ReadOnly {
+            return ReadOnly.openWithWal(allocator, device_value, log_value, .{
+                .image_id = options.image_id,
+                .cache_frames = options.cache_frames,
+            });
+        }
+
         /// Formats an empty device and takes ownership on success.
         pub const format = if (LogDeviceT == null) formatWithoutWal else formatWithWal;
         /// Opens an existing database and takes ownership of the supplied device on success.
         pub const open = if (LogDeviceT == null) openWithoutWal else openWithWal;
+        /// Opens an existing database without modifying its device or WAL.
+        pub const openReadOnly = if (LogDeviceT == null)
+            openReadOnlyWithoutWal
+        else
+            openReadOnlyWithWal;
 
         pub const Diagnostics = struct {
             core_address: usize,
@@ -1896,6 +2121,18 @@ fn DynamicDatabaseImpl(comptime DeviceT: type, comptime LogDeviceT: ?type) type 
         /// current catalog components that this build does not recognize.
         pub fn preflightKnownSchema(self: *Self, comptime SchemaT: type) Error!void {
             return self.preflightSchemaImpl(SchemaT, false);
+        }
+
+        /// Returns the durable collector phase without starting a transaction.
+        pub fn garbageCollectionPhase(self: *Self) Error!gc.Phase {
+            const core = self.corePtr();
+            if (!core.state.gc_cycle_active) {
+                return .idle;
+            }
+            const page_id = gcRoot(&core.state.gc_state) orelse return error.BadGcState;
+            var page = try core.cache.fetch(page_id);
+            defer page.deinit();
+            return GcModel.phaseFromPage(try page.data()) catch error.BadGcState;
         }
 
         /// Restores a known binding's runtime metadata from its catalog page.

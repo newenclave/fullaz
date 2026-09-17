@@ -79,6 +79,39 @@ test "FileBlock: data persists across deinit + reopen" {
     }
 }
 
+test "FileBlock: read-only open reads data and rejects mutations" {
+    const io = std.testing.io;
+    const path = ".zig-cache/fb_read_only.img";
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    const Dev = FileBlock(u32);
+    var expected = [_]u8{0x5C} ** 64;
+
+    {
+        var dev = try Dev.create(io, path, expected.len);
+        defer dev.deinit();
+        _ = try dev.appendBlock();
+        try dev.writeBlock(0, &expected);
+    }
+    {
+        var dev = try Dev.openReadOnly(io, path, expected.len);
+        defer dev.deinit();
+        var actual: [expected.len]u8 = undefined;
+        try dev.readBlock(0, &actual);
+        try std.testing.expectEqualSlices(u8, &expected, &actual);
+        try std.testing.expectError(error.ReadOnly, dev.appendBlock());
+        try std.testing.expectError(error.ReadOnly, dev.writeBlock(0, &actual));
+        try std.testing.expectError(error.ReadOnly, dev.truncateBlocks(1));
+        try std.testing.expectError(error.ReadOnly, dev.sync());
+    }
+
+    var dev = try Dev.open(io, path, expected.len);
+    defer dev.deinit();
+    var actual: [expected.len]u8 = undefined;
+    try dev.readBlock(0, &actual);
+    try std.testing.expectEqualSlices(u8, &expected, &actual);
+}
+
 test "FileBlock: non-zero start position maps block zero after the prefix" {
     const io = std.testing.io;
     const path = ".zig-cache/fb_start_position.img";

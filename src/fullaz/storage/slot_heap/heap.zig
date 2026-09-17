@@ -126,13 +126,30 @@ pub fn Heap(comptime ModelT: type) type {
 
         pub const Peek = struct {
             const PeekSelf = @This();
+            const State = struct {
+                model: *ModelT,
+                leaf: ?Leaf,
+            };
 
-            model: *ModelT,
-            leaf: ?Leaf,
+            state_storage: [@sizeOf(State)]u8 align(@alignOf(State)),
+
+            fn init(model: *ModelT, leaf: Leaf) PeekSelf {
+                var self: PeekSelf = undefined;
+                self.state().* = .{ .model = model, .leaf = leaf };
+                return self;
+            }
+
+            fn state(self: *PeekSelf) *State {
+                return @ptrCast(&self.state_storage);
+            }
+
+            fn stateConst(self: *const PeekSelf) *const State {
+                return @ptrCast(&self.state_storage);
+            }
 
             /// The returned key remains valid until deinit() or heap mutation.
             pub fn key(self: *const PeekSelf) Error!KeyOut {
-                if (self.leaf) |*leaf| {
+                if (self.stateConst().leaf) |*leaf| {
                     return leaf.getKey(0);
                 }
                 return Error.EmptySet;
@@ -140,16 +157,17 @@ pub fn Heap(comptime ModelT: type) type {
 
             /// The returned value remains valid until deinit() or heap mutation.
             pub fn value(self: *const PeekSelf) Error!ValueOut {
-                if (self.leaf) |*leaf| {
+                if (self.stateConst().leaf) |*leaf| {
                     return leaf.getValue(0);
                 }
                 return Error.EmptySet;
             }
 
             pub fn deinit(self: *PeekSelf) void {
-                if (self.leaf) |leaf| {
-                    self.model.accessor().deinitLeaf(leaf);
-                    self.leaf = null;
+                const state_value = self.state();
+                if (state_value.leaf) |leaf| {
+                    state_value.model.accessor().deinitLeaf(leaf);
+                    state_value.leaf = null;
                 }
             }
         };
@@ -221,7 +239,7 @@ pub fn Heap(comptime ModelT: type) type {
             if (try leaf.size() == 0) {
                 return Error.CorruptTree;
             }
-            return .{ .model = self.model, .leaf = leaf };
+            return Peek.init(self.model, leaf);
         }
 
         pub fn mutableTop(self: *Self) Error!MutablePeek {

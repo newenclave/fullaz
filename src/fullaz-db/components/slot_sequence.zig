@@ -607,31 +607,49 @@ fn SequenceImplementation(
 
         pub const ReadIterator = struct {
             const Self = @This();
+            const State = struct {
+                inner: ChainT.Iterator,
+                active_iterators: *usize,
+                open: bool = true,
+            };
 
-            inner: ChainT.Iterator,
-            active_iterators: *usize,
-            open: bool = true,
+            state_storage: [@sizeOf(State)]u8 align(@alignOf(State)),
+
+            fn init(inner: ChainT.Iterator, active_iterators: *usize) Self {
+                var self: Self = undefined;
+                self.state().* = .{
+                    .inner = inner,
+                    .active_iterators = active_iterators,
+                };
+                return self;
+            }
+
+            fn state(self: *Self) *State {
+                return @ptrCast(&self.state_storage);
+            }
 
             /// The returned slice is valid until the iterator advances or is deinitialized.
             pub fn next(self: *Self) ReadError!?[]const u8 {
-                if (!self.open) {
+                const state_value = self.state();
+                if (!state_value.open) {
                     return error.InvalidIterator;
                 }
                 const result = if (comptime sequence_kind == .stack)
-                    try self.inner.prev()
+                    try state_value.inner.prev()
                 else
-                    try self.inner.next();
-                return if (result) |value| value.value else null;
+                    try state_value.inner.next();
+                return if (result) |entry| entry.value else null;
             }
 
             pub fn deinit(self: *Self) void {
-                if (!self.open) {
+                const state_value = self.state();
+                if (!state_value.open) {
                     return;
                 }
-                self.inner.deinit();
-                std.debug.assert(self.active_iterators.* != 0);
-                self.active_iterators.* -= 1;
-                self.open = false;
+                state_value.inner.deinit();
+                std.debug.assert(state_value.active_iterators.* != 0);
+                state_value.active_iterators.* -= 1;
+                state_value.open = false;
             }
         };
 
@@ -700,32 +718,54 @@ fn SequenceImplementation(
 
         pub const ConstPeek = struct {
             const Self = @This();
+            const State = struct {
+                inner: LowPeekT,
+                active_peeks: *usize,
+                open: bool = true,
+            };
 
-            inner: LowPeekT,
-            active_peeks: *usize,
-            open: bool = true,
+            state_storage: [@sizeOf(State)]u8 align(@alignOf(State)),
+
+            fn init(inner: LowPeekT, active_peeks: *usize) Self {
+                var self: Self = undefined;
+                self.state().* = .{
+                    .inner = inner,
+                    .active_peeks = active_peeks,
+                };
+                return self;
+            }
+
+            fn state(self: *Self) *State {
+                return @ptrCast(&self.state_storage);
+            }
+
+            fn stateConst(self: *const Self) *const State {
+                return @ptrCast(&self.state_storage);
+            }
 
             /// The returned slice is valid until this peek is deinitialized.
             pub fn value(self: *const Self) ReadError![]const u8 {
                 if (comptime sequence_kind == .list) {
                     @compileError("slot-list does not support peeking");
                 }
-                if (!self.open) {
+                const state_value = self.stateConst();
+                if (!state_value.open) {
                     return error.InvalidIterator;
                 }
-                return self.inner.value();
+                return state_value.inner.value();
             }
 
             pub fn deinit(self: *Self) void {
-                if (!self.open) {
+                const state_value = self.state();
+                if (!state_value.open) {
                     return;
                 }
                 if (comptime sequence_kind != .list) {
-                    self.inner.deinit();
+                    state_value.inner.deinit();
                 }
-                std.debug.assert(self.active_peeks.* != 0);
-                self.active_peeks.* -= 1;
-                self.open = false;
+                std.debug.assert(state_value.active_peeks.* != 0);
+                state_value.active_peeks.* -= 1;
+                state_value.open = false;
             }
         };
 
@@ -909,12 +949,24 @@ fn SequenceImplementation(
             pub const Peek = ConstPeek;
             pub const Error = ReadError;
 
-            sequence: *SequenceT,
-            active_iterators: *usize,
-            active_peeks: *usize,
+            sequence_ptr: *align(@alignOf(SequenceT)) const anyopaque,
+            active_iterators_ptr: *align(@alignOf(usize)) const anyopaque,
+            active_peeks_ptr: *align(@alignOf(usize)) const anyopaque,
+
+            fn sequence(self: *const Self) *SequenceT {
+                return @ptrCast(@constCast(self.sequence_ptr));
+            }
+
+            fn activeIterators(self: *const Self) *usize {
+                return @ptrCast(@constCast(self.active_iterators_ptr));
+            }
+
+            fn activePeeks(self: *const Self) *usize {
+                return @ptrCast(@constCast(self.active_peeks_ptr));
+            }
 
             pub fn size(self: *const Self) Self.Error!usize {
-                return ImplSelf.liveCount(self.sequence);
+                return ImplSelf.liveCount(self.sequence());
             }
 
             pub fn isEmpty(self: *const Self) Self.Error!bool {
@@ -922,20 +974,18 @@ fn SequenceImplementation(
             }
 
             pub fn elementsCount(self: *const Self) Self.Error!usize {
-                return ImplSelf.elementsCount(self.sequence);
+                return ImplSelf.elementsCount(self.sequence());
             }
 
             pub fn tombstoneCount(self: *const Self) Self.Error!usize {
-                return ImplSelf.tombstoneCount(self.sequence);
+                return ImplSelf.tombstoneCount(self.sequence());
             }
 
             pub fn iterator(self: *const Self) Self.Error!?Iterator {
-                const inner = (try ImplSelf.openIterator(self.sequence)) orelse return null;
-                self.active_iterators.* += 1;
-                return .{
-                    .inner = inner,
-                    .active_iterators = self.active_iterators,
-                };
+                const inner = (try ImplSelf.openIterator(self.sequence())) orelse return null;
+                const active_iterators = self.activeIterators();
+                active_iterators.* += 1;
+                return ReadIterator.init(inner, active_iterators);
             }
 
             pub fn front(self: *const Self) Self.Error!Peek {
@@ -953,12 +1003,10 @@ fn SequenceImplementation(
             }
 
             fn openPeek(self: *const Self) Self.Error!Peek {
-                const inner = try ImplSelf.openPeek(self.sequence);
-                self.active_peeks.* += 1;
-                return .{
-                    .inner = inner,
-                    .active_peeks = self.active_peeks,
-                };
+                const inner = try ImplSelf.openPeek(self.sequence());
+                const active_peeks = self.activePeeks();
+                active_peeks.* += 1;
+                return ConstPeek.init(inner, active_peeks);
             }
         };
 
@@ -1027,9 +1075,9 @@ fn SequenceImplementation(
             runtime.active_peeks = 0;
             runtime.active_editor = false;
             runtime.const_proxy = .{
-                .sequence = &runtime.sequence,
-                .active_iterators = &runtime.active_iterators,
-                .active_peeks = &runtime.active_peeks,
+                .sequence_ptr = &runtime.sequence,
+                .active_iterators_ptr = &runtime.active_iterators,
+                .active_peeks_ptr = &runtime.active_peeks,
             };
         }
 
