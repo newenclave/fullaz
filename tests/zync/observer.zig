@@ -16,6 +16,12 @@ const FixedObserver = fullaz.zync.ObserverImpl(
     Event,
     u32,
 );
+const SpinObserver = fullaz.zync.ObserverImpl(
+    fullaz.zync.policies.SpinSync,
+    fullaz.zync.storage.Fixed(4),
+    Event,
+    u32,
+);
 
 fn addValue(ctx: ?*anyopaque, event: *const Event) void {
     const total: *u32 = @ptrCast(@alignCast(ctx.?));
@@ -104,4 +110,35 @@ test "Zync observer: fixed notification snapshot permits self-unsubscribe" {
     try observer.notify(&.{ .value = 1 });
     try observer.notify(&.{ .value = 2 });
     try std.testing.expectEqual(@as(u32, 1), subscriber.calls);
+}
+
+const SpinSubscriber = struct {
+    observer: *SpinObserver,
+    total: *u32,
+
+    fn subscribe(self: *SpinSubscriber) void {
+        _ = self.observer.subscribe(addValue, self.total) catch unreachable;
+    }
+};
+
+test "Zync observer: spin synchronization serializes concurrent subscriptions" {
+    var observer = SpinObserver.init(.init(), .{});
+    defer observer.deinit();
+
+    var totals = [_]u32{0} ** 4;
+    var subscribers: [totals.len]SpinSubscriber = undefined;
+    var threads: [totals.len]std.Thread = undefined;
+
+    for (&subscribers, &threads, &totals) |*subscriber, *thread, *total| {
+        subscriber.* = .{ .observer = &observer, .total = total };
+        thread.* = try std.Thread.spawn(.{}, SpinSubscriber.subscribe, .{subscriber});
+    }
+    for (&threads) |*thread| {
+        thread.join();
+    }
+
+    try observer.notify(&.{ .value = 3 });
+    for (totals) |total| {
+        try std.testing.expectEqual(@as(u32, 3), total);
+    }
 }

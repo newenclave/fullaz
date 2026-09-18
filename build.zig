@@ -331,6 +331,58 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSmall,
     });
     fullaz_wasm.addOptions("build_options", fullaz_options);
+
+    const wasm_atomic_target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+        .cpu_features_add = std.Target.wasm.featureSet(&.{.atomics}),
+    });
+    const fullaz_wasm_atomic = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = wasm_atomic_target,
+        .optimize = .ReleaseSmall,
+    });
+    fullaz_wasm_atomic.addOptions("build_options", fullaz_options);
+
+    const cortex_m4_target = b.resolveTargetQuery(.{
+        .cpu_arch = .thumb,
+        .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m4 },
+        .os_tag = .freestanding,
+        .abi = .eabi,
+    });
+    const fullaz_cortex_m4 = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = cortex_m4_target,
+        .optimize = .ReleaseSmall,
+    });
+    fullaz_cortex_m4.addOptions("build_options", fullaz_options);
+
+    const check_zync_targets = b.step(
+        "check-zync-targets",
+        "Compile zync queues for freestanding WASM and Cortex-M4",
+    );
+    check_zync_targets.dependOn(&addZyncSmokeObject(
+        b,
+        "zync-wasm-no-sync",
+        "tests/zync/target_no_sync_smoke.zig",
+        wasm_target,
+        fullaz_wasm,
+    ).step);
+    check_zync_targets.dependOn(&addZyncSmokeObject(
+        b,
+        "zync-wasm-spin",
+        "tests/zync/target_spin_smoke.zig",
+        wasm_atomic_target,
+        fullaz_wasm_atomic,
+    ).step);
+    check_zync_targets.dependOn(&addZyncSmokeObject(
+        b,
+        "zync-cortex-m4-spin",
+        "tests/zync/target_spin_smoke.zig",
+        cortex_m4_target,
+        fullaz_cortex_m4,
+    ).step);
+
     const fullaz_db_wasm = b.createModule(.{
         .root_source_file = b.path("src/fullaz-db/root.zig"),
         .target = wasm_target,
@@ -609,6 +661,26 @@ fn addCompileErrorFixture(
     const compile = b.addTest(.{ .root_module = fixture_module });
     compile.expect_errors = .{ .contains = fixture.expected };
     step.dependOn(&compile.step);
+}
+
+fn addZyncSmokeObject(
+    b: *std.Build,
+    name: []const u8,
+    source: []const u8,
+    target: std.Build.ResolvedTarget,
+    fullaz: *std.Build.Module,
+) *std.Build.Step.Compile {
+    return b.addObject(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(source),
+            .target = target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{
+                .{ .name = "fullaz", .module = fullaz },
+            },
+        }),
+    });
 }
 
 fn applyTestFilter(b: *std.Build, compile: *std.Build.Step.Compile, filter: ?[]const u8) void {

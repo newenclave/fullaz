@@ -125,5 +125,8 @@ test {
     _ = @import("long_store.zig");
     _ = @import("free_list.zig");
     _ = @import("wal.zig");
+    _ = @import("zync/atomic.zig");
     _ = @import("zync/observer.zig");
+    _ = @import("zync/queue_storage.zig");
+    _ = @import("zync/task_queue.zig");
 }
