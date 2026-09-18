@@ -19,6 +19,10 @@ files.
 | `GarbageCollectionActive` | A staged GC cycle is active. | Finish or cancel GC before beginning a normal write. |
 | `BadGcState` | GC has not started or is already complete. | Start a cycle or inspect its phase. |
 | `BadKeyLength` | A SlotHeap key has the wrong fixed width. | Use exactly `maximum_key_size` bytes. |
+| `ValueTooLarge` | A slot value exceeds `maximum_value_size`. | Store fewer bytes or choose a larger durable limit. |
+| `UnsupportedPageSize` | One maximum-size slot cannot fit the page. | Use a larger page or a smaller maximum value size. |
+| `EmptySet` | Queue/stack `front`, `dequeue`, `top`, or `pop` found no live value. | Check `isEmpty()` or handle the empty case. |
+| `IteratorActive` / `PeekActive` / `ValueEditorActive` | A slot-sequence resource remains open. | Deinitialize it before mutation, commit, or rollback. |
 
 ## Normal `false` Results
 

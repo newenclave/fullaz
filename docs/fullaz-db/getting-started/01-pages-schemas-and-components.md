@@ -8,6 +8,9 @@ A `fullaz-db` schema is a compile-time list of structures in one database. Each
 | Sorted key/value records and range scans | B+ tree |
 | Rectangles or geographic bounds | R-tree |
 | Read the smallest priority key first | SlotHeap |
+| Append bounded records and read oldest first | SlotList |
+| Read bounded records in FIFO order | SlotQueue |
+| Read bounded records in LIFO order | SlotStack |
 | One appendable byte blob | ChainStore |
 | Insert and remove bytes in a sequence | WeightedSequence |
 
@@ -45,6 +48,15 @@ const Schema = fullaz_db.Schema(.{ .page_id = u32 })
         .maximum_key_size = 8,
         .maximum_value_size = 128,
     }))
+    .add("history", fullaz_db.slotList(.{
+        .maximum_value_size = 128,
+    }))
+    .add("pending", fullaz_db.slotQueue(.{
+        .maximum_value_size = 128,
+    }))
+    .add("undo", fullaz_db.slotStack(.{
+        .maximum_value_size = 128,
+    }))
     .add("audit", fullaz_db.chainStore(.{}))
     .add("document", fullaz_db.weightedSequence(.{
         .maximum_chunk_size = 256,
@@ -79,6 +91,10 @@ keys.
 
 `SlotHeap.maximum_key_size` is currently an exact key width. Every key passed
 to `push` must have exactly that many bytes.
+
+Each slot sequence needs a nonzero `maximum_value_size`. It limits one stored
+value and is part of the durable schema. A larger value returns `ValueTooLarge`.
+The value and its slot must also fit the selected page size.
 
 Static and virtual-static databases require ordered components with
 `CompareContext = void`. Other backends can support a context but may need it

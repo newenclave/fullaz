@@ -11,6 +11,9 @@ data.
 | Sorted byte keys and range scans | `bpt` |
 | Rectangle or box overlap queries | `rtree` |
 | Take the smallest fixed-width priority key | `slotHeap` |
+| Append bounded values | `slotList` |
+| Take bounded values in FIFO order | `slotQueue` |
+| Take bounded values in LIFO order | `slotStack` |
 | Append and read one byte blob | `chainStore` |
 | Edit bytes at offsets | `weightedSequence` |
 | Store typed embedded components | `hierarchyStore` |
@@ -77,6 +80,60 @@ return `false` when the key is absent. An iterator owns a page pin, so call
 `rtree` stores a bounding box and byte value for overlap queries. `slotHeap`
 stores a fixed-width priority key and byte value. `chainStore` is for one blob.
 `weightedSequence` is for editable byte sequences.
+
+## Append, FIFO, And LIFO Values
+
+Use `slotList` for appended history values, `slotQueue` for FIFO work, and
+`slotStack` for LIFO resume or undo values. Every value must fit the component's
+nonzero `maximum_value_size` and one database page.
+
+```zig
+const WorkSchema = fullaz_db.Schema(.{ .page_id = u32 })
+    .add("history", fullaz_db.slotList(.{
+        .maximum_value_size = 64,
+    }))
+    .add("pending", fullaz_db.slotQueue(.{
+        .maximum_value_size = 64,
+    }))
+    .add("suspended", fullaz_db.slotStack(.{
+        .maximum_value_size = 64,
+    }));
+```
+
+Append, enqueue, and push make the order explicit:
+
+```zig
+var transaction = try database.begin();
+defer transaction.deinit();
+
+try transaction.get("history").append("created");
+try transaction.get("pending").enqueue("first job");
+try transaction.get("pending").enqueue("second job");
+try transaction.get("suspended").push("interrupted job");
+try transaction.commit();
+```
+
+Read a queue front before `dequeue()` or a stack top before `pop()`. The remove
+methods do not return the removed bytes:
+
+```zig
+var transaction = try database.begin();
+defer transaction.deinit();
+
+const pending = transaction.get("pending");
+{
+    var front = try pending.front();
+    defer front.deinit();
+    const job = try front.value();
+    std.debug.print("next: {s}\n", .{job});
+}
+try pending.dequeue();
+try transaction.commit();
+```
+
+List and queue iterators run oldest first. Stack iterators run newest first. A
+mutable iterator can tombstone or edit its current value. Close all iterators,
+peeks, and editors before `removeTombstones()`, commit, or rollback.
 
 ## Component Hierarchy
 
@@ -160,7 +217,7 @@ pub fn main() !void {
 
     var transaction = try database.begin();
     defer transaction.deinit();
-    const files = transaction.get("store").owner("files");
+    const files = try transaction.get("store").owner("files");
 
     const root_value = try files.encodedEmbedded("folder");
     if (!try files.proxy().insert("root", root_value.data())) {

@@ -5,7 +5,8 @@ returns those pages to the database free list. A later write can reuse them.
 GC does not make the image file smaller.
 
 Run GC after an operation removes a structural ownership edge. The common case
-is removing an embedded child from a `hierarchyStore` owner.
+is removing an embedded child from a `hierarchyStore` owner or tombstoning a
+slot-sequence value that owns an embedded child.
 
 ## Before You Start
 
@@ -33,7 +34,7 @@ pages still exist until a GC cycle reclaims them.
 var transaction = try database.begin();
 defer transaction.deinit();
 
-const files = transaction.get("store").owner("files");
+const files = try transaction.get("store").owner("files");
 if (!try files.proxy().remove("root")) {
     return error.RootMissing;
 }
@@ -85,8 +86,9 @@ cycle returns `BadGcState`.
 
 GC follows page references that component bindings define as structural. Normal
 byte values are opaque. `hierarchyStore` is the supported exception: it reads
-validated embedded envelopes and follows their child roots. Raw hierarchy
-payloads remain ordinary bytes.
+validated embedded envelopes and follows their child roots. This includes live
+slot-list, slot-queue, and slot-stack values. Tombstoned slot values no longer
+own their embedded children. Raw hierarchy payloads remain ordinary bytes.
 
 Every component in the schema must provide the required GC capability. A custom
 component without that capability cannot use staged GC in the typed database.

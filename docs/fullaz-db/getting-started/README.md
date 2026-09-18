@@ -25,8 +25,8 @@ the component names.
 - [Virtual Static WAL](../virtual-static-database-quickstart.md) separates logical and physical page IDs.
 - [Dynamic Schema WAL](../dynamic-database-quickstart.md) stores typed component metadata in a catalog. It needs careful manual pairing of its image and WAL.
 
-The last chapter has a component chooser, a small B+ tree and blob example,
-and a typed hierarchy example. Writing a component binding is outside this
-local getting-started guide.
+The last chapters have a component chooser, small B+ tree/blob and slot-sequence
+examples, and a typed hierarchy example. Writing a component binding is outside
+this local getting-started guide.
 
 [fullaz-db documentation](../README.md)

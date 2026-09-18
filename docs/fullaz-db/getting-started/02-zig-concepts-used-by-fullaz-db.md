@@ -51,11 +51,15 @@ error.
 - A database owns its device, cache, and component runtimes.
 - Proxies from `transaction.get("name")` borrow the active transaction.
 - Proxies from `database.getConst("name")` borrow the database.
-- B+ tree iterators and SlotHeap peeks own page pins and need `deinit`.
-- Slices from iterators and peeks borrow page memory.
+- B+ tree iterators, SlotHeap peeks, slot-sequence iterators, and slot
+  queue/stack peeks own page pins and need `deinit`.
+- A slot-sequence editor needs `finish()` to keep an exact-length edit, or
+  `deinit()` to restore the original bytes.
+- Slices from iterators and peeks borrow page memory. A sequence iterator slice
+  expires at its next `next()` call or at `deinit()`.
 
-Do not copy a database, transaction, iterator, peek, or page handle. Do not
-use a transaction proxy after commit or rollback.
+Do not copy a database, transaction, iterator, peek, editor, or page handle. Do
+not use a transaction proxy after commit or rollback.
 
 `getConst` is not an isolation or snapshot API. Serialize application access
 and avoid it while a mutable transaction is active unless you intentionally

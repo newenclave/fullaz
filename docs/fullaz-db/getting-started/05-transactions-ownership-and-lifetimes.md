@@ -47,8 +47,23 @@ const entry = (try iterator.get()).?;
 std.debug.print("{s}\n", .{entry.value});
 ```
 
-Close an iterator or SlotHeap peek before mutation, commit, or rollback. Copy
-borrowed bytes when they must outlive the iterator.
+Close an iterator, SlotHeap peek, slot-sequence iterator, queue/stack peek, or
+value editor before mutation, commit, or rollback. Copy borrowed bytes when
+they must outlive the iterator or peek.
+
+Read a queue value before removing it. `dequeue()` and `pop()` do not return the
+removed bytes:
+
+```zig
+const pending = transaction.get("pending");
+{
+    var front = try pending.front();
+    defer front.deinit();
+    const job = try front.value();
+    _ = job;
+}
+try pending.dequeue();
+```
 
 R-tree callbacks receive borrowed value slices. Copy a value inside the
 callback if it is needed later. Do not start a transaction from that callback.
