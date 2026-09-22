@@ -184,5 +184,113 @@ pub fn Storage(comptime T: type) type {
                 }
             };
         }
+
+        /// Allocator-backed priority storage that preserves insertion order
+        /// when the task comparator returns `Order.eq`.
+        pub fn StablePriority(
+            comptime ContextT: type,
+            comptime compareFn: anytype,
+        ) type {
+            return StablePriorityWithSequence(u64, ContextT, compareFn);
+        }
+
+        /// Stable priority storage with a caller-selected unsigned sequence type.
+        pub fn StablePriorityWithSequence(
+            comptime SequenceT: type,
+            comptime ContextT: type,
+            comptime compareFn: anytype,
+        ) type {
+            const CompareFn = fn (context: ContextT, a: T, b: T) std.math.Order;
+            comptime {
+                switch (@typeInfo(SequenceT)) {
+                    .int => |info| {
+                        if (info.signedness != .unsigned or info.bits == 0) {
+                            @compileError("zync.Storage.StablePriority sequence type " ++
+                                "must be a nonzero unsigned integer");
+                        }
+                    },
+                    else => @compileError("zync.Storage.StablePriority sequence type " ++
+                        "must be a nonzero unsigned integer"),
+                }
+                if (@TypeOf(compareFn) != CompareFn) {
+                    @compileError("zync.Storage.StablePriority comparator must have signature " ++
+                        @typeName(CompareFn));
+                }
+            }
+
+            const Entry = struct {
+                task: T,
+                sequence: SequenceT,
+            };
+            const compare = struct {
+                fn stable(
+                    context: ContextT,
+                    left: Entry,
+                    right: Entry,
+                ) std.math.Order {
+                    const order = compareFn(context, left.task, right.task);
+                    if (order != .eq) {
+                        return order;
+                    }
+                    return std.math.order(left.sequence, right.sequence);
+                }
+            }.stable;
+            const InnerStorage = Storage(Entry).Priority(ContextT, compare);
+
+            return struct {
+                const Self = @This();
+
+                pub const Task = T;
+                pub const Error = InnerStorage.Error || error{SequenceOverflow};
+                pub const Policy = InnerStorage.Policy;
+
+                inner: InnerStorage,
+                next_sequence: SequenceT = 0,
+                sequence_exhausted: bool = false,
+
+                pub fn init(policy: Policy) Self {
+                    return .{ .inner = .init(policy) };
+                }
+
+                pub fn deinit(self: *Self) void {
+                    self.inner.deinit();
+                    self.* = undefined;
+                }
+
+                pub fn push(self: *Self, value: T) Error!void {
+                    if (self.sequence_exhausted) {
+                        return error.SequenceOverflow;
+                    }
+
+                    try self.inner.push(.{
+                        .task = value,
+                        .sequence = self.next_sequence,
+                    });
+                    if (self.next_sequence == std.math.maxInt(SequenceT)) {
+                        self.sequence_exhausted = true;
+                    } else {
+                        self.next_sequence += 1;
+                    }
+                }
+
+                pub fn pop(self: *Self) ?T {
+                    const entry = self.inner.pop() orelse return null;
+                    if (self.inner.isEmpty()) {
+                        self.next_sequence = 0;
+                        self.sequence_exhausted = false;
+                    }
+                    return entry.task;
+                }
+
+                pub fn isEmpty(self: *const Self) bool {
+                    return self.inner.isEmpty();
+                }
+
+                pub fn peek(self: *const Self) ?T {
+                    const entry = self.inner.peek() orelse return null;
+                    return entry.task;
+                }
+            };
+        }
     };
 }

@@ -186,10 +186,10 @@ fn isTaskDue(current_tick: u64, task: *const ScheduledTask) bool {
     return task.due_tick <= current_tick;
 }
 
-test "Zync task queue: priority popIf removes only due tasks" {
+test "Zync task queue: stable priority popIf preserves due task order" {
     const Queue = zync.TaskQueue(
         zync.policies.NoSync,
-        zync.queue_storage.Storage(ScheduledTask).Priority(
+        zync.queue_storage.Storage(ScheduledTask).StablePriority(
             void,
             compareScheduledTask,
         ),
@@ -200,6 +200,7 @@ test "Zync task queue: priority popIf removes only due tasks" {
     try queue.push(.{ .id = 10, .due_tick = 10 });
     try queue.push(.{ .id = 5, .due_tick = 5 });
     try queue.push(.{ .id = 7, .due_tick = 7 });
+    try queue.push(.{ .id = 8, .due_tick = 7 });
 
     try std.testing.expectEqual(
         @as(?ScheduledTask, null),
@@ -215,6 +216,10 @@ test "Zync task queue: priority popIf removes only due tasks" {
     );
     try std.testing.expectEqual(
         @as(u32, 7),
+        queue.popIf(@as(u64, 7), isTaskDue).?.id,
+    );
+    try std.testing.expectEqual(
+        @as(u32, 8),
         queue.popIf(@as(u64, 7), isTaskDue).?.id,
     );
     try std.testing.expectEqual(
