@@ -3,6 +3,10 @@ const fullaz = @import("fullaz");
 const fullaz_db = @import("fullaz-db");
 const lab = @import("db_lab");
 
+test {
+    _ = @import("gc_runner.zig");
+}
+
 fn countFreePages(database: anytype) !usize {
     const cache = database.cache();
     const page_count = cache.pageCount();

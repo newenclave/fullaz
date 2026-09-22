@@ -478,6 +478,13 @@ pub fn build(b: *std.Build) void {
         b.path("demos/db-lab/web/index.html"),
         "web-db-lab/index.html",
     ).step);
+    const db_lab_wasm_smoke = b.addSystemCommand(&.{"node"});
+    db_lab_wasm_smoke.addFileArg(b.path("demos/db-lab/tests/wasm_gc_smoke.mjs"));
+    db_lab_wasm_smoke.addFileArg(db_lab_wasm_exe.getEmittedBin());
+    b.step(
+        "test-wasm-db-lab",
+        "Run the db-lab WASM GC smoke test with Node.js",
+    ).dependOn(&db_lab_wasm_smoke.step);
 
     // Shared terminal plumbing for the full-screen demos. Not a demo itself,
     // so it gets a module and a test step rather than an addDemo call.

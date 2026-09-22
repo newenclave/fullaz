@@ -26,7 +26,10 @@ const GcStatus = enum(u32) {
     idle,
     marking,
     ready_to_sweep,
+    sweeping,
+    cancelling,
     complete,
+    failed,
 };
 
 pub const panic = std.debug.FullPanic(struct {
@@ -42,8 +45,19 @@ var gc_status: GcStatus = .unsupported;
 var gc_page_count: usize = 0;
 var gc_free_page_count: usize = 0;
 var gc_free_pages_before_sweep: usize = 0;
+var gc_sweep_baseline_valid = false;
 var gc_reclaimed_page_count: usize = 0;
 var gc_step_count: usize = 0;
+var gc_page_budget: usize = 0;
+var gc_runner = lab.GcRunner.init();
+var gc_observers_initialized = false;
+var gc_event_sequence: u32 = 0;
+var gc_last_event: lab.GcRunner.Event = .{
+    .kind = .restored,
+    .state = .idle,
+    .page_budget = 0,
+    .completed_steps = 0,
+};
 var generation_target: usize = 0;
 var generation_completed: usize = 0;
 
@@ -85,6 +99,7 @@ fn teardown() void {
     }
     rows.deinit(allocator);
     rows = .empty;
+    gc_runner.restore(.idle);
     resetGcStats(false);
     generation_target = 0;
     generation_completed = 0;
@@ -95,8 +110,10 @@ fn resetGcStats(supported: bool) void {
     gc_page_count = 0;
     gc_free_page_count = 0;
     gc_free_pages_before_sweep = 0;
+    gc_sweep_baseline_valid = false;
     gc_reclaimed_page_count = 0;
     gc_step_count = 0;
+    gc_page_budget = 0;
 }
 
 fn resetGcStatsForCurrentDatabase() void {
@@ -109,6 +126,42 @@ fn resetGcStatsForCurrentDatabase() void {
         .dynamic => true,
         else => false,
     });
+    gc_runner.restore(.idle);
+    if (current.* == .memory) {
+        gc_status = .unsupported;
+    }
+}
+
+fn gcStatusForState(state: lab.GcRunner.State) GcStatus {
+    return switch (state) {
+        .idle => .idle,
+        .marking => .marking,
+        .ready_to_sweep => .ready_to_sweep,
+        .sweeping => .sweeping,
+        .cancelling => .cancelling,
+        .complete => .complete,
+        .failed => .failed,
+    };
+}
+
+fn updateGcProgress(_: ?*anyopaque, event: *const lab.GcRunner.Event) void {
+    gc_status = gcStatusForState(event.state);
+    gc_step_count = event.completed_steps;
+    gc_page_budget = event.page_budget;
+}
+
+fn recordGcEvent(_: ?*anyopaque, event: *const lab.GcRunner.Event) void {
+    gc_last_event = event.*;
+    gc_event_sequence +%= 1;
+}
+
+fn ensureGcObservers() void {
+    if (gc_observers_initialized) {
+        return;
+    }
+    _ = gc_runner.subscribe(updateGcProgress, null) catch unreachable;
+    _ = gc_runner.subscribe(recordGcEvent, null) catch unreachable;
+    gc_observers_initialized = true;
 }
 
 fn makeDevice(comptime BlockIdT: type, bytes: []const u8) !fullaz.device.MemoryBlock(BlockIdT) {
@@ -134,6 +187,10 @@ export fn freeAllocation(ptr: usize, len: usize) void {
 
 /// `kind`: 0 memory, 1 static WAL, 2 virtual WAL, 3 dynamic WAL with GC.
 export fn format(kind: u32) u32 {
+    ensureGcObservers();
+    if (gc_runner.blocksDatabaseReplacement()) {
+        return fail(error.GarbageCollectionActive);
+    }
     teardown();
     switch (kind) {
         0 => database = .{ .memory = MemoryDatabase.init(allocator, .{
@@ -182,6 +239,10 @@ export fn importImage(kind: u32, ptr: usize, len: usize) u32 {
         last_error = "InvalidImage";
         return 0;
     }
+    ensureGcObservers();
+    if (gc_runner.blocksDatabaseReplacement()) {
+        return fail(error.GarbageCollectionActive);
+    }
     teardown();
     const bytes = input(ptr, len);
     switch (kind) {
@@ -214,12 +275,18 @@ export fn importImage(kind: u32, ptr: usize, len: usize) u32 {
             return 0;
         },
     }
-    resetGcStatsForCurrentDatabase();
+    restoreGcRuntimeForCurrentDatabase() catch |err| {
+        teardown();
+        return fail(err);
+    };
     last_error = "";
     return 1;
 }
 
 fn mutate(comptime action: anytype, first: []const u8, second: []const u8, third: []const u8) u32 {
+    if (gc_runner.blocksDatabaseReplacement()) {
+        return fail(error.GarbageCollectionActive);
+    }
     const current = &(database orelse {
         last_error = "NotReady";
         return 0;
@@ -276,6 +343,9 @@ export fn remove(table_ptr: usize, table_len: usize, key_ptr: usize, key_len: us
 }
 
 export fn deleteTable(table_ptr: usize, table_len: usize) u32 {
+    if (gc_runner.blocksDatabaseReplacement()) {
+        return fail(error.GarbageCollectionActive);
+    }
     const current = &(database orelse {
         last_error = "NotReady";
         return 0;
@@ -293,6 +363,9 @@ export fn generateExamples() u32 {
 }
 
 export fn generateExamplesWithCount(count: u32) u32 {
+    if (gc_runner.blocksDatabaseReplacement()) {
+        return fail(error.GarbageCollectionActive);
+    }
     const planet_count: usize = std.math.cast(usize, count) orelse return fail(error.InvalidExampleCount);
     if (planet_count < lab.minimum_planet_count or planet_count > lab.maximum_planet_count) {
         return fail(error.InvalidExampleCount);
@@ -355,79 +428,128 @@ fn captureGcStats(value: anytype) !void {
     gc_free_page_count = try countFreePages(value);
 }
 
-/// Completes prepare and mark work, then stops before the first sweep step.
-fn markGarbageCollectionFor(value: anytype) !void {
-    const phase = try value.garbageCollectionPhase();
-    if (phase == .idle) {
-        resetGcStats(true);
-        try value.startGarbageCollection();
-    }
-
-    gc_status = .marking;
-    while (true) {
-        const active_phase = try value.garbageCollectionPhase();
-        switch (active_phase) {
-            .preparing, .marking => {
-                _ = try value.stepGarbageCollection(32);
-                gc_step_count += 1;
-            },
-            .sweeping => {
-                try captureGcStats(value);
+fn restoreGcRuntimeForCurrentDatabase() !void {
+    ensureGcObservers();
+    const current = &(database orelse return error.NotReady);
+    switch (current.*) {
+        .memory => {
+            resetGcStats(false);
+            gc_runner.restore(.idle);
+            gc_status = .unsupported;
+        },
+        inline else => |*value| {
+            resetGcStats(true);
+            const phase = try value.garbageCollectionPhase();
+            gc_runner.restore(phase);
+            try captureGcStats(value);
+            if (phase == .sweeping) {
                 gc_free_pages_before_sweep = gc_free_page_count;
-                gc_status = .ready_to_sweep;
-                last_error = "";
-                return;
-            },
-            .idle => {
-                return error.GarbageCollectionStopped;
-            },
-        }
+                gc_sweep_baseline_valid = true;
+            }
+        },
     }
 }
 
-export fn markGarbageCollection() u32 {
+export fn markGarbageCollection(page_budget: u32) u32 {
+    ensureGcObservers();
     const current = &(database orelse return fail(error.NotReady));
-    switch (current.*) {
-        .static => |*value| markGarbageCollectionFor(value) catch |err| return fail(err),
-        .virtual => |*value| markGarbageCollectionFor(value) catch |err| return fail(err),
-        .dynamic => |*value| markGarbageCollectionFor(value) catch |err| return fail(err),
-        .memory => return fail(error.GarbageCollectionUnsupported),
+    if (current.* == .memory) {
+        return fail(error.GarbageCollectionUnsupported);
     }
-    return 1;
-}
-
-/// Reclaims every page that the completed mark phase did not reach.
-fn sweepGarbageCollectionFor(value: anytype) !void {
-    const phase = try value.garbageCollectionPhase();
-    if (phase != .sweeping) {
-        return error.GarbageCollectionMarkRequired;
+    const starts_new_cycle = switch (gc_runner.state()) {
+        .idle, .complete => true,
+        else => false,
+    };
+    gc_runner.requestMark(page_budget) catch |err| return fail(err);
+    if (starts_new_cycle) {
+        gc_free_pages_before_sweep = 0;
+        gc_sweep_baseline_valid = false;
+        gc_reclaimed_page_count = 0;
     }
-
-    while (true) {
-        const status = try value.stepGarbageCollection(32);
-        gc_step_count += 1;
-        if (status == .complete) {
-            break;
-        }
-    }
-    try captureGcStats(value);
-    gc_reclaimed_page_count = if (gc_free_page_count >= gc_free_pages_before_sweep)
-        gc_free_page_count - gc_free_pages_before_sweep
-    else
-        0;
-    gc_status = .complete;
     last_error = "";
+    return 1;
 }
 
-export fn sweepGarbageCollection() u32 {
+export fn sweepGarbageCollection(page_budget: u32) u32 {
+    ensureGcObservers();
     const current = &(database orelse return fail(error.NotReady));
-    switch (current.*) {
-        .static => |*value| sweepGarbageCollectionFor(value) catch |err| return fail(err),
-        .virtual => |*value| sweepGarbageCollectionFor(value) catch |err| return fail(err),
-        .dynamic => |*value| sweepGarbageCollectionFor(value) catch |err| return fail(err),
-        .memory => return fail(error.GarbageCollectionUnsupported),
+    if (current.* == .memory) {
+        return fail(error.GarbageCollectionUnsupported);
     }
+    gc_runner.requestSweep(page_budget) catch |err| return fail(err);
+    last_error = "";
     return 1;
+}
+
+export fn cancelGarbageCollection() u32 {
+    ensureGcObservers();
+    const current = &(database orelse return fail(error.NotReady));
+    if (current.* == .memory) {
+        return fail(error.GarbageCollectionUnsupported);
+    }
+    gc_runner.requestCancel();
+    last_error = "";
+    return 1;
+}
+
+export fn pumpGarbageCollection() u32 {
+    ensureGcObservers();
+    const current = &(database orelse return fail(error.NotReady));
+    const pumped = switch (current.*) {
+        .static => |*value| gc_runner.pump(value) catch |err| return fail(err),
+        .virtual => |*value| gc_runner.pump(value) catch |err| return fail(err),
+        .dynamic => |*value| gc_runner.pump(value) catch |err| return fail(err),
+        .memory => return fail(error.GarbageCollectionUnsupported),
+    };
+    if (!pumped) {
+        last_error = "";
+        return 1;
+    }
+
+    switch (gc_runner.state()) {
+        .ready_to_sweep => switch (current.*) {
+            inline .static, .virtual, .dynamic => |*value| {
+                captureGcStats(value) catch |err| return fail(err);
+                gc_free_pages_before_sweep = gc_free_page_count;
+                gc_sweep_baseline_valid = true;
+            },
+            .memory => unreachable,
+        },
+        .idle, .complete => switch (current.*) {
+            inline .static, .virtual, .dynamic => |*value| {
+                captureGcStats(value) catch |err| return fail(err);
+                gc_reclaimed_page_count = if (gc_sweep_baseline_valid and
+                    gc_free_page_count >= gc_free_pages_before_sweep)
+                    gc_free_page_count - gc_free_pages_before_sweep
+                else
+                    0;
+            },
+            .memory => unreachable,
+        },
+        else => {},
+    }
+    last_error = "";
+    return 1;
+}
+
+export fn gcHasPendingWork() u32 {
+    return @intFromBool(gc_runner.hasPendingWork());
+}
+
+export fn gcRunnerState() u32 {
+    return @intFromEnum(gc_runner.state());
+}
+
+export fn gcPageBudget() usize {
+    return gc_page_budget;
+}
+
+export fn gcEventSequence() u32 {
+    return gc_event_sequence;
+}
+
+export fn gcLastEventKind() u32 {
+    return @intFromEnum(gc_last_event.kind);
 }
 
 export fn gcStatus() u32 {
