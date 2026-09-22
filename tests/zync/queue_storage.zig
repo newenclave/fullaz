@@ -9,13 +9,17 @@ test "Zync queue storage: deque is FIFO and can refill" {
     defer storage.deinit();
 
     try std.testing.expect(storage.isEmpty());
+    try std.testing.expectEqual(@as(?i32, null), storage.peek());
     try storage.push(1);
     try storage.push(2);
+    try std.testing.expectEqual(@as(?i32, 1), storage.peek());
     try std.testing.expectEqual(@as(?i32, 1), storage.pop());
+    try std.testing.expectEqual(@as(?i32, 2), storage.peek());
     try storage.push(3);
     try std.testing.expectEqual(@as(?i32, 2), storage.pop());
     try std.testing.expectEqual(@as(?i32, 3), storage.pop());
     try std.testing.expectEqual(@as(?i32, null), storage.pop());
+    try std.testing.expectEqual(@as(?i32, null), storage.peek());
     try std.testing.expect(storage.isEmpty());
 }
 
@@ -24,9 +28,11 @@ test "Zync queue storage: fixed ring wraps without overwriting tasks" {
     var storage = Storage.init(.{});
     defer storage.deinit();
 
+    try std.testing.expectEqual(@as(?i32, null), storage.peek());
     try storage.push(1);
     try storage.push(2);
     try storage.push(3);
+    try std.testing.expectEqual(@as(?i32, 1), storage.peek());
     try std.testing.expectError(error.NotEnoughSpace, storage.push(4));
 
     try std.testing.expectEqual(@as(?i32, 1), storage.pop());
@@ -34,10 +40,12 @@ test "Zync queue storage: fixed ring wraps without overwriting tasks" {
     try storage.push(4);
     try storage.push(5);
 
+    try std.testing.expectEqual(@as(?i32, 3), storage.peek());
     try std.testing.expectEqual(@as(?i32, 3), storage.pop());
     try std.testing.expectEqual(@as(?i32, 4), storage.pop());
     try std.testing.expectEqual(@as(?i32, 5), storage.pop());
     try std.testing.expectEqual(@as(?i32, null), storage.pop());
+    try std.testing.expectEqual(@as(?i32, null), storage.peek());
 }
 
 test "Zync queue storage: fixed ring supports capacity one" {
@@ -61,12 +69,16 @@ test "Zync queue storage: priority pops in comparator order" {
     var storage = Storage.init(.init(std.testing.allocator, {}));
     defer storage.deinit();
 
+    try std.testing.expectEqual(@as(?i32, null), storage.peek());
     try storage.push(3);
     try storage.push(1);
     try storage.push(2);
 
+    try std.testing.expectEqual(@as(?i32, 1), storage.peek());
     try std.testing.expectEqual(@as(?i32, 1), storage.pop());
+    try std.testing.expectEqual(@as(?i32, 2), storage.peek());
     try std.testing.expectEqual(@as(?i32, 2), storage.pop());
     try std.testing.expectEqual(@as(?i32, 3), storage.pop());
     try std.testing.expectEqual(@as(?i32, null), storage.pop());
+    try std.testing.expectEqual(@as(?i32, null), storage.peek());
 }

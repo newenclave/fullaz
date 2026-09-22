@@ -43,6 +43,10 @@ pub fn Storage(comptime T: type) type {
             pub fn isEmpty(self: *const Self) bool {
                 return self.items.len == 0;
             }
+
+            pub fn peek(self: *const Self) ?T {
+                return self.items.front();
+            }
         };
 
         /// Allocation-free FIFO storage embedded directly in its owner.
@@ -102,6 +106,13 @@ pub fn Storage(comptime T: type) type {
 
                 pub fn isEmpty(self: *const Self) bool {
                     return self.len == 0;
+                }
+
+                pub fn peek(self: *const Self) ?T {
+                    if (self.len == 0) {
+                        return null;
+                    }
+                    return self.items[self.head];
                 }
             };
         }
@@ -166,6 +177,10 @@ pub fn Storage(comptime T: type) type {
 
                 pub fn isEmpty(self: *const Self) bool {
                     return self.items.count() == 0;
+                }
+
+                pub fn peek(self: *const Self) ?T {
+                    return self.items.peek();
                 }
             };
         }

@@ -42,6 +42,40 @@ pub fn TaskQueue(
             return self.storage.pop();
         }
 
+        /// Removes and returns the next task only when `predicate` accepts it.
+        /// The predicate runs under the queue lock. It must not call queue methods
+        /// or keep the task pointer after returning.
+        pub fn popIf(
+            self: *Self,
+            ctx: anytype,
+            predicate: fn (ctx: @TypeOf(ctx), task: *const Task) bool,
+        ) ?Task {
+            self.sync.lock();
+            defer self.sync.unlock();
+
+            const task = self.storage.peek() orelse return null;
+            if (!predicate(ctx, &task)) {
+                return null;
+            }
+            return self.storage.pop().?;
+        }
+
+        /// Copies the next task under the queue lock, then tests the snapshot
+        /// after releasing the lock. References inside `Task` are not kept alive.
+        pub fn testNext(
+            self: *Self,
+            ctx: anytype,
+            predicate: fn (ctx: @TypeOf(ctx), task: *const Task) bool,
+        ) bool {
+            const next = blk: {
+                self.sync.lock();
+                defer self.sync.unlock();
+                break :blk self.storage.peek();
+            };
+            const task = next orelse return false;
+            return predicate(ctx, &task);
+        }
+
         /// Waits until the queue is nonempty without reserving a task.
         pub fn wait(self: *Self) void {
             requireWaitSupport("wait");
