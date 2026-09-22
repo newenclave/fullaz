@@ -139,3 +139,26 @@ test "Zync queue storage: stable priority reports and resets sequence overflow" 
     try storage.push(4);
     try std.testing.expectEqual(@as(?i32, 4), storage.pop());
 }
+
+test "Zync queue storage: failed stable push keeps the final sequence" {
+    const Storage = queue_storage.Storage(i32).StablePriorityWithSequence(
+        u8,
+        void,
+        compareEqualInt,
+    );
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var storage = Storage.init(.init(failing.allocator(), {}));
+    defer storage.deinit();
+
+    storage.next_sequence = std.math.maxInt(u8);
+    failing.fail_index = failing.alloc_index;
+    try std.testing.expectError(error.OutOfMemory, storage.push(1));
+
+    failing.fail_index = std.math.maxInt(usize);
+    try storage.push(1);
+    try std.testing.expectError(error.SequenceOverflow, storage.push(2));
+    try std.testing.expectEqual(@as(?i32, 1), storage.pop());
+
+    try storage.push(2);
+    try std.testing.expectEqual(@as(?i32, 2), storage.pop());
+}
