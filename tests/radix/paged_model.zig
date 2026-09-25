@@ -80,7 +80,71 @@ const NoneStorageManager = struct {
     }
 };
 
-fn freeLeafRoot(manager: *const NoneStorageManager) ?u32 {
+fn DestroyTrackingStorageManager(comptime CacheT: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const PageId = CacheT.Pid;
+        pub const Error = error{
+            DuplicateDestroy,
+            PageStillPinned,
+            TooManyPages,
+        };
+
+        pub const StateLeaseType = struct {
+            pub const Error = Self.Error;
+
+            manager: *Self,
+
+            pub fn data(self: *const @This()) @This().Error![]const u8 {
+                return std.mem.asBytes(@as(*const RadixState, &self.manager.state_value));
+            }
+
+            pub fn dataMut(self: *@This()) @This().Error![]u8 {
+                return std.mem.asBytes(&self.manager.state_value);
+            }
+
+            pub fn finish(self: *@This()) void {
+                self.manager.finishes += 1;
+            }
+
+            pub fn deinit(self: *@This()) void {
+                self.manager.active_leases -= 1;
+            }
+        };
+
+        cache: *CacheT,
+        state_value: RadixState = .{},
+        active_leases: usize = 0,
+        finishes: usize = 0,
+        destroyed_pages: usize = 0,
+        destroyed: [256]bool = [_]bool{false} ** 256,
+
+        pub fn state(self: *Self) Error!StateLeaseType {
+            self.active_leases += 1;
+            return .{ .manager = self };
+        }
+
+        pub fn destroyPage(self: *Self, page_id: PageId) Error!void {
+            if (self.cache.frames_cache.get(page_id)) |frame| {
+                if (frame.ref_count != 0) {
+                    return error.PageStillPinned;
+                }
+            }
+            const index = std.math.cast(usize, page_id) orelse return error.TooManyPages;
+            if (index >= self.destroyed.len) {
+                return error.TooManyPages;
+            }
+            if (self.destroyed[index]) {
+                return error.DuplicateDestroy;
+            }
+            self.destroyed[index] = true;
+            self.destroyed_pages += 1;
+        }
+    };
+}
+
+fn freeLeafRoot(manager: anytype) ?u32 {
     const page_id = manager.state_value.free_leaf_root.get();
     return if (page_id == std.math.maxInt(u32)) null else page_id;
 }
@@ -210,6 +274,62 @@ test "RadixTree paged: model create inode" {
     try std.testing.expect(inode_load.id() == 0);
 }
 
+test "RadixTree paged: init rejects slot bases that the key cannot represent" {
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const TinyKeyModel = RadixModel(PageCache, NoneStorageManager, u8, 8);
+
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var page_cache = try PageCache.init(&device, std.testing.allocator, 4);
+    defer page_cache.deinit();
+    var store_mgr = NoneStorageManager{};
+
+    try std.testing.expectError(
+        error.InvalidSettings,
+        TinyKeyModel.init(
+            &page_cache,
+            &store_mgr,
+            .{
+                .leaf_page_kind = 0x5678,
+                .inode_page_kind = 0x9abc,
+            },
+        ),
+    );
+}
+
+fn expectInvalidKeyGeometry(comptime KeyT: type) !void {
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const InvalidModel = RadixModel(PageCache, NoneStorageManager, KeyT, 8);
+
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var page_cache = try PageCache.init(&device, std.testing.allocator, 4);
+    defer page_cache.deinit();
+    var store_mgr = NoneStorageManager{};
+
+    try std.testing.expectError(
+        error.InvalidSettings,
+        InvalidModel.init(
+            &page_cache,
+            &store_mgr,
+            .{
+                .leaf_page_kind = 0x5678,
+                .inode_page_kind = 0x9abc,
+            },
+        ),
+    );
+}
+
+test "RadixTree paged: init rejects split workspace larger than a temporary page" {
+    try expectInvalidKeyGeometry(u512);
+}
+
+test "RadixTree paged: init rejects key depth larger than the durable level" {
+    try expectInvalidKeyGeometry(u4096);
+}
+
 test "RadixTree paged: model split key" {
     const TestSuiteType = TestSuite(u32, NoneStorageManager, u64, u64);
     var suite = TestSuiteType{};
@@ -238,6 +358,21 @@ const StdOut = struct {
     }
 };
 
+fn expectTreeValue(tree: anytype, key: anytype, expected: []const u8) !void {
+    var entry = (try tree.find(key)) orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    defer entry.deinit();
+    try std.testing.expect(std.mem.startsWith(u8, (try entry.get()).value, expected));
+}
+
+fn expectTreeMissing(tree: anytype, key: anytype) !void {
+    var entry = (try tree.find(key)) orelse return;
+    defer entry.deinit();
+    try std.testing.expect(false);
+}
+
 test "RadixTree paged: model create tree" {
     const TestSuiteType = TestSuite(u32, NoneStorageManager, u64, [32]u8);
     var suite = TestSuiteType{};
@@ -253,7 +388,7 @@ test "RadixTree paged: model create tree" {
     try std.testing.expectEqual(@as(u32, 0), suite.store_mgr.state_value.root.get());
     try std.testing.expect(suite.store_mgr.finishes > 0);
     try std.testing.expectEqual(@as(usize, 0), suite.store_mgr.active_leases);
-    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(0x11223344)).?, "Hello!"));
+    try expectTreeValue(&suite.tree, 0x11223344, "Hello!");
 
     try suite.tree.set(0x12, "12345678");
     try suite.tree.set(0x0, "0");
@@ -267,10 +402,10 @@ test "RadixTree paged: model create tree" {
     try suite.tree.set(0x12345680, "88888"); // Also nearby
     try suite.tree.set(0x12340000, "77777"); // Same digit[3] and digit[2]
 
-    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(0)).?, "0"));
-    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(0x3456)).?, "6666"));
-    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(0xFFFFFFFF)).?, "FFFFFFFF"));
-    try std.testing.expect((try suite.tree.get(0x9999)) == null);
+    try expectTreeValue(&suite.tree, 0, "0");
+    try expectTreeValue(&suite.tree, 0x3456, "6666");
+    try expectTreeValue(&suite.tree, 0xFFFFFFFF, "FFFFFFFF");
+    try expectTreeMissing(&suite.tree, 0x9999);
 
     try suite.tree.dumpTree(StdOut{});
 }
@@ -288,13 +423,62 @@ test "RadixTree paged: value editor locks layout, rolls back, and finishes" {
     try std.testing.expectError(error.ValueEditorActive, suite.tree.free(7));
     try std.testing.expectError(error.ValueEditorActive, suite.tree.openValueEditor(7));
     editor.deinit();
-    try std.testing.expect(std.mem.eql(u8, (try suite.tree.get(7)).?, "original"));
+    try expectTreeValue(&suite.tree, 7, "original");
 
     var finished = (try suite.tree.openValueEditor(7)).?;
     @memcpy(try finished.valueMut(), "finished");
     try finished.finish();
     try std.testing.expectError(error.EditorInvalidated, finished.valueMut());
-    try std.testing.expect(std.mem.eql(u8, (try suite.tree.get(7)).?, "finished"));
+    try expectTreeValue(&suite.tree, 7, "finished");
+}
+
+test "RadixTree paged: point entries block mutations and editors own independent pins" {
+    const TestSuiteType = TestSuite(u32, NoneStorageManager, u64, [8]u8);
+    var suite = TestSuiteType{};
+    try suite.initInPlace();
+    defer suite.deinit();
+
+    try suite.tree.set(7, "original");
+    const root_id = suite.store_mgr.state_value.root.get();
+    const const_tree: *const TestSuiteType.Tree = &suite.tree;
+    try std.testing.expect((try const_tree.find(9)) == null);
+    try std.testing.expect(!try suite.page_cache.isPinned(root_id));
+    try suite.tree.set(8, "existing");
+
+    var entry = (try const_tree.find(7)).?;
+    defer entry.deinit();
+    try std.testing.expect(try suite.page_cache.isPinned(root_id));
+    const found = try entry.get();
+    try std.testing.expectEqual(@as(u64, 7), found.key);
+    try std.testing.expectEqualSlices(u8, "original", found.value);
+
+    const generation = suite.model.structuralMutationCoordinator().generation();
+    try std.testing.expectError(error.ReadHandleActive, suite.tree.free(7));
+    try std.testing.expectError(error.ReadHandleActive, suite.tree.set(8, "another!"));
+    try std.testing.expectError(error.ReadHandleActive, suite.tree.destroy());
+    try std.testing.expectEqual(
+        generation,
+        suite.model.structuralMutationCoordinator().generation(),
+    );
+    try std.testing.expectEqualSlices(u8, "original", (try entry.get()).value);
+    try expectTreeValue(&suite.tree, 8, "existing");
+
+    var editor = try entry.editValue();
+    defer editor.deinit();
+    entry.deinit();
+    try std.testing.expect(try suite.page_cache.isPinned(root_id));
+    try std.testing.expectError(error.InvalidHandle, entry.get());
+    try std.testing.expectError(error.InvalidHandle, entry.editValue());
+    @memcpy(try editor.valueMut(), "changed!");
+    try std.testing.expectError(error.ValueEditorActive, suite.tree.set(8, "another!"));
+    try editor.finish();
+    try std.testing.expect(!try suite.page_cache.isPinned(root_id));
+    try expectTreeValue(&suite.tree, 7, "changed!");
+
+    try suite.tree.free(7);
+    try suite.tree.set(7, "restored");
+    try suite.tree.destroy();
+    try std.testing.expectEqual(@as(?u32, null), try suite.model.accessor().getRoot());
 }
 
 test "RadixTree paged: a leaf root reports level zero" {
@@ -305,7 +489,7 @@ test "RadixTree paged: a leaf root reports level zero" {
 
     try suite.tree.set(7, "value");
     try std.testing.expectEqual(@as(?usize, 0), try suite.model.accessor().getRootLevel());
-    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(7)).?, "value"));
+    try expectTreeValue(&suite.tree, 7, "value");
 }
 
 test "RadixTree paged: reuses partial leaves and unlinks empty leaves" {
@@ -323,13 +507,125 @@ test "RadixTree paged: reuses partial leaves and unlinks empty leaves" {
 
     try suite.tree.free(0);
     try std.testing.expectEqual(@as(?u32, second_leaf_id), freeLeafRoot(&suite.store_mgr));
-    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(leaf_base)).?, "second"));
+    try expectTreeValue(&suite.tree, leaf_base, "second");
 
     try std.testing.expectEqual(
         @as(?u64, @as(u64, leaf_base) + 1),
         try suite.tree.takeFree("reused"),
     );
-    try std.testing.expect(std.mem.startsWith(u8, (try suite.tree.get(leaf_base + 1)).?, "reused"));
+    try expectTreeValue(&suite.tree, leaf_base + 1, "reused");
+}
+
+test "RadixTree paged: terminal partial leaf exposes only representable free keys" {
+    const TestSuiteType = TestSuite(u32, NoneStorageManager, u16, [8]u8);
+    var suite = TestSuiteType{};
+    try suite.initInPlace();
+    defer suite.deinit();
+
+    const leaf_base: u16 = suite.model.effectiveSettings().leaf_base;
+    const max_key = std.math.maxInt(u16);
+    const terminal_digit = max_key % leaf_base;
+    const terminal_start = max_key - terminal_digit;
+    try suite.tree.set(max_key, "maximum!");
+
+    for (0..@as(usize, terminal_digit)) |offset| {
+        const expected = terminal_start + @as(u16, @intCast(offset));
+        try std.testing.expectEqual(@as(?u16, expected), try suite.tree.takeFree("reused!!"));
+        if (offset + 1 == @as(usize, terminal_digit)) {
+            try std.testing.expectEqual(@as(?u32, null), freeLeafRoot(&suite.store_mgr));
+        }
+    }
+    try std.testing.expectEqual(@as(?u16, null), try suite.tree.takeFree("blocked!"));
+    try std.testing.expectEqual(@as(?u32, null), freeLeafRoot(&suite.store_mgr));
+    try expectTreeValue(&suite.tree, max_key, "maximum!");
+}
+
+test "RadixTree paged: takeFree unlinks before its final representable write" {
+    const TestSuiteType = TestSuite(u32, NoneStorageManager, u64, [8]u8);
+    var suite = TestSuiteType{};
+    try suite.initInPlace();
+    defer suite.deinit();
+
+    const leaf_base = suite.model.effectiveSettings().leaf_base;
+    const last_digit = @as(u64, leaf_base) - 1;
+    for (0..@as(usize, leaf_base) - 1) |digit| {
+        try suite.tree.set(@intCast(digit), "occupied");
+    }
+    const leaf_id = freeLeafRoot(&suite.store_mgr).?;
+
+    try std.testing.expectError(error.BadLength, suite.tree.takeFree("too-long!"));
+    try std.testing.expectEqual(@as(?u32, leaf_id), freeLeafRoot(&suite.store_mgr));
+    try expectTreeMissing(&suite.tree, last_digit);
+
+    const invalid_next: u32 = @intCast(suite.device.blocksCount() + 1);
+    {
+        var page = try suite.page_cache.fetch(leaf_id);
+        defer page.deinit();
+        var view = View(u32, u16, u64, 8, .little, false).LeafSubheaderView.init(
+            try page.dataMut(),
+        );
+        try view.setFreeLeafLinks(null, invalid_next);
+    }
+    try std.testing.expectError(error.InvalidId, suite.tree.takeFree("lastfree"));
+    try expectTreeMissing(&suite.tree, last_digit);
+
+    {
+        var page = try suite.page_cache.fetch(leaf_id);
+        defer page.deinit();
+        var view = View(u32, u16, u64, 8, .little, false).LeafSubheaderView.init(
+            try page.dataMut(),
+        );
+        try view.setFreeLeafLinks(null, null);
+    }
+    try std.testing.expectEqual(@as(?u64, last_digit), try suite.tree.takeFree("lastfree"));
+    try std.testing.expectEqual(@as(?u32, null), freeLeafRoot(&suite.store_mgr));
+    try expectTreeValue(&suite.tree, last_digit, "lastfree");
+}
+
+test "RadixTree paged: destroy releases a deep sparse tree without pinned pages" {
+    const Device = dev.MemoryBlock(u32);
+    const PageCache = PageCacheT(Device);
+    const StorageManager = DestroyTrackingStorageManager(PageCache);
+    const Model = RadixModel(PageCache, StorageManager, u64, 8);
+    const Tree = TreeType(Model);
+
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var page_cache = try PageCache.init(&device, std.testing.allocator, 32);
+    defer page_cache.deinit();
+    var store_mgr = StorageManager{ .cache = &page_cache };
+    var model = try Model.init(
+        &page_cache,
+        &store_mgr,
+        .{
+            .leaf_page_kind = 0x5678,
+            .inode_page_kind = 0x9abc,
+        },
+    );
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    defer tree.deinit();
+
+    const leaf_base = @as(u64, model.effectiveSettings().leaf_base);
+    try tree.set(0, "zero0000");
+    try tree.set(leaf_base, "second!!");
+    try tree.set(std.math.maxInt(u64), "maximum!");
+    try std.testing.expect((try model.accessor().getRootLevel()).? > 2);
+    try std.testing.expect(freeLeafRoot(&store_mgr) != null);
+    const page_count = device.blocksCount();
+
+    try tree.destroy();
+    try std.testing.expectEqual(@as(?u32, null), try model.accessor().getRoot());
+    try std.testing.expectEqual(@as(?u32, null), freeLeafRoot(&store_mgr));
+    try std.testing.expectEqual(page_count, store_mgr.destroyed_pages);
+    try std.testing.expectEqual(@as(usize, 0), store_mgr.active_leases);
+    for (0..page_count) |page_id| {
+        try std.testing.expect(store_mgr.destroyed[page_id]);
+        try std.testing.expect(!try page_cache.isPinned(@intCast(page_id)));
+    }
+
+    try tree.destroy();
+    try std.testing.expectEqual(page_count, store_mgr.destroyed_pages);
 }
 
 test "RadixTree paged: free leaf list unlinks in constant time" {

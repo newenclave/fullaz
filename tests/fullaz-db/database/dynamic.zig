@@ -1425,6 +1425,80 @@ test "fullaz-db: dynamic schema database restores a chainStore const proxy" {
     }
 }
 
+test "fullaz-db: radix dynamic schema database persists and reclaims its pages" {
+    const Descriptor = fullaz_db.radix(.{ .Key = u32, .value_size = 8 });
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("index", Descriptor);
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    const io = std.testing.io;
+    const path = ".zig-cache/dynamic_schema_radix.img";
+    const image_id = [_]u8{0xC4} ** 16;
+    const options: Database.InitOptions = .{
+        .image_id = image_id,
+        .components = .{ .index = .{} },
+    };
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        try transaction.get("index").set(42, "radix001");
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        var entry = (try database.getConst("index").find(42)).?;
+        defer entry.deinit();
+        const result = try entry.get();
+        try std.testing.expectEqual(@as(u32, 42), result.key);
+        try std.testing.expectEqualSlices(u8, "radix001", result.value);
+    }
+    {
+        var database = try Database.openReadOnly(
+            std.testing.allocator,
+            try Device.openReadOnly(io, path, 1024),
+            options,
+        );
+        defer database.deinit();
+        const index = database.getConst("index");
+        try std.testing.expect(!@hasDecl(@TypeOf(index.*), "set"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "begin"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "cache"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "startGarbageCollection"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "stepGarbageCollection"));
+        try std.testing.expect(!@hasDecl(Database.ReadOnly, "cancelGarbageCollection"));
+        {
+            var entry = (try index.find(42)).?;
+            defer entry.deinit();
+            const result = try entry.get();
+            try std.testing.expectEqual(@as(u32, 42), result.key);
+            try std.testing.expectEqualSlices(u8, "radix001", result.value);
+        }
+    }
+
+    try reclaimDroppedComponentLifecycle(
+        Descriptor,
+        1,
+        "index",
+        Schema.pageKinds("index"),
+        1,
+        image_id,
+        path,
+    );
+}
+
 test "fullaz-db: dynamic schema database reuses reclaimed BPT pages after reopen" {
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
         "index",
@@ -1832,6 +1906,85 @@ test "fullaz-db: WAL dynamic schema database commits and reopens" {
         defer database.deinit();
         try std.testing.expectEqual(@as(u64, 3), try database.getConst("blob").size());
         try std.testing.expectEqual(.idle, try database.garbageCollectionPhase());
+    }
+}
+
+test "fullaz-db: radix WAL dynamic schema lifecycle preserves committed values" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
+        "index",
+        fullaz_db.radix(.{ .Key = u32, .value_size = 16 }),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz_db.DynamicSchemaDatabaseWithWal(Schema, Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/dynamic_schema_radix_wal.img";
+    const log_path = ".zig-cache/dynamic_schema_radix_wal.log";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{0xC5} ** 16,
+        .cache_frames = 32,
+        .components = .{ .index = .{} },
+    };
+    const key: u32 = 0x0102_0304;
+    const committed_value = "committed-value!";
+    const discarded_value = "discarded-value!";
+    std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 1024),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        try std.testing.expectEqual(@as(usize, 16), committed_value.len);
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        try transaction.get("index").set(key, committed_value);
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 1024),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        {
+            var transaction = try database.begin();
+            defer transaction.deinit();
+            try std.testing.expectEqual(@as(usize, 16), discarded_value.len);
+            try transaction.get("index").set(key, discarded_value);
+            try transaction.rollback();
+        }
+        {
+            var entry = (try database.getConst("index").find(key)).?;
+            defer entry.deinit();
+            const result = try entry.get();
+            try std.testing.expectEqual(key, result.key);
+            try std.testing.expectEqualSlices(u8, committed_value, result.value);
+        }
+        try database.startGarbageCollection();
+        while (try database.stepGarbageCollection(1) != .complete) {}
+    }
+    {
+        var database = try Database.openReadOnly(
+            std.testing.allocator,
+            try Device.openReadOnly(io, image_path, 1024),
+            try Log.openReadOnly(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var entry = (try database.getConst("index").find(key)).?;
+        defer entry.deinit();
+        const result = try entry.get();
+        try std.testing.expectEqual(key, result.key);
+        try std.testing.expectEqualSlices(u8, committed_value, result.value);
     }
 }
 

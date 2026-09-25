@@ -30,6 +30,7 @@ pub const assertStaticMetadata = component.assertStaticMetadata;
 pub const assertTrait = component.assertTrait;
 pub const bpt = components.bpt;
 pub const hierarchyStore = components.hierarchyStore;
+pub const radix = components.radix;
 pub const rtree = components.rtree;
 pub const slotHeap = components.slotHeap;
 pub const slotList = components.slotList;

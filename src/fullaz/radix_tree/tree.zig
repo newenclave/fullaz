@@ -24,12 +24,17 @@ pub fn Tree(comptime ModelT: type) type {
         const Splitter = KeySplitter(KeyInType);
         pub const Error = Splitter.Error ||
             Model.Error ||
+            errors.HandleError ||
             errors.LayoutError ||
             StructuralMutationError;
         pub const PageId = NodeIdType;
 
+        const FreeSlot = struct {
+            digit: KeyInType,
+            key: KeyInType,
+        };
+
         model: *Model,
-        splitter: Splitter,
 
         /// An owned mutable lease for the exact value stored at one unique key.
         pub const ValueEditor = struct {
@@ -50,18 +55,72 @@ pub fn Tree(comptime ModelT: type) type {
             }
         };
 
-        pub fn init(model: *Model) Self {
-            return Self{
-                .model = model,
-                .splitter = Splitter.init(
-                    model.getSettings().inode_base,
-                    model.getSettings().leaf_base,
-                ),
+        /// Owns the loaded leaf that keeps this exact point lookup valid.
+        pub const Entry = struct {
+            const EntrySelf = @This();
+
+            pub const Result = struct {
+                key: KeyInType,
+                value: ValueOutType,
             };
+
+            model: ?*Model,
+            leaf: LeafType,
+            key: KeyInType,
+            digit: KeyInType,
+            structural_generation: u64,
+
+            /// Returns a value borrowed from this entry when the model uses borrowed outputs.
+            pub fn get(self: *const EntrySelf) Error!Result {
+                _ = try self.usableModel();
+                return .{
+                    .key = self.key,
+                    .value = try self.leaf.get(self.digit),
+                };
+            }
+
+            pub fn editValue(self: *EntrySelf) Error!ValueEditor {
+                const model = try self.usableModel();
+                return .{
+                    .editor = try model.accessor().openValueEditor(&self.leaf, self.digit),
+                };
+            }
+
+            pub fn deinit(self: *EntrySelf) void {
+                const model = self.model orelse return;
+                model.accessor().deinitLeaf(&self.leaf);
+                model.structuralMutationCoordinator().finishReadHandle();
+                self.model = null;
+                self.leaf = undefined;
+            }
+
+            fn usableModel(self: *const EntrySelf) Error!*Model {
+                const model = self.model orelse return error.InvalidHandle;
+                try model.structuralMutationCoordinator().checkGeneration(
+                    self.structural_generation,
+                );
+                return model;
+            }
+        };
+
+        pub fn init(model: *Model) Self {
+            return .{ .model = model };
         }
 
         pub fn deinit(self: *Self) void {
             self.* = undefined;
+        }
+
+        /// Releases every node reachable from the root and empties the free-leaf list.
+        /// This operation is not failure-atomic. Use rollback-capable storage or a
+        /// transaction when `destroyPage` can fail.
+        pub fn destroy(self: *Self) Error!void {
+            var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
+            defer mutation.deinit();
+            const acc = self.accessor();
+            const root_id = (try acc.getRoot()) orelse return;
+            try self.destroyNode(root_id);
+            try acc.setRoot(null);
         }
 
         pub fn scanInodeRefs(
@@ -176,6 +235,8 @@ pub fn Tree(comptime ModelT: type) type {
             }
         }
 
+        /// Convenience lookup for models whose output remains valid after the
+        /// leaf is released. Borrowing models must use `find()` instead.
         pub fn get(self: *Self, key: KeyInType) Error!?ValueOutType {
             const acc = self.accessor();
             var split_key = try acc.splitKey(key);
@@ -189,6 +250,29 @@ pub fn Tree(comptime ModelT: type) type {
                 }
             }
             return null;
+        }
+
+        /// Finds one exact key and keeps its leaf loaded until `Entry.deinit()`.
+        pub fn find(self: *const Self, key: KeyInType) Error!?Entry {
+            const acc = self.accessor();
+            var split_key = try acc.splitKey(key);
+            defer acc.deinitSplitKey(&split_key);
+            var leaf = (try self.findLeaf(&split_key)) orelse return null;
+            errdefer acc.deinitLeaf(&leaf);
+            const digit = split_key.get(0).digit;
+            if (!try leaf.isSet(digit)) {
+                acc.deinitLeaf(&leaf);
+                return null;
+            }
+            const coordinator = self.model.structuralMutationCoordinator();
+            try coordinator.beginReadHandle();
+            return .{
+                .model = self.model,
+                .leaf = leaf,
+                .key = key,
+                .digit = digit,
+                .structural_generation = coordinator.generation(),
+            };
         }
 
         pub fn set(self: *Self, key: KeyInType, value: ValueInType) Error!void {
@@ -210,25 +294,36 @@ pub fn Tree(comptime ModelT: type) type {
             var mutation = try self.model.structuralMutationCoordinator().beginStructuralMutation();
             defer mutation.deinit();
             const acc = self.accessor();
-            var leaf = (try acc.getFreeLeaf()) orelse return null;
-            defer acc.deinitLeaf(&leaf);
+            while (try acc.getFreeLeaf()) |leaf_value| {
+                var leaf = leaf_value;
+                defer acc.deinitLeaf(&leaf);
 
-            if (!try leaf.isInFree()) {
-                return Error.InconsistentLayout;
+                if (!try leaf.isInFree()) {
+                    return Error.InconsistentLayout;
+                }
+                const free_slot = (try self.getRepresentableFreeSlot(&leaf)) orelse {
+                    try acc.removeFreeLeaf(leaf.id());
+                    continue;
+                };
+                const has_more = try self.hasRepresentableFreeSlotAfter(
+                    &leaf,
+                    free_slot.digit,
+                );
+                if (!has_more) {
+                    try acc.removeFreeLeaf(leaf.id());
+                }
+                leaf.set(free_slot.digit, value) catch |err| {
+                    if (!has_more) {
+                        acc.addFreeLeaf(&leaf) catch |restore_err| {
+                            // Restoration failure requires external storage rollback.
+                            return restore_err;
+                        };
+                    }
+                    return err;
+                };
+                return free_slot.key;
             }
-            const digit = (try leaf.getFirstFree()) orelse return Error.InconsistentLayout;
-            const quotient = try leaf.getParentQuotient();
-            const multiplied = @mulWithOverflow(quotient, self.model.getSettings().leaf_base);
-            if (multiplied[1] != 0) {
-                return Error.InvalidId;
-            }
-            const key_result = @addWithOverflow(multiplied[0], digit);
-            if (key_result[1] != 0) {
-                return Error.InvalidId;
-            }
-            try leaf.set(digit, value);
-            try self.syncFreeLeaf(&leaf);
-            return key_result[0];
+            return null;
         }
 
         pub fn free(self: *Self, key: KeyInType) Error!void {
@@ -311,7 +406,7 @@ pub fn Tree(comptime ModelT: type) type {
             }
         }
 
-        fn findLeaf(self: *Self, skr: *const SplitKeyType) Error!?LeafType {
+        fn findLeaf(self: *const Self, skr: *const SplitKeyType) Error!?LeafType {
             const acc = self.accessor();
             const key_level = skr.size() - 1;
 
@@ -342,14 +437,101 @@ pub fn Tree(comptime ModelT: type) type {
             return null;
         }
 
+        fn destroyNode(self: *Self, node_id: NodeIdType) Error!void {
+            const acc = self.accessor();
+            if (try acc.isLeaf(node_id)) {
+                const listed = blk: {
+                    var leaf = try acc.loadLeaf(node_id);
+                    defer acc.deinitLeaf(&leaf);
+                    break :blk try leaf.isInFree();
+                };
+                if (listed) {
+                    try acc.removeFreeLeaf(node_id);
+                }
+                return acc.destroy(node_id);
+            }
+
+            const capacity = blk: {
+                var inode = try acc.loadInode(node_id);
+                defer acc.deinitInode(&inode);
+                break :blk try inode.capacity();
+            };
+            for (0..capacity) |index| {
+                const child_id = blk: {
+                    var inode = try acc.loadInode(node_id);
+                    defer acc.deinitInode(&inode);
+                    const digit = std.math.cast(KeyInType, index) orelse
+                        return Error.InconsistentLayout;
+                    if (!try inode.isSet(digit)) {
+                        break :blk null;
+                    }
+                    break :blk try inode.get(digit);
+                };
+                if (child_id) |id| {
+                    try self.destroyNode(id);
+                }
+            }
+            return acc.destroy(node_id);
+        }
+
+        fn getRepresentableFreeSlot(self: *Self, leaf: *const LeafType) Error!?FreeSlot {
+            const digit = (try leaf.getFirstFree()) orelse return null;
+            const key = (try self.keyForLeafDigit(leaf, digit)) orelse return null;
+            return .{
+                .digit = digit,
+                .key = key,
+            };
+        }
+
+        fn hasRepresentableFreeSlotAfter(
+            self: *Self,
+            leaf: *const LeafType,
+            digit: KeyInType,
+        ) Error!bool {
+            const capacity = try leaf.capacity();
+            const digit_index = std.math.cast(usize, digit) orelse
+                return Error.InconsistentLayout;
+            var index = digit_index + 1;
+            while (index < capacity) : (index += 1) {
+                const next_digit = std.math.cast(KeyInType, index) orelse return false;
+                if ((try self.keyForLeafDigit(leaf, next_digit)) == null) {
+                    return false;
+                }
+                if (!try leaf.isSet(next_digit)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        fn keyForLeafDigit(
+            self: *Self,
+            leaf: *const LeafType,
+            digit: KeyInType,
+        ) Error!?KeyInType {
+            const quotient = try leaf.getParentQuotient();
+            const leaf_base = std.math.cast(
+                KeyInType,
+                self.model.getSettings().leaf_base,
+            ) orelse return Error.InconsistentLayout;
+            const multiplied = @mulWithOverflow(quotient, leaf_base);
+            if (multiplied[1] != 0) {
+                return null;
+            }
+            const key_result = @addWithOverflow(multiplied[0], digit);
+            if (key_result[1] != 0) {
+                return null;
+            }
+            return key_result[0];
+        }
+
         fn syncFreeLeaf(self: *Self, leaf: *LeafType) Error!void {
             const acc = self.accessor();
             const size = try leaf.size();
-            const capacity = try leaf.capacity();
             if (size == 0) {
                 return;
             }
-            if (size < capacity) {
+            if ((try self.getRepresentableFreeSlot(leaf)) != null) {
                 if (!try leaf.isInFree()) {
                     try acc.addFreeLeaf(leaf);
                 }
@@ -469,7 +651,7 @@ pub fn Tree(comptime ModelT: type) type {
             }
         }
 
-        fn accessor(self: *Self) *Model.AccessorType {
+        fn accessor(self: *const Self) *Model.AccessorType {
             return self.model.accessor();
         }
     };

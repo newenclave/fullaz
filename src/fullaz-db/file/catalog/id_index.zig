@@ -40,8 +40,9 @@ pub fn CatalogIdIndex(comptime CacheT: type, comptime ManagerT: type) type {
             }
             var tree = TreeT.init(&self.model);
             defer tree.deinit();
-            const bytes = (try tree.get(component_id)) orelse return null;
-            return try CatalogRef.decode(bytes);
+            var entry = (try tree.find(component_id)) orelse return null;
+            defer entry.deinit();
+            return try CatalogRef.decode((try entry.get()).value);
         }
 
         pub fn set(self: *Self, component_id: u64, ref: CatalogRef) Error!void {

@@ -2,6 +2,17 @@ const std = @import("std");
 const errors = @import("../core/errors.zig");
 
 pub fn Splitter(comptime KeyT: type) type {
+    comptime {
+        switch (@typeInfo(KeyT)) {
+            .int => |int| {
+                if (int.signedness != .unsigned) {
+                    @compileError("RadixTree Splitter KeyT must be an unsigned integer");
+                }
+            },
+            else => @compileError("RadixTree Splitter KeyT must be an unsigned integer"),
+        }
+    }
+
     const Key = KeyT;
 
     return struct {

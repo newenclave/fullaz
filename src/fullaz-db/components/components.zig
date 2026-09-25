@@ -1,5 +1,6 @@
 pub const bpt = @import("bpt.zig").bpt;
 pub const hierarchyStore = @import("hierarchy_store.zig").hierarchyStore;
+pub const radix = @import("radix.zig").radix;
 pub const rtree = @import("rtree.zig").rtree;
 pub const slotHeap = @import("slot_heap.zig").slotHeap;
 pub const slotList = @import("slot_sequence.zig").slotList;

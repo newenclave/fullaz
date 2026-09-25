@@ -39,3 +39,31 @@ test "fullaz-db: schema fingerprint delegates component settings to traits" {
     const second = fullaz_db.schemaFingerprint(Second);
     try std.testing.expect(!std.mem.eql(u8, &first, &second));
 }
+
+test "fullaz-db: radix fingerprint includes key width value size and format version" {
+    const U32 = fullaz_db.radix(.{ .Key = u32, .value_size = 8 }).Trait;
+    const U64 = fullaz_db.radix(.{ .Key = u64, .value_size = 8 }).Trait;
+    const LargerValue = fullaz_db.radix(.{ .Key = u32, .value_size = 16 }).Trait;
+    const NextFormat = fullaz_db.radix(.{
+        .Key = u32,
+        .value_size = 8,
+        .format_version = 2,
+    }).Trait;
+
+    const u32_digest = fullaz_db.componentFingerprint(U32);
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        &u32_digest,
+        &fullaz_db.componentFingerprint(U64),
+    ));
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        &u32_digest,
+        &fullaz_db.componentFingerprint(LargerValue),
+    ));
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        &u32_digest,
+        &fullaz_db.componentFingerprint(NextFormat),
+    ));
+}

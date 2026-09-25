@@ -1,5 +1,8 @@
-/// Coordinates single-threaded structural mutations and mutable value editors.
+const std = @import("std");
+
+/// Coordinates single-threaded structural mutations, read handles, and value editors.
 pub const Error = error{
+    ReadHandleActive,
     ValueEditorActive,
     StructuralMutationActive,
     StaleIterator,
@@ -25,6 +28,7 @@ pub const StructuralMutationCoordinator = struct {
     };
 
     structural_generation: u64 = 0,
+    read_handle_count: usize = 0,
     value_editor_active: bool = false,
     structural_mutation_active: bool = false,
 
@@ -33,6 +37,9 @@ pub const StructuralMutationCoordinator = struct {
     }
 
     pub fn beginStructuralMutation(self: *Self) Error!MutationGuard {
+        if (self.read_handle_count != 0) {
+            return error.ReadHandleActive;
+        }
         if (self.value_editor_active) {
             return error.ValueEditorActive;
         }
@@ -43,6 +50,18 @@ pub const StructuralMutationCoordinator = struct {
         self.structural_mutation_active = true;
         self.structural_generation +%= 1;
         return .{ .coordinator = self };
+    }
+
+    pub fn beginReadHandle(self: *Self) Error!void {
+        if (self.structural_mutation_active) {
+            return error.StructuralMutationActive;
+        }
+        self.read_handle_count += 1;
+    }
+
+    pub fn finishReadHandle(self: *Self) void {
+        std.debug.assert(self.read_handle_count != 0);
+        self.read_handle_count -= 1;
     }
 
     pub fn beginValueEditor(self: *Self) Error!void {

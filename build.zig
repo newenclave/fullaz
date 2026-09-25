@@ -155,6 +155,22 @@ pub fn build(b: *std.Build) void {
             .expected = "Unknown fullaz-db.bpt option: leaf_page_kind",
         },
         .{
+            .source = "tests/compile_errors/pages/radix_invalid_key.zig",
+            .expected = "fullaz-db.radix Key must be an unsigned integer of at least 16 bits",
+        },
+        .{
+            .source = "tests/compile_errors/pages/radix_zero_value_size.zig",
+            .expected = "fullaz-db.radix value_size must be between 1 and maxInt(u16)",
+        },
+        .{
+            .source = "tests/compile_errors/pages/radix_zero_format_version.zig",
+            .expected = "fullaz-db.radix format_version cannot be zero",
+        },
+        .{
+            .source = "tests/compile_errors/pages/radix_unknown_option.zig",
+            .expected = "Unknown fullaz-db.radix option: leaf_page_kind",
+        },
+        .{
             .source = "tests/compile_errors/pages/slot_heap_missing_compare.zig",
             .expected = "Missing fullaz-db.slotHeap option: compare",
         },

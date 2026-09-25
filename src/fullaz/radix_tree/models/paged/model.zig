@@ -181,7 +181,9 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
 
         pub fn getFirstFree(self: *const Self) Error!?KeyT {
             const view = ConstPageViewType.init(try self.handle.data());
-            return try view.getFirstFree();
+            const slot_dir = try view.slotsDir();
+            const index = (try slot_dir.getFirstFree()) orelse return null;
+            return std.math.cast(KeyT, index);
         }
 
         pub fn isInFree(self: *const Self) Error!bool {
@@ -458,7 +460,10 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
         fn init(ctx: Context) Self {
             return .{
                 .ctx = ctx,
-                .splitter = SplitterType.init(ctx.settings.inode_base, ctx.settings.leaf_base),
+                .splitter = SplitterType.init(
+                    @intCast(ctx.settings.inode_base),
+                    @intCast(ctx.settings.leaf_base),
+                ),
                 .coordinator = .{},
             };
         }
@@ -760,8 +765,31 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             const inode_base = InodeType.ConstPageViewType.calculateSlotCapacity(device.pageSize(), 0);
             const leaf_base = LeafType.ConstPageViewType.calculateSlotCapacity(device.pageSize(), 0);
             if (inode_base < 2 or leaf_base < 2 or
-                inode_base > std.math.maxInt(u16) or leaf_base > std.math.maxInt(u16))
+                inode_base > std.math.maxInt(u16) or leaf_base > std.math.maxInt(u16) or
+                std.math.cast(KeyT, inode_base) == null or
+                std.math.cast(KeyT, leaf_base) == null)
             {
+                return error.InvalidSettings;
+            }
+
+            const splitter = SplitterType.init(
+                @as(KeyT, @intCast(inode_base)),
+                @as(KeyT, @intCast(leaf_base)),
+            );
+            if (splitter.maximum_levels - 1 > std.math.maxInt(u8)) {
+                return error.InvalidSettings;
+            }
+            const split_bytes = std.math.mul(
+                usize,
+                splitter.maximum_levels,
+                @sizeOf(SplitterType.Result),
+            ) catch return error.InvalidSettings;
+            const required_scratch = std.math.add(
+                usize,
+                split_bytes,
+                @alignOf(SplitterType.Result) - 1,
+            ) catch return error.InvalidSettings;
+            if (required_scratch > page_size) {
                 return error.InvalidSettings;
             }
 

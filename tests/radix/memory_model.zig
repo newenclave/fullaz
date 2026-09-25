@@ -102,3 +102,85 @@ test "RadixTree memory: value editor finishes or rolls back and blocks mutations
     try std.testing.expectError(error.EditorInvalidated, finished.valueMut());
     try std.testing.expectEqual(@as(?u32, 30), try tree.get(1));
 }
+
+test "RadixTree memory: point entries block mutations and editors outlive entries" {
+    const M = Model(u32, u32);
+    const Tree = radix_tree.Tree(M);
+
+    var model = try M.init(std.testing.allocator, .{
+        .leaf_base = 4,
+        .inode_base = 4,
+    });
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    defer tree.deinit();
+
+    try tree.set(1, 10);
+    const const_tree: *const Tree = &tree;
+    try std.testing.expect((try const_tree.find(2)) == null);
+    try tree.set(2, 30);
+
+    var entry = (try const_tree.find(1)).?;
+    defer entry.deinit();
+    const found = try entry.get();
+    try std.testing.expectEqual(@as(u32, 1), found.key);
+    try std.testing.expectEqual(@as(u32, 10), found.value);
+
+    const generation = model.structuralMutationCoordinator().generation();
+    try std.testing.expectError(error.ReadHandleActive, tree.free(1));
+    try std.testing.expectError(error.ReadHandleActive, tree.set(2, 31));
+    try std.testing.expectError(error.ReadHandleActive, tree.destroy());
+    try std.testing.expectEqual(generation, model.structuralMutationCoordinator().generation());
+    try std.testing.expectEqual(@as(u32, 10), (try entry.get()).value);
+    try std.testing.expectEqual(@as(?u32, 30), try tree.get(2));
+
+    var other_entry = (try const_tree.find(2)).?;
+    defer other_entry.deinit();
+    var editor = try entry.editValue();
+    defer editor.deinit();
+    entry.deinit();
+    try std.testing.expectError(error.InvalidHandle, entry.get());
+    try std.testing.expectError(error.InvalidHandle, entry.editValue());
+    try std.testing.expectError(error.ReadHandleActive, tree.set(2, 31));
+    other_entry.deinit();
+    (try editor.valueMut()).* = 20;
+    try std.testing.expectError(error.ValueEditorActive, tree.set(2, 31));
+    try editor.finish();
+    try std.testing.expectEqual(@as(?u32, 20), try tree.get(1));
+
+    try tree.free(1);
+    try tree.set(1, 40);
+    try tree.destroy();
+    try std.testing.expectEqual(@as(?usize, null), try model.accessor().getRoot());
+}
+
+test "RadixTree memory: destroy releases a deep sparse tree and its free leaves" {
+    const M = Model(u32, u32);
+    const Tree = radix_tree.Tree(M);
+
+    var model = try M.init(std.testing.allocator, .{
+        .leaf_base = 4,
+        .inode_base = 4,
+    });
+    defer model.deinit();
+    var tree = Tree.init(&model);
+    defer tree.deinit();
+
+    try tree.set(1, 11);
+    try tree.set(64, 64);
+    try tree.set(std.math.maxInt(u32), 99);
+    try std.testing.expect((try model.accessor().getRootLevel()).? > 2);
+    try std.testing.expect(model.accessor().free_leaf_ids.count() >= 3);
+    const node_count = model.accessor().cont.items.len;
+
+    try tree.destroy();
+    try std.testing.expectEqual(@as(?usize, null), try model.accessor().getRoot());
+    try std.testing.expectEqual(@as(usize, 0), model.accessor().free_leaf_ids.count());
+    try std.testing.expectEqual(@as(?u32, null), try tree.get(1));
+    try std.testing.expectEqual(@as(?u32, null), try tree.takeFree(1));
+    for (0..node_count) |node_id| {
+        try std.testing.expectError(error.InvalidId, model.accessor().isLeaf(node_id));
+    }
+
+    try tree.destroy();
+}

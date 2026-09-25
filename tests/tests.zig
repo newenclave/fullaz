@@ -7,6 +7,7 @@ test {
     _ = @import("fullaz-db/component/schema.zig");
     _ = @import("fullaz-db/component/fingerprint.zig");
     _ = @import("fullaz-db/components/bpt.zig");
+    _ = @import("fullaz-db/components/radix.zig");
     _ = @import("fullaz-db/components/rtree.zig");
     _ = @import("fullaz-db/components/slot_heap.zig");
     _ = @import("fullaz-db/components/slot_sequence.zig");

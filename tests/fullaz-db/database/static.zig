@@ -18,6 +18,88 @@ fn prep(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
 
+test "fullaz-db: radix static format commit rollback reclaim and reopen" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
+        "index",
+        fullaz_db.radix(.{ .Key = u32, .value_size = 8 }),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Database = fullaz_db.StaticDatabase(Schema, Device);
+    const io = std.testing.io;
+    const path = ".zig-cache/static_radix.img";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{101} ** 16,
+        .components = .{ .index = .{} },
+    };
+    prep(io, path);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, path, 512),
+            options,
+        );
+        defer database.deinit();
+
+        var free_key: u32 = undefined;
+        {
+            var transaction = try database.begin();
+            defer transaction.deinit();
+            const index = transaction.get("index");
+            try index.set(7, "first001");
+            free_key = (try index.takeFree("second02")).?;
+            try transaction.commit();
+        }
+        {
+            var transaction = try database.begin();
+            defer transaction.deinit();
+            const index = transaction.get("index");
+            try index.set(7, "wrong001");
+            try index.free(free_key);
+            try transaction.rollback();
+        }
+        {
+            var first = (try database.getConst("index").find(7)).?;
+            defer first.deinit();
+            const result = try first.get();
+            try std.testing.expectEqual(@as(u32, 7), result.key);
+            try std.testing.expectEqualSlices(u8, "first001", result.value);
+
+            var second = (try database.getConst("index").find(free_key)).?;
+            defer second.deinit();
+            try std.testing.expectEqualSlices(u8, "second02", (try second.get()).value);
+        }
+
+        const page_count = database.diagnostics().page_count;
+        {
+            var transaction = try database.begin();
+            defer transaction.deinit();
+            try transaction.reclaim("index");
+            try transaction.commit();
+        }
+        try std.testing.expect((try database.getConst("index").find(7)) == null);
+        {
+            var transaction = try database.begin();
+            defer transaction.deinit();
+            try transaction.get("index").set(7, "reused03");
+            try transaction.commit();
+        }
+        try std.testing.expectEqual(page_count, database.diagnostics().page_count);
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, path, 512),
+            options,
+        );
+        defer database.deinit();
+        var entry = (try database.getConst("index").find(7)).?;
+        defer entry.deinit();
+        try std.testing.expectEqualSlices(u8, "reused03", (try entry.get()).value);
+    }
+}
+
 test "fullaz-db: static database reopens chainStore metadata" {
     const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
         "blob",

@@ -198,3 +198,49 @@ test "fullaz-db: built-in binding GC capabilities collect roots and register str
         try std.testing.expect(scanner.value_scan == null);
     }
 }
+
+test "fullaz-db: radix GC traces only the canonical root" {
+    const Binding = fullaz_db.radix(.{
+        .Key = u32,
+        .value_size = 8,
+    }).Trait.Binding(Backend);
+    comptime fullaz_db.assertGc(Binding, TestCollector);
+
+    var device = try Device.init(std.testing.allocator, 512);
+    defer device.deinit();
+    var raw_cache = try RawCache.init(&device, std.testing.allocator, 8);
+    defer raw_cache.deinit();
+    var cache = Cache.init(std.testing.allocator, &raw_cache);
+    defer cache.deinit();
+    var backend = Backend{
+        .allocator_value = std.testing.allocator,
+        .cache_ptr = &cache,
+    };
+    var runtime: Binding.Runtime = undefined;
+    try Binding.initRuntime(
+        &runtime,
+        &backend,
+        .{ .base = 0x0200, .count = 2 },
+        .{},
+    );
+    defer Binding.deinitRuntime(&runtime);
+    runtime.state.root.set(10);
+    runtime.state.free_leaf_root.set(11);
+
+    var roots: std.ArrayList(u32) = .empty;
+    defer roots.deinit(std.testing.allocator);
+    try Binding.Gc(TestCollector).appendRoots(
+        &runtime,
+        std.testing.allocator,
+        &roots,
+    );
+    try std.testing.expectEqualSlices(u32, &.{10}, roots.items);
+
+    var collector = TestCollector{};
+    try Binding.Gc(TestCollector).registerScanners(&runtime, &collector);
+    try std.testing.expectEqual(@as(usize, 2), collector.scanner_count);
+    try std.testing.expectEqual(@as(u16, 0x0200), collector.scanners[0].page_kind);
+    try std.testing.expectEqual(@as(u16, 0x0201), collector.scanners[1].page_kind);
+    try std.testing.expect(collector.scanners[0].value_scan == null);
+    try std.testing.expect(collector.scanners[1].value_scan == null);
+}

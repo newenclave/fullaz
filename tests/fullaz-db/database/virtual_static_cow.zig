@@ -6,6 +6,78 @@ fn prep(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
 
+test "fullaz-db: radix virtual CoW commits rolls back reclaims and reopens" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
+        "index",
+        fullaz_db.radix(.{ .Key = u32, .value_size = 8 }),
+    );
+    const Device = fullaz.device.FileBlock(u64);
+    const Database = fullaz_db.VirtualStaticDatabaseWithCow(Schema, Device);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/virtual_static_cow_radix.img";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{104} ** 16,
+        .components = .{ .index = .{} },
+    };
+    prep(io, image_path);
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 512),
+            options,
+        );
+        defer database.deinit();
+        {
+            var transaction = try database.begin();
+            defer transaction.deinit();
+            try transaction.get("index").set(11, "cow-init");
+            try transaction.commit();
+        }
+        {
+            var transaction = try database.begin();
+            defer transaction.deinit();
+            const index = transaction.get("index");
+            try index.set(11, "cow-bad!");
+            try index.set(12, "cow-temp");
+            try transaction.rollback();
+        }
+        {
+            var entry = (try database.getConst("index").find(11)).?;
+            defer entry.deinit();
+            try std.testing.expectEqualSlices(u8, "cow-init", (try entry.get()).value);
+        }
+        try std.testing.expect((try database.getConst("index").find(12)) == null);
+        {
+            var transaction = try database.begin();
+            defer transaction.deinit();
+            try transaction.reclaim("index");
+            try transaction.commit();
+        }
+        try std.testing.expect((try database.getConst("index").find(11)) == null);
+        {
+            var transaction = try database.begin();
+            defer transaction.deinit();
+            try transaction.get("index").set(11, "cow-next");
+            try transaction.commit();
+        }
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 512),
+            options,
+        );
+        defer database.deinit();
+        var entry = (try database.getConst("index").find(11)).?;
+        defer entry.deinit();
+        const result = try entry.get();
+        try std.testing.expectEqual(@as(u32, 11), result.key);
+        try std.testing.expectEqualSlices(u8, "cow-next", result.value);
+    }
+}
+
 const CrashState = struct {
     allocator: std.mem.Allocator,
     block_size: usize,

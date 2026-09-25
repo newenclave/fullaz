@@ -518,7 +518,9 @@ pub fn Paged(
             defer model.deinit();
             var tree = VirtualToPhysicalTree.init(&model);
             defer tree.deinit();
-            const bytes = (try tree.get(virtual_page_id)) orelse return null;
+            var entry = (try tree.find(virtual_page_id)) orelse return null;
+            defer entry.deinit();
+            const bytes = (try entry.get()).value;
             if (bytes.len != @sizeOf(PhysicalPidSlot)) {
                 return error.InconsistentMapping;
             }
@@ -568,7 +570,9 @@ pub fn Paged(
             defer model.deinit();
             var tree = PhysicalToVirtualTree.init(&model);
             defer tree.deinit();
-            const bytes = (try tree.get(physical_page_id)) orelse return null;
+            var entry = (try tree.find(physical_page_id)) orelse return null;
+            defer entry.deinit();
+            const bytes = (try entry.get()).value;
             if (bytes.len != @sizeOf(VirtualPidSlot)) {
                 return error.InconsistentMapping;
             }

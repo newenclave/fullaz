@@ -18,6 +18,68 @@ fn prep(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
 }
 
+test "fullaz-db: radix static WAL edits commits and reopens" {
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add(
+        "index",
+        fullaz_db.radix(.{ .Key = u64, .value_size = 8 }),
+    );
+    const Device = fullaz.device.FileBlock(u32);
+    const Log = fullaz.device.FileLog(u32);
+    const Database = fullaz_db.StaticDatabaseWithWal(Schema, Device, Log);
+    const io = std.testing.io;
+    const image_path = ".zig-cache/static_radix_wal.img";
+    const log_path = ".zig-cache/static_radix_wal.log";
+    const options: Database.InitOptions = .{
+        .image_id = [_]u8{102} ** 16,
+        .components = .{ .index = .{} },
+    };
+    prep(io, image_path);
+    prep(io, log_path);
+    defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
+
+    const key: u64 = 0x0102030405060708;
+    {
+        var database = try Database.format(
+            std.testing.allocator,
+            try Device.create(io, image_path, 512),
+            try Log.create(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const index = transaction.get("index");
+        try index.set(key, "wal-init");
+
+        var editor = (try index.openValueEditor(key)).?;
+        @memcpy(try editor.valueMut(), "wal-edit");
+        try editor.finish();
+        editor.deinit();
+
+        var entry = (try index.find(key)).?;
+        const result = try entry.get();
+        try std.testing.expectEqual(key, result.key);
+        try std.testing.expectEqualSlices(u8, "wal-edit", result.value);
+        entry.deinit();
+        try transaction.commit();
+    }
+    {
+        var database = try Database.open(
+            std.testing.allocator,
+            try Device.open(io, image_path, 512),
+            try Log.open(io, log_path),
+            options,
+        );
+        defer database.deinit();
+        var entry = (try database.getConst("index").find(key)).?;
+        defer entry.deinit();
+        const result = try entry.get();
+        try std.testing.expectEqual(key, result.key);
+        try std.testing.expectEqualSlices(u8, "wal-edit", result.value);
+    }
+}
+
 const SyncCounts = struct {
     device: usize = 0,
     log: usize = 0,
