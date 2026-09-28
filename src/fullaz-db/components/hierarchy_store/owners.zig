@@ -24,7 +24,7 @@ fn allows(comptime HierarchyT: type, comptime allowed_ids: []const hierarchy.Typ
 }
 
 // The envelope machinery needs a BPT parent model only to own its generic
-// child editors. Aggregate R-tree and SlotHeap owners never allocate through it.
+// child editors. Non-BPT aggregate owners never allocate through it.
 fn envelopeCoreDescriptor(comptime HierarchyT: type) component.Descriptor {
     return core.hierarchyCore(HierarchyT, bpt_descriptor.bpt(.{
         .compare = coreCompare,
@@ -33,7 +33,7 @@ fn envelopeCoreDescriptor(comptime HierarchyT: type) component.Descriptor {
         .maximum_key_size = 1,
         .maximum_value_size = 1024,
         .fixed_value_size = 1024,
-    }));
+    }), null);
 }
 
 pub fn bptOwner(
@@ -41,7 +41,11 @@ pub fn bptOwner(
     comptime parent_descriptor: component.Descriptor,
     comptime allowed_ids: []const hierarchy.TypeId,
 ) component.Descriptor {
-    const CoreDescriptor = core.hierarchyCore(HierarchyT, parent_descriptor);
+    const CoreDescriptor = core.hierarchyCore(
+        HierarchyT,
+        parent_descriptor,
+        allowed_ids,
+    );
     const ParentTrait = parent_descriptor.Trait;
     return ownerDescriptor(HierarchyT, ParentTrait, CoreDescriptor, allowed_ids, .bpt);
 }
@@ -62,7 +66,15 @@ pub fn slotHeapOwner(
     return ownerDescriptor(HierarchyT, parent_descriptor.Trait, envelopeCoreDescriptor(HierarchyT), allowed_ids, .slot_heap);
 }
 
-const OwnerKind = enum { bpt, rtree, slot_heap };
+pub fn radixOwner(
+    comptime HierarchyT: type,
+    comptime parent_descriptor: component.Descriptor,
+    comptime allowed_ids: []const hierarchy.TypeId,
+) component.Descriptor {
+    return ownerDescriptor(HierarchyT, parent_descriptor.Trait, envelopeCoreDescriptor(HierarchyT), allowed_ids, .radix);
+}
+
+const OwnerKind = enum { bpt, radix, rtree, slot_heap };
 
 fn ownerDescriptor(
     comptime HierarchyT: type,
@@ -74,6 +86,7 @@ fn ownerDescriptor(
     const Trait = struct {
         pub const kind_name: []const u8 = switch (kind) {
             .bpt => "fullaz.hierarchy-store.bpt-owner",
+            .radix => "fullaz.hierarchy-store.radix-owner",
             .rtree => "fullaz.hierarchy-store.rtree-owner",
             .slot_heap => "fullaz.hierarchy-store.slot-heap-owner",
         };
@@ -89,10 +102,24 @@ fn ownerDescriptor(
         pub fn Binding(comptime BackendT: type) type {
             const Parent = ParentTrait.Binding(BackendT);
             const Core = CoreDescriptor.Trait.Binding(BackendT);
-            const value_capacity = if (kind == .bpt)
-                ParentTrait.fixed_value_size orelse @compileError("hierarchy BPT owner requires fixed_value_size")
-            else
-                ParentTrait.maximum_value_size;
+            const value_capacity = switch (kind) {
+                .bpt => ParentTrait.fixed_value_size orelse
+                    @compileError("hierarchy BPT owner requires fixed_value_size"),
+                .radix => ParentTrait.value_size,
+                .rtree, .slot_heap => ParentTrait.maximum_value_size,
+            };
+
+            comptime if (kind == .radix and allowed_ids.len != 0) {
+                var maximum_state_size: usize = 0;
+                for (allowed_ids) |allowed_id| {
+                    const entry = HierarchyT.entryByTypeId(allowed_id);
+                    const ChildBinding = component.bindingFor(entry.descriptor, BackendT);
+                    maximum_state_size = @max(maximum_state_size, @sizeOf(ChildBinding.State));
+                }
+                if (value_capacity < value_envelope.envelope_byte_size + maximum_state_size) {
+                    @compileError("fullaz-db hierarchyStore Radix owner value_size cannot hold every allowed child envelope");
+                }
+            };
 
             const ProxyImpl = struct {
                 const Self = @This();
@@ -197,13 +224,56 @@ fn ownerDescriptor(
                 ) @TypeOf(self.inner.openEmbedded(key, tag)) {
                     return self.inner.openEmbedded(key, tag);
                 }
+            } else if (kind == .radix) struct {
+                const Self = @This();
+
+                pub const Entry = Parent.ConstProxy.Entry;
+                pub const Error = Parent.ConstProxy.Error ||
+                    Core.ConstProxy.Error ||
+                    error{TypeNotAllowed};
+
+                parent: *const Parent.ConstProxy,
+                envelope: *const Core.ConstProxy,
+
+                pub fn find(self: *const Self, key: ParentTrait.Key) Parent.ConstProxy.Error!?Entry {
+                    return self.parent.find(key);
+                }
+
+                pub fn openEmbedded(
+                    self: *const Self,
+                    key: ParentTrait.Key,
+                    comptime tag: []const u8,
+                ) Error!?@typeInfo(@TypeOf(self.envelope.openRootChild(
+                    @as(Entry, undefined),
+                    @as([]const u8, undefined),
+                    tag,
+                ))).error_union.payload {
+                    if (comptime !allows(HierarchyT, allowed_ids, tag)) {
+                        return error.TypeNotAllowed;
+                    }
+                    var entry = (try self.parent.find(key)) orelse return null;
+                    const found = entry.get() catch |err| {
+                        entry.deinit();
+                        return err;
+                    };
+                    const Child = @typeInfo(@TypeOf(self.envelope.openRootChild(
+                        @as(Entry, undefined),
+                        @as([]const u8, undefined),
+                        tag,
+                    ))).error_union.payload;
+                    return @as(?Child, try self.envelope.openRootChild(
+                        entry,
+                        found.value,
+                        tag,
+                    ));
+                }
             } else Parent.ConstProxy;
 
             return struct {
                 pub const Runtime = struct {
                     parent: Parent.Runtime,
                     envelope: Core.Runtime,
-                    const_proxy: if (kind == .bpt) ConstProxy else void,
+                    const_proxy: if (kind == .bpt or kind == .radix) ConstProxy else void,
                 };
                 pub const Proxy = ProxyImpl;
                 pub const ConstProxy = ConstProxyImpl;
@@ -259,6 +329,12 @@ fn ownerDescriptor(
                         runtime.const_proxy = .{ .inner = Core.proxyConst(&runtime.envelope) };
                     } else {
                         try Core.initAggregateEnvelopeRuntime(&runtime.envelope, backend, owner_kinds, type_kinds);
+                        if (comptime kind == .radix) {
+                            runtime.const_proxy = .{
+                                .parent = Parent.proxyConst(&runtime.parent),
+                                .envelope = Core.proxyConst(&runtime.envelope),
+                            };
+                        }
                     }
                     runtime.envelope.aggregate_next_instance_id = aggregate_next_instance_id;
                 }
@@ -308,7 +384,7 @@ fn ownerDescriptor(
                         Parent.proxy(&runtime.parent), .envelope = Core.proxy(&runtime.envelope) };
                 }
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
-                    if (comptime kind == .bpt) {
+                    if (comptime kind == .bpt or kind == .radix) {
                         return &runtime.const_proxy;
                     }
                     return Parent.proxyConst(&runtime.parent);
@@ -333,6 +409,13 @@ fn ownerDescriptor(
                                 try collector.registerForCycle(kinds.kindAt(1).?, 1, &runtime.envelope.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanInodeRefs), null);
                             } else if (comptime kind == .rtree) {
                                 try collector.registerForCycleWithContexts(kinds.kindAt(0).?, 1, &runtime.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanLeafRefs), &runtime.envelope, Core.hierarchyValueScanner(CollectorT));
+                                try collector.registerForCycle(kinds.kindAt(1).?, 1, &runtime.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanInodeRefs), null);
+                            } else if (comptime kind == .radix) {
+                                const value_scanner = if (allowed_ids.len == 0)
+                                    null
+                                else
+                                    Core.hierarchyValueScanner(CollectorT);
+                                try collector.registerForCycleWithContexts(kinds.kindAt(0).?, 1, &runtime.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanLeafRefs), &runtime.envelope, value_scanner);
                                 try collector.registerForCycle(kinds.kindAt(1).?, 1, &runtime.parent.tree, gc.scanners.method(CollectorT, Parent.Tree, Parent.Tree.scanInodeRefs), null);
                             } else {
                                 try collector.registerForCycleWithContexts(kinds.kindAt(0).?, 1, &runtime.parent.heap, gc.scanners.method(CollectorT, Parent.Heap, Parent.Heap.scanLeafRefs), &runtime.envelope, Core.hierarchyValueScanner(CollectorT));

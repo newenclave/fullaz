@@ -5,6 +5,7 @@ const interfaces = @import("fullaz").contracts.interfaces;
 const dynamic_metadata = @import("../file/metadata/dynamic.zig");
 const tagged = @import("../file/tagged_fields.zig");
 const low_level_radix = @import("fullaz").radix_tree;
+const storage_manager_contract = @import("fullaz").contracts.storage_manager;
 const gc = @import("fullaz").gc;
 const FingerprintWriter = @import("../component/fingerprint.zig").Writer;
 
@@ -631,7 +632,7 @@ pub fn radix(comptime options: anytype) component.Descriptor {
 
                 pub fn deinitRuntime(runtime: *Runtime) void {
                     requireTransactionIdle(runtime) catch
-                        @panic("Radix runtime deinitialized with an active value editor");
+                        @panic("Radix runtime deinitialized with an active handle or value editor");
                     runtime.tree.deinit();
                     runtime.model.deinit();
                     runtime.* = undefined;
@@ -646,6 +647,7 @@ pub fn radix(comptime options: anytype) component.Descriptor {
                     if (runtime.active_editor) {
                         return error.ValueEditorActive;
                     }
+                    try runtime.model.requireIdle();
                 }
 
                 pub fn captureTransactionState(runtime: *const Runtime) TransactionState {
@@ -668,10 +670,137 @@ pub fn radix(comptime options: anytype) component.Descriptor {
                 pub fn proxyConst(runtime: *const Runtime) *const ConstProxy {
                     return &runtime.const_proxy;
                 }
+
+                pub fn StorageBinding(comptime StorageManagerT: type) type {
+                    comptime storage_manager_contract.assertPagedStorageManager(
+                        StorageManagerT,
+                        CacheT.Pid,
+                    );
+                    const StorageModelT = low_level_radix.models.paged.Model(
+                        CacheT,
+                        StorageManagerT,
+                        KeyT,
+                        configured_value_size,
+                    );
+                    const StorageTreeT = low_level_radix.Tree(StorageModelT);
+                    const StorageProxyTypesT = ProxyFactory.get(StorageTreeT);
+                    const StorageProxyT = StorageProxyTypesT.Mutable;
+                    const StorageConstProxyT = StorageProxyTypesT.Const;
+                    const StorageInitOptions = struct {};
+                    const StorageError = StorageProxyT.Error || error{InvalidPageKinds};
+                    const StorageRuntimeT = struct {
+                        page_kinds: component.PageKindRange,
+                        cache: *CacheT,
+                        storage_manager: *StorageManagerT,
+                        model: StorageModelT,
+                        tree: StorageTreeT,
+                        const_proxy: StorageConstProxyT,
+                        allocator_value: std.mem.Allocator,
+                        active_editor: bool = false,
+                    };
+
+                    const StorageBindingT = struct {
+                        pub const Runtime = StorageRuntimeT;
+                        pub const Proxy = StorageProxyT;
+                        pub const ConstProxy = StorageConstProxyT;
+                        pub const InitOptions = StorageInitOptions;
+                        pub const Error = StorageError;
+                        pub const value_capacity: ?usize = configured_value_size;
+
+                        pub fn emptyState() StateT {
+                            return .{};
+                        }
+
+                        pub fn initRuntime(
+                            runtime: *StorageRuntimeT,
+                            backend: *BackendT,
+                            storage_manager: *StorageManagerT,
+                            page_kinds: component.PageKindRange,
+                            _: StorageInitOptions,
+                        ) StorageError!void {
+                            if (page_kinds.count != page_kind_count) {
+                                return StorageError.InvalidPageKinds;
+                            }
+                            const leaf_page_kind = page_kinds.kindAt(0) orelse
+                                return StorageError.InvalidPageKinds;
+                            const inode_page_kind = page_kinds.kindAt(1) orelse
+                                return StorageError.InvalidPageKinds;
+
+                            runtime.page_kinds = page_kinds;
+                            runtime.cache = backend.cache();
+                            runtime.storage_manager = storage_manager;
+                            runtime.model = try StorageModelT.init(
+                                runtime.cache,
+                                runtime.storage_manager,
+                                .{
+                                    .leaf_page_kind = leaf_page_kind,
+                                    .inode_page_kind = inode_page_kind,
+                                },
+                            );
+                            runtime.tree = StorageTreeT.init(&runtime.model);
+                            runtime.allocator_value = backend.allocator();
+                            runtime.active_editor = false;
+                            runtime.const_proxy = StorageConstProxyT.init(
+                                &runtime.tree,
+                                runtime.allocator_value,
+                            );
+                        }
+
+                        pub fn deinitRuntime(runtime: *StorageRuntimeT) void {
+                            @This().requireTransactionIdle(runtime) catch
+                                @panic("Radix storage runtime deinitialized with an active handle or value editor");
+                            runtime.tree.deinit();
+                            runtime.model.deinit();
+                            runtime.* = undefined;
+                        }
+
+                        pub fn requireTransactionIdle(
+                            runtime: *const StorageRuntimeT,
+                        ) StorageError!void {
+                            if (runtime.active_editor) {
+                                return error.ValueEditorActive;
+                            }
+                            try runtime.model.requireIdle();
+                        }
+
+                        pub fn reclaimPersistent(runtime: *StorageRuntimeT) StorageError!void {
+                            try @This().requireTransactionIdle(runtime);
+                            try runtime.tree.destroy();
+                        }
+
+                        pub fn proxy(runtime: *StorageRuntimeT) StorageProxyT {
+                            return StorageProxyT.init(
+                                &runtime.tree,
+                                runtime.cache,
+                                runtime.allocator_value,
+                                &runtime.active_editor,
+                            );
+                        }
+
+                        pub fn proxyConst(
+                            runtime: *const StorageRuntimeT,
+                        ) *const StorageConstProxyT {
+                            return &runtime.const_proxy;
+                        }
+                    };
+                    comptime component.assertStorageBinding(
+                        StorageBindingT,
+                        BackendT,
+                        StorageManagerT,
+                        StateT,
+                    );
+                    return StorageBindingT;
+                }
             };
             comptime component.assertDynamicMetadata(BindingT, BindingT.DynamicMetadata);
             comptime component.assertBinding(BindingT, BackendT);
             comptime component.assertReclamation(BindingT);
+            comptime component.assertStorageBinding(
+                BindingT.StorageBinding(ManagerT),
+                BackendT,
+                ManagerT,
+                StateT,
+            );
             return BindingT;
         }
     };

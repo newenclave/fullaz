@@ -294,7 +294,7 @@ fn validate(comptime HierarchyT: type, comptime options: hierarchy.StoreOptions)
     inline for (options.owners, 0..) |owner, index| {
         if (owner.tag.len == 0 or owner.owner_id == 0) @compileError("fullaz-db hierarchyStore owner tag and owner_id must be non-zero");
         comptime component.assertTrait(owner.descriptor.Trait);
-        if (!supported(owner.descriptor.Trait)) @compileError("fullaz-db hierarchyStore owners must be BPT, R-tree, or SlotHeap descriptors");
+        if (!supported(owner.descriptor.Trait)) @compileError("fullaz-db hierarchyStore owners must be BPT, Radix, R-tree, or SlotHeap descriptors");
         inline for (options.owners[0..index]) |prior| {
             if (std.mem.eql(u8, owner.tag, prior.tag)) @compileError("Duplicate fullaz-db hierarchyStore owner tag");
             if (owner.owner_id == prior.owner_id) @compileError("Duplicate fullaz-db hierarchyStore owner ID");
@@ -310,6 +310,7 @@ fn validate(comptime HierarchyT: type, comptime options: hierarchy.StoreOptions)
 
 fn supported(comptime Trait: type) bool {
     return (std.mem.eql(u8, Trait.kind_name, "fullaz.bpt.paged") and Trait.page_kind_count == 2) or
+        (std.mem.eql(u8, Trait.kind_name, "fullaz.radix.paged") and Trait.page_kind_count == 2) or
         (std.mem.eql(u8, Trait.kind_name, "fullaz.rtree.paged") and Trait.page_kind_count == 2) or
         (std.mem.eql(u8, Trait.kind_name, "fullaz.slot-heap.paged") and Trait.page_kind_count == 3);
 }
@@ -328,6 +329,9 @@ fn ownerDescriptor(comptime HierarchyT: type, comptime owner: hierarchy.Owner) c
     }
     if (std.mem.eql(u8, owner.descriptor.Trait.kind_name, "fullaz.rtree.paged")) {
         return hierarchy_owners.rtreeOwner(HierarchyT, owner.descriptor, owner.allowed_type_ids);
+    }
+    if (std.mem.eql(u8, owner.descriptor.Trait.kind_name, "fullaz.radix.paged")) {
+        return hierarchy_owners.radixOwner(HierarchyT, owner.descriptor, owner.allowed_type_ids);
     }
     return hierarchy_owners.slotHeapOwner(HierarchyT, owner.descriptor, owner.allowed_type_ids);
 }

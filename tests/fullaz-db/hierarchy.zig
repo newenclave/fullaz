@@ -877,3 +877,356 @@ test "fullaz-db hierarchyStore: slot-sequence children nest and tombstones relea
         try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(page_id));
     }
 }
+
+test "fullaz-db hierarchyStore: BPT owner capacity considers only allowed root types" {
+    const envelope_capacity = fullaz_db.value_envelope.envelope_byte_size + @sizeOf(u32);
+    const Root = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 60,
+        .maximum_key_size = 16,
+        .maximum_value_size = envelope_capacity,
+        .fixed_value_size = envelope_capacity,
+    });
+    const UnrelatedRadix = fullaz_db.radix(.{ .Key = u32, .value_size = 8 });
+    const Types = fullaz_db.Hierarchy(.{
+        .registry_id = 0x77ed,
+        .types = &.{
+            .{
+                .tag = "root",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = Root,
+                .allowed_child_type_ids = &.{},
+            },
+            .{
+                .tag = "unrelated-radix",
+                .type_id = 2,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = UnrelatedRadix,
+                .allowed_child_type_ids = &.{},
+            },
+        },
+    });
+    const OwnerDescriptor = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 59,
+        .maximum_key_size = 16,
+        .maximum_value_size = envelope_capacity,
+        .fixed_value_size = envelope_capacity,
+    });
+    const Store = fullaz_db.hierarchyStore(Types, .{ .owners = &.{.{
+        .tag = "roots",
+        .owner_id = 1,
+        .descriptor = OwnerDescriptor,
+        .allowed_type_ids = &.{1},
+    }} });
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("store", Store);
+    const Database = fullaz_db.MemoryDatabase(Schema);
+    const RootState = Root.Trait.Binding(Database.BackendType).State;
+    const RadixState = UnrelatedRadix.Trait.Binding(Database.BackendType).State;
+    try std.testing.expectEqual(@as(usize, 68), envelope_capacity);
+    try std.testing.expectEqual(@as(usize, 4), @sizeOf(RootState));
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(RadixState));
+
+    var database = try Database.init(std.testing.allocator, .{
+        .page_size = 1024,
+        .components = .{ .store = .{ .owner_0 = .{} } },
+    });
+    defer database.deinit();
+    var transaction = try database.begin();
+    defer transaction.deinit();
+    const owner = try transaction.get("store").owner("roots");
+    const root_value = try owner.encodedEmbedded("root");
+    try std.testing.expectEqual(envelope_capacity, root_value.data().len);
+    try std.testing.expect(try owner.proxy().insert("root", root_value.data()));
+    const root_editor = (try owner.proxy().openValueEditor("root")).?;
+    var root = try owner.openChild(root_editor, "root");
+    defer root.deinit();
+    try root.finish();
+    try transaction.commit();
+}
+
+test "fullaz-db hierarchyStore: BPT owner opens recursive Radix children mutably and const" {
+    const Branch = fullaz_db.radix(.{ .Key = u32, .value_size = 128 });
+    const Leaf = fullaz_db.radix(.{ .Key = u16, .value_size = 8 });
+    const Types = fullaz_db.Hierarchy(.{
+        .registry_id = 0x77ee,
+        .types = &.{
+            .{
+                .tag = "branch",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = Branch,
+                .allowed_child_type_ids = &.{2},
+            },
+            .{
+                .tag = "leaf",
+                .type_id = 2,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = Leaf,
+                .allowed_child_type_ids = &.{},
+            },
+        },
+    });
+    const Store = fullaz_db.hierarchyStore(Types, .{ .owners = &.{.{
+        .tag = "files",
+        .owner_id = 1,
+        .descriptor = fullaz_db.bpt(.{
+            .compare = compare,
+            .CompareContext = void,
+            .comparator_id = 61,
+            .maximum_key_size = 16,
+            .maximum_value_size = 128,
+            .fixed_value_size = 128,
+        }),
+        .allowed_type_ids = &.{1},
+    }} });
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("store", Store);
+    const Database = fullaz_db.MemoryDatabase(Schema);
+    var database = try Database.init(std.testing.allocator, .{
+        .page_size = 1024,
+        .components = .{ .store = .{ .owner_0 = .{} } },
+    });
+    defer database.deinit();
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const owner = try transaction.get("store").owner("files");
+        const branch_value = try owner.encodedEmbedded("branch");
+        try std.testing.expect(try owner.proxy().insert("root", branch_value.data()));
+
+        const branch_editor = (try owner.proxy().openValueEditor("root")).?;
+        var branch = try owner.openChild(branch_editor, "branch");
+        defer branch.deinit();
+        const leaf_value = try branch.encodedEmbedded("leaf");
+        try branch.proxy().set(20, leaf_value.data());
+
+        const leaf_editor = (try branch.proxy().openValueEditor(20)).?;
+        var leaf = try branch.openChild(leaf_editor, "leaf");
+        defer leaf.deinit();
+        try leaf.proxy().set(30, "value030");
+
+        try leaf.finish();
+        try branch.finish();
+        try transaction.commit();
+    }
+
+    const owner = database.getConst("store").owner("files");
+    var branch = (try owner.openEmbedded("root", "branch")).?;
+    defer branch.deinit();
+    var leaf_entry = (try branch.proxy().find(20)).?;
+    const leaf_value = (try leaf_entry.get()).value;
+    var leaf = try branch.openChild(leaf_entry, leaf_value, "leaf");
+    defer leaf.deinit();
+    var value = (try leaf.proxy().find(30)).?;
+    defer value.deinit();
+    try std.testing.expectEqualSlices(u8, "value030", (try value.get()).value);
+}
+
+test "fullaz-db hierarchyStore: Radix owner numeric API honors exact capacity and allowlist" {
+    const envelope_capacity = fullaz_db.value_envelope.envelope_byte_size + 2 * @sizeOf(u32);
+    const Branch = fullaz_db.radix(.{ .Key = u32, .value_size = envelope_capacity });
+    const Leaf = fullaz_db.radix(.{ .Key = u16, .value_size = 8 });
+    const Types = fullaz_db.Hierarchy(.{
+        .registry_id = 0x77ef,
+        .types = &.{
+            .{
+                .tag = "branch",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = Branch,
+                .allowed_child_type_ids = &.{2},
+            },
+            .{
+                .tag = "leaf",
+                .type_id = 2,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = Leaf,
+                .allowed_child_type_ids = &.{},
+            },
+        },
+    });
+    const Store = fullaz_db.hierarchyStore(Types, .{ .owners = &.{.{
+        .tag = "numbers",
+        .owner_id = 1,
+        .descriptor = fullaz_db.radix(.{
+            .Key = u64,
+            .value_size = envelope_capacity,
+        }),
+        .allowed_type_ids = &.{1},
+    }} });
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("store", Store);
+    const Database = fullaz_db.MemoryDatabase(Schema);
+    var database = try Database.init(std.testing.allocator, .{
+        .page_size = 1024,
+        .components = .{ .store = .{ .owner_0 = .{} } },
+    });
+    defer database.deinit();
+    try std.testing.expectEqual(@as(usize, 72), envelope_capacity);
+
+    var reused_key: u64 = undefined;
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const owner = try transaction.get("store").owner("numbers");
+        try std.testing.expectError(error.TypeNotAllowed, owner.encodedEmbedded("leaf"));
+        try std.testing.expectError(error.TypeNotAllowed, owner.encodedRaw("leaf", "blocked"));
+
+        const branch_value = try owner.encodedEmbedded("branch");
+        try owner.proxy().set(10, branch_value.data());
+        const free_key = (try owner.proxy().takeFree(branch_value.data())).?;
+        try owner.proxy().free(free_key);
+        reused_key = (try owner.proxy().takeFree(branch_value.data())).?;
+        try std.testing.expectEqual(free_key, reused_key);
+
+        const branch_editor = (try owner.proxy().openValueEditor(10)).?;
+        var branch = try owner.openChild(branch_editor, "branch");
+        defer branch.deinit();
+        try std.testing.expectError(
+            error.ChildTypeNotAllowed,
+            branch.encodedEmbedded("branch"),
+        );
+        const leaf_value = try branch.encodedEmbedded("leaf");
+        try branch.proxy().set(20, leaf_value.data());
+
+        const leaf_editor = (try branch.proxy().openValueEditor(20)).?;
+        var leaf = try branch.openChild(leaf_editor, "leaf");
+        defer leaf.deinit();
+        try leaf.proxy().set(30, "value030");
+        try leaf.finish();
+        try branch.finish();
+        try transaction.commit();
+    }
+
+    const owner = database.getConst("store").owner("numbers");
+    try std.testing.expectError(error.TypeNotAllowed, owner.openEmbedded(10, "leaf"));
+    try std.testing.expectEqual(null, try owner.openEmbedded(99, "branch"));
+    var reused = (try owner.find(reused_key)).?;
+    try std.testing.expectEqual(reused_key, (try reused.get()).key);
+    reused.deinit();
+
+    var branch = (try owner.openEmbedded(10, "branch")).?;
+    defer branch.deinit();
+    var leaf_entry = (try branch.proxy().find(20)).?;
+    const leaf_value = (try leaf_entry.get()).value;
+    var leaf = try branch.openChild(leaf_entry, leaf_value, "leaf");
+    defer leaf.deinit();
+    var value = (try leaf.proxy().find(30)).?;
+    defer value.deinit();
+    try std.testing.expectEqualSlices(u8, "value030", (try value.get()).value);
+}
+
+test "fullaz-db hierarchyStore: Radix child handles block finish and abandonment rolls back both roots" {
+    const Branch = fullaz_db.radix(.{ .Key = u32, .value_size = 8 });
+    const Types = fullaz_db.Hierarchy(.{ .registry_id = 0x77f0, .types = &.{.{
+        .tag = "branch",
+        .type_id = 1,
+        .type_version = 1,
+        .metadata_format_version = 1,
+        .descriptor = Branch,
+        .allowed_child_type_ids = &.{},
+    }} });
+    const OwnerDescriptor = fullaz_db.bpt(.{
+        .compare = compare,
+        .CompareContext = void,
+        .comparator_id = 62,
+        .maximum_key_size = 16,
+        .maximum_value_size = 72,
+        .fixed_value_size = 72,
+    });
+    const Store = fullaz_db.hierarchyStore(Types, .{ .owners = &.{.{
+        .tag = "files",
+        .owner_id = 1,
+        .descriptor = OwnerDescriptor,
+        .allowed_type_ids = &.{1},
+    }} });
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("store", Store);
+    const Database = fullaz_db.MemoryDatabase(Schema);
+    const BranchState = Branch.Trait.Binding(Database.BackendType).State;
+    var database = try Database.init(std.testing.allocator, .{
+        .page_size = 512,
+        .cache_frames = 32,
+        .components = .{ .store = .{ .owner_0 = .{} } },
+    });
+    defer database.deinit();
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const owner = try transaction.get("store").owner("files");
+        const branch_value = try owner.encodedEmbedded("branch");
+        try std.testing.expect(try owner.proxy().insert("root", branch_value.data()));
+        const branch_editor = (try owner.proxy().openValueEditor("root")).?;
+        var branch = try owner.openChild(branch_editor, "branch");
+        defer branch.deinit();
+        for (0..96) |index| {
+            try branch.proxy().set(@intCast(index), "original");
+        }
+
+        var entry = (try branch.proxy().find(0)).?;
+        try std.testing.expectError(error.ReadHandleActive, branch.finish());
+        entry.deinit();
+        try branch.finish();
+        try transaction.commit();
+    }
+
+    var before: BranchState = undefined;
+    {
+        const owner = database.getConst("store").owner("files");
+        var root = (try owner.find("root")).?;
+        before = try embeddedState(
+            BranchState,
+            (try root.get()).?.value,
+            Types.typeIdentityByTag("branch"),
+        );
+        root.deinit();
+    }
+    try std.testing.expect(!before.root.isMax());
+    try std.testing.expect(!before.free_leaf_root.isMax());
+    try std.testing.expect(before.root.get() != before.free_leaf_root.get());
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const owner = try transaction.get("store").owner("files");
+        const branch_editor = (try owner.proxy().openValueEditor("root")).?;
+        var branch = try owner.openChild(branch_editor, "branch");
+        defer branch.deinit();
+        try branch.proxy().free(0);
+        try std.testing.expectEqual(
+            @as(?u32, 0),
+            try branch.proxy().takeFree("changed!"),
+        );
+        try branch.proxy().set(1000, "temp0000");
+        branch.deinit();
+        try std.testing.expectError(error.TransactionRollbackOnly, transaction.commit());
+        try transaction.rollback();
+    }
+
+    const owner = database.getConst("store").owner("files");
+    var root = (try owner.find("root")).?;
+    const after = try embeddedState(
+        BranchState,
+        (try root.get()).?.value,
+        Types.typeIdentityByTag("branch"),
+    );
+    root.deinit();
+    try std.testing.expectEqual(before.root.get(), after.root.get());
+    try std.testing.expectEqual(before.free_leaf_root.get(), after.free_leaf_root.get());
+
+    var branch = (try owner.openEmbedded("root", "branch")).?;
+    defer branch.deinit();
+    var original = (try branch.proxy().find(0)).?;
+    try std.testing.expectEqualSlices(u8, "original", (try original.get()).value);
+    original.deinit();
+    try std.testing.expect((try branch.proxy().find(1000)) == null);
+}

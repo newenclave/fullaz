@@ -36,6 +36,18 @@ pub const StructuralMutationCoordinator = struct {
         return self.structural_generation;
     }
 
+    pub fn requireIdle(self: *const Self) Error!void {
+        if (self.read_handle_count != 0) {
+            return error.ReadHandleActive;
+        }
+        if (self.value_editor_active) {
+            return error.ValueEditorActive;
+        }
+        if (self.structural_mutation_active) {
+            return error.StructuralMutationActive;
+        }
+    }
+
     pub fn beginStructuralMutation(self: *Self) Error!MutationGuard {
         if (self.read_handle_count != 0) {
             return error.ReadHandleActive;

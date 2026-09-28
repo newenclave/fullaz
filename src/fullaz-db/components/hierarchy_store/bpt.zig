@@ -12,6 +12,7 @@ const gc = fullaz.gc;
 const ChildKind = enum {
     bpt,
     chain_store,
+    radix,
     rtree,
     weighted_sequence,
     slot_heap,
@@ -26,6 +27,7 @@ const ChildKind = enum {
 pub fn hierarchyCore(
     comptime HierarchyT: type,
     comptime parent_descriptor: component.Descriptor,
+    comptime root_allowed_type_ids: ?[]const hierarchy.TypeId,
 ) component.Descriptor {
     comptime validate(HierarchyT, parent_descriptor);
     const ParentTrait = parent_descriptor.Trait;
@@ -52,10 +54,16 @@ pub fn hierarchyCore(
             const ChildError = childErrors(HierarchyT, BackendT, 0);
 
             comptime {
-                if (ParentTrait.fixed_value_size.? < value_envelope.envelope_byte_size +
-                    maximumChildPayloadSize(HierarchyT, PageIdT))
-                {
-                    @compileError("fullaz-db hierarchyStore parent fixed_value_size cannot hold an embedded child envelope");
+                if (root_allowed_type_ids) |allowed_type_ids| {
+                    const required = value_envelope.envelope_byte_size +
+                        maximumAllowedRootStateSize(
+                            HierarchyT,
+                            allowed_type_ids,
+                            BackendT,
+                        );
+                    if (ParentTrait.fixed_value_size.? < required) {
+                        @compileError("fullaz-db Hierarchy BPT fixed_value_size cannot hold every allowed child envelope");
+                    }
                 }
                 validateChildEnvelopeCapacities(HierarchyT, PageIdT);
             }
@@ -140,7 +148,7 @@ pub fn hierarchyCore(
             };
 
             const ConstRuntime = struct {
-                parent: *const ParentBinding.Runtime,
+                parent: ?*const ParentBinding.Runtime,
                 backend: *BackendT,
                 type_page_kinds: component.PageKindRange,
 
@@ -228,7 +236,8 @@ pub fn hierarchyCore(
                 }
 
                 fn parent(self: *const Self) *const ParentBinding.ConstProxy {
-                    return ParentBinding.proxyConst(self.runtime().parent);
+                    return ParentBinding.proxyConst(self.runtime().parent orelse
+                        @panic("hierarchy envelope-only runtime has no BPT parent"));
                 }
 
                 pub fn iterator(self: *const Self) ParentBinding.ConstProxy.Error!?Iterator {
@@ -262,6 +271,16 @@ pub fn hierarchyCore(
                     const entry = (try parent_iterator.get()) orelse return null;
                     transferred = true;
                     return try self.openChildValue(parent_iterator, entry.value, tag);
+                }
+
+                /// Transfers a root owner's native value pin into a read-only child.
+                pub fn openRootChild(
+                    self: *const Self,
+                    parent_pin: anytype,
+                    bytes: []const u8,
+                    comptime tag: []const u8,
+                ) Error!ConstChildHandle(tag, @TypeOf(parent_pin)) {
+                    return self.openChildValue(parent_pin, bytes, tag);
                 }
 
                 fn openChildValue(
@@ -370,7 +389,7 @@ pub fn hierarchyCore(
                     return self.parent.tree.scanLeafRefs(page_id, page, visitor);
                 }
 
-                fn scanBptChildLeaf(
+                fn scanTreeChildLeaf(
                     self: *const @This(),
                     comptime index: usize,
                     page_id: PageIdT,
@@ -386,7 +405,7 @@ pub fn hierarchyCore(
                     return child.runtime.tree.scanLeafRefs(page_id, page, visitor);
                 }
 
-                fn scanBptChildInode(
+                fn scanTreeChildInode(
                     self: *const @This(),
                     comptime index: usize,
                     page_id: PageIdT,
@@ -464,38 +483,6 @@ pub fn hierarchyCore(
                     );
                     defer child.deinit();
                     return child.runtime.sequence.scanChunkRefs(page_id, page, visitor);
-                }
-
-                fn scanRtreeChildLeaf(
-                    self: *const @This(),
-                    comptime index: usize,
-                    page_id: PageIdT,
-                    page: []const u8,
-                    visitor: anytype,
-                ) !void {
-                    var child: ChildRuntimeFactory.get(index) = undefined;
-                    try child.init(
-                        self.backend,
-                        self.childPageKinds(index),
-                    );
-                    defer child.deinit();
-                    return child.runtime.tree.scanLeafRefs(page_id, page, visitor);
-                }
-
-                fn scanRtreeChildInode(
-                    self: *const @This(),
-                    comptime index: usize,
-                    page_id: PageIdT,
-                    page: []const u8,
-                    visitor: anytype,
-                ) !void {
-                    var child: ChildRuntimeFactory.get(index) = undefined;
-                    try child.init(
-                        self.backend,
-                        self.childPageKinds(index),
-                    );
-                    defer child.deinit();
-                    return child.runtime.tree.scanInodeRefs(page_id, page, visitor);
                 }
 
                 fn scanSlotHeapChildLeaf(
@@ -618,7 +605,7 @@ pub fn hierarchyCore(
                     }.scan;
                 }
 
-                fn bptChildLeafScanner(comptime CollectorT: type, comptime index: usize) CollectorT.Scanner {
+                fn treeChildLeafScanner(comptime CollectorT: type, comptime index: usize) CollectorT.Scanner {
                     return struct {
                         fn scan(
                             context: ?*const anyopaque,
@@ -628,7 +615,7 @@ pub fn hierarchyCore(
                         ) CollectorT.Error!void {
                             const runtime: *const RuntimeSelf = @ptrCast(@alignCast(context orelse return error.InvalidScannerContext));
                             var visitor = SinkVisitor(CollectorT){ .sink = sink };
-                            runtime.scanBptChildLeaf(index, page_id, page, &visitor) catch |err| {
+                            runtime.scanTreeChildLeaf(index, page_id, page, &visitor) catch |err| {
                                 if (err == error.Abort) {
                                     return visitor.sink_error.?;
                                 }
@@ -638,7 +625,7 @@ pub fn hierarchyCore(
                     }.scan;
                 }
 
-                fn bptChildInodeScanner(comptime CollectorT: type, comptime index: usize) CollectorT.Scanner {
+                fn treeChildInodeScanner(comptime CollectorT: type, comptime index: usize) CollectorT.Scanner {
                     return struct {
                         fn scan(
                             context: ?*const anyopaque,
@@ -648,7 +635,7 @@ pub fn hierarchyCore(
                         ) CollectorT.Error!void {
                             const runtime: *const RuntimeSelf = @ptrCast(@alignCast(context orelse return error.InvalidScannerContext));
                             var visitor = SinkVisitor(CollectorT){ .sink = sink };
-                            runtime.scanBptChildInode(index, page_id, page, &visitor) catch |err| {
+                            runtime.scanTreeChildInode(index, page_id, page, &visitor) catch |err| {
                                 if (err == error.Abort) {
                                     return visitor.sink_error.?;
                                 }
@@ -729,46 +716,6 @@ pub fn hierarchyCore(
                             const runtime: *const RuntimeSelf = @ptrCast(@alignCast(context orelse return error.InvalidScannerContext));
                             var visitor = SinkVisitor(CollectorT){ .sink = sink };
                             runtime.scanSlotSequenceChild(index, page_id, page, &visitor) catch |err| {
-                                if (err == error.Abort) {
-                                    return visitor.sink_error.?;
-                                }
-                                return error.InvalidPage;
-                            };
-                        }
-                    }.scan;
-                }
-
-                fn rtreeChildLeafScanner(comptime CollectorT: type, comptime index: usize) CollectorT.Scanner {
-                    return struct {
-                        fn scan(
-                            context: ?*const anyopaque,
-                            page_id: CollectorT.PageId,
-                            page: []const u8,
-                            sink: CollectorT.ReferenceSink,
-                        ) CollectorT.Error!void {
-                            const runtime: *const RuntimeSelf = @ptrCast(@alignCast(context orelse return error.InvalidScannerContext));
-                            var visitor = SinkVisitor(CollectorT){ .sink = sink };
-                            runtime.scanRtreeChildLeaf(index, page_id, page, &visitor) catch |err| {
-                                if (err == error.Abort) {
-                                    return visitor.sink_error.?;
-                                }
-                                return error.InvalidPage;
-                            };
-                        }
-                    }.scan;
-                }
-
-                fn rtreeChildInodeScanner(comptime CollectorT: type, comptime index: usize) CollectorT.Scanner {
-                    return struct {
-                        fn scan(
-                            context: ?*const anyopaque,
-                            page_id: CollectorT.PageId,
-                            page: []const u8,
-                            sink: CollectorT.ReferenceSink,
-                        ) CollectorT.Error!void {
-                            const runtime: *const RuntimeSelf = @ptrCast(@alignCast(context orelse return error.InvalidScannerContext));
-                            var visitor = SinkVisitor(CollectorT){ .sink = sink };
-                            runtime.scanRtreeChildInode(index, page_id, page, &visitor) catch |err| {
                                 if (err == error.Abort) {
                                     return visitor.sink_error.?;
                                 }
@@ -1209,6 +1156,12 @@ pub fn hierarchyCore(
                     runtime.active_editor = false;
                     runtime.next_instance_id = 1;
                     runtime.aggregate_next_instance_id = null;
+                    runtime.const_runtime = .{
+                        .parent = null,
+                        .backend = backend,
+                        .type_page_kinds = runtime.type_page_kinds,
+                    };
+                    runtime.const_proxy = ConstProxy.init(&runtime.const_runtime);
                 }
 
                 pub fn deinitRuntime(runtime: *RuntimeImpl) void {
@@ -1267,15 +1220,22 @@ pub fn hierarchyCore(
                     inline for (0..HierarchyT.type_count) |index| {
                         const kinds = runtime.childPageKinds(index);
                         if (comptime childKind(HierarchyT, index) == .bpt) {
-                            try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.bptChildLeafScanner(CollectorT, index), RuntimeImpl.valueScanner(CollectorT));
-                            try collector.registerForCycle(kinds.kindAt(1).?, 1, runtime, RuntimeImpl.bptChildInodeScanner(CollectorT, index), null);
+                            try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.treeChildLeafScanner(CollectorT, index), RuntimeImpl.valueScanner(CollectorT));
+                            try collector.registerForCycle(kinds.kindAt(1).?, 1, runtime, RuntimeImpl.treeChildInodeScanner(CollectorT, index), null);
                         } else if (comptime childKind(HierarchyT, index) == .chain_store) {
                             try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.chainStoreChildScanner(CollectorT, index), null);
                         } else if (comptime childKind(HierarchyT, index) == .slot_sequence) {
                             try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.slotSequenceChildScanner(CollectorT, index), RuntimeImpl.valueScanner(CollectorT));
                         } else if (comptime childKind(HierarchyT, index) == .rtree) {
-                            try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.rtreeChildLeafScanner(CollectorT, index), RuntimeImpl.valueScanner(CollectorT));
-                            try collector.registerForCycle(kinds.kindAt(1).?, 1, runtime, RuntimeImpl.rtreeChildInodeScanner(CollectorT, index), null);
+                            try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.treeChildLeafScanner(CollectorT, index), RuntimeImpl.valueScanner(CollectorT));
+                            try collector.registerForCycle(kinds.kindAt(1).?, 1, runtime, RuntimeImpl.treeChildInodeScanner(CollectorT, index), null);
+                        } else if (comptime childKind(HierarchyT, index) == .radix) {
+                            const value_scanner = if (HierarchyT.types[index].allowed_child_type_ids.len == 0)
+                                null
+                            else
+                                RuntimeImpl.valueScanner(CollectorT);
+                            try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.treeChildLeafScanner(CollectorT, index), value_scanner);
+                            try collector.registerForCycle(kinds.kindAt(1).?, 1, runtime, RuntimeImpl.treeChildInodeScanner(CollectorT, index), null);
                         } else if (comptime childKind(HierarchyT, index) == .slot_heap) {
                             try collector.registerForCycle(kinds.kindAt(0).?, 1, runtime, RuntimeImpl.slotHeapChildLeafScanner(CollectorT, index), RuntimeImpl.valueScanner(CollectorT));
                             try collector.registerForCycle(kinds.kindAt(1).?, 1, runtime, RuntimeImpl.slotHeapChildInodeScanner(CollectorT, index), null);
@@ -1326,14 +1286,14 @@ pub fn hierarchyCore(
                                         kinds.kindAt(0).?,
                                         1,
                                         runtime,
-                                        RuntimeImpl.bptChildLeafScanner(CollectorT, index),
+                                        RuntimeImpl.treeChildLeafScanner(CollectorT, index),
                                         RuntimeImpl.valueScanner(CollectorT),
                                     );
                                     try collector.registerForCycle(
                                         kinds.kindAt(1).?,
                                         1,
                                         runtime,
-                                        RuntimeImpl.bptChildInodeScanner(CollectorT, index),
+                                        RuntimeImpl.treeChildInodeScanner(CollectorT, index),
                                         null,
                                     );
                                 } else if (comptime childKind(HierarchyT, index) == .chain_store) {
@@ -1357,14 +1317,33 @@ pub fn hierarchyCore(
                                         kinds.kindAt(0).?,
                                         1,
                                         runtime,
-                                        RuntimeImpl.rtreeChildLeafScanner(CollectorT, index),
+                                        RuntimeImpl.treeChildLeafScanner(CollectorT, index),
                                         RuntimeImpl.valueScanner(CollectorT),
                                     );
                                     try collector.registerForCycle(
                                         kinds.kindAt(1).?,
                                         1,
                                         runtime,
-                                        RuntimeImpl.rtreeChildInodeScanner(CollectorT, index),
+                                        RuntimeImpl.treeChildInodeScanner(CollectorT, index),
+                                        null,
+                                    );
+                                } else if (comptime childKind(HierarchyT, index) == .radix) {
+                                    const value_scanner = if (HierarchyT.types[index].allowed_child_type_ids.len == 0)
+                                        null
+                                    else
+                                        RuntimeImpl.valueScanner(CollectorT);
+                                    try collector.registerForCycle(
+                                        kinds.kindAt(0).?,
+                                        1,
+                                        runtime,
+                                        RuntimeImpl.treeChildLeafScanner(CollectorT, index),
+                                        value_scanner,
+                                    );
+                                    try collector.registerForCycle(
+                                        kinds.kindAt(1).?,
+                                        1,
+                                        runtime,
+                                        RuntimeImpl.treeChildInodeScanner(CollectorT, index),
                                         null,
                                     );
                                 } else if (comptime childKind(HierarchyT, index) == .slot_heap) {
@@ -1463,6 +1442,7 @@ fn validate(comptime HierarchyT: type, comptime parent_descriptor: component.Des
                 }
             },
             .chain_store => {},
+            .radix => {},
             .rtree => {},
             .weighted_sequence => {
                 if (@TypeOf(Trait.maximum_chunk_size) != usize) {
@@ -1493,10 +1473,16 @@ fn childKind(comptime HierarchyT: type, comptime index: usize) ChildKind {
     return childKindForTrait(HierarchyT.types[index].descriptor.Trait);
 }
 
-fn maximumChildPayloadSize(comptime HierarchyT: type, comptime PageIdT: type) usize {
+fn maximumAllowedRootStateSize(
+    comptime HierarchyT: type,
+    comptime allowed_type_ids: []const hierarchy.TypeId,
+    comptime BackendT: type,
+) usize {
     var maximum: usize = 0;
-    inline for (HierarchyT.types) |entry| {
-        maximum = @max(maximum, childPayloadSize(entry.descriptor.Trait, PageIdT));
+    inline for (allowed_type_ids) |allowed_type_id| {
+        const entry = HierarchyT.entryByTypeId(allowed_type_id);
+        const ChildBinding = component.bindingFor(entry.descriptor, BackendT);
+        maximum = @max(maximum, @sizeOf(ChildBinding.State));
     }
     return maximum;
 }
@@ -1510,6 +1496,11 @@ fn validateChildEnvelopeCapacities(comptime HierarchyT: type, comptime PageIdT: 
             .bpt => {
                 if (Trait.fixed_value_size.? < required) {
                     @compileError("fullaz-db Hierarchy BPT fixed_value_size cannot hold every allowed child envelope");
+                }
+            },
+            .radix => {
+                if (entry.allowed_child_type_ids.len != 0 and Trait.value_size < required) {
+                    @compileError("fullaz-db Hierarchy Radix value_size cannot hold every allowed child envelope");
                 }
             },
             .rtree, .slot_heap, .slot_sequence => {
@@ -1544,6 +1535,7 @@ fn childPayloadSize(comptime Trait: type, comptime PageIdT: type) usize {
     const PackedPageId = PackedInt(PageIdT, .little);
     return switch (childKindForTrait(Trait)) {
         .bpt, .rtree, .weighted_sequence => @sizeOf(PackedPageId),
+        .radix => 2 * @sizeOf(PackedPageId),
         .chain_store => 2 * @sizeOf(PackedPageId) + @sizeOf(u64),
         .slot_heap => (2 + Trait.maximum_level + 1 + Trait.size_class_count) * @sizeOf(PackedPageId) +
             @sizeOf(u16) + @sizeOf(u64),
@@ -1567,6 +1559,13 @@ fn childKindForTrait(comptime Trait: type) ChildKind {
         Trait.page_kind_count == 1)
     {
         return .chain_store;
+    }
+    if (comptime std.mem.eql(u8, Trait.kind_name, "fullaz.radix.paged") and
+        Trait.page_kind_count == 2 and
+        @hasDecl(Trait, "Key") and
+        @hasDecl(Trait, "value_size"))
+    {
+        return .radix;
     }
     if (comptime std.mem.eql(u8, Trait.kind_name, "fullaz.rtree.paged") and
         Trait.page_kind_count == 2 and
@@ -1605,7 +1604,7 @@ fn childKindForTrait(comptime Trait: type) ChildKind {
     {
         return .slot_sequence;
     }
-    @compileError("fullaz-db hierarchyStore supports BPT, ChainStore, R-tree, WeightedSequence, SlotHeap, SlotList, SlotQueue, and SlotStack child types only");
+    @compileError("fullaz-db hierarchyStore supports BPT, ChainStore, Radix, R-tree, WeightedSequence, SlotHeap, SlotList, SlotQueue, and SlotStack child types only");
 }
 
 fn childPageKindCount(comptime HierarchyT: type) usize {

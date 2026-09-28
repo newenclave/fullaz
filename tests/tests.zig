@@ -34,6 +34,7 @@ test {
     _ = @import("fullaz-db/file/metadata/io.zig");
     _ = @import("fullaz-db/value_envelope.zig");
     _ = @import("fullaz-db/hierarchy.zig");
+    _ = @import("fullaz-db/hierarchy_radix_persistence.zig");
     _ = @import("core/wordt.zig");
     _ = @import("core/bitset.zig");
     _ = @import("gc/interfaces.zig");

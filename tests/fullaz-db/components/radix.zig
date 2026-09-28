@@ -99,16 +99,107 @@ test "fullaz-db: radix binding supports point entries editors and fixed values" 
     first_editor.deinit();
     try std.testing.expectError(error.ValueEditorActive, Binding.requireTransactionIdle(&runtime));
     second_editor.deinit();
-    try Binding.requireTransactionIdle(&runtime);
+    try std.testing.expectError(error.ReadHandleActive, Binding.requireTransactionIdle(&runtime));
 
     try std.testing.expectEqualSlices(u8, "changed!", (try entry.get()).value);
     entry.deinit();
+    try Binding.requireTransactionIdle(&runtime);
     try transaction.commit();
 
     const radix_const = Binding.proxyConst(&runtime);
     var committed = (try radix_const.find(7)).?;
-    defer committed.deinit();
     try std.testing.expectEqualSlices(u8, "changed!", (try committed.get()).value);
+    try std.testing.expectError(error.ReadHandleActive, Binding.requireTransactionIdle(&runtime));
+    committed.deinit();
+    try Binding.requireTransactionIdle(&runtime);
+}
+
+test "fullaz-db: radix storage binding uses external two-root state and tracks handles" {
+    const Device = fullaz.device.MemoryBlock(u32);
+    const InnerCache = fullaz.storage.page_cache.PageCache(Device);
+    const Cache = fullaz_db.MemoryReclaimingCache(InnerCache);
+    const Backend = TestBackend(Cache);
+    const OwnedBinding = fullaz_db.radix(.{
+        .Key = u32,
+        .value_size = 8,
+    }).Trait.Binding(Backend);
+    const Manager = OwnedBinding.Manager;
+    const Binding = OwnedBinding.StorageBinding(Manager);
+
+    var device = try Device.init(std.testing.allocator, 4096);
+    defer device.deinit();
+    var inner = try InnerCache.init(&device, std.testing.allocator, 8);
+    defer inner.deinit();
+    var cache = Cache.init(std.testing.allocator, &inner);
+    defer cache.deinit();
+    var backend = Backend{
+        .allocator_value = std.testing.allocator,
+        .cache_ptr = &cache,
+    };
+    var state = Binding.emptyState();
+    var manager = Manager.init(&backend, &state);
+
+    {
+        var runtime: Binding.Runtime = undefined;
+        try Binding.initRuntime(
+            &runtime,
+            &backend,
+            &manager,
+            .{ .base = 0x0100, .count = 2 },
+            .{},
+        );
+        defer Binding.deinitRuntime(&runtime);
+
+        var transaction = try cache.begin();
+        errdefer transaction.discard() catch {};
+        const radix = Binding.proxy(&runtime);
+        try radix.set(7, "value007");
+        try std.testing.expect(!state.root.isMax());
+        try std.testing.expect(!state.free_leaf_root.isMax());
+        try std.testing.expectEqual(state.root.get(), state.free_leaf_root.get());
+
+        var entry = (try radix.find(7)).?;
+        try std.testing.expectError(
+            error.ReadHandleActive,
+            Binding.requireTransactionIdle(&runtime),
+        );
+        entry.deinit();
+
+        var editor = (try radix.openValueEditor(7)).?;
+        try std.testing.expectError(
+            error.ValueEditorActive,
+            Binding.requireTransactionIdle(&runtime),
+        );
+        editor.deinit();
+        try Binding.requireTransactionIdle(&runtime);
+        try transaction.commit();
+    }
+
+    {
+        var runtime: Binding.Runtime = undefined;
+        try Binding.initRuntime(
+            &runtime,
+            &backend,
+            &manager,
+            .{ .base = 0x0100, .count = 2 },
+            .{},
+        );
+        defer Binding.deinitRuntime(&runtime);
+
+        const saved_state = state;
+        state = Binding.emptyState();
+        try std.testing.expect((try Binding.proxyConst(&runtime).find(7)) == null);
+        state = saved_state;
+
+        var entry = (try Binding.proxyConst(&runtime).find(7)).?;
+        try std.testing.expectEqualSlices(u8, "value007", (try entry.get()).value);
+        try std.testing.expectError(
+            error.ReadHandleActive,
+            Binding.requireTransactionIdle(&runtime),
+        );
+        entry.deinit();
+        try Binding.requireTransactionIdle(&runtime);
+    }
 }
 
 test "fullaz-db: radix metadata validates both persistent roots" {

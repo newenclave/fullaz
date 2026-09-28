@@ -262,6 +262,14 @@ pub fn build(b: *std.Build) void {
             .source = "tests/compile_errors/hierarchy/bpt_allowed_child_envelope_too_large.zig",
             .expected = "fullaz-db Hierarchy BPT fixed_value_size cannot hold every allowed child envelope",
         },
+        .{
+            .source = "tests/compile_errors/hierarchy/radix_parent_allowed_child_envelope_too_large.zig",
+            .expected = "fullaz-db Hierarchy Radix value_size cannot hold every allowed child envelope",
+        },
+        .{
+            .source = "tests/compile_errors/hierarchy/radix_owner_allowed_child_envelope_too_large.zig",
+            .expected = "fullaz-db hierarchyStore Radix owner value_size cannot hold every allowed child envelope",
+        },
     }) |fixture| {
         addCompileErrorFixture(
             b,

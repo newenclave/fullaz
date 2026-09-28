@@ -2992,3 +2992,196 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     while (try database.stepGarbageCollection(1) != .complete) {}
     try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(child_root));
 }
+
+test "fullaz-db hierarchyStore: dynamic GC traces Radix descendants and skips terminal values" {
+    const envelope_capacity = fullaz_db.value_envelope.envelope_byte_size + 2 * @sizeOf(u32);
+    const Branch = fullaz_db.radix(.{ .Key = u32, .value_size = envelope_capacity });
+    const Terminal = fullaz_db.radix(.{ .Key = u16, .value_size = 8 });
+    const Hierarchy = fullaz_db.Hierarchy(.{
+        .registry_id = 0x1241,
+        .types = &.{
+            .{
+                .tag = "branch",
+                .type_id = 1,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = Branch,
+                .allowed_child_type_ids = &.{2},
+            },
+            .{
+                .tag = "terminal",
+                .type_id = 2,
+                .type_version = 1,
+                .metadata_format_version = 1,
+                .descriptor = Terminal,
+                .allowed_child_type_ids = &.{},
+            },
+        },
+    });
+    const OwnerDescriptor = fullaz_db.radix(.{
+        .Key = u64,
+        .value_size = envelope_capacity,
+    });
+    const OpaqueOwnerDescriptor = fullaz_db.radix(.{ .Key = u32, .value_size = 8 });
+    const Store = fullaz_db.hierarchyStore(Hierarchy, .{ .owners = &.{
+        .{
+            .tag = "nodes",
+            .owner_id = 1,
+            .descriptor = OwnerDescriptor,
+            .allowed_type_ids = &.{1},
+        },
+        .{
+            .tag = "opaque",
+            .owner_id = 2,
+            .descriptor = OpaqueOwnerDescriptor,
+            .allowed_type_ids = &.{},
+        },
+    } });
+    const Schema = fullaz_db.Schema(.{ .page_id = u32 }).add("tree", Store);
+    const Device = fullaz.device.MemoryBlock(u32);
+    const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
+    var database = try Database.format(
+        std.testing.allocator,
+        try Device.init(std.testing.allocator, 1024),
+        .{
+            .image_id = [_]u8{0xEA} ** 16,
+            .cache_frames = 64,
+            .components = .{ .tree = .{ .owner_0 = .{}, .owner_1 = .{} } },
+        },
+    );
+    defer database.deinit();
+
+    const terminal_edge_key: u32 = 50;
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const store = transaction.get("tree");
+        const opaque_owner = try store.owner("opaque");
+        try opaque_owner.proxy().set(77, "FZVEown!");
+        const owner = try store.owner("nodes");
+        const branch_value = try owner.encodedEmbedded("branch");
+        try owner.proxy().set(10, branch_value.data());
+        const branch_editor = (try owner.proxy().openValueEditor(10)).?;
+        var branch = try owner.openChild(branch_editor, "branch");
+        defer branch.deinit();
+
+        var ordinary_branch_value = [_]u8{0xA5} ** envelope_capacity;
+        for (0..160) |index| {
+            ordinary_branch_value[ordinary_branch_value.len - 1] = @intCast(index);
+            try branch.proxy().set(@intCast(index), &ordinary_branch_value);
+        }
+        const terminal_value = try branch.encodedEmbedded("terminal");
+        try branch.proxy().set(terminal_edge_key, terminal_value.data());
+        const terminal_editor = (try branch.proxy().openValueEditor(terminal_edge_key)).?;
+        var terminal = try branch.openChild(terminal_editor, "terminal");
+        defer terminal.deinit();
+        for (0..320) |index| {
+            try terminal.proxy().set(@intCast(index), "ordinary");
+        }
+        try terminal.proxy().set(7, "FZVEraw!");
+        try terminal.finish();
+        try branch.finish();
+        try transaction.commit();
+    }
+
+    const store_kinds = Schema.pageKinds("tree");
+    const opaque_owner_kinds: fullaz_db.PageKindRange = .{
+        .base = @intCast(@as(u32, store_kinds.base) + OwnerDescriptor.Trait.page_kind_count),
+        .count = @intCast(OpaqueOwnerDescriptor.Trait.page_kind_count),
+    };
+    const branch_kinds: fullaz_db.PageKindRange = .{
+        .base = @intCast(@as(u32, store_kinds.base) + Store.Trait.type_page_kind_offset),
+        .count = @intCast(Branch.Trait.page_kind_count),
+    };
+    const terminal_kinds: fullaz_db.PageKindRange = .{
+        .base = @intCast(@as(u32, branch_kinds.base) + Branch.Trait.page_kind_count),
+        .count = @intCast(Terminal.Trait.page_kind_count),
+    };
+    var branch_pages = try collectComponentPages(&database, branch_kinds);
+    defer branch_pages.deinit(std.testing.allocator);
+    var terminal_pages = try collectComponentPages(&database, terminal_kinds);
+    defer terminal_pages.deinit(std.testing.allocator);
+    var opaque_owner_pages = try collectComponentPages(&database, opaque_owner_kinds);
+    defer opaque_owner_pages.deinit(std.testing.allocator);
+    try std.testing.expect(branch_pages.items.len > 1);
+    try std.testing.expect(terminal_pages.items.len > 1);
+    try std.testing.expect(opaque_owner_pages.items.len > 0);
+
+    {
+        const owner = database.getConst("tree").owner("nodes");
+        var branch = (try owner.openEmbedded(10, "branch")).?;
+        defer branch.deinit();
+        var terminal_entry = (try branch.proxy().find(terminal_edge_key)).?;
+        const terminal_value = (try terminal_entry.get()).value;
+        var terminal = try branch.openChild(
+            terminal_entry,
+            terminal_value,
+            "terminal",
+        );
+        defer terminal.deinit();
+        var ordinary = (try terminal.proxy().find(7)).?;
+        defer ordinary.deinit();
+        try std.testing.expectEqualSlices(u8, "FZVEraw!", (try ordinary.get()).value);
+    }
+
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    for (branch_pages.items) |page_id| {
+        var retained = try database.cache().fetch(page_id);
+        retained.deinit();
+    }
+    for (terminal_pages.items) |page_id| {
+        var retained = try database.cache().fetch(page_id);
+        retained.deinit();
+    }
+    for (opaque_owner_pages.items) |page_id| {
+        var retained = try database.cache().fetch(page_id);
+        retained.deinit();
+    }
+    {
+        var opaque_entry = (try database.getConst("tree").owner("opaque").find(77)).?;
+        defer opaque_entry.deinit();
+        try std.testing.expectEqualSlices(u8, "FZVEown!", (try opaque_entry.get()).value);
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const owner = try transaction.get("tree").owner("nodes");
+        const branch_editor = (try owner.proxy().openValueEditor(10)).?;
+        var branch = try owner.openChild(branch_editor, "branch");
+        defer branch.deinit();
+        try branch.proxy().free(terminal_edge_key);
+        try branch.finish();
+        try transaction.commit();
+    }
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    for (branch_pages.items) |page_id| {
+        var retained = try database.cache().fetch(page_id);
+        retained.deinit();
+    }
+    for (terminal_pages.items) |page_id| {
+        try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(page_id));
+    }
+
+    {
+        var transaction = try database.begin();
+        defer transaction.deinit();
+        const owner = try transaction.get("tree").owner("nodes");
+        try owner.proxy().free(10);
+        try transaction.commit();
+    }
+    try database.startGarbageCollection();
+    while (try database.stepGarbageCollection(1) != .complete) {}
+    for (branch_pages.items) |page_id| {
+        try std.testing.expectError(error.PageNotAllocated, database.cache().fetch(page_id));
+    }
+    for (opaque_owner_pages.items) |page_id| {
+        var retained = try database.cache().fetch(page_id);
+        retained.deinit();
+    }
+    var opaque_entry = (try database.getConst("tree").owner("opaque").find(77)).?;
+    defer opaque_entry.deinit();
+    try std.testing.expectEqualSlices(u8, "FZVEown!", (try opaque_entry.get()).value);
+}

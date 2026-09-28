@@ -859,6 +859,10 @@ pub fn Model(comptime PageCacheT: type, comptime StorageManagerT: type, comptime
             return &self.accessor_state.ctx.settings;
         }
 
+        pub fn requireIdle(self: *const Self) StructuralMutationError!void {
+            return self.accessor_state.coordinator.requireIdle();
+        }
+
         pub fn accessor(self: *Self) *AccessorType {
             return &self.accessor_state;
         }
