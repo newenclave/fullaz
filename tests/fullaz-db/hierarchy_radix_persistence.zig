@@ -59,9 +59,9 @@ const leaf_filler_keys = [_]u16{
     0x9009,
     0xb00b,
 };
-const branch_filler_value = [_]u8{0xc3} ** envelope_capacity;
-const branch_probe_low_value = [_]u8{0x4a} ** envelope_capacity;
-const branch_probe_high_value = [_]u8{0xe6} ** envelope_capacity;
+const branch_filler_value = @as([envelope_capacity]u8, @splat(0xc3));
+const branch_probe_low_value = @as([envelope_capacity]u8, @splat(0x4a));
+const branch_probe_high_value = @as([envelope_capacity]u8, @splat(0xe6));
 
 const RootSnapshot = struct {
     branch_root: u32,
@@ -81,7 +81,7 @@ fn prep(io: std.Io, path: []const u8) void {
 
 fn initOptions(comptime DatabaseT: type, image_byte: u8) DatabaseT.InitOptions {
     return .{
-        .image_id = [_]u8{image_byte} ** 16,
+        .image_id = @as([16]u8, @splat(image_byte)),
         .components = .{ .store = .{ .owner_0 = .{} } },
     };
 }

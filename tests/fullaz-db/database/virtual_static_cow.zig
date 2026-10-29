@@ -16,7 +16,7 @@ test "fullaz-db: radix virtual CoW commits rolls back reclaims and reopens" {
     const io = std.testing.io;
     const image_path = ".zig-cache/virtual_static_cow_radix.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{104} ** 16,
+        .image_id = @as([16]u8, @splat(104)),
         .components = .{ .index = .{} },
     };
     prep(io, image_path);
@@ -182,8 +182,8 @@ test "fullaz-db: virtual COW superblock persists and validates retired queue cou
     const Database = fullaz_db.VirtualStaticDatabaseWithCow(Schema, Device);
     const Superblock = Database.SuperblockType;
     const identity: Superblock.Identity = .{
-        .image_id = [_]u8{47} ** 16,
-        .schema_digest = [_]u8{53} ** 32,
+        .image_id = @as([16]u8, @splat(47)),
+        .schema_digest = @as([32]u8, @splat(53)),
     };
     const metadata = std.mem.zeroes(Database.MetadataType);
     var page: [512]u8 = undefined;
@@ -265,7 +265,7 @@ test "fullaz-db: virtual static CoW database keeps logical roots across reopen" 
     const io = std.testing.io;
     const image_path = ".zig-cache/virtual_static_cow_chain_store.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{23} ** 16,
+        .image_id = @as([16]u8, @splat(23)),
         .components = .{ .blob = .{} },
     };
     prep(io, image_path);
@@ -313,7 +313,7 @@ test "fullaz-db: virtual static CoW database falls back from a corrupt newest sl
     const io = std.testing.io;
     const image_path = ".zig-cache/virtual_static_cow_fallback.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{29} ** 16,
+        .image_id = @as([16]u8, @splat(29)),
         .components = .{ .blob = .{} },
     };
     prep(io, image_path);
@@ -334,7 +334,7 @@ test "fullaz-db: virtual static CoW database falls back from a corrupt newest sl
     {
         var device = try Device.open(io, image_path, 512);
         defer device.deinit();
-        var corrupt: [512]u8 = [_]u8{0} ** 512;
+        var corrupt: [512]u8 = @as([512]u8, @splat(0));
         try device.writeBlock(1, &corrupt);
         try device.sync();
     }
@@ -360,7 +360,7 @@ test "fullaz-db: virtual static CoW database rejects another image identity" {
     const io = std.testing.io;
     const image_path = ".zig-cache/virtual_static_cow_identity.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{37} ** 16,
+        .image_id = @as([16]u8, @splat(37)),
         .components = .{ .blob = .{} },
     };
     prep(io, image_path);
@@ -393,7 +393,7 @@ test "fullaz-db: virtual static CoW database recovers the old generation when a 
     );
     const Database = fullaz_db.VirtualStaticDatabaseWithCow(Schema, CrashDevice);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{31} ** 16,
+        .image_id = @as([16]u8, @splat(31)),
         .components = .{ .blob = .{} },
     };
 
@@ -436,7 +436,7 @@ test "fullaz-db: virtual static CoW database reuses pages after their generation
     const io = std.testing.io;
     const image_path = ".zig-cache/virtual_static_cow_reuse.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{41} ** 16,
+        .image_id = @as([16]u8, @splat(41)),
         .components = .{ .blob = .{} },
     };
     prep(io, image_path);
@@ -488,7 +488,7 @@ test "fullaz-db: a crashed reused page remains invisible to the previous generat
     );
     const Database = fullaz_db.VirtualStaticDatabaseWithCow(Schema, CrashDevice);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{43} ** 16,
+        .image_id = @as([16]u8, @splat(43)),
         .components = .{ .blob = .{} },
     };
     var state = CrashState.init(std.testing.allocator, 512);

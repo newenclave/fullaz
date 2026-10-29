@@ -12,7 +12,7 @@ pub fn State(
     const ClassState = page_chain.State(PageIdT, void, Endian);
     const Classes = [SizePolicyT.maximum_class_count]ClassState;
     const StateT = extern struct {
-        classes: Classes = .{@as(ClassState, .{})} ** SizePolicyT.maximum_class_count,
+        classes: Classes = @splat(@as(ClassState, .{})),
     };
     comptime {
         if (@alignOf(StateT) != 1 or
@@ -34,6 +34,6 @@ pub fn emptyState(
 ) State(PageIdT, SizePolicyT, Endian) {
     const ClassState = page_chain.State(PageIdT, void, Endian);
     return .{
-        .classes = .{@as(ClassState, .{})} ** SizePolicyT.maximum_class_count,
+        .classes = @splat(@as(ClassState, .{})),
     };
 }

@@ -97,7 +97,7 @@ fn box(x0: i64, y0: i64, x1: i64, y1: i64) Key {
 }
 
 const Collector = struct {
-    seen: [128]bool = [_]bool{false} ** 128,
+    seen: [128]bool = @as([128]bool, @splat(false)),
     count: usize = 0,
     fn cb(self: *Collector, _: Key, value: []const u8) anyerror!void {
         const i = std.mem.readInt(u32, value[0..4], .little);
@@ -386,7 +386,7 @@ test "RTree paged: delete keeps the exact remaining set" {
     }
 
     // Remove every third entry.
-    var removed = [_]bool{false} ** N;
+    var removed = @as([N]bool, @splat(false));
     i = 0;
     while (i < N) : (i += 3) {
         const m = MatchIdx{ .want = @intCast(i) };
@@ -534,7 +534,7 @@ fn fbox(x0: f32, y0: f32, x1: f32, y1: f32) FKey {
 }
 
 const FCollector = struct {
-    seen: [128]bool = [_]bool{false} ** 128,
+    seen: [128]bool = @as([128]bool, @splat(false)),
     count: usize = 0,
     fn cb(self: *FCollector, _: FKey, value: []const u8) anyerror!void {
         self.seen[std.mem.readInt(u32, value[0..4], .little)] = true;

@@ -8,26 +8,26 @@ const FsT = fsx.fs.Fs(PageCache, fsx.path.Default);
 const Inspector = fsx.inspect.Inspector(PageCache);
 
 const Counts = struct {
-    roles: [@typeInfo(fsx.inspect.PageRole).@"enum".fields.len]usize = [_]usize{0} ** @typeInfo(fsx.inspect.PageRole).@"enum".fields.len,
+    roles: [@typeInfo(fsx.inspect.PageRole).@"enum".field_names.len]usize = @splat(0),
 
     fn collect(self: *Counts, info: fsx.inspect.PageInfo) anyerror!void {
-        self.roles[@intFromEnum(info.role)] += 1;
+        self.roles[@backingInt(info.role)] += 1;
     }
 
     fn get(self: *const Counts, role: fsx.inspect.PageRole) usize {
-        return self.roles[@intFromEnum(role)];
+        return self.roles[@backingInt(role)];
     }
 };
 
 const OwnershipCounts = struct {
-    roles: [@typeInfo(fsx.inspect.OwnershipRole).@"enum".fields.len]usize = [_]usize{0} ** @typeInfo(fsx.inspect.OwnershipRole).@"enum".fields.len,
+    roles: [@typeInfo(fsx.inspect.OwnershipRole).@"enum".field_names.len]usize = @splat(0),
 
     fn collect(self: *OwnershipCounts, page: fsx.inspect.OwnedPage) anyerror!void {
-        self.roles[@intFromEnum(page.role)] += 1;
+        self.roles[@backingInt(page.role)] += 1;
     }
 
     fn get(self: *const OwnershipCounts, role: fsx.inspect.OwnershipRole) usize {
-        return self.roles[@intFromEnum(role)];
+        return self.roles[@backingInt(role)];
     }
 };
 
@@ -40,7 +40,7 @@ test "Fs inspector classifies live and freed pages" {
     var f = try FsT.format(&cache, 4096);
     try f.touch("/f");
 
-    const data = [_]u8{0x44} ** 10_000;
+    const data = @as([10_000]u8, @splat(0x44));
     _ = try f.write("/f", &data);
 
     var inspector = Inspector.init(&cache);
@@ -66,7 +66,7 @@ test "Fs inspector traces selected file and directory ownership" {
     var f = try FsT.format(&cache, 4096);
     try f.touch("/f");
 
-    const data = [_]u8{0x45} ** 10_000;
+    const data = @as([10_000]u8, @splat(0x45));
     _ = try f.write("/f", &data);
 
     var file_pages = OwnershipCounts{};
@@ -118,7 +118,7 @@ test "Fs inspector recognizes v1 file-index page kinds" {
     }
     f = try FsT.open(&cache, 4096);
     try f.touch("/f");
-    const data = [_]u8{0x46} ** 10_000;
+    const data = @as([10_000]u8, @splat(0x46));
     _ = try f.write("/f", &data);
 
     var inspector = Inspector.init(&cache);

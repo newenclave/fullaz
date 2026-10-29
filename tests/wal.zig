@@ -64,12 +64,12 @@ const Collector = struct {
 };
 
 fn page(byte: u8) [PAGE]u8 {
-    return .{byte} ** PAGE;
+    return @splat(byte);
 }
 
 const identity = Wal.Identity{
-    .image_id = [_]u8{1} ** 16,
-    .schema_digest = [_]u8{2} ** 32,
+    .image_id = @as([16]u8, @splat(1)),
+    .schema_digest = @as([32]u8, @splat(2)),
 };
 
 test "WAL: identity-bound logs reject another image" {
@@ -282,7 +282,7 @@ test "WAL cache: recovery redoes a committed txn from the log" {
     {
         var w = try WalT.init(a, &log, dev.blockSize());
         defer w.deinit();
-        try w.appendPage(0, &([_]u8{0xCD} ** BLOCK));
+        try w.appendPage(0, &(@as([BLOCK]u8, @splat(0xCD))));
         try w.sealCommit(1);
     }
     try testing.expect(log.size() > 0);
@@ -311,7 +311,7 @@ test "WAL cache: recovery ignores an uncommitted txn" {
     {
         var w = try WalT.init(a, &log, dev.blockSize());
         defer w.deinit();
-        try w.appendPage(0, &([_]u8{0xEE} ** BLOCK));
+        try w.appendPage(0, &(@as([BLOCK]u8, @splat(0xEE))));
     }
 
     const w2 = try WalT.init(a, &log, dev.blockSize());
@@ -333,7 +333,7 @@ test "WAL cache: staged recovery waits for semantic validation before checkpoint
     {
         var w = try WalT.init(a, &log, dev.blockSize());
         defer w.deinit();
-        try w.appendPage(0, &([_]u8{0xAC} ** BLOCK));
+        try w.appendPage(0, &(@as([BLOCK]u8, @splat(0xAC))));
         try w.sealCommit(1);
     }
 

@@ -9,7 +9,7 @@ const TestSlotsConst = Fixed(u16, u16, .little, true);
 const errors = @import("fullaz").core.errors;
 
 test "Slots Fixed: init and format" {
-    var buffer = [_]u8{0} ** 128;
+    var buffer = @as([128]u8, @splat(0));
     var slot = try TestSlots.init(buffer[0..]);
     try slot.format(16);
     const hdr = slot.header();
@@ -26,7 +26,7 @@ test "Slots Fixed: init and format" {
 }
 
 test "Slots Fixed: set and get slots" {
-    var buffer = [_]u8{0} ** 128;
+    var buffer = @as([128]u8, @splat(0));
     var slot = try TestSlots.init(buffer[0..]);
     try slot.format(16);
 
@@ -48,7 +48,7 @@ test "Slots Fixed: set and get slots" {
 }
 
 test "Slots Fixed: out of bounds" {
-    var buffer = [_]u8{0} ** 128;
+    var buffer = @as([128]u8, @splat(0));
     var slot = try TestSlots.init(buffer[0..]);
     try slot.format(16);
 
@@ -59,7 +59,7 @@ test "Slots Fixed: out of bounds" {
 }
 
 test "Slots Fixed: get free and used" {
-    var buffer = [_]u8{0} ** 128;
+    var buffer = @as([128]u8, @splat(0));
     var slot = try TestSlots.init(buffer[0..]);
     try slot.format(16);
 
@@ -71,7 +71,7 @@ test "Slots Fixed: get free and used" {
 }
 
 test "Slots Fixed: swapUsed swaps complete occupied records" {
-    var buffer = [_]u8{0} ** 128;
+    var buffer = @as([128]u8, @splat(0));
     var slots = try TestSlots.init(&buffer);
     try slots.format(4);
 
@@ -89,7 +89,7 @@ test "Slots Fixed: swapUsed swaps complete occupied records" {
 }
 
 test "Slots Fixed: swapUsed validates occupied indexes" {
-    var buffer = [_]u8{0} ** 128;
+    var buffer = @as([128]u8, @splat(0));
     var slots = try TestSlots.init(&buffer);
     try slots.format(4);
     try slots.set(0, &.{ 1, 2, 3, 4 });
@@ -102,7 +102,7 @@ test "Slots Fixed: swapUsed validates occupied indexes" {
 
 test "Slots Fixed: swapUsed preserves records with big-endian metadata" {
     const BigEndianSlots = Fixed(u16, u16, .big, false);
-    var buffer = [_]u8{0} ** 128;
+    var buffer = @as([128]u8, @splat(0));
     var slots = try BigEndianSlots.init(&buffer);
     try slots.format(3);
     try slots.set(0, &.{ 0xaa, 0xbb, 0xcc });
@@ -115,7 +115,7 @@ test "Slots Fixed: swapUsed preserves records with big-endian metadata" {
 }
 
 test "Slots Fixed: size does not imply a dense occupied prefix" {
-    var buffer = [_]u8{0} ** 128;
+    var buffer = @as([128]u8, @splat(0));
     var slots = try TestSlots.init(&buffer);
     try slots.format(4);
     try slots.set(0, &.{ 1, 1, 1, 1 });

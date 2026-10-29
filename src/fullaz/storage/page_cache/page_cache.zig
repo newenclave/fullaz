@@ -407,7 +407,7 @@ pub fn PageCacheImpl(
             }
             for (self.policy.framesSlice()) |*frame| {
                 if (frame.ref_count != 0) {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         std.debug.panic("Deinit called on PageCache with pinned pages. pid: {} fid: {} ref_count: {}\n", .{
                             frame.pid,
                             frame.frame_id,

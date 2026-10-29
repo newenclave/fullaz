@@ -236,7 +236,7 @@ pub fn Galaxy(comptime PageCacheType: type, comptime kind: StrategyKind) type {
 
         pub fn walkNodes(self: *Self, ctx: anytype, cb: anytype) !void {
             const acc = self.model.accessor();
-            const root = acc.getRoot() orelse return;
+            const root = (acc.getRoot() catch return) orelse return;
             try walkNode(acc, root, ctx, cb);
         }
 

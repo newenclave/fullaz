@@ -12,7 +12,7 @@ fn DatabaseInitOptions(comptime ComponentOptionsT: type) type {
     } else null;
     const field_names = [_][]const u8{ "page_size", "cache_frames", "components" };
     const field_types = [_]type{ usize, usize, ComponentOptionsT };
-    const field_attrs = [_]std.builtin.Type.StructField.Attributes{
+    const field_attrs = [_]std.builtin.Type.Struct.FieldAttributes{
         .{},
         .{ .default_value_ptr = &default_cache_frames },
         .{ .default_value_ptr = components_default_ptr },

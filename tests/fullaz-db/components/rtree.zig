@@ -28,7 +28,7 @@ const Collector = struct {
 };
 
 const ValuesCollector = struct {
-    seen: [16]bool = [_]bool{false} ** 16,
+    seen: [16]bool = @as([16]bool, @splat(false)),
 
     fn callback(self: *ValuesCollector, _: anytype, value: []const u8) void {
         const index = std.mem.readInt(u32, value[0..4], .little);

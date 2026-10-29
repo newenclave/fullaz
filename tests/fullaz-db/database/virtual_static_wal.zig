@@ -18,7 +18,7 @@ test "fullaz-db: radix virtual WAL persists logical pages across reopen" {
     const image_path = ".zig-cache/virtual_static_radix_wal.img";
     const log_path = ".zig-cache/virtual_static_radix_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{103} ** 16,
+        .image_id = @as([16]u8, @splat(103)),
         .components = .{ .index = .{} },
     };
     prep(io, image_path);
@@ -76,7 +76,7 @@ test "fullaz-db: virtual static WAL database keeps logical roots across reopen" 
     const image_path = ".zig-cache/virtual_static_chain_store.img";
     const log_path = ".zig-cache/virtual_static_chain_store.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{21} ** 16,
+        .image_id = @as([16]u8, @splat(21)),
         .components = .{ .blob = .{} },
     };
     prep(io, image_path);

@@ -41,9 +41,9 @@ pub fn radix(comptime options: anytype) component.Descriptor {
     if (options_info != .@"struct" or options_info.@"struct".is_tuple) {
         @compileError("fullaz-db.radix options must be a named struct");
     }
-    inline for (options_info.@"struct".fields) |field| {
-        if (comptime !isKnownOption(field.name)) {
-            @compileError("Unknown fullaz-db.radix option: " ++ field.name);
+    inline for (options_info.@"struct".field_names) |field_name| {
+        if (comptime !isKnownOption(field_name)) {
+            @compileError("Unknown fullaz-db.radix option: " ++ field_name);
         }
     }
     requireOption(OptionsT, "Key");

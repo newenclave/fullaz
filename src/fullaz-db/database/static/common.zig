@@ -99,8 +99,8 @@ fn databaseOptions(comptime ComponentOptionsT: type) type {
     } else null;
     const names = [_][]const u8{ "image_id", "cache_frames", "components" };
     const types = [_]type{ [16]u8, usize, ComponentOptionsT };
-    const attributes = [_]std.builtin.Type.StructField.Attributes{
-        .{ .default_value_ptr = &([_]u8{0} ** 16) },
+    const attributes = [_]std.builtin.Type.Struct.FieldAttributes{
+        .{ .default_value_ptr = &(@as([16]u8, @splat(0))) },
         .{ .default_value_ptr = &default_cache_frames },
         .{ .default_value_ptr = components_default_ptr },
     };

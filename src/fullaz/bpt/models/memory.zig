@@ -8,7 +8,7 @@ const StaticVector = core.static_vector.StaticVector;
 const algos = core.algorithm;
 const StructuralMutationCoordinator = core.structural_mutation.StructuralMutationCoordinator;
 
-const IS_DEBUG = builtin.mode == .Debug;
+const IS_DEBUG = builtin.mode == .debug;
 
 const MemoryPidType = usize;
 const EmptyError = error{};
@@ -266,7 +266,7 @@ fn MemLeafType(comptime KeyT: type, comptime maximum_elements: usize, comptime c
 
         pub fn insertValue(self: *Self, pos: usize, key: KeyT, value: ValueInType) ErrorSet!void {
             if (self.leaf) |leaf| {
-                try leaf.values.insert(pos, [_]u8{0} ** 16);
+                try leaf.values.insert(pos, @as([16]u8, @splat(0)));
                 const len = @min(16, value.len);
                 @memcpy(leaf.values.ptrAt(pos).?[0..len], value[0..len]);
                 try leaf.keys.insert(pos, key);

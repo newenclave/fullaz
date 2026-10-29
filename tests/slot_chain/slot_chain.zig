@@ -917,7 +917,7 @@ test "SlotChain: appendRef survives later appends and payload compaction" {
 
     var first_page = try handle.loadPage(first.page_id);
     defer first_page.deinit();
-    var scratch = [_]u8{undefined} ** 4096;
+    var scratch = @as([4096]u8, @splat(undefined));
     try first_page.compact(&scratch);
 
     var record = try handle.loadRef(first);

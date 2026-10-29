@@ -55,7 +55,7 @@ fn finiteCallbackError(comptime CallbackT: type) type {
                 @compileError("fullaz-db.rtree callback must return void or a finite error union with void payload");
             }
             const ErrorSet = error_union.error_set;
-            if (@typeInfo(ErrorSet).error_set == null) {
+            if (@typeInfo(ErrorSet).error_set.error_names == null) {
                 @compileError("fullaz-db.rtree callback error set cannot be anyerror");
             }
             break :blk ErrorSet;
@@ -92,9 +92,9 @@ pub fn rtree(comptime options: anytype) component.Descriptor {
         @compileError("fullaz-db.rtree options must be a named struct");
     }
 
-    inline for (options_info.@"struct".fields) |field| {
-        if (comptime !isKnownOption(field.name)) {
-            @compileError("Unknown fullaz-db.rtree option: " ++ field.name);
+    inline for (options_info.@"struct".field_names) |field_name| {
+        if (comptime !isKnownOption(field_name)) {
+            @compileError("Unknown fullaz-db.rtree option: " ++ field_name);
         }
     }
 

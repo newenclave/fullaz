@@ -7,7 +7,7 @@ const state = metadata_page.State{
 };
 
 test "fullaz-db component metadata page: round-trips its identity and payload" {
-    var page = [_]u8{0} ** 512;
+    var page = @as([512]u8, @splat(0));
     try metadata_page.format(&page, state, "metadata");
 
     const view = try metadata_page.read(&page, state);
@@ -17,7 +17,7 @@ test "fullaz-db component metadata page: round-trips its identity and payload" {
 }
 
 test "fullaz-db component metadata page: rejects a bad identity, CRC, and short page" {
-    var page = [_]u8{0} ** 512;
+    var page = @as([512]u8, @splat(0));
     try metadata_page.format(&page, state, "metadata");
 
     try std.testing.expectError(
@@ -31,7 +31,7 @@ test "fullaz-db component metadata page: rejects a bad identity, CRC, and short 
     page[metadata_page.envelope_byte_size] ^= 1;
     try std.testing.expectError(error.BadComponentMetadataPage, metadata_page.read(&page, state));
 
-    var short_page = [_]u8{0} ** (metadata_page.envelope_byte_size - 1);
+    var short_page = @as([(metadata_page.envelope_byte_size - 1)]u8, @splat(0));
     try std.testing.expectError(
         error.BadComponentMetadataPage,
         metadata_page.format(&short_page, state, ""),

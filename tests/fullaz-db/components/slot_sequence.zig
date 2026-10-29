@@ -51,8 +51,8 @@ test "fullaz-db: slot sequences preserve their public order" {
 
     const ConstProxy = @TypeOf(database.getConst("list").*);
     try std.testing.expect(!@hasField(ConstProxy, "sequence"));
-    try std.testing.expect(@typeInfo(@FieldType(ConstProxy, "active_iterators_ptr")).pointer.is_const);
-    try std.testing.expect(@typeInfo(@FieldType(ConstProxy, "active_peeks_ptr")).pointer.is_const);
+    try std.testing.expect(@typeInfo(@FieldType(ConstProxy, "active_iterators_ptr")).pointer.attrs.@"const");
+    try std.testing.expect(@typeInfo(@FieldType(ConstProxy, "active_peeks_ptr")).pointer.attrs.@"const");
     try std.testing.expect(!@hasField(ConstProxy.Iterator, "inner"));
     try std.testing.expect(!@hasField(ConstProxy.Iterator, "active_iterators"));
     try std.testing.expect(!@hasField(ConstProxy.Peek, "inner"));
@@ -176,7 +176,7 @@ test "fullaz-db: slot sequence borrows gate structural mutation and commit" {
 
     var transaction = try database.begin();
     const list = transaction.get("list");
-    try std.testing.expectError(error.ValueTooLarge, list.append("a" ** 33));
+    try std.testing.expectError(error.ValueTooLarge, list.append(&@as([33]u8, @splat('a'))));
     try list.append("value");
 
     var iterator = (try list.iterator()).?;
@@ -201,7 +201,7 @@ test "fullaz-db: slot sequences reopen with tombstones" {
     const io = std.testing.io;
     const path = ".zig-cache/static_slot_sequences.img";
     const options: StaticDatabase.InitOptions = .{
-        .image_id = [_]u8{0x5a} ** 16,
+        .image_id = @as([16]u8, @splat(0x5a)),
         .components = .{ .list = .{}, .queue = .{}, .stack = .{} },
     };
     std.Io.Dir.cwd().deleteFile(io, path) catch {};

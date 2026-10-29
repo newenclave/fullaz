@@ -1,7 +1,7 @@
 # Create A Zig Project
 
 This chapter creates an application that imports `fullaz` and `fullaz-db`. Use
-Zig `0.16.0` or newer. Run every command in a terminal.
+Zig `0.17.0` or newer. Run every command in a terminal.
 
 ## 1. Create The Project
 

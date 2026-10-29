@@ -47,7 +47,7 @@ pub fn main(init: std.process.Init) !void {
     const log_path = try std.fmt.bufPrint(&log_buf, "{s}.log", .{image});
 
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x44} ** 16,
+        .image_id = @as([16]u8, @splat(0x44)),
         .components = .{
             .simulation = .{},
             .orders = .{},

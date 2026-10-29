@@ -235,7 +235,7 @@ test "fullaz-db: paged BPT binding requires and copies non-void compare context"
     }).Trait;
     const Binding = Trait.Binding(Backend);
 
-    const option_fields = @typeInfo(Binding.InitOptions).@"struct".fields;
+    const option_fields = @typeInfo(Binding.InitOptions).@"struct".field_attrs;
     try std.testing.expectEqual(@as(usize, 1), option_fields.len);
     try std.testing.expect(option_fields[0].default_value_ptr == null);
 

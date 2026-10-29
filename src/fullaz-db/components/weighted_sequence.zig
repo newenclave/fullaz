@@ -17,9 +17,9 @@ pub fn weightedSequence(comptime options: anytype) component.Descriptor {
     if (info != .@"struct" or info.@"struct".is_tuple) {
         @compileError("fullaz-db.weightedSequence options must be a named struct");
     }
-    inline for (info.@"struct".fields) |field| {
-        if (!std.mem.eql(u8, field.name, "maximum_chunk_size")) {
-            @compileError("Unknown fullaz-db.weightedSequence option: " ++ field.name);
+    inline for (info.@"struct".field_names) |field_name| {
+        if (!std.mem.eql(u8, field_name, "maximum_chunk_size")) {
+            @compileError("Unknown fullaz-db.weightedSequence option: " ++ field_name);
         }
     }
     const configured_maximum_chunk_size =

@@ -14,7 +14,7 @@ fn box(x0: i64, y0: i64, x1: i64, y1: i64) Key {
 }
 
 const Collector = struct {
-    seen: [128]bool = [_]bool{false} ** 128,
+    seen: [128]bool = @as([128]bool, @splat(false)),
     count: usize = 0,
     fn cb(self: *Collector, _: Key, value: u64) anyerror!void {
         self.seen[value] = true;

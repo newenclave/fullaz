@@ -262,7 +262,7 @@ pub fn Geometry(comptime CoordT: type) type {
                 return 0;
             }
 
-            const Bits = std.meta.Int(.unsigned, @bitSizeOf(CoordT));
+            const Bits = @Int(.unsigned, @bitSizeOf(CoordT));
             const fraction_bits = std.math.floatFractionalBits(CoordT);
             const precision = fraction_bits + 1;
             const exponent_bias = std.math.floatExponentMax(CoordT);

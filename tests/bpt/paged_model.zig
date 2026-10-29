@@ -40,7 +40,7 @@ const NoneStorageManager = struct {
     pub const PageId = u32;
     pub const Error = error{};
     root_block_id: ?PageId = null,
-    buffer: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
+    buffer: [@sizeOf(PageId)]u8 = @splat(std.math.maxInt(u8)),
 
     pub const StateLeaseType = struct {
         const LeaseSelf = @This();
@@ -100,7 +100,7 @@ fn DestroyTrackingStorageManager(comptime CacheT: type) type {
 
         cache: *CacheT,
         root: ?PageId = null,
-        state_bytes: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
+        state_bytes: [@sizeOf(PageId)]u8 = @splat(std.math.maxInt(u8)),
         destroyed_pages: usize = 0,
         last_pinned_page: ?PageId = null,
         last_pinned_ref_count: usize = 0,
@@ -461,7 +461,7 @@ test "Bpt parent exact-fit retries inode sharing after leaf split" {
         defer accessor.deinitLeaf(leaf);
         try leaf.setParent(target_parent.id());
         for (0..3) |index| {
-            var key = [_]u8{'i'} ** 115;
+            var key = @as([115]u8, @splat('i'));
             key[key.len - 1] = @as(u8, '0') + @as(u8, @intCast(index));
             try leaf.insertValue(index, &key, "");
         }
@@ -473,9 +473,9 @@ test "Bpt parent exact-fit retries inode sharing after leaf split" {
         defer accessor.deinitLeaf(leaf);
         try leaf.setParent(target_parent.id());
         for (0..8) |index| {
-            var key = [_]u8{'j'} ** 56;
+            var key = @as([56]u8, @splat('j'));
             key[key.len - 1] = @as(u8, '0') + @as(u8, @intCast(index));
-            var value = [_]u8{'v'} ** 58;
+            var value = @as([58]u8, @splat('v'));
             value[value.len - 1] = @as(u8, '0') + @as(u8, @intCast(index));
             try leaf.insertValue(index, &key, &value);
         }
@@ -486,7 +486,7 @@ test "Bpt parent exact-fit retries inode sharing after leaf split" {
     for (&long_separators, 0..) |*separator, index| {
         try target_parent.insertChild(index + 1, separator, child_ids[index + 1]);
     }
-    var target_min = [_]u8{'j'} ** 56;
+    var target_min = @as([56]u8, @splat('j'));
     target_min[target_min.len - 1] = '0';
     try target_parent.insertChild(8, &target_min, child_ids[8]);
     try target_parent.updateChild(9, child_ids[9]);
@@ -495,13 +495,13 @@ test "Bpt parent exact-fit retries inode sharing after leaf split" {
     try root.updateChild(1, target_parent.id());
     try accessor.setRoot(root.id());
 
-    var middle_key = [_]u8{'j'} ** 56;
+    var middle_key = @as([56]u8, @splat('j'));
     middle_key[middle_key.len - 1] = '4';
     try std.testing.expect(!try target_parent.canInsertChild(9, &middle_key, child_ids[9]));
 
-    var pending_key = [_]u8{'j'} ** 56;
+    var pending_key = @as([56]u8, @splat('j'));
     pending_key[pending_key.len - 1] = '8';
-    var pending_value = [_]u8{'v'} ** 58;
+    var pending_value = @as([58]u8, @splat('v'));
     pending_value[pending_value.len - 1] = '8';
 
     var tree = Tree.init(&model, .neighbor_share);
@@ -2716,7 +2716,7 @@ test "Bpt paged: FileBlock prefix persists across reopen" {
     const block_size = 4096;
     const start_position = 13;
     const options: Device.Options = .{ .start_position = start_position };
-    var prefix: [start_position]u8 = .{0xD3} ** start_position;
+    var prefix: [start_position]u8 = @splat(0xD3);
     var root: ?u32 = null;
 
     {

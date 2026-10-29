@@ -50,9 +50,9 @@ pub fn slotHeap(comptime options: anytype) component.Descriptor {
     if (info != .@"struct" or info.@"struct".is_tuple) {
         @compileError("fullaz-db.slotHeap options must be a named struct");
     }
-    inline for (info.@"struct".fields) |field| {
-        if (comptime !isKnownOption(field.name)) {
-            @compileError("Unknown fullaz-db.slotHeap option: " ++ field.name);
+    inline for (info.@"struct".field_names) |field_name| {
+        if (comptime !isKnownOption(field_name)) {
+            @compileError("Unknown fullaz-db.slotHeap option: " ++ field_name);
         }
     }
 

@@ -5,7 +5,7 @@ const GcState = fullaz.gc.models.paged.State(usize);
 const Store = struct {
     const page_size = 128;
     const Entry = struct {
-        bytes: [page_size]u8 = [_]u8{0} ** page_size,
+        bytes: [page_size]u8 = @as([page_size]u8, @splat(0)),
         free: bool = false,
         reserved: bool = false,
     };

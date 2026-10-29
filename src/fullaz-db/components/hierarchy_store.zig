@@ -152,7 +152,7 @@ pub fn hierarchyStore(comptime HierarchyT: type, comptime options: hierarchy.Sto
                     pub fn restore(runtime: *Runtime, payload: []const u8, page_count: usize) @This().Error!void {
                         try tagged.validateKnownFields(payload, known_tags);
                         var storage: AggregateStorage = undefined;
-                        var found: [options.owners.len]bool = [_]bool{false} ** options.owners.len;
+                        var found: [options.owners.len]bool = @as([options.owners.len]bool, @splat(false));
                         var next: ?u64 = null;
                         var reader = tagged.Reader.init(payload);
                         while (try reader.next()) |field| {
@@ -353,7 +353,7 @@ fn bptOwnerCount(comptime options: hierarchy.StoreOptions) usize {
 fn memberStruct(comptime bindings_: anytype, comptime member: []const u8) type {
     comptime var names: [bindings_.len][]const u8 = undefined;
     comptime var types: [bindings_.len]type = undefined;
-    comptime var attributes: [bindings_.len]std.builtin.Type.StructField.Attributes = undefined;
+    comptime var attributes: [bindings_.len]std.builtin.Type.Struct.FieldAttributes = undefined;
     inline for (bindings_, 0..) |Binding, index| {
         names[index] = ownerField(index);
         types[index] = @field(Binding, member);
@@ -365,7 +365,7 @@ fn memberStruct(comptime bindings_: anytype, comptime member: []const u8) type {
 fn staticStorage(comptime bindings_: anytype) type {
     comptime var names: [bindings_.len + 1][]const u8 = undefined;
     comptime var types: [bindings_.len + 1]type = undefined;
-    comptime var attributes: [bindings_.len + 1]std.builtin.Type.StructField.Attributes = undefined;
+    comptime var attributes: [bindings_.len + 1]std.builtin.Type.Struct.FieldAttributes = undefined;
     inline for (bindings_, 0..) |Binding, index| {
         names[index] = ownerField(index);
         types[index] = Binding.StaticMetadata.Storage;

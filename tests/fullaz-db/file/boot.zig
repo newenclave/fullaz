@@ -4,7 +4,7 @@ const tagged = @import("fullaz-db").file.tagged_fields;
 
 fn state() boot.State {
     return .{
-        .image_id = [_]u8{0x11} ** 16,
+        .image_id = @as([16]u8, @splat(0x11)),
         .page_size = 512,
         .page_id_bits = 32,
         .clean = true,
@@ -42,8 +42,8 @@ test "fullaz-db file boot: round-trips state and validates identity" {
     initial.catalog_last = 9;
     initial.catalog_elements_count = 5;
     initial.catalog_tombstone_count = 2;
-    var page = [_]u8{0} ** 512;
-    var scratch = [_]u8{undefined} ** 512;
+    var page = @as([512]u8, @splat(0));
+    var scratch = @as([512]u8, @splat(undefined));
     try boot.format(&page, &scratch, initial, &.{});
 
     const view = try boot.read(&page, expected(initial));
@@ -64,19 +64,19 @@ test "fullaz-db file boot: round-trips state and validates identity" {
 
 test "fullaz-db file boot: preserves unknown payload fields during rewrite" {
     const initial = state();
-    var old_page = [_]u8{0} ** 512;
-    var old_scratch = [_]u8{undefined} ** 512;
+    var old_page = @as([512]u8, @splat(0));
+    var old_scratch = @as([512]u8, @splat(undefined));
     try boot.format(&old_page, &old_scratch, initial, &.{});
     const old_view = try boot.read(&old_page, expected(initial));
 
-    var previous_payload = [_]u8{undefined} ** 512;
+    var previous_payload = @as([512]u8, @splat(undefined));
     @memcpy(previous_payload[0..old_view.payload.len], old_view.payload);
     var previous_writer = tagged.Writer.init(&previous_payload);
     previous_writer.len = old_view.payload.len;
     try previous_writer.append(99, 0x8000, "future");
 
-    var new_page = [_]u8{0} ** 512;
-    var new_scratch = [_]u8{undefined} ** 512;
+    var new_page = @as([512]u8, @splat(0));
+    var new_scratch = @as([512]u8, @splat(undefined));
     var updated = initial;
     updated.catalog_epoch = 1;
     try boot.format(&new_page, &new_scratch, updated, previous_writer.used());
@@ -97,8 +97,8 @@ test "fullaz-db file boot: preserves unknown payload fields during rewrite" {
 
 test "fullaz-db file boot: rejects CRC, malformed state, and page mismatch" {
     const initial = state();
-    var page = [_]u8{0} ** 512;
-    var scratch = [_]u8{undefined} ** 512;
+    var page = @as([512]u8, @splat(0));
+    var scratch = @as([512]u8, @splat(undefined));
     try boot.format(&page, &scratch, initial, &.{});
 
     page[40] ^= 1;

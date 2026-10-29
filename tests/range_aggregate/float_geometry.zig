@@ -58,7 +58,7 @@ test "RangeAggregate float boundaries round halfway products to even" {
 
 test "RangeAggregate float boundaries preserve subnormal steps and canonical zero" {
     inline for (.{ f32, f64 }) |CoordT| {
-        const Bits = std.meta.Int(.unsigned, @bitSizeOf(CoordT));
+        const Bits = @Int(.unsigned, @bitSizeOf(CoordT));
         const Geometry = range_aggregate.Geometry(CoordT);
         const settings: range_aggregate.Settings(CoordT) = .{
             .base_width = @bitCast(@as(Bits, 1)),
@@ -118,7 +118,7 @@ test "RangeAggregate float boundaries validate settings even at zero" {
 
 test "RangeAggregate float boundaries match exact products across exponent ranges" {
     inline for (.{ f32, f64 }) |CoordT| {
-        const Bits = std.meta.Int(.unsigned, @bitSizeOf(CoordT));
+        const Bits = @Int(.unsigned, @bitSizeOf(CoordT));
         const fraction_bits = std.math.floatFractionalBits(CoordT);
         const fraction_mask = (@as(Bits, 1) << fraction_bits) - 1;
         const exponent_limit = (@as(Bits, 1) << std.math.floatExponentBits(CoordT)) - 1;
@@ -241,7 +241,7 @@ test "RangeAggregate float buckets reject lost resolution and nonfinite coordina
 
 test "RangeAggregate float buckets preserve subnormal coordinates and reject index overflow" {
     inline for (.{ f32, f64 }) |CoordT| {
-        const Bits = std.meta.Int(.unsigned, @bitSizeOf(CoordT));
+        const Bits = @Int(.unsigned, @bitSizeOf(CoordT));
         const Geometry = range_aggregate.Geometry(CoordT);
         var settings: range_aggregate.Settings(CoordT) = .{
             .base_width = std.math.floatTrueMin(CoordT),

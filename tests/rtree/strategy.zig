@@ -30,7 +30,7 @@ test "Guttman splitEntries: separates two clusters" {
         box(0, 0, 1, 1), box(0, 0, 1, 1), // bottom-left cluster: idx 0,1
         box(10, 10, 11, 11), box(10, 10, 11, 11), box(10, 10, 11, 11), // top-right: idx 2,3,4
     };
-    var assign = [_]u8{9} ** 5;
+    var assign = @as([5]u8, @splat(9));
     Guttman.splitEntries(&mbrs, 2, &assign);
 
     // each cluster ends up wholly in one group, and the groups differ
@@ -44,7 +44,7 @@ test "Guttman splitEntries: identical boxes still respect min_fill" {
     const mbrs = [_]BB{
         box(0, 0, 1, 1), box(0, 0, 1, 1), box(0, 0, 1, 1), box(0, 0, 1, 1), box(0, 0, 1, 1),
     };
-    var assign = [_]u8{9} ** 5;
+    var assign = @as([5]u8, @splat(9));
     Guttman.splitEntries(&mbrs, 2, &assign);
 
     var c0: usize = 0;

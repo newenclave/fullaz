@@ -231,7 +231,7 @@ fn appendInt(writer: *tagged.Writer, tag: u16, comptime T: type, value: T) Error
 
 fn decodeState(payload: []const u8) Error!State {
     var state: State = undefined;
-    var found = [_]bool{false} ** known_tags.len;
+    var found = @as([known_tags.len]bool, @splat(false));
 
     var reader = tagged.Reader.init(payload);
     while (try reader.next()) |field| {

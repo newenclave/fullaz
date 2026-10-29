@@ -793,7 +793,7 @@ test "SSTable versioned rejects truncated loaded index leaf keys and inode separ
     const Reader = sstable.Reader(Format, Log, compareBytes, void);
     const IndexView = fullaz.bpt.models.paged.View(Format.PageId, u16, .little, false);
     const index_settings: fullaz.bpt.models.paged.Settings = .{};
-    const short_key = [_]u8{0} ** (@sizeOf(Format.Lsn) - 1);
+    const short_key = @as([(@sizeOf(Format.Lsn) - 1)]u8, @splat(0));
 
     for ([_]bool{ false, true }) |corrupt_inode| {
         const entry_count: usize = if (corrupt_inode) 128 else 1;

@@ -43,7 +43,7 @@ fn encodeRecord(bytes: []u8, scratch: []u8, revision: u32, name: []const u8) ![]
         .page_kind_base = 0x0100,
         .page_kind_count = 1,
         .metadata_root_pid = 1,
-        .settings_fingerprint = [_]u8{0} ** 32,
+        .settings_fingerprint = @as([32]u8, @splat(0)),
         .dependency_ids = &.{},
     }, &.{});
     const byte_len = try fullaz_db.file.catalog_record.encodedByteSize(bytes);

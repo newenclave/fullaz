@@ -82,7 +82,7 @@ test "RangeAggregate settings reject nonpositive and nonfinite float widths" {
             settings.base_width = width;
             try std.testing.expectError(error.InvalidBaseWidth, settings.validate());
         }
-        const Bits = std.meta.Int(.unsigned, @bitSizeOf(CoordT));
+        const Bits = @Int(.unsigned, @bitSizeOf(CoordT));
         const smallest_positive: CoordT = @bitCast(@as(Bits, 1));
         for ([_]CoordT{ 0.25, 0.1, 0.3333, smallest_positive }) |width| {
             settings.base_width = width;

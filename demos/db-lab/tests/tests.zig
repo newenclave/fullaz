@@ -55,7 +55,7 @@ test "db-lab runs the same catalog operations through the virtual WAL backend" {
         try Device.init(std.testing.allocator, 1024),
         try Log.init(std.testing.allocator),
         .{
-            .image_id = [_]u8{0xD1} ** 16,
+            .image_id = @as([16]u8, @splat(0xD1)),
             .components = .{ .catalog = .{ .owner_0 = .{} } },
         },
     );
@@ -80,7 +80,7 @@ test "db-lab marks then sweeps a disconnected table in dynamic WAL" {
         try Device.init(std.testing.allocator, 1024),
         try Log.init(std.testing.allocator),
         .{
-            .image_id = [_]u8{0xD3} ** 16,
+            .image_id = @as([16]u8, @splat(0xD3)),
             .cache_frames = 32,
             .components = .{ .catalog = .{ .owner_0 = .{} } },
         },
@@ -121,7 +121,7 @@ test "db-lab marks then sweeps a disconnected table in static WAL" {
         try Device.init(std.testing.allocator, 1024),
         try Log.init(std.testing.allocator),
         .{
-            .image_id = [_]u8{0xD4} ** 16,
+            .image_id = @as([16]u8, @splat(0xD4)),
             .cache_frames = 32,
             .components = .{ .catalog = .{ .owner_0 = .{} } },
         },
@@ -149,7 +149,7 @@ test "db-lab marks then sweeps a disconnected table in virtual static WAL" {
         try Device.init(std.testing.allocator, 1024),
         try Log.init(std.testing.allocator),
         .{
-            .image_id = [_]u8{0xD5} ** 16,
+            .image_id = @as([16]u8, @splat(0xD5)),
             .cache_frames = 32,
             .components = .{ .catalog = .{ .owner_0 = .{} } },
         },
@@ -224,7 +224,7 @@ test "db-lab can replace a populated virtual database" {
     const Log = fullaz.device.MemoryLog(u32);
     const Database = fullaz_db.VirtualStaticDatabaseWithWal(lab.Schema, Device, Log);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xD2} ** 16,
+        .image_id = @as([16]u8, @splat(0xD2)),
         .cache_frames = 32,
         .components = .{ .catalog = .{ .owner_0 = .{} } },
     };

@@ -32,7 +32,7 @@ fn expectFileIndexLeafKind(format_version: u16, expected_kind: u16) !void {
     }
 
     try f.touch("/f");
-    const data = [_]u8{0x5a} ** 10_000;
+    const data = @as([10_000]u8, @splat(0x5a));
     _ = try f.write("/f", &data);
 
     const roots = switch ((try f.resolve("/f")).?) {
@@ -213,8 +213,8 @@ test "Fs replace: overwrites a multi-page file and persists" {
         var f = try FsT.format(&cache, 4096);
         try f.touch("/note.txt");
 
-        const original = [_]u8{0x61} ** 12_000;
-        const replacement = [_]u8{0x62} ** 1_500;
+        const original = @as([12_000]u8, @splat(0x61));
+        const replacement = @as([1_500]u8, @splat(0x62));
         _ = try f.write("/note.txt", &original);
         const written = try f.replace("/note.txt", &replacement);
         try std.testing.expectEqual(replacement.len, written);
@@ -231,7 +231,7 @@ test "Fs replace: overwrites a multi-page file and persists" {
         defer cache.deinit();
         var f = try FsT.open(&cache, 4096);
 
-        const replacement = [_]u8{0x62} ** 1_500;
+        const replacement = @as([1_500]u8, @splat(0x62));
         var read_back: [replacement.len]u8 = undefined;
         const read = try f.read("/note.txt", &read_back);
         try std.testing.expectEqual(replacement.len, read);
@@ -248,7 +248,7 @@ test "Fs replace: empty save and regrowth reuse pages" {
     var f = try FsT.format(&cache, 4096);
     try f.touch("/note.txt");
 
-    const content = [_]u8{0x63} ** 12_000;
+    const content = @as([12_000]u8, @splat(0x63));
     _ = try f.write("/note.txt", &content);
     const grown_blocks = device.blocksCount();
 

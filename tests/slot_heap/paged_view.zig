@@ -311,14 +311,14 @@ test "SlotHeap paged view: inode setEntry accepts its currently borrowed key" {
 }
 
 test "SlotHeap paged view: inode format rejects oversized key before mutation" {
-    var page = [_]u8{0xaa} ** 256;
+    var page = @as([256]u8, @splat(0xaa));
     var inode = MutableView.Inode.init(&page);
 
     try std.testing.expectError(
         error.BadKeyLength,
         inode.formatPage(32, 11, 1, std.math.maxInt(u16), 9),
     );
-    try std.testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 16), page[0..16]);
+    try std.testing.expectEqualSlices(u8, &(@as([16]u8, @splat(0xaa))), page[0..16]);
 }
 
 test "SlotHeap paged view: optional page IDs reject the null sentinel" {

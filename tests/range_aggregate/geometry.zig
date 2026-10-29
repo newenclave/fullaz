@@ -765,7 +765,7 @@ test "RangeAggregate cover preflights output and validates its inputs" {
         .level_count = 2,
         .value_size = 8,
     };
-    var output = [_]range_aggregate.LevelInfo(i32){.{ .level = 9, .from = 9, .to = 9 }} ** 2;
+    var output = @as([2]range_aggregate.LevelInfo(i32), @splat(.{ .level = 9, .from = 9, .to = 9 }));
     try std.testing.expectError(
         error.OutputTooSmall,
         Geometry.cover(settings, .{ .from = 2, .to = 8 }, 1, output[0..1]),

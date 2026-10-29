@@ -96,15 +96,15 @@ test "GC: memory model reclaims one BPT graph and retains another" {
     }
     const retained_root = (try bpt_model.accessor().getRoot()).?;
 
-    var dropped_pages = [_]bool{false} ** 64;
-    var retained_pages = [_]bool{false} ** 64;
+    var dropped_pages = @as([64]bool, @splat(false));
+    var retained_pages = @as([64]bool, @splat(false));
     try collectBptGraph(BptModel, &bpt_model, dropped_root, &dropped_pages);
     try collectBptGraph(BptModel, &bpt_model, retained_root, &retained_pages);
     const page_count = @max(lastSet(&dropped_pages), lastSet(&retained_pages)) + 1;
     try std.testing.expect(dropped_pages[dropped_root]);
     try std.testing.expect(retained_pages[retained_root]);
 
-    var free = [_]bool{false} ** 64;
+    var free = @as([64]bool, @splat(false));
     var store = MemoryStore(BptModel){
         .model = &bpt_model,
         .page_count = page_count,
@@ -184,9 +184,9 @@ test "GC: memory BPT leaf value scanner retains an embedded root" {
     try std.testing.expect(try garbage.insert(30, "garbage"));
     const garbage_root = (try bpt_model.accessor().getRoot()).?;
 
-    var target_pages = [_]bool{false} ** 64;
-    var source_pages = [_]bool{false} ** 64;
-    var garbage_pages = [_]bool{false} ** 64;
+    var target_pages = @as([64]bool, @splat(false));
+    var source_pages = @as([64]bool, @splat(false));
+    var garbage_pages = @as([64]bool, @splat(false));
     try collectBptGraph(BptModel, &bpt_model, target_root, &target_pages);
     try collectBptGraph(BptModel, &bpt_model, source_root, &source_pages);
     try collectBptGraph(BptModel, &bpt_model, garbage_root, &garbage_pages);
@@ -195,7 +195,7 @@ test "GC: memory BPT leaf value scanner retains an embedded root" {
         lastSet(&garbage_pages),
     ) + 1;
 
-    var free = [_]bool{false} ** 64;
+    var free = @as([64]bool, @splat(false));
     var store = MemoryStore(BptModel){
         .model = &bpt_model,
         .page_count = page_count,
@@ -276,11 +276,11 @@ fn lastSet(bits: []const bool) usize {
 const PagedStore = struct {
     const page_size = 128;
     const Entry = struct {
-        bytes: [page_size]u8 = [_]u8{0} ** page_size,
+        bytes: [page_size]u8 = @as([page_size]u8, @splat(0)),
         free: bool = false,
     };
 
-    entries: [256]Entry = [_]Entry{.{}} ** 256,
+    entries: [256]Entry = @as([256]Entry, @splat(.{})),
     count: usize = 0,
 };
 
@@ -402,7 +402,7 @@ const PagedManager = struct {
     };
 
     store: *PagedStore,
-    state_bytes: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
+    state_bytes: [@sizeOf(PageId)]u8 = @splat(std.math.maxInt(u8)),
 
     pub fn state(self: *Self) Error!StateLease {
         return .{ .manager = self };
@@ -469,8 +469,8 @@ test "GC: paged model resumes while reclaiming one BPT graph" {
     }
     const dropped_root = dropped_manager.storedRoot().?;
     const retained_root = retained_manager.storedRoot().?;
-    var dropped_pages = [_]bool{false} ** 256;
-    var retained_pages = [_]bool{false} ** 256;
+    var dropped_pages = @as([256]bool, @splat(false));
+    var retained_pages = @as([256]bool, @splat(false));
     try collectBptGraph(BptModel, &dropped_model, dropped_root, &dropped_pages);
     try collectBptGraph(BptModel, &retained_model, retained_root, &retained_pages);
 

@@ -147,7 +147,7 @@ pub fn assertBinding(comptime BindingT: type, comptime BackendT: type) void {
     const InitOptions = BindingT.InitOptions;
     const TransactionState = BindingT.TransactionState;
     const Error = BindingT.Error;
-    if (@typeInfo(Error).error_set == null) {
+    if (@typeInfo(Error).error_set.error_names == null) {
         @compileError("fullaz-db component binding Error cannot be anyerror");
     }
     const options_info = @typeInfo(InitOptions);
@@ -223,7 +223,7 @@ pub fn assertStorageBinding(
     interfaces.requiresTypeDeclaration(StorageBindingT, "ConstProxy");
     interfaces.requiresTypeDeclaration(StorageBindingT, "InitOptions");
     interfaces.requiresErrorDeclaration(StorageBindingT, "Error");
-    if (@typeInfo(StorageBindingT.Error).error_set == null) {
+    if (@typeInfo(StorageBindingT.Error).error_set.error_names == null) {
         @compileError("fullaz-db storage binding Error cannot be anyerror");
     }
     interfaces.requiresFnSignature(
@@ -295,7 +295,7 @@ pub fn assertGc(comptime BindingT: type, comptime CollectorT: type) void {
     interfaces.requiresTypeDeclaration(CollectorT, "Scanner");
     interfaces.requiresTypeDeclaration(CollectorT, "ValueScanner");
     interfaces.requiresErrorDeclaration(CollectorT, "Error");
-    if (@typeInfo(CollectorT.Error).error_set == null) {
+    if (@typeInfo(CollectorT.Error).error_set.error_names == null) {
         @compileError("fullaz-db GC collector Error cannot be anyerror");
     }
     if (!@hasDecl(BindingT, "Gc")) {
@@ -357,7 +357,7 @@ pub fn assertStaticMetadata(comptime BindingT: type, comptime MetadataT: type) v
     if (@typeInfo(Storage) != .@"struct" or @typeInfo(Storage).@"struct".layout != .@"extern") {
         @compileError("Pages StaticMetadata.Storage must be an extern struct");
     }
-    if (@typeInfo(Error).error_set == null) {
+    if (@typeInfo(Error).error_set.error_names == null) {
         @compileError("Pages StaticMetadata.Error cannot be anyerror");
     }
     interfaces.requiresFnSignature(MetadataT, "capture", fn (*const BindingT.Runtime) Storage);

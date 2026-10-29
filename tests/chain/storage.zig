@@ -352,7 +352,7 @@ test "ChainStore Blob: clear releases pages before reclamation" {
     var manager = Manager{ .cache = &cache };
     var blob = Blob.init(&cache, &manager, .{});
     defer blob.deinit();
-    const bytes = [_]u8{'a'} ** 300;
+    const bytes = @as([300]u8, @splat('a'));
 
     try blob.create();
     _ = try blob.append(&bytes);
@@ -380,7 +380,7 @@ test "ChainStore handle: write page" {
     defer page.deinit();
 
     const test_data = "Hello, ChainStore!";
-    var buffer_to_read = [_]u8{0} ** 1000;
+    var buffer_to_read = @as([1000]u8, @splat(0));
     const writ_len_0 = try hdl.writePage(&page, 0, test_data);
     printer.print("Write data: {s} res: {d} total: {d}\n", .{ test_data, writ_len_0, try hdl.totalSize() });
     const writ_len_1 = try hdl.writePage(&page, 900, test_data);
@@ -410,7 +410,7 @@ test "ChainStore handle: write page handle" {
         const w = try hdl.write("Hello, ChainStore!");
         _ = w;
     }
-    var buffer_to_read = [_]u8{0} ** 1000;
+    var buffer_to_read = @as([1000]u8, @splat(0));
     _ = try hdl.read(&buffer_to_read);
     const r = try hdl.read(&buffer_to_read);
 

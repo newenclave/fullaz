@@ -173,13 +173,13 @@ test "DevMemBlock: non-zero start position isolates the prefix" {
     try std.testing.expect(mem_block.isValidId(block1));
     try std.testing.expectEqual(@as(usize, 2), mem_block.blocksCount());
 
-    var block0_data: [block_size]u8 = .{0xA0} ** block_size;
-    var block1_data: [block_size]u8 = .{0xB1} ** block_size;
+    var block0_data: [block_size]u8 = @splat(0xA0);
+    var block1_data: [block_size]u8 = @splat(0xB1);
     try mem_block.writeBlock(block0, &block0_data);
     try mem_block.writeBlock(block1, &block1_data);
 
     try std.testing.expectEqual(@as(usize, start_position + 2 * block_size), mem_block.storage.items.len);
-    try std.testing.expectEqualSlices(u8, &(.{0xD3} ** start_position), mem_block.storage.items[0..start_position]);
+    try std.testing.expectEqualSlices(u8, &@as([start_position]u8, @splat(0xD3)), mem_block.storage.items[0..start_position]);
     try std.testing.expectEqualSlices(u8, &block0_data, mem_block.storage.items[start_position .. start_position + block_size]);
     try std.testing.expectEqualSlices(u8, &block1_data, mem_block.storage.items[start_position + block_size ..]);
 
@@ -193,12 +193,12 @@ test "DevMemBlock: non-zero start position isolates the prefix" {
     try std.testing.expectEqual(@as(usize, 1), mem_block.blocksCount());
     try std.testing.expectEqual(@as(usize, start_position + block_size), mem_block.storage.items.len);
     try std.testing.expectError(MemoryBlock.Error.InvalidId, mem_block.readBlock(block1, &output));
-    try std.testing.expectEqualSlices(u8, &(.{0xD3} ** start_position), mem_block.storage.items[0..start_position]);
+    try std.testing.expectEqualSlices(u8, &@as([start_position]u8, @splat(0xD3)), mem_block.storage.items[0..start_position]);
 
     try mem_block.truncateBlocks(1);
     try std.testing.expectEqual(@as(usize, 0), mem_block.blocksCount());
     try std.testing.expectEqual(@as(usize, start_position), mem_block.storage.items.len);
-    try std.testing.expectEqualSlices(u8, &(.{0xD3} ** start_position), mem_block.storage.items);
+    try std.testing.expectEqualSlices(u8, &@as([start_position]u8, @splat(0xD3)), mem_block.storage.items);
 }
 
 test "DevMemBlock: zero block size is rejected" {
@@ -227,6 +227,6 @@ test "DevMemBlock: PageCache preserves a non-zero device prefix" {
     @memcpy((try page.dataMut())[0..5], "hello");
     try cache.flushAll();
 
-    try std.testing.expectEqualSlices(u8, &(.{0xD3} ** start_position), mem_block.storage.items[0..start_position]);
+    try std.testing.expectEqualSlices(u8, &@as([start_position]u8, @splat(0xD3)), mem_block.storage.items[0..start_position]);
     try std.testing.expectEqualSlices(u8, "hello", mem_block.storage.items[start_position .. start_position + 5]);
 }

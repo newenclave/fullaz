@@ -390,7 +390,7 @@ fn encodeRecord(bytes: []u8, scratch: []u8) ![]const u8 {
         .page_kind_base = 0x0100,
         .page_kind_count = 1,
         .metadata_root_pid = 1,
-        .settings_fingerprint = [_]u8{0} ** 32,
+        .settings_fingerprint = @as([32]u8, @splat(0)),
         .dependency_ids = &.{},
     }, &.{});
     return bytes[0..try fullaz_db.file.catalog_record.encodedByteSize(bytes)];
@@ -413,7 +413,7 @@ fn encodeLifecycleRecord(
         .page_kind_base = @intCast(0x0100 + component_id),
         .page_kind_count = 1,
         .metadata_root_pid = 1,
-        .settings_fingerprint = [_]u8{0} ** 32,
+        .settings_fingerprint = @as([32]u8, @splat(0)),
         .dependency_ids = dependency_ids,
     }, &.{});
     return bytes[0..try fullaz_db.file.catalog_record.encodedByteSize(bytes)];
@@ -441,7 +441,7 @@ test "fullaz-db: dynamic database formats and opens a memory block" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xA5} ** 16,
+        .image_id = @as([16]u8, @splat(0xA5)),
         .cache_frames = 32,
     };
 
@@ -472,7 +472,7 @@ test "fullaz-db: dynamic database opens a read-only memory block" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xA4} ** 16,
+        .image_id = @as([16]u8, @splat(0xA4)),
         .cache_frames = 32,
     };
 
@@ -506,7 +506,7 @@ test "fullaz-db: read-only dynamic open rejects a wrong identity without changin
     const io = std.testing.io;
     const path = ".zig-cache/dynamic_read_only_wrong_identity.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xA3} ** 16,
+        .image_id = @as([16]u8, @splat(0xA3)),
         .cache_frames = 32,
     };
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
@@ -527,7 +527,7 @@ test "fullaz-db: read-only dynamic open rejects a wrong identity without changin
         Database.openReadOnly(
             std.testing.allocator,
             try Device.openReadOnly(io, path, 1024),
-            .{ .image_id = [_]u8{0xA2} ** 16, .cache_frames = 32 },
+            .{ .image_id = @as([16]u8, @splat(0xA2)), .cache_frames = 32 },
         ),
     );
     const after = try readFileAlloc(std.testing.allocator, io, path);
@@ -539,7 +539,7 @@ test "fullaz-db: dynamic database reclaims a dropped component tombstone" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xA6} ** 16,
+        .image_id = @as([16]u8, @splat(0xA6)),
         .cache_frames = 32,
     };
     var database = try Database.format(
@@ -624,7 +624,7 @@ test "fullaz-db: dynamic database persists and reuses reclaimed pages" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xA6} ** 16,
+        .image_id = @as([16]u8, @splat(0xA6)),
         .cache_frames = 16,
     };
     var database = try Database.format(
@@ -657,7 +657,7 @@ test "fullaz-db: dynamic database rejects a cyclic persistent free list" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xA7} ** 16,
+        .image_id = @as([16]u8, @splat(0xA7)),
         .cache_frames = 16,
     };
     var database = try Database.format(
@@ -688,7 +688,7 @@ test "fullaz-db: dynamic database rollback restores the free-list root" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xA8} ** 16,
+        .image_id = @as([16]u8, @splat(0xA8)),
         .cache_frames = 16,
     };
     var database = try Database.format(
@@ -723,7 +723,7 @@ test "fullaz-db: WAL dynamic database reuses reclaimed pages after reopen" {
     const image_path = ".zig-cache/dynamic_database_reclaiming_wal.img";
     const log_path = ".zig-cache/dynamic_database_reclaiming_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xA9} ** 16,
+        .image_id = @as([16]u8, @splat(0xA9)),
         .cache_frames = 16,
     };
     std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
@@ -774,7 +774,7 @@ test "fullaz-db: WAL dynamic database persists catalog lifecycle changes" {
     const image_path = ".zig-cache/dynamic_database_lifecycle_wal.img";
     const log_path = ".zig-cache/dynamic_database_lifecycle_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xAA} ** 16,
+        .image_id = @as([16]u8, @splat(0xAA)),
         .cache_frames = 16,
     };
     std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
@@ -830,7 +830,7 @@ test "fullaz-db: WAL dynamic database compacts catalog history" {
     const image_path = ".zig-cache/dynamic_database_compaction_wal.img";
     const log_path = ".zig-cache/dynamic_database_compaction_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xAB} ** 16,
+        .image_id = @as([16]u8, @splat(0xAB)),
         .cache_frames = 64,
     };
     std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
@@ -879,7 +879,7 @@ test "fullaz-db: dynamic database commits catalog control-plane changes" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x3C} ** 16,
+        .image_id = @as([16]u8, @splat(0x3C)),
         .cache_frames = 32,
     };
     var database = try Database.format(
@@ -906,7 +906,7 @@ test "fullaz-db: dynamic database renames and drops catalog components" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x3D} ** 16,
+        .image_id = @as([16]u8, @splat(0x3D)),
         .cache_frames = 32,
     };
     var database = try Database.format(
@@ -971,7 +971,7 @@ test "fullaz-db: dynamic database blocks drop while an active component depends 
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x3E} ** 16,
+        .image_id = @as([16]u8, @splat(0x3E)),
         .cache_frames = 32,
     };
     var database = try Database.format(
@@ -1011,7 +1011,7 @@ test "fullaz-db: dynamic database compacts catalog history" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x3F} ** 16,
+        .image_id = @as([16]u8, @splat(0x3F)),
         .cache_frames = 64,
     };
     var database = try Database.format(
@@ -1062,7 +1062,7 @@ test "fullaz-db: dynamic database rolls back catalog control-plane changes" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x4D} ** 16,
+        .image_id = @as([16]u8, @splat(0x4D)),
         .cache_frames = 32,
     };
     var database = try Database.format(
@@ -1088,7 +1088,7 @@ test "fullaz-db: dynamic database persists typed component metadata pages" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x6E} ** 16,
+        .image_id = @as([16]u8, @splat(0x6E)),
         .cache_frames = 16,
     };
     var database = try Database.format(
@@ -1115,7 +1115,7 @@ test "fullaz-db: dynamic database migrates metadata into an immutable catalog su
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x6F} ** 16,
+        .image_id = @as([16]u8, @splat(0x6F)),
         .cache_frames = 16,
     };
     var database = try Database.format(
@@ -1155,7 +1155,7 @@ test "fullaz-db: dynamic database migrates metadata into an immutable catalog su
         .page_kind_base = 0x0100,
         .page_kind_count = 1,
         .metadata_root_pid = source_page_id,
-        .settings_fingerprint = [_]u8{0} ** 32,
+        .settings_fingerprint = @as([32]u8, @splat(0)),
         .dependency_ids = &.{},
     }, &.{});
     _ = try transaction.registerCatalogComponent(
@@ -1172,7 +1172,7 @@ test "fullaz-db: dynamic database migrates metadata into an immutable catalog su
         .page_kind_base = 0x0100,
         .page_kind_count = 1,
         .metadata_root_pid = successor_page_id,
-        .settings_fingerprint = [_]u8{0} ** 32,
+        .settings_fingerprint = @as([32]u8, @splat(0)),
         .dependency_ids = &.{},
     }, &.{});
     _ = try transaction.replaceCatalogRevision(
@@ -1215,7 +1215,7 @@ test "fullaz-db: dynamic database preflights the complete compiled schema" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x71} ** 16,
+        .image_id = @as([16]u8, @splat(0x71)),
         .cache_frames = 32,
     };
     var database = try Database.format(
@@ -1240,7 +1240,7 @@ test "fullaz-db: dynamic database allocates durable component identities" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x8B} ** 16,
+        .image_id = @as([16]u8, @splat(0x8B)),
         .cache_frames = 8,
     };
     var database = try Database.format(
@@ -1271,7 +1271,7 @@ test "fullaz-db: dynamic database preflight ignores historical catalog revisions
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x9A} ** 16,
+        .image_id = @as([16]u8, @splat(0x9A)),
         .cache_frames = 32,
     };
     var database = try Database.format(
@@ -1300,7 +1300,7 @@ test "fullaz-db: dynamic database preserves current unknown catalog components" 
     const Database = fullaz_db.DynamicDatabase(Device);
     const EmptySchema = fullaz_db.Schema(.{ .page_id = u32 });
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x9B} ** 16,
+        .image_id = @as([16]u8, @splat(0x9B)),
         .cache_frames = 32,
     };
     var database = try Database.format(
@@ -1324,7 +1324,7 @@ test "fullaz-db: dynamic database replaces a catalog revision atomically" {
     const Device = fullaz.device.MemoryBlock(u32);
     const Database = fullaz_db.DynamicDatabase(Device);
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x9C} ** 16,
+        .image_id = @as([16]u8, @splat(0x9C)),
         .cache_frames = 32,
     };
     var database = try Database.format(
@@ -1372,7 +1372,7 @@ test "fullaz-db: dynamic schema database restores a chainStore const proxy" {
     const io = std.testing.io;
     const path = ".zig-cache/dynamic_schema_chain_store.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xC1} ** 16,
+        .image_id = @as([16]u8, @splat(0xC1)),
         .components = .{ .blob = .{} },
     };
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
@@ -1432,7 +1432,7 @@ test "fullaz-db: radix dynamic schema database persists and reclaims its pages" 
     const Database = fullaz_db.DynamicSchemaDatabase(Schema, Device);
     const io = std.testing.io;
     const path = ".zig-cache/dynamic_schema_radix.img";
-    const image_id = [_]u8{0xC4} ** 16;
+    const image_id = @as([16]u8, @splat(0xC4));
     const options: Database.InitOptions = .{
         .image_id = image_id,
         .components = .{ .index = .{} },
@@ -1515,7 +1515,7 @@ test "fullaz-db: dynamic schema database reuses reclaimed BPT pages after reopen
     const io = std.testing.io;
     const path = ".zig-cache/dynamic_schema_reclaiming_bpt.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xC2} ** 16,
+        .image_id = @as([16]u8, @splat(0xC2)),
         .components = .{ .index = .{} },
     };
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
@@ -1611,7 +1611,7 @@ test "fullaz-db: dynamic database reclaims every built-in multi-page component" 
     const Box = RtreeBinding.Proxy.BoundingBox;
     const io = std.testing.io;
     const path = ".zig-cache/dynamic_builtin_reclaim_matrix.img";
-    const image_id = [_]u8{0xC3} ** 16;
+    const image_id = @as([16]u8, @splat(0xC3));
     const options: Database.InitOptions = .{
         .image_id = image_id,
         .cache_frames = 64,
@@ -1682,7 +1682,7 @@ test "fullaz-db: dynamic database reclaims every built-in multi-page component" 
             try std.testing.expectEqualSlices(u8, &bpt_value, entry.value);
         }
         const Collector = struct {
-            seen: [5]bool = [_]bool{false} ** 5,
+            seen: [5]bool = @as([5]bool, @splat(false)),
 
             fn callback(self: *@This(), _: Box, value: []const u8) void {
                 const value_id = std.mem.readInt(u32, value[0..4], .little);
@@ -1790,7 +1790,7 @@ test "fullaz-db: WAL dynamic database commits and reopens" {
     const io = std.testing.io;
     const image_path = ".zig-cache/dynamic_database_wal.img";
     const log_path = ".zig-cache/dynamic_database_wal.log";
-    const options: Database.InitOptions = .{ .image_id = [_]u8{0xD1} ** 16 };
+    const options: Database.InitOptions = .{ .image_id = @as([16]u8, @splat(0xD1)) };
     std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
     std.Io.Dir.cwd().deleteFile(io, log_path) catch {};
     defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
@@ -1865,7 +1865,7 @@ test "fullaz-db: WAL dynamic schema database commits and reopens" {
     const image_path = ".zig-cache/dynamic_schema_database_wal.img";
     const log_path = ".zig-cache/dynamic_schema_database_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xD2} ** 16,
+        .image_id = @as([16]u8, @splat(0xD2)),
         .components = .{ .blob = .{} },
     };
     std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
@@ -1921,7 +1921,7 @@ test "fullaz-db: radix WAL dynamic schema lifecycle preserves committed values" 
     const image_path = ".zig-cache/dynamic_schema_radix_wal.img";
     const log_path = ".zig-cache/dynamic_schema_radix_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xC5} ** 16,
+        .image_id = @as([16]u8, @splat(0xC5)),
         .cache_frames = 32,
         .components = .{ .index = .{} },
     };
@@ -1998,7 +1998,7 @@ test "fullaz-db: read-only dynamic WAL overlays committed pages without changing
     const log_path = ".zig-cache/dynamic_schema_read_only_overlay.log";
     const page_size = 1024;
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0xD3} ** 16,
+        .image_id = @as([16]u8, @splat(0xD3)),
         .components = .{ .blob = .{} },
     };
     std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
@@ -2055,7 +2055,7 @@ test "fullaz-db: read-only dynamic WAL overlays committed pages without changing
         while (device.blocksCount() <= updated_page_count) {
             _ = try device.appendBlock();
         }
-        var garbage = [_]u8{0xEE} ** page_size;
+        var garbage = @as([page_size]u8, @splat(0xEE));
         try device.writeBlock(@intCast(updated_page_count), &garbage);
         try device.sync();
     }
@@ -2118,7 +2118,7 @@ test "fullaz-db: dynamic schema GC completes and releases its lease" {
 
     const device = try Device.init(std.testing.allocator, 1024);
     var database = try Database.format(std.testing.allocator, device, .{
-        .image_id = [_]u8{0x47} ** 16,
+        .image_id = @as([16]u8, @splat(0x47)),
         .cache_frames = 32,
     });
     defer database.deinit();
@@ -2138,7 +2138,7 @@ test "fullaz-db: read-only dynamic schema database reports an active GC phase" {
     const io = std.testing.io;
     const path = ".zig-cache/dynamic_schema_read_only_gc.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x48} ** 16,
+        .image_id = @as([16]u8, @splat(0x48)),
         .cache_frames = 32,
         .components = .{},
     };
@@ -2221,7 +2221,7 @@ test "fullaz-db: dynamic schema embedded BPT hierarchy edits and collects child 
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0xE1} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
+        .{ .image_id = @as([16]u8, @splat(0xE1)), .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -2360,7 +2360,7 @@ test "fullaz-db: dynamic schema recursive embedded BPT hierarchy retains nested 
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0xE9} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
+        .{ .image_id = @as([16]u8, @splat(0xE9)), .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -2519,7 +2519,7 @@ test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and c
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0xE4} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
+        .{ .image_id = @as([16]u8, @splat(0xE4)), .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -2556,7 +2556,7 @@ test "fullaz-db: dynamic schema embedded weighted sequence hierarchy edits and c
         try std.testing.expectEqualStrings("aQf", &read);
         try editor.proxy().clear();
         try std.testing.expectEqual(@as(u64, 0), try editor.proxy().size());
-        var bytes = [_]u8{0xA5} ** 2048;
+        var bytes = @as([2048]u8, @splat(0xA5));
         try editor.proxy().append(&bytes);
         try editor.finish();
         try transaction.commit();
@@ -2655,7 +2655,7 @@ test "fullaz-db: dynamic schema embedded ChainStore hierarchy traces and collect
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0xE2} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
+        .{ .image_id = @as([16]u8, @splat(0xE2)), .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -2683,7 +2683,7 @@ test "fullaz-db: dynamic schema embedded ChainStore hierarchy traces and collect
         var editor = try owner.openChild(blob_editor, "blob");
         defer editor.deinit();
         try editor.proxy().append("hello");
-        var extra = [_]u8{0xA5} ** 2048;
+        var extra = @as([2048]u8, @splat(0xA5));
         try editor.proxy().append(&extra);
         try std.testing.expectEqual(@as(u64, 2053), try editor.proxy().size());
         var read: [5]u8 = undefined;
@@ -2765,7 +2765,7 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 4096),
-        .{ .image_id = [_]u8{0xE8} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
+        .{ .image_id = @as([16]u8, @splat(0xE8)), .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -2795,7 +2795,7 @@ test "fullaz-db: dynamic schema embedded SlotHeap hierarchy retains and collects
         var editor = try owner.openChild(queue_editor, "queue");
         defer editor.deinit();
         const queue = editor.proxy();
-        var value = [_]u8{0xA5} ** 128;
+        var value = @as([128]u8, @splat(0xA5));
         for (0..96) |index| {
             var key: [4]u8 = undefined;
             _ = try std.fmt.bufPrint(&key, "{d:0>4}", .{96 - index});
@@ -2902,7 +2902,7 @@ test "fullaz-db: dynamic schema embedded R-tree hierarchy edits and collects chi
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0xE3} ** 16, .components = .{ .tree = .{ .owner_0 = .{} } } },
+        .{ .image_id = @as([16]u8, @splat(0xE3)), .components = .{ .tree = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -3044,7 +3044,7 @@ test "fullaz-db hierarchyStore: dynamic GC traces Radix descendants and skips te
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
         .{
-            .image_id = [_]u8{0xEA} ** 16,
+            .image_id = @as([16]u8, @splat(0xEA)),
             .cache_frames = 64,
             .components = .{ .tree = .{ .owner_0 = .{}, .owner_1 = .{} } },
         },
@@ -3065,7 +3065,7 @@ test "fullaz-db hierarchyStore: dynamic GC traces Radix descendants and skips te
         var branch = try owner.openChild(branch_editor, "branch");
         defer branch.deinit();
 
-        var ordinary_branch_value = [_]u8{0xA5} ** envelope_capacity;
+        var ordinary_branch_value = @as([envelope_capacity]u8, @splat(0xA5));
         for (0..160) |index| {
             ordinary_branch_value[ordinary_branch_value.len - 1] = @intCast(index);
             try branch.proxy().set(@intCast(index), &ordinary_branch_value);

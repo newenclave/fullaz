@@ -6,10 +6,10 @@ test "fullaz-db: static superblock detects identity and CRC corruption" {
     const Metadata = extern struct { root: u32 };
     const Superblock = fullaz_db.StaticSuperblock(Metadata);
     const identity = Superblock.Identity{
-        .image_id = [_]u8{1} ** 16,
-        .schema_digest = [_]u8{2} ** 32,
+        .image_id = @as([16]u8, @splat(1)),
+        .schema_digest = @as([32]u8, @splat(2)),
     };
-    var page = [_]u8{0} ** 512;
+    var page = @as([512]u8, @splat(0));
     try Superblock.format(&page, page.len, 7, identity, .{ .root = 4 }, true);
     const storage = try Superblock.read(&page, page.len, identity);
     try std.testing.expectEqual(@as(u16, 3), Superblock.version);

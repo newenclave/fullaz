@@ -62,17 +62,17 @@ var generation_target: usize = 0;
 var generation_completed: usize = 0;
 
 const static_options: StaticDatabase.InitOptions = .{
-    .image_id = [_]u8{0x53} ** 16,
+    .image_id = @as([16]u8, @splat(0x53)),
     .cache_frames = 32,
     .components = .{ .catalog = .{ .owner_0 = .{} } },
 };
 const dynamic_options: DynamicDatabase.InitOptions = .{
-    .image_id = [_]u8{0x44} ** 16,
+    .image_id = @as([16]u8, @splat(0x44)),
     .cache_frames = 32,
     .components = .{ .catalog = .{ .owner_0 = .{} } },
 };
 const virtual_options: VirtualDatabase.InitOptions = .{
-    .image_id = [_]u8{0x56} ** 16,
+    .image_id = @as([16]u8, @splat(0x56)),
     .cache_frames = 32,
     .components = .{ .catalog = .{ .owner_0 = .{} } },
 };
@@ -537,7 +537,7 @@ export fn gcHasPendingWork() u32 {
 }
 
 export fn gcRunnerState() u32 {
-    return @intFromEnum(gc_runner.state());
+    return @backingInt(gc_runner.state());
 }
 
 export fn gcPageBudget() usize {
@@ -549,11 +549,11 @@ export fn gcEventSequence() u32 {
 }
 
 export fn gcLastEventKind() u32 {
-    return @intFromEnum(gc_last_event.kind);
+    return @backingInt(gc_last_event.kind);
 }
 
 export fn gcStatus() u32 {
-    return @intFromEnum(gc_status);
+    return @backingInt(gc_status);
 }
 
 export fn gcPageCount() usize {

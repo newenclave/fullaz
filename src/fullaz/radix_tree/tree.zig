@@ -142,7 +142,7 @@ pub fn Tree(comptime ModelT: type) type {
         }
 
         fn debugPrintSplitKey(key: KeyInType, skr: *const SplitKeyType) void {
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 std.debug.print("Key 0x{X:0>8} -> {} levels:\n", .{ key, skr.size() });
                 for (0..skr.size()) |i| {
                     const kd = skr.get(i);

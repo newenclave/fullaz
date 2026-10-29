@@ -94,7 +94,7 @@ pub fn PackedFloat(comptime T: type, comptime Endian: std.builtin.Endian) type {
         }
     }
 
-    const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+    const Bits = @Int(.unsigned, @bitSizeOf(T));
 
     return extern struct {
         const Self = @This();

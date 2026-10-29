@@ -4,7 +4,7 @@ const geometry = @import("../../geometry.zig");
 const limits = @import("../limits.zig");
 const StructuralMutationCoordinator = @import("../../../core/core.zig").structural_mutation.StructuralMutationCoordinator;
 
-const IS_DEBUG = builtin.mode == .Debug;
+const IS_DEBUG = builtin.mode == .debug;
 
 // the very same idea as from weighted_bpt...
 pub fn Model(

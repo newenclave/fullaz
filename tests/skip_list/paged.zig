@@ -94,7 +94,7 @@ const StorageManager4 = TestStorageManager(4);
 const StorageManager6 = TestStorageManager(6);
 
 test "SkipList paged: page and view" {
-    var buf: [4096]u8 = .{0} ** 4096;
+    var buf: [4096]u8 = @splat(0);
     var view = View(u32, u16, void, std.builtin.Endian.little, false).init(buf[0..]);
     try view.formatPage(42, 1234, 64);
 
@@ -137,7 +137,7 @@ test "SkipList paged: create and load nodes" {
 }
 
 test "SkipList paged: create slot, work with the slot" {
-    var buf: [4096]u8 = .{0} ** 4096;
+    var buf: [4096]u8 = @splat(0);
     const ViewT = View(u32, u16, void, std.builtin.Endian.little, false);
     const SlotWrapper = ViewT.SlotWrapper;
 
@@ -146,7 +146,7 @@ test "SkipList paged: create slot, work with the slot" {
     var view = ViewT.init(buf[0..]);
     try view.formatPage(42, 1234, 64);
 
-    var slotBody: [256]u8 = .{0} ** 256;
+    var slotBody: [256]u8 = @splat(0);
     var slot = try view.createSlot(slotBody[0..], 4, 4, 7);
 
     try std.testing.expectEqual(4, slot.header().key_len.get());
@@ -404,7 +404,7 @@ test "SkipList paged scanner follows level-zero next links and values" {
 }
 
 test "SkipList paged: View.compact reclaims a freed hole and preserves slot ids" {
-    var buf: [1024]u8 = .{0} ** 1024;
+    var buf: [1024]u8 = @splat(0);
     const ViewT = View(u32, u16, void, std.builtin.Endian.little, false);
     var v = ViewT.init(buf[0..]);
     try v.formatPage(1, 7, 0);

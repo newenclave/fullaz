@@ -56,7 +56,7 @@ fn composeFromFields(comptime configured_version: u8, comptime descriptors: anyt
 
     comptime var field_names: [field_count][]const u8 = undefined;
     comptime var field_types: [field_count]type = undefined;
-    comptime var field_attrs: [field_count]std.builtin.Type.StructField.Attributes = undefined;
+    comptime var field_attrs: [field_count]std.builtin.Type.Struct.FieldAttributes = undefined;
     inline for (0..field_count) |index| {
         const descriptor = descriptors[index];
         if (@TypeOf(descriptor) != Field) {
@@ -153,7 +153,7 @@ pub fn Compose(comptime config: anytype) type {
         @compileError("Page extension descriptors must be a tuple");
     }
 
-    const field_count = fields_info.@"struct".fields.len;
+    const field_count = fields_info.@"struct".field_names.len;
     const descriptors = comptime blk: {
         var result: [field_count]Field = undefined;
         for (0..field_count) |index| {
@@ -207,7 +207,7 @@ pub fn Extend(comptime BaseT: type, comptime config: anytype) type {
     }
 
     const base_count = BaseT.fields.len;
-    const field_count = fields_info.@"struct".fields.len;
+    const field_count = fields_info.@"struct".field_names.len;
     const extension_fields = comptime blk: {
         var result: [field_count]Field = undefined;
         for (0..field_count) |index| {

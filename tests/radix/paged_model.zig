@@ -13,7 +13,7 @@ test "RadixTree paged: leaf create/format" {
     const PageView = View(u32, u16, u64, 16, std.builtin.Endian.little, false);
     const LeafSubheader = PageView.LeafSubheaderView;
 
-    var tmp_buf = [_]u8{0} ** 4096;
+    var tmp_buf = @as([4096]u8, @splat(0));
     var leaf_view = LeafSubheader.init(&tmp_buf);
     try leaf_view.formatPage(0x5678, 0x9abc, 0);
     try leaf_view.check();
@@ -30,7 +30,7 @@ test "RadixTree paged: inode create/format" {
     const PageView = View(u32, u16, u64, 16, std.builtin.Endian.little, false);
     const InodeSubheader = PageView.InodeSubheaderView;
 
-    var tmp_buf = [_]u8{0} ** 4096;
+    var tmp_buf = @as([4096]u8, @splat(0));
     var inode_view = InodeSubheader.init(&tmp_buf);
     try inode_view.formatPage(0x5678, 0x9abc, 0);
     try inode_view.check();
@@ -118,7 +118,7 @@ fn DestroyTrackingStorageManager(comptime CacheT: type) type {
         active_leases: usize = 0,
         finishes: usize = 0,
         destroyed_pages: usize = 0,
-        destroyed: [256]bool = [_]bool{false} ** 256,
+        destroyed: [256]bool = @as([256]bool, @splat(false)),
 
         pub fn state(self: *Self) Error!StateLeaseType {
             self.active_leases += 1;

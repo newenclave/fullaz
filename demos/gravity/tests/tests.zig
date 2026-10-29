@@ -15,7 +15,7 @@ test "gravity: mass trait calculates center of mass" {
     var simulation = try gravity.Simulation.init(std.testing.allocator, &bodies);
     defer simulation.deinit();
 
-    const root_id = simulation.model.accessor().getRoot().?;
+    const root_id = (try simulation.model.accessor().getRoot()).?;
     var root = try simulation.model.accessor().loadNode(root_id);
     defer simulation.model.accessor().deinitNode(&root);
     try std.testing.expectEqual(@as(usize, 3), root.trait().data.body_count);

@@ -41,7 +41,7 @@ pub fn HeapState(
         cached_top_page: PackedPageId = PackedPageId.init(PackedPageId.max),
         cached_top_slot: PackedSlotId = PackedSlotId.init(PackedSlotId.max),
         entries_count: PackedCount = PackedCount.init(0),
-        available_inode_heads: [maximum_level + 1]PackedPageId = .{PackedPageId.init(PackedPageId.max)} ** (maximum_level + 1),
+        available_inode_heads: [maximum_level + 1]PackedPageId = @splat(PackedPageId.init(PackedPageId.max)),
     };
 }
 

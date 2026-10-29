@@ -178,7 +178,7 @@ fn appendRecord(writer: *tagged.Writer, record: Record) Error!void {
     try appendInt(writer, Tag.page_kind_count, u16, record.page_kind_count);
     try appendInt(writer, Tag.metadata_root_pid, u64, record.metadata_root_pid);
     try writer.append(Tag.settings_fingerprint, 0, &record.settings_fingerprint);
-    try appendInt(writer, Tag.lifecycle_state, u8, @intFromEnum(record.state));
+    try appendInt(writer, Tag.lifecycle_state, u8, @backingInt(record.state));
     for (record.dependency_ids) |dependency_id| {
         try appendInt(writer, Tag.dependency_id, u64, dependency_id);
     }
@@ -193,7 +193,7 @@ fn appendInt(writer: *tagged.Writer, tag: u16, comptime T: type, value: T) Error
 fn decode(payload: []const u8, version: u16) Error!View {
     var result: View = undefined;
     var dependency_count: usize = 0;
-    var found = [_]bool{false} ** singular_tags.len;
+    var found = @as([singular_tags.len]bool, @splat(false));
     result.state = .active;
 
     var reader = tagged.Reader.init(payload);
@@ -251,9 +251,9 @@ fn decode(payload: []const u8, version: u16) Error!View {
                     return error.BadCatalogRecord;
                 }
                 result.state = switch (try readInt(field.value, u8)) {
-                    @intFromEnum(LifecycleState.active) => .active,
-                    @intFromEnum(LifecycleState.dropped) => .dropped,
-                    @intFromEnum(LifecycleState.reclaimed) => .reclaimed,
+                    @backingInt(LifecycleState.active) => .active,
+                    @backingInt(LifecycleState.dropped) => .dropped,
+                    @backingInt(LifecycleState.reclaimed) => .reclaimed,
                     else => return error.BadCatalogRecord,
                 };
             },

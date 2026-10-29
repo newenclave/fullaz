@@ -184,7 +184,7 @@ fn validatePosition(position: Position) !void {
 }
 
 fn emptyId() [8]u8 {
-    return [_]u8{0} ** 8;
+    return @as([8]u8, @splat(0));
 }
 
 fn hasId(id: [8]u8) bool {
@@ -269,12 +269,12 @@ fn moveToward(base: Position, current: Position, target: Position, maximum_dista
 
 fn appendHistory(history: anytype, state: *const SimulationState, event: Event, id: [8]u8, description: []const u8) !void {
     var record = HistoryRecord{
-        .event = @intFromEnum(event),
-        .reserved = .{0} ** 3,
+        .event = @backingInt(event),
+        .reserved = @splat(0),
         .model_seconds = .init(state.model_seconds.get()),
         .order_id = id,
         .description_length = @intCast(@min(description.len, 40)),
-        .description = [_]u8{0} ** 40,
+        .description = @as([40]u8, @splat(0)),
     };
     @memcpy(record.description[0..record.description_length], description[0..record.description_length]);
     try history.append(std.mem.asBytes(&record));
@@ -301,10 +301,10 @@ fn removeSpatialOrder(comptime DatabaseT: type, transaction: anytype, id: [8]u8)
 
 fn assignOrder(comptime DatabaseT: type, transaction: anytype, state: *SimulationState, id: [8]u8, event: Event) !void {
     var order = (try readRecord(transaction.get("orders"), &id, OrderRecord)) orelse return error.OrderNotFound;
-    order.status = @intFromEnum(OrderStatus.active);
+    order.status = @backingInt(OrderStatus.active);
     try writeOrder(transaction.get("orders"), &id, &order);
     state.active_id = id;
-    state.phase = @intFromEnum(Phase.travelling);
+    state.phase = @backingInt(Phase.travelling);
     try appendHistory(transaction.get("history"), state, event, id, order.description[0..order.description_length]);
     _ = DatabaseT;
 }
@@ -330,10 +330,10 @@ fn assignNext(comptime DatabaseT: type, transaction: anytype, state: *Simulation
 
     state.active_id = emptyId();
     if (localDistanceMeters(basePosition(state), positionFromState(state), basePosition(state)) == 0) {
-        state.phase = @intFromEnum(Phase.idle);
+        state.phase = @backingInt(Phase.idle);
         try appendHistory(transaction.get("history"), state, .at_base, emptyId(), "crew idle at base");
     } else {
-        state.phase = @intFromEnum(Phase.returning);
+        state.phase = @backingInt(Phase.returning);
         try appendHistory(transaction.get("history"), state, .returning, emptyId(), "crew returning to base");
     }
 }
@@ -378,15 +378,15 @@ fn addOrderInTransaction(comptime DatabaseT: type, transaction: anytype, state: 
 
     var order = OrderRecord{
         .version = .init(format_version),
-        .kind = @intFromEnum(kind),
-        .status = @intFromEnum(if (kind == .normal) OrderStatus.pending else OrderStatus.active),
+        .kind = @backingInt(kind),
+        .status = @backingInt(if (kind == .normal) OrderStatus.pending else OrderStatus.active),
         .latitude = .init(position.latitude),
         .longitude = .init(position.longitude),
         .remaining_service_seconds = .init(service_seconds),
         .created_seconds = .init(state.model_seconds.get()),
         .description_length = @intCast(description.len),
-        .reserved = .{0} ** 3,
-        .description = [_]u8{0} ** maximum_description_size,
+        .reserved = @splat(0),
+        .description = @as([maximum_description_size]u8, @splat(0)),
     };
     @memcpy(order.description[0..description.len], description);
     if (!try transaction.get("orders").insert(&id, std.mem.asBytes(&order))) {
@@ -402,7 +402,7 @@ fn addOrderInTransaction(comptime DatabaseT: type, transaction: anytype, state: 
     if (kind == .normal) {
         try transaction.get("pending").enqueue(&id);
         try appendHistory(transaction.get("history"), state, .queued, id, description);
-        if (state.phase == @intFromEnum(Phase.idle) or state.phase == @intFromEnum(Phase.returning)) {
+        if (state.phase == @backingInt(Phase.idle) or state.phase == @backingInt(Phase.returning)) {
             try assignNext(DatabaseT, transaction, state);
         }
         return id;
@@ -410,7 +410,7 @@ fn addOrderInTransaction(comptime DatabaseT: type, transaction: anytype, state: 
 
     if (hasId(state.active_id)) {
         var previous = (try readRecord(transaction.get("orders"), &state.active_id, OrderRecord)) orelse return error.OrderNotFound;
-        previous.status = @intFromEnum(OrderStatus.suspended);
+        previous.status = @backingInt(OrderStatus.suspended);
         try writeOrder(transaction.get("orders"), &state.active_id, &previous);
         try transaction.get("suspended").push(&state.active_id);
         try appendHistory(transaction.get("history"), state, .suspended, state.active_id, previous.description[0..previous.description_length]);
@@ -431,8 +431,8 @@ pub fn initializeSimulation(comptime DatabaseT: type, database: *DatabaseT, base
         .version = .init(format_version),
         .configured = 1,
         .auto_orders = 0,
-        .phase = @intFromEnum(Phase.idle),
-        .reserved = .{0} ** 3,
+        .phase = @backingInt(Phase.idle),
+        .reserved = @splat(0),
         .base_latitude = .init(base.latitude),
         .base_longitude = .init(base.longitude),
         .crew_latitude = .init(base.latitude),
@@ -497,7 +497,7 @@ pub fn stepSimulation(comptime DatabaseT: type, database: *DatabaseT) !void {
         }
     }
 
-    const phase: Phase = @enumFromInt(state.phase);
+    const phase: Phase = @fromBackingInt(@intCast(state.phase));
     if (phase == .travelling) {
         const id = state.active_id;
         var order = (try readRecord(transaction.get("orders"), &id, OrderRecord)) orelse return error.OrderNotFound;
@@ -506,8 +506,8 @@ pub fn stepSimulation(comptime DatabaseT: type, database: *DatabaseT) !void {
         const position = moveToward(basePosition(&state), current, target, crew_speed_meters_per_second * tick_seconds);
         setCrewPosition(&state, position);
         if (localDistanceMeters(basePosition(&state), position, target) == 0) {
-            state.phase = @intFromEnum(Phase.working);
-            order.status = @intFromEnum(OrderStatus.active);
+            state.phase = @backingInt(Phase.working);
+            order.status = @backingInt(OrderStatus.active);
             try writeOrder(transaction.get("orders"), &id, &order);
             try appendHistory(transaction.get("history"), &state, .arrived, id, order.description[0..order.description_length]);
         }
@@ -529,7 +529,7 @@ pub fn stepSimulation(comptime DatabaseT: type, database: *DatabaseT) !void {
         const position = moveToward(base, positionFromState(&state), base, crew_speed_meters_per_second * tick_seconds);
         setCrewPosition(&state, position);
         if (localDistanceMeters(base, position, base) == 0) {
-            state.phase = @intFromEnum(Phase.idle);
+            state.phase = @backingInt(Phase.idle);
             try appendHistory(transaction.get("history"), &state, .at_base, emptyId(), "crew idle at base");
         }
     }
@@ -615,7 +615,7 @@ pub fn snapshotHistory(comptime DatabaseT: type, database: *const DatabaseT, all
         const record = try decode(HistoryRecord, value);
         try result.append(allocator, .{
             .event = record.event,
-            .reserved = .{0} ** 3,
+            .reserved = @splat(0),
             .model_seconds = record.model_seconds.get(),
             .order_id = record.order_id,
             .description = record.description,
@@ -651,7 +651,7 @@ pub fn ordersInArea(comptime DatabaseT: type, database: *const DatabaseT, alloca
 
 pub fn validateSimulation(comptime DatabaseT: type, database: *const DatabaseT, allocator: std.mem.Allocator) !void {
     const state = try readSimulation(database.getConst("simulation"));
-    if (state.version.get() != format_version or state.configured != 1 or state.auto_orders > 1 or state.phase > @intFromEnum(Phase.returning)) {
+    if (state.version.get() != format_version or state.configured != 1 or state.auto_orders > 1 or state.phase > @backingInt(Phase.returning)) {
         return error.BadDispatchState;
     }
     try validatePosition(basePosition(&state));
@@ -662,19 +662,19 @@ pub fn validateSimulation(comptime DatabaseT: type, database: *const DatabaseT, 
     defer suspended.deinit(allocator);
     for (pending.items) |id| {
         const order = (try readRecord(database.getConst("orders"), &id, OrderRecord)) orelse return error.BadDispatchState;
-        if (order.status != @intFromEnum(OrderStatus.pending)) return error.BadDispatchState;
+        if (order.status != @backingInt(OrderStatus.pending)) return error.BadDispatchState;
     }
     for (suspended.items) |id| {
         const order = (try readRecord(database.getConst("orders"), &id, OrderRecord)) orelse return error.BadDispatchState;
-        if (order.status != @intFromEnum(OrderStatus.suspended)) return error.BadDispatchState;
+        if (order.status != @backingInt(OrderStatus.suspended)) return error.BadDispatchState;
         for (pending.items) |pending_id| if (std.mem.eql(u8, &id, &pending_id)) return error.BadDispatchState;
     }
     if (hasId(state.active_id)) {
         const active = (try readRecord(database.getConst("orders"), &state.active_id, OrderRecord)) orelse return error.BadDispatchState;
-        if (active.status != @intFromEnum(OrderStatus.active)) return error.BadDispatchState;
+        if (active.status != @backingInt(OrderStatus.active)) return error.BadDispatchState;
         for (pending.items) |id| if (std.mem.eql(u8, &id, &state.active_id)) return error.BadDispatchState;
         for (suspended.items) |id| if (std.mem.eql(u8, &id, &state.active_id)) return error.BadDispatchState;
-    } else if (state.phase == @intFromEnum(Phase.travelling) or state.phase == @intFromEnum(Phase.working)) {
+    } else if (state.phase == @backingInt(Phase.travelling) or state.phase == @backingInt(Phase.working)) {
         return error.BadDispatchState;
     }
 }

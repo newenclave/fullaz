@@ -5,7 +5,7 @@ const errors = @import("../../core/errors.zig");
 
 const StructuralMutationCoordinator = core.structural_mutation.StructuralMutationCoordinator;
 
-const IS_DEBUG = builtin.mode == .Debug;
+const IS_DEBUG = builtin.mode == .debug;
 
 pub fn Model(comptime T: type, comptime MaximumElements: usize) type {
     const Pid = usize;

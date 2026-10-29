@@ -57,9 +57,9 @@ fn slotSequence(
     if (options_info != .@"struct" or options_info.@"struct".is_tuple) {
         @compileError("fullaz-db slot-sequence options must be a named struct");
     }
-    inline for (options_info.@"struct".fields) |field| {
-        if (!std.mem.eql(u8, field.name, "maximum_value_size")) {
-            @compileError("Unknown fullaz-db slot-sequence option: " ++ field.name);
+    inline for (options_info.@"struct".field_names) |field_name| {
+        if (!std.mem.eql(u8, field_name, "maximum_value_size")) {
+            @compileError("Unknown fullaz-db slot-sequence option: " ++ field_name);
         }
     }
     requireOption(OptionsT, "maximum_value_size");

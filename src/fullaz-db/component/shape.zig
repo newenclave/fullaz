@@ -31,7 +31,7 @@ pub fn runtimes(comptime SchemaT: type, comptime bindings_: anytype) type {
     const field_count = SchemaT.fields.len;
     comptime var names: [field_count][]const u8 = undefined;
     comptime var types: [field_count]type = undefined;
-    comptime var attributes: [field_count]std.builtin.Type.StructField.Attributes = undefined;
+    comptime var attributes: [field_count]std.builtin.Type.Struct.FieldAttributes = undefined;
     inline for (SchemaT.fields, 0..) |field, index| {
         names[index] = field.name;
         types[index] = bindings_[index].Runtime;
@@ -44,7 +44,7 @@ pub fn transactionStates(comptime SchemaT: type, comptime bindings_: anytype) ty
     const field_count = SchemaT.fields.len;
     comptime var names: [field_count][]const u8 = undefined;
     comptime var types: [field_count]type = undefined;
-    comptime var attributes: [field_count]std.builtin.Type.StructField.Attributes = undefined;
+    comptime var attributes: [field_count]std.builtin.Type.Struct.FieldAttributes = undefined;
     inline for (SchemaT.fields, 0..) |field, index| {
         names[index] = field.name;
         types[index] = bindings_[index].TransactionState;
@@ -58,8 +58,8 @@ pub fn canDefaultInit(comptime T: type) bool {
     if (type_info != .@"struct" or type_info.@"struct".is_tuple) {
         @compileError("fullaz-db component InitOptions must be a named struct");
     }
-    inline for (type_info.@"struct".fields) |field| {
-        if (field.default_value_ptr == null) {
+    inline for (type_info.@"struct".field_attrs) |field_attrs| {
+        if (field_attrs.default_value_ptr == null) {
             return false;
         }
     }
@@ -70,7 +70,7 @@ pub fn initOptions(comptime SchemaT: type, comptime bindings_: anytype) type {
     const field_count = SchemaT.fields.len;
     comptime var names: [field_count][]const u8 = undefined;
     comptime var types: [field_count]type = undefined;
-    comptime var attributes: [field_count]std.builtin.Type.StructField.Attributes = undefined;
+    comptime var attributes: [field_count]std.builtin.Type.Struct.FieldAttributes = undefined;
     inline for (SchemaT.fields, 0..) |field, index| {
         const Options = bindings_[index].InitOptions;
         names[index] = field.name;
@@ -110,7 +110,7 @@ pub fn staticMetadata(comptime SchemaT: type, comptime bindings_: anytype) type 
     const field_count = SchemaT.fields.len + 3;
     comptime var names: [field_count][]const u8 = undefined;
     comptime var types: [field_count]type = undefined;
-    comptime var attributes: [field_count]std.builtin.Type.StructField.Attributes = undefined;
+    comptime var attributes: [field_count]std.builtin.Type.Struct.FieldAttributes = undefined;
     names[0] = "free_root";
     types[0] = PackedInt(SchemaT.PageId, .little);
     attributes[0] = .{};

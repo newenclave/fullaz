@@ -13,15 +13,15 @@ fn record() catalog.Record {
         .page_kind_base = 0x0100,
         .page_kind_count = 3,
         .metadata_root_pid = 42,
-        .settings_fingerprint = [_]u8{0x5a} ** 32,
+        .settings_fingerprint = @as([32]u8, @splat(0x5a)),
         .dependency_ids = &.{ 2, 5 },
     };
 }
 
 test "fullaz-db catalog record: round-trips core and repeated fields" {
     const original = record();
-    var bytes = [_]u8{undefined} ** 512;
-    var scratch = [_]u8{undefined} ** 512;
+    var bytes = @as([512]u8, @splat(undefined));
+    var scratch = @as([512]u8, @splat(undefined));
     try catalog.format(&bytes, &scratch, original, &.{});
 
     const encoded_len = try catalog.encodedByteSize(&bytes);
@@ -39,8 +39,8 @@ test "fullaz-db catalog record: round-trips core and repeated fields" {
 test "fullaz-db catalog record: round-trips lifecycle state and reads v1 as active" {
     var current = record();
     current.state = .dropped;
-    var current_bytes = [_]u8{undefined} ** 512;
-    var current_scratch = [_]u8{undefined} ** 512;
+    var current_bytes = @as([512]u8, @splat(undefined));
+    var current_scratch = @as([512]u8, @splat(undefined));
     try catalog.format(&current_bytes, &current_scratch, current, &.{});
     const current_len = try catalog.encodedByteSize(&current_bytes);
     try std.testing.expectEqual(
@@ -48,7 +48,7 @@ test "fullaz-db catalog record: round-trips lifecycle state and reads v1 as acti
         (try catalog.read(current_bytes[0..current_len])).state,
     );
 
-    var legacy_payload_bytes = [_]u8{undefined} ** 512;
+    var legacy_payload_bytes = @as([512]u8, @splat(undefined));
     var legacy_payload = tagged.Writer.init(&legacy_payload_bytes);
     var reader = tagged.Reader.init(current_bytes[catalog.envelope_byte_size..current_len]);
     while (try reader.next()) |field| {
@@ -56,7 +56,7 @@ test "fullaz-db catalog record: round-trips lifecycle state and reads v1 as acti
             try legacy_payload.appendEncoded(field.encoded);
         }
     }
-    var legacy_bytes = [_]u8{0} ** 512;
+    var legacy_bytes = @as([512]u8, @splat(0));
     std.mem.writeInt(u16, legacy_bytes[0..2], catalog.legacy_format_version, .little);
     std.mem.writeInt(u16, legacy_bytes[2..4], 0, .little);
     std.mem.writeInt(u32, legacy_bytes[4..8], @intCast(legacy_payload.used().len), .little);
@@ -68,20 +68,20 @@ test "fullaz-db catalog record: round-trips lifecycle state and reads v1 as acti
 
 test "fullaz-db catalog record: preserves unknown fields and rejects malformed core" {
     const original = record();
-    var first = [_]u8{undefined} ** 512;
-    var first_scratch = [_]u8{undefined} ** 512;
+    var first = @as([512]u8, @splat(undefined));
+    var first_scratch = @as([512]u8, @splat(undefined));
     try catalog.format(&first, &first_scratch, original, &.{});
     const first_len = try catalog.encodedByteSize(&first);
 
-    var previous_payload = [_]u8{undefined} ** 512;
+    var previous_payload = @as([512]u8, @splat(undefined));
     const first_payload = first[catalog.envelope_byte_size..first_len];
     @memcpy(previous_payload[0..first_payload.len], first_payload);
     var previous = tagged.Writer.init(&previous_payload);
     previous.len = first_payload.len;
     try previous.append(99, 0x8000, "future");
 
-    var second = [_]u8{undefined} ** 512;
-    var second_scratch = [_]u8{undefined} ** 512;
+    var second = @as([512]u8, @splat(undefined));
+    var second_scratch = @as([512]u8, @splat(undefined));
     var updated = original;
     updated.revision = 4;
     try catalog.format(&second, &second_scratch, updated, previous.used());

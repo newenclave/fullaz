@@ -223,11 +223,11 @@ test "fullaz-db: memory database generates exact runtime storage fields" {
     const Components = Db.ComponentsStorageType;
     const IndexBinding = Schema.trait("index").Binding(Db.BackendType);
     const SecondaryBinding = Schema.trait("secondary").Binding(Db.BackendType);
-    const fields = @typeInfo(Components).@"struct".fields;
+    const fields = @typeInfo(Components).@"struct";
 
-    try std.testing.expectEqual(@as(usize, 2), fields.len);
-    try std.testing.expectEqualStrings("index", fields[0].name);
-    try std.testing.expectEqualStrings("secondary", fields[1].name);
+    try std.testing.expectEqual(@as(usize, 2), fields.field_names.len);
+    try std.testing.expectEqualStrings("index", fields.field_names[0]);
+    try std.testing.expectEqualStrings("secondary", fields.field_names[1]);
     try std.testing.expect(@FieldType(Components, "index") == IndexBinding.Runtime);
     try std.testing.expect(@FieldType(Components, "secondary") == SecondaryBinding.Runtime);
     try std.testing.expect(IndexBinding.Runtime != SecondaryBinding.Runtime);
@@ -250,12 +250,12 @@ test "fullaz-db: memory database generates conditional component option defaults
         .maximum_value_size = 48,
     }));
     const MixedDb = fullaz_db.MemoryDatabase(MixedSchema);
-    const component_fields = @typeInfo(MixedDb.ComponentInitOptionsType).@"struct".fields;
-    const init_fields = @typeInfo(MixedDb.InitOptions).@"struct".fields;
+    const component_fields = @typeInfo(MixedDb.ComponentInitOptionsType).@"struct";
+    const init_fields = @typeInfo(MixedDb.InitOptions).@"struct";
 
-    try std.testing.expect(component_fields[0].default_value_ptr != null);
-    try std.testing.expect(component_fields[1].default_value_ptr == null);
-    try std.testing.expect(init_fields[2].default_value_ptr == null);
+    try std.testing.expect(component_fields.field_attrs[0].default_value_ptr != null);
+    try std.testing.expect(component_fields.field_attrs[1].default_value_ptr == null);
+    try std.testing.expect(init_fields.field_attrs[2].default_value_ptr == null);
     const mixed_options = MixedDb.InitOptions{
         .page_size = 4096,
         .components = .{
@@ -274,7 +274,7 @@ test "fullaz-db: memory database generates conditional component option defaults
         .maximum_value_size = 128,
     }));
     const DefaultDb = fullaz_db.MemoryDatabase(DefaultSchema);
-    const default_init_fields = @typeInfo(DefaultDb.InitOptions).@"struct".fields;
+    const default_init_fields = @typeInfo(DefaultDb.InitOptions).@"struct".field_attrs;
     try std.testing.expect(default_init_fields[2].default_value_ptr != null);
     const default_options = DefaultDb.InitOptions{ .page_size = 4096 };
     try std.testing.expectEqual(@as(usize, 64), default_options.cache_frames);
@@ -814,14 +814,14 @@ test "fullaz-db: memory database generates thirty-two distinct components" {
         .add("index_30", stressDescriptor(30))
         .add("index_31", stressDescriptor(31));
     const Db = fullaz_db.MemoryDatabase(Schema);
-    const runtime_fields = @typeInfo(Db.ComponentsStorageType).@"struct".fields;
-    const option_fields = @typeInfo(Db.ComponentInitOptionsType).@"struct".fields;
+    const runtime_fields = @typeInfo(Db.ComponentsStorageType).@"struct".field_names;
+    const option_fields = @typeInfo(Db.ComponentInitOptionsType).@"struct".field_names;
 
     try std.testing.expectEqual(@as(usize, 32), Schema.fields.len);
     try std.testing.expectEqual(@as(usize, 32), runtime_fields.len);
     try std.testing.expectEqual(@as(usize, 32), option_fields.len);
-    try std.testing.expectEqualStrings("index_0", runtime_fields[0].name);
-    try std.testing.expectEqualStrings("index_31", runtime_fields[31].name);
+    try std.testing.expectEqualStrings("index_0", runtime_fields[0]);
+    try std.testing.expectEqualStrings("index_31", runtime_fields[31]);
     try std.testing.expect(@FieldType(
         Db.ComponentsStorageType,
         "index_0",

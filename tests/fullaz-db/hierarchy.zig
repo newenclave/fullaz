@@ -243,7 +243,7 @@ test "fullaz-db hierarchyStore: composes BPT, R-tree, and SlotHeap owners" {
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0x79} ** 16, .components = .{ .store = .{
+        .{ .image_id = @as([16]u8, @splat(0x79)), .components = .{ .store = .{
             .owner_0 = .{ .compare_context = {} },
             .owner_1 = .{},
             .owner_2 = .{ .compare_context = {} },
@@ -302,7 +302,7 @@ test "fullaz-db hierarchyStore: BPT owner edits recursive embedded envelopes" {
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0x7a} ** 16, .components = .{ .store = .{ .owner_0 = .{} } } },
+        .{ .image_id = @as([16]u8, @splat(0x7a)), .components = .{ .store = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 
@@ -508,7 +508,7 @@ test "fullaz-db hierarchyStore: aggregate owners trace nested envelopes" {
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0x7b} ** 16, .components = .{ .store = .{
+        .{ .image_id = @as([16]u8, @splat(0x7b)), .components = .{ .store = .{
             .owner_0 = .{},
             .owner_1 = .{},
             .owner_2 = .{ .compare_context = {} },
@@ -631,7 +631,7 @@ test "fullaz-db hierarchyStore: memory and static databases construct and persis
     const io = std.testing.io;
     const path = ".zig-cache/static_hierarchy_store.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{0x7c} ** 16,
+        .image_id = @as([16]u8, @splat(0x7c)),
         .components = .{ .store = .{ .owner_0 = .{} } },
     };
     std.Io.Dir.cwd().deleteFile(io, path) catch {};
@@ -739,7 +739,7 @@ test "fullaz-db hierarchyStore: slot-sequence children nest and tombstones relea
     var database = try Database.format(
         std.testing.allocator,
         try Device.init(std.testing.allocator, 1024),
-        .{ .image_id = [_]u8{0x7d} ** 16, .components = .{ .store = .{ .owner_0 = .{} } } },
+        .{ .image_id = @as([16]u8, @splat(0x7d)), .components = .{ .store = .{ .owner_0 = .{} } } },
     );
     defer database.deinit();
 

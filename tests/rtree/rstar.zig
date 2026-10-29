@@ -17,7 +17,7 @@ fn box(x0: i64, y0: i64, x1: i64, y1: i64) BB {
 }
 
 const Collector = struct {
-    seen: [128]bool = [_]bool{false} ** 128,
+    seen: [128]bool = @as([128]bool, @splat(false)),
     count: usize = 0,
     fn cb(self: *Collector, _: Key, value: u64) anyerror!void {
         self.seen[value] = true;
@@ -45,7 +45,7 @@ test "RStar splitEntries: valid partition, respects min_fill, separates clusters
         box(20, 20, 21, 21), box(20, 20, 21, 21),
         box(20, 20, 21, 21),
     };
-    var assign = [_]u8{9} ** 5;
+    var assign = @as([5]u8, @splat(9));
     RStar.splitEntries(&mbrs, 2, &assign);
     var c0: usize = 0;
     for (assign) |a| {

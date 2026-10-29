@@ -237,9 +237,9 @@ fn createPlanetPlan(allocator: std.mem.Allocator, count: usize) !std.ArrayList(P
     var generator = PlanetGenerator{};
     for (0..count) |index| {
         var row = PlanetRow{
-            .key_bytes = [_]u8{0} ** 32,
+            .key_bytes = @as([32]u8, @splat(0)),
             .key_len = 0,
-            .value_bytes = [_]u8{0} ** 64,
+            .value_bytes = @as([64]u8, @splat(0)),
             .value_len = 0,
         };
         const key = try std.fmt.bufPrint(&row.key_bytes, "planet-{d:0>3}", .{index});
@@ -385,11 +385,11 @@ pub fn snapshot(database: anytype, allocator: std.mem.Allocator) !std.ArrayList(
                         return error.InvalidStoredKey;
                     }
                     var row = Row{
-                        .table = [_]u8{0} ** 32,
+                        .table = @as([32]u8, @splat(0)),
                         .table_len = @intCast(table_entry.key.len),
-                        .key = [_]u8{0} ** 32,
+                        .key = @as([32]u8, @splat(0)),
                         .key_len = @intCast(value_entry.key.len),
-                        .value = [_]u8{0} ** 64,
+                        .value = @as([64]u8, @splat(0)),
                         .value_len = @intCast(value.payload.len),
                     };
                     @memcpy(row.table[0..table_entry.key.len], table_entry.key);

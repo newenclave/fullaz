@@ -84,7 +84,7 @@ test "Fs rm after replace reclaims the retained tail chunk" {
     var f = try FsT.format(&cache, 4096);
     try f.touch("/f");
 
-    const large = [_]u8{0x71} ** 12_000;
+    const large = @as([12_000]u8, @splat(0x71));
     _ = try f.write("/f", &large);
     const baseline = device.blocksCount();
 

@@ -702,7 +702,7 @@ const NoneStorageManager = struct {
     };
 
     root_block_id: ?u32 = null,
-    state_bytes: [@sizeOf(PageId)]u8 = [_]u8{std.math.maxInt(u8)} ** @sizeOf(PageId),
+    state_bytes: [@sizeOf(PageId)]u8 = @splat(std.math.maxInt(u8)),
 
     pub fn getRoot(self: *const Self) ?u32 {
         return self.root_block_id;

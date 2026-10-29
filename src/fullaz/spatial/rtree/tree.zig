@@ -133,7 +133,7 @@ fn TreeWithConfig(
         //
         // TODO: Stack! Needs to be a part of model/accessor API? getContext/deinitContext
         const InsertCtx = struct {
-            done: [max_depth]bool = [_]bool{false} ** max_depth,
+            done: [max_depth]bool = @as([max_depth]bool, @splat(false)),
 
             s_mbr: [orphan_cap]Key = undefined,
             s_id: [orphan_cap]Pid = undefined,
@@ -528,7 +528,7 @@ fn TreeWithConfig(
             Strategy.reinsertOrder(mbrs[0..total], node_mbr, order[0..total]);
 
             const p = @max(1, (total * 3) / 10);
-            var eject = [_]bool{false} ** (Max + 1);
+            var eject = @as([(Max + 1)]bool, @splat(false));
 
             i = 0;
             while (i < p) : (i += 1) {
@@ -583,7 +583,7 @@ fn TreeWithConfig(
             const p = @max(1, (total * 3) / 10);
             const level = try inode.getLevel();
 
-            var eject = [_]bool{false} ** (Max + 1);
+            var eject = @as([(Max + 1)]bool, @splat(false));
             i = 0;
             while (i < p) : (i += 1) {
                 eject[order[i]] = true;

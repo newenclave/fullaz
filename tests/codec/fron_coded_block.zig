@@ -343,7 +343,7 @@ test "Codec: bounded buffer contracts match front-coded block usage" {
 }
 
 test "Codec: FrontCodedBlock builder includes writer errors" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
 
     try std.testing.expectError(
@@ -353,7 +353,7 @@ test "Codec: FrontCodedBlock builder includes writer errors" {
 }
 
 test "Codec: FrontCodedBlock reader includes view errors" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
 
     try std.testing.expectError(
         error.ReadFailed,
@@ -362,7 +362,7 @@ test "Codec: FrontCodedBlock reader includes view errors" {
 }
 
 test "Codec: FrontCodedBlock writes header metadata" {
-    var buf = [_]u8{0} ** 1024;
+    var buf = @as([1024]u8, @splat(0));
     var scratch: [256]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -384,7 +384,7 @@ test "Codec: FrontCodedBlock writes header metadata" {
 }
 
 test "Codec: FrontCodedBlock supports empty block" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -404,7 +404,7 @@ test "Codec: FrontCodedBlock supports empty block" {
 }
 
 test "Codec: FrontCodedBlock iterator rebuilds keys with caller scratch" {
-    var buf = [_]u8{0} ** 1024;
+    var buf = @as([1024]u8, @splat(0));
     var builder_scratch: [256]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
     defer builder.deinit();
@@ -432,7 +432,7 @@ test "Codec: FrontCodedBlock iterator rebuilds keys with caller scratch" {
 }
 
 test "Codec: FrontCodedBlock preserves per-entry metadata" {
-    var buf = [_]u8{0} ** 256;
+    var buf = @as([256]u8, @splat(0));
     var builder_scratch: [32]u8 = undefined;
     var builder = try MetadataFrontCodedBlock.Builder.init(
         BlockWriter.init(buf[0..]),
@@ -463,7 +463,7 @@ test "Codec: FrontCodedBlock preserves per-entry metadata" {
 }
 
 test "Codec: FrontCodedBlock validates metadata length" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
     var builder = try MetadataFrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -489,7 +489,7 @@ test "Codec: FrontCodedBlock accounts for metadata capacity" {
 }
 
 test "Codec: FrontCodedBlock rejects truncated metadata" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
     var builder = try MetadataFrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -505,8 +505,8 @@ test "Codec: FrontCodedBlock rejects truncated metadata" {
 }
 
 test "Codec: FrontCodedBlock metadata length zero preserves the wire format" {
-    var default_buf = [_]u8{0} ** 256;
-    var metadata_buf = [_]u8{0} ** 256;
+    var default_buf = @as([256]u8, @splat(0));
+    var metadata_buf = @as([256]u8, @splat(0));
     var default_scratch: [32]u8 = undefined;
     var metadata_scratch: [32]u8 = undefined;
     var default_builder = try FrontCodedBlock.Builder.init(
@@ -533,7 +533,7 @@ test "Codec: FrontCodedBlock metadata length zero preserves the wire format" {
 }
 
 test "Codec: FrontCodedBlock find returns matching entries" {
-    var buf = [_]u8{0} ** 1024;
+    var buf = @as([1024]u8, @splat(0));
     var builder_scratch: [256]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
     defer builder.deinit();
@@ -565,7 +565,7 @@ test "Codec: FrontCodedBlock find returns matching entries" {
 }
 
 test "Codec: FrontCodedBlock find returns null for missing keys" {
-    var buf = [_]u8{0} ** 1024;
+    var buf = @as([1024]u8, @splat(0));
     var builder_scratch: [256]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
     defer builder.deinit();
@@ -588,7 +588,7 @@ test "Codec: FrontCodedBlock find returns null for missing keys" {
 }
 
 test "Codec: FrontCodedBlock find handles empty block" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var builder_scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
     defer builder.deinit();
@@ -601,7 +601,7 @@ test "Codec: FrontCodedBlock find handles empty block" {
 }
 
 test "Codec: FrontCodedBlock find rejects unordered comparison" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var builder_scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
     defer builder.deinit();
@@ -616,7 +616,7 @@ test "Codec: FrontCodedBlock find rejects unordered comparison" {
 }
 
 test "Codec: FrontCodedBlock iterator ignores padding after used bytes" {
-    var buf = [_]u8{0} ** 1024;
+    var buf = @as([1024]u8, @splat(0));
     var builder_scratch: [256]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
     defer builder.deinit();
@@ -647,7 +647,7 @@ test "Codec: FrontCodedBlock iterator ignores padding after used bytes" {
 }
 
 test "Codec: FrontCodedBlock stores shared prefix entries" {
-    var buf = [_]u8{0} ** 1024;
+    var buf = @as([1024]u8, @splat(0));
     var scratch: [256]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -677,7 +677,7 @@ test "Codec: FrontCodedBlock stores shared prefix entries" {
 }
 
 test "Codec: FrontCodedBlock rejects too-small block buffer" {
-    var buf = [_]u8{0} ** (HEADER_SIZE + ENTRY_HEADER_SIZE + 3);
+    var buf = @as([(HEADER_SIZE + ENTRY_HEADER_SIZE + 3)]u8, @splat(0));
     var scratch: [16]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -687,8 +687,8 @@ test "Codec: FrontCodedBlock rejects too-small block buffer" {
 }
 
 test "Codec: FrontCodedBlock rejects too-small scratch buffer" {
-    var buf = [_]u8{0} ** 128;
-    var scratch = [_]u8{0} ** 3;
+    var buf = @as([128]u8, @splat(0));
+    var scratch = @as([3]u8, @splat(0));
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
 
@@ -697,7 +697,7 @@ test "Codec: FrontCodedBlock rejects too-small scratch buffer" {
 }
 
 test "Codec: FrontCodedBlock iterator requires max-key scratch" {
-    var buf = [_]u8{0} ** 256;
+    var buf = @as([256]u8, @splat(0));
     var builder_scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
     defer builder.deinit();
@@ -708,7 +708,7 @@ test "Codec: FrontCodedBlock iterator requires max-key scratch" {
     var reader = try builder.reader();
     defer reader.deinit();
 
-    var read_scratch = [_]u8{0} ** 5;
+    var read_scratch = @as([5]u8, @splat(0));
     var itr = try reader.iterator(read_scratch[0..]);
     defer itr.deinit();
 
@@ -717,7 +717,7 @@ test "Codec: FrontCodedBlock iterator requires max-key scratch" {
 }
 
 test "Codec: FrontCodedBlock rejects first entry with shared prefix" {
-    var buf = [_]u8{0} ** 256;
+    var buf = @as([256]u8, @splat(0));
     var builder_scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
     defer builder.deinit();
@@ -735,7 +735,7 @@ test "Codec: FrontCodedBlock rejects first entry with shared prefix" {
 }
 
 test "Codec: FrontCodedBlock rejects entry with shared prefix longer than previous key" {
-    var buf = [_]u8{0} ** 256;
+    var buf = @as([256]u8, @splat(0));
     var builder_scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), builder_scratch[0..]);
     defer builder.deinit();
@@ -759,7 +759,7 @@ test "Codec: FrontCodedBlock rejects entry with shared prefix longer than previo
 }
 
 test "Codec: FrontCodedBlock rejects entry count overflow" {
-    var buf = [_]u8{0} ** 2048;
+    var buf = @as([2048]u8, @splat(0));
     var scratch: [1]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -774,9 +774,9 @@ test "Codec: FrontCodedBlock rejects entry count overflow" {
 }
 
 test "Codec: FrontCodedBlock rejects index overflow" {
-    var buf = [_]u8{0} ** 512;
-    var scratch = [_]u8{0} ** 256;
-    var key = [_]u8{'a'} ** 256;
+    var buf = @as([512]u8, @splat(0));
+    var scratch = @as([256]u8, @splat(0));
+    var key = @as([256]u8, @splat('a'));
     var builder = try SmallIndexFrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
 
@@ -785,10 +785,10 @@ test "Codec: FrontCodedBlock rejects index overflow" {
 }
 
 test "Codec: FrontCodedBlock rejects block size overflow" {
-    var buf = [_]u8{0} ** 512;
-    var scratch = [_]u8{0} ** 256;
-    var first_key = [_]u8{'a'} ** 200;
-    var second_key = [_]u8{'b'} ** 200;
+    var buf = @as([512]u8, @splat(0));
+    var scratch = @as([256]u8, @splat(0));
+    var first_key = @as([200]u8, @splat('a'));
+    var second_key = @as([200]u8, @splat('b'));
     var builder = try SmallBlockSizeFrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
 
@@ -800,7 +800,7 @@ test "Codec: FrontCodedBlock rejects block size overflow" {
 }
 
 test "Codec: FrontCodedBlock reader rejects used bytes smaller than header" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -814,7 +814,7 @@ test "Codec: FrontCodedBlock reader rejects used bytes smaller than header" {
 }
 
 test "Codec: FrontCodedBlock reader rejects used bytes beyond view" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -828,7 +828,7 @@ test "Codec: FrontCodedBlock reader rejects used bytes beyond view" {
 }
 
 test "Codec: FrontCodedBlock reader rejects truncated entry" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -842,7 +842,7 @@ test "Codec: FrontCodedBlock reader rejects truncated entry" {
 }
 
 test "Codec: FrontCodedBlock reader rejects entry count mismatch" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -856,7 +856,7 @@ test "Codec: FrontCodedBlock reader rejects entry count mismatch" {
 }
 
 test "Codec: FrontCodedBlock reader rejects trailing bytes inside used bytes" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
     var builder = try FrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -873,7 +873,7 @@ test "Codec: FrontCodedBlock reader rejects trailing bytes inside used bytes" {
 test "Codec: FrontCodedBlock iterator borrows reader view" {
     counting_view_deinit_count = 0;
 
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
     var builder = try CountingViewFrontCodedBlock.Builder.init(BlockWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();
@@ -893,7 +893,7 @@ test "Codec: FrontCodedBlock iterator borrows reader view" {
 }
 
 test "Codec: FrontCodedBlock builder uses writer contract without buf field" {
-    var buf = [_]u8{0} ** 128;
+    var buf = @as([128]u8, @splat(0));
     var scratch: [32]u8 = undefined;
     var builder = try NoBufWriterFrontCodedBlock.Builder.init(NoBufFieldWriter.init(buf[0..]), scratch[0..]);
     defer builder.deinit();

@@ -252,8 +252,8 @@ fn DynamicSchemaDatabaseImpl(
         null,
         &[_][]const u8{ "image_id", "cache_frames", "components" },
         &[_]type{ [16]u8, usize, ComponentOptions },
-        &[_]std.builtin.Type.StructField.Attributes{
-            .{ .default_value_ptr = &([_]u8{0} ** 16) },
+        &[_]std.builtin.Type.Struct.FieldAttributes{
+            .{ .default_value_ptr = &(@as([16]u8, @splat(0))) },
             .{ .default_value_ptr = &default_cache_frames },
             .{ .default_value_ptr = component_default },
         },

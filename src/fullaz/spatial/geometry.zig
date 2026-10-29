@@ -60,8 +60,8 @@ pub fn BoundingBox(comptime CoordT: type, comptime dim_v: usize) type {
 
         pub fn init() Self {
             return Self{
-                .low = [_]Coord{0} ** dimension,
-                .high = [_]Coord{0} ** dimension,
+                .low = @as([dimension]Coord, @splat(0)),
+                .high = @as([dimension]Coord, @splat(0)),
             };
         }
 

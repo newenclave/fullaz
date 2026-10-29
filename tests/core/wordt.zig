@@ -183,7 +183,7 @@ test "WordT: randomized roundtrip for multiple types/endians" {
             var i: usize = 0;
             while (i < 200) : (i += 1) {
                 // Generate arbitrary bits, then bitcast into T.
-                const U = std.meta.Int(.unsigned, @bitSizeOf(T));
+                const U = @Int(.unsigned, @bitSizeOf(T));
                 const bits: U = rnd.int(U);
                 const val: T = @bitCast(bits);
 
@@ -237,7 +237,7 @@ test "PackedFloat: bit-exact roundtrip incl. inf/nan/negzero" {
     inline for (.{ f16, f32, f64, f128 }) |T| {
         inline for (.{ std.builtin.Endian.little, std.builtin.Endian.big }) |E| {
             const W = PackedFloat(T, E);
-            const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+            const Bits = @Int(.unsigned, @bitSizeOf(T));
 
             var prng = std.Random.DefaultPrng.init(0xF10A7);
             const rnd = prng.random();
@@ -279,7 +279,7 @@ test "PackedNumber: selects PackedInt for ints and PackedFloat for floats" {
 test "WordViewMut: set writes into mapped buffer (u32 LE)" {
     const V = WordViewMut(u32, .little);
 
-    var page: [16]u8 = [_]u8{0} ** 16;
+    var page: [16]u8 = @as([16]u8, @splat(0));
 
     // Map at arbitrary offset (could be unaligned)
     var view = try V.init(page[3..]); // starts at offset 3
@@ -294,7 +294,7 @@ test "WordViewConst: reads from mapped buffer (u32 BE)" {
     const Vc = WordViewConst(u32, .big);
 
     // Put BE bytes at an odd offset
-    var page: [16]u8 = [_]u8{0} ** 16;
+    var page: [16]u8 = @as([16]u8, @splat(0));
     page[5] = 0x11;
     page[6] = 0x22;
     page[7] = 0x33;

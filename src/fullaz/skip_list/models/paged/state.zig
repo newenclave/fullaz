@@ -22,7 +22,7 @@ pub fn State(
     };
     const Roots = [maximum_level]Root;
     const StateT = extern struct {
-        roots: Roots = .{@as(Root, .{})} ** maximum_level,
+        roots: Roots = @splat(@as(Root, .{})),
     };
 
     comptime {

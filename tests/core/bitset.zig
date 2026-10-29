@@ -162,7 +162,7 @@ test "bitset: pseudo-random toggles with popcount tracking" {
     var bs = try BitSet(u32, .little).initMutable(buffer[0..], 64);
     try bs.reset();
 
-    var shadow: [64]bool = .{false} ** 64;
+    var shadow: [64]bool = @splat(false);
     var ones: usize = 0;
 
     // Deterministic LCG: simple index generator [0..63]

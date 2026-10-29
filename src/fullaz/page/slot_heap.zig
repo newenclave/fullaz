@@ -133,7 +133,7 @@ pub fn SlotHeap(
                 self.key_size.set(key_size);
                 self.comparator_id.set(comparator_id);
                 self.available_linked = 0;
-                self.reserved = [_]u8{0} ** 3;
+                self.reserved = @as([3]u8, @splat(0));
             }
         };
 

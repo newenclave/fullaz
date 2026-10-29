@@ -28,7 +28,7 @@ test "fullaz-db: radix static format commit rollback reclaim and reopen" {
     const io = std.testing.io;
     const path = ".zig-cache/static_radix.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{101} ** 16,
+        .image_id = @as([16]u8, @splat(101)),
         .components = .{ .index = .{} },
     };
     prep(io, path);
@@ -110,7 +110,7 @@ test "fullaz-db: static database reopens chainStore metadata" {
     const io = std.testing.io;
     const path = ".zig-cache/static_chain_store.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{11} ** 16,
+        .image_id = @as([16]u8, @splat(11)),
         .components = .{ .blob = .{} },
     };
     prep(io, path);
@@ -152,7 +152,7 @@ test "fullaz-db: static database reopens weightedSequence metadata" {
     const io = std.testing.io;
     const path = ".zig-cache/static_weighted_sequence.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{13} ** 16,
+        .image_id = @as([16]u8, @splat(13)),
         .components = .{ .sequence = .{} },
     };
     prep(io, path);
@@ -212,7 +212,7 @@ test "fullaz-db: static database reopens SlotHeap metadata" {
     const io = std.testing.io;
     const path = ".zig-cache/static_slot_heap.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{6} ** 16,
+        .image_id = @as([16]u8, @splat(6)),
         .components = .{ .heap = .{} },
     };
     prep(io, path);
@@ -262,7 +262,7 @@ test "fullaz-db: static database formats, opens, and persists reclaimed BPT page
     const io = std.testing.io;
     const path = ".zig-cache/static_database.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{7} ** 16,
+        .image_id = @as([16]u8, @splat(7)),
         .components = .{ .index = .{} },
     };
     prep(io, path);
@@ -326,7 +326,7 @@ test "fullaz-db: static database reclaims a component tree for reuse" {
     const io = std.testing.io;
     const path = ".zig-cache/static_database_component_reclaim.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{8} ** 16,
+        .image_id = @as([16]u8, @splat(8)),
         .components = .{ .index = .{} },
     };
     prep(io, path);
@@ -393,7 +393,7 @@ test "fullaz-db: static database reopens an R-tree root" {
     const io = std.testing.io;
     const path = ".zig-cache/static_database_rtree.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{6} ** 16,
+        .image_id = @as([16]u8, @splat(6)),
         .components = .{ .spatial = .{} },
     };
     prep(io, path);
@@ -437,7 +437,7 @@ test "fullaz-db: static database rejects a different image identity" {
     const Database = fullaz_db.StaticDatabase(Schema, Device);
     const io = std.testing.io;
     const path = ".zig-cache/static_database_identity.img";
-    const options: Database.InitOptions = .{ .image_id = [_]u8{3} ** 16, .components = .{} };
+    const options: Database.InitOptions = .{ .image_id = @as([16]u8, @splat(3)), .components = .{} };
     prep(io, path);
     defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
@@ -451,7 +451,7 @@ test "fullaz-db: static database rejects a different image identity" {
     }
 
     var wrong_options = options;
-    wrong_options.image_id = [_]u8{4} ** 16;
+    wrong_options.image_id = @as([16]u8, @splat(4));
     try std.testing.expectError(
         error.IdentityMismatch,
         Database.open(
@@ -480,7 +480,7 @@ test "fullaz-db: static database rejects a dirty image" {
     const Database = fullaz_db.StaticDatabase(Schema, Device);
     const io = std.testing.io;
     const path = ".zig-cache/static_database_dirty.img";
-    const options: Database.InitOptions = .{ .image_id = [_]u8{5} ** 16, .components = .{} };
+    const options: Database.InitOptions = .{ .image_id = @as([16]u8, @splat(5)), .components = .{} };
     prep(io, path);
     defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
@@ -540,7 +540,7 @@ test "fullaz-db: static database rejects a cyclic persistent free list" {
     const io = std.testing.io;
     const path = ".zig-cache/static_database_free_cycle.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{11} ** 16,
+        .image_id = @as([16]u8, @splat(11)),
         .components = .{ .index = .{} },
     };
     prep(io, path);
@@ -605,7 +605,7 @@ test "fullaz-db: static database rejects an out-of-range component root" {
     const io = std.testing.io;
     const path = ".zig-cache/static_database_bad_root.img";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{12} ** 16,
+        .image_id = @as([16]u8, @splat(12)),
         .components = .{ .index = .{} },
     };
     prep(io, path);

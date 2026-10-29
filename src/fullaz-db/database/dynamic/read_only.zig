@@ -198,7 +198,7 @@ test "read-only recovery removes a page entry when allocation fails" {
     failing.fail_index = failing.alloc_index;
     try std.testing.expectError(
         error.OutOfMemory,
-        recovered.applyRecoveredPage(0, &([_]u8{0xA5} ** 64)),
+        recovered.applyRecoveredPage(0, &(@as([64]u8, @splat(0xA5)))),
     );
     try std.testing.expectEqual(@as(usize, 0), recovered.recovered_pages.count());
 }

@@ -47,9 +47,9 @@ pub fn bpt(comptime options: anytype) component.Descriptor {
         @compileError("fullaz-db.bpt options must be a named struct");
     }
 
-    inline for (options_info.@"struct".fields) |field| {
-        if (comptime !isKnownOption(field.name)) {
-            @compileError("Unknown fullaz-db.bpt option: " ++ field.name);
+    inline for (options_info.@"struct".field_names) |field_name| {
+        if (comptime !isKnownOption(field_name)) {
+            @compileError("Unknown fullaz-db.bpt option: " ++ field_name);
         }
     }
     requireOption(OptionsT, "compare");

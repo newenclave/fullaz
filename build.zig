@@ -60,17 +60,14 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     const mod_tests = b.addTest(.{
         .root_module = unit_tests,
     });
     if (verbose_tests) {
-        const test_runner_path = b.graph.zig_lib_directory.join(b.allocator, &.{ "compiler", "test_runner.zig" }) catch @panic("OOM resolving test runner path");
         mod_tests.test_runner = .{
-            .path = .{ .cwd_relative = test_runner_path },
+            .path = std.Build.LazyPath.zig_lib.path(b, "compiler/test_runner.zig"),
             .mode = .simple,
         };
     }
@@ -319,17 +316,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(dispatch_exe);
     const run_dispatch = b.addRunArtifact(dispatch_exe);
     run_dispatch.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_dispatch.addArgs(args);
-    } else {
-        run_dispatch.addArgs(&.{
-            ".zig-cache/dispatch-demo.img",
-            "--format",
-            "base",
-            "60.1699",
-            "24.9384",
-        });
-    }
+    run_dispatch.addPassthruArgs();
     b.step("run-dispatch", "Run the dispatch CLI demo").dependOn(&run_dispatch.step);
     //test_step.dependOn(&run_exe_tests.step);
 
@@ -352,7 +339,7 @@ pub fn build(b: *std.Build) void {
     const fullaz_wasm = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = wasm_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
     });
     fullaz_wasm.addOptions("build_options", fullaz_options);
 
@@ -364,7 +351,7 @@ pub fn build(b: *std.Build) void {
     const fullaz_wasm_atomic = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = wasm_atomic_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
     });
     fullaz_wasm_atomic.addOptions("build_options", fullaz_options);
 
@@ -377,7 +364,7 @@ pub fn build(b: *std.Build) void {
     const fullaz_cortex_m4 = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = cortex_m4_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
     });
     fullaz_cortex_m4.addOptions("build_options", fullaz_options);
 
@@ -410,7 +397,7 @@ pub fn build(b: *std.Build) void {
     const fullaz_db_wasm = b.createModule(.{
         .root_source_file = b.path("src/fullaz-db/root.zig"),
         .target = wasm_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
         .imports = &.{
             .{ .name = "fullaz", .module = fullaz_wasm },
         },
@@ -419,7 +406,7 @@ pub fn build(b: *std.Build) void {
     const dispatch_wasm = b.createModule(.{
         .root_source_file = b.path("demos/dispatch/src/root.zig"),
         .target = wasm_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
         .imports = &.{
             .{ .name = "fullaz", .module = fullaz_wasm },
             .{ .name = "fullaz-db", .module = fullaz_db_wasm },
@@ -430,7 +417,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("demos/dispatch/src/wasm.zig"),
             .target = wasm_target,
-            .optimize = .ReleaseSmall,
+            .optimize = .small,
             .imports = &.{
                 .{ .name = "fullaz", .module = fullaz_wasm },
                 .{ .name = "fullaz-db", .module = fullaz_db_wasm },
@@ -473,7 +460,7 @@ pub fn build(b: *std.Build) void {
     const db_lab_wasm = b.createModule(.{
         .root_source_file = b.path("demos/db-lab/src/root.zig"),
         .target = wasm_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
         .imports = &.{
             .{ .name = "fullaz", .module = fullaz_wasm },
             .{ .name = "fullaz-db", .module = fullaz_db_wasm },
@@ -484,7 +471,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("demos/db-lab/src/wasm.zig"),
             .target = wasm_target,
-            .optimize = .ReleaseSmall,
+            .optimize = .small,
             .imports = &.{
                 .{ .name = "fullaz", .module = fullaz_wasm },
                 .{ .name = "fullaz-db", .module = fullaz_db_wasm },
@@ -706,7 +693,7 @@ fn addZyncSmokeObject(
         .root_module = b.createModule(.{
             .root_source_file = b.path(source),
             .target = target,
-            .optimize = .ReleaseSmall,
+            .optimize = .small,
             .imports = &.{
                 .{ .name = "fullaz", .module = fullaz },
             },
@@ -756,7 +743,7 @@ fn addDemo(b: *std.Build, ctx: DemoContext, demo: Demo) void {
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
 
     const tests_mod = b.addModule(b.fmt("{s}_tests", .{demo.name}), .{
         .root_source_file = b.path(demo.tests_source),
@@ -777,7 +764,7 @@ fn addDemo(b: *std.Build, ctx: DemoContext, demo: Demo) void {
     const wasm_lib = b.createModule(.{
         .root_source_file = b.path(demo.wasm_lib_source orelse demo.lib_source),
         .target = ctx.wasm_target,
-        .optimize = .ReleaseSmall,
+        .optimize = .small,
         .imports = &.{
             .{ .name = "fullaz", .module = ctx.fullaz_wasm },
         },
@@ -787,7 +774,7 @@ fn addDemo(b: *std.Build, ctx: DemoContext, demo: Demo) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path(demo.wasm_source),
             .target = ctx.wasm_target,
-            .optimize = .ReleaseSmall,
+            .optimize = .small,
             .imports = &.{
                 .{ .name = "fullaz", .module = ctx.fullaz_wasm },
                 .{ .name = demo.name, .module = wasm_lib },

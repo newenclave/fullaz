@@ -135,7 +135,7 @@ pub fn Orthtree(
             self.entries_tombstone_count.set(0);
             self.level = 0;
             self.flags = 0;
-            self.reserved = .{0} ** 2;
+            self.reserved = @splat(0);
             inline for (0..dims) |axis| {
                 self.bounds.low[axis].set(0);
                 self.bounds.high[axis].set(0);
@@ -188,7 +188,7 @@ pub fn Orthtree(
             self.entries_tombstone_count.set(0);
             self.level = 0;
             self.flags = 0;
-            self.reserved = .{0} ** 2;
+            self.reserved = @splat(0);
             inline for (0..dims) |axis| {
                 self.bounds.low[axis].set(0);
                 self.bounds.high[axis].set(0);

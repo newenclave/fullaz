@@ -2049,7 +2049,7 @@ fn DynamicDatabaseImpl(
             comptime reject_unknown_components: bool,
         ) Error!void {
             const core = self.corePtr();
-            var found = [_]bool{false} ** SchemaT.fields.len;
+            var found = @as([SchemaT.fields.len]bool, @splat(false));
             var active_count: u64 = 0;
             var iterator = try core.catalog.iterator(catalogRecordCount(&core.state.catalog));
             defer iterator.deinit();

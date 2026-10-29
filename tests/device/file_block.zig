@@ -38,7 +38,7 @@ test "FileBlock: satisfies the block-device contract + create/append/write/read"
     @memset(&wbuf, 0xAB);
     try dev.writeBlock(b1, &wbuf);
 
-    var rbuf: [64]u8 = .{0} ** 64;
+    var rbuf: [64]u8 = @splat(0);
     try dev.readBlock(b1, &rbuf);
     try std.testing.expectEqualSlices(u8, &wbuf, &rbuf);
 
@@ -46,7 +46,7 @@ test "FileBlock: satisfies the block-device contract + create/append/write/read"
     var zbuf: [64]u8 = undefined;
     @memset(&zbuf, 0xFF);
     try dev.readBlock(b0, &zbuf);
-    try std.testing.expectEqualSlices(u8, &(.{0} ** 64), &zbuf);
+    try std.testing.expectEqualSlices(u8, &@as([64]u8, @splat(0)), &zbuf);
 
     // out-of-range id -> InvalidId (from the device's own error set)
     try std.testing.expectError(Dev.Error.InvalidId, dev.readBlock(2, &rbuf));
@@ -73,9 +73,9 @@ test "FileBlock: data persists across deinit + reopen" {
         var dev = try Dev.open(io, path, 128);
         defer dev.deinit();
         try std.testing.expectEqual(@as(usize, 2), dev.blocksCount());
-        var buf: [128]u8 = .{0} ** 128;
+        var buf: [128]u8 = @splat(0);
         try dev.readBlock(1, &buf);
-        try std.testing.expectEqualSlices(u8, &(.{0x5C} ** 128), &buf);
+        try std.testing.expectEqualSlices(u8, &@as([128]u8, @splat(0x5C)), &buf);
     }
 }
 
@@ -85,7 +85,7 @@ test "FileBlock: read-only open reads data and rejects mutations" {
     prep(io, path);
     defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
     const Dev = FileBlock(u32);
-    var expected = [_]u8{0x5C} ** 64;
+    var expected = @as([64]u8, @splat(0x5C));
 
     {
         var dev = try Dev.create(io, path, expected.len);
@@ -122,8 +122,8 @@ test "FileBlock: non-zero start position maps block zero after the prefix" {
     const block_size = 16;
     const start_position = 21;
     const options: Dev.Options = .{ .start_position = start_position };
-    var block0_data: [block_size]u8 = .{0xA0} ** block_size;
-    var block1_data: [block_size]u8 = .{0xB1} ** block_size;
+    var block0_data: [block_size]u8 = @splat(0xA0);
+    var block1_data: [block_size]u8 = @splat(0xB1);
 
     {
         var dev = try Dev.createWithOptions(io, path, block_size, options);
@@ -131,7 +131,7 @@ test "FileBlock: non-zero start position maps block zero after the prefix" {
 
         try std.testing.expectEqual(@as(u64, start_position), try dev.file.length(io));
 
-        var prefix: [start_position]u8 = .{0xEE} ** start_position;
+        var prefix: [start_position]u8 = @splat(0xEE);
         try dev.file.writePositionalAll(io, &prefix, 0);
 
         try std.testing.expectEqual(@as(u32, 0), try dev.appendBlock());
@@ -172,13 +172,13 @@ test "FileBlock: truncate preserves the prefix and shrinks to the region boundar
     var dev = try Dev.createWithOptions(io, path, block_size, .{ .start_position = start_position });
     defer dev.deinit();
 
-    var prefix: [start_position]u8 = .{0xEE} ** start_position;
+    var prefix: [start_position]u8 = @splat(0xEE);
     try dev.file.writePositionalAll(io, &prefix, 0);
     for (0..3) |_| {
         _ = try dev.appendBlock();
     }
-    var block0: [block_size]u8 = .{0xA0} ** block_size;
-    var block2: [block_size]u8 = .{0xC2} ** block_size;
+    var block0: [block_size]u8 = @splat(0xA0);
+    var block2: [block_size]u8 = @splat(0xC2);
     try dev.writeBlock(0, &block0);
     try dev.writeBlock(2, &block2);
 
@@ -209,7 +209,7 @@ test "FileBlock: truncating lazy blocks does not change the prefix" {
     var dev = try Dev.createWithOptions(io, path, 16, .{ .start_position = start_position });
     defer dev.deinit();
 
-    var prefix: [start_position]u8 = .{0xD3} ** start_position;
+    var prefix: [start_position]u8 = @splat(0xD3);
     try dev.file.writePositionalAll(io, &prefix, 0);
     for (0..3) |_| {
         _ = try dev.appendBlock();
@@ -313,7 +313,7 @@ test "FileBlock: PageCache preserves a non-zero device prefix" {
     const block_size = 64;
     const start_position = 13;
     const options: Dev.Options = .{ .start_position = start_position };
-    var prefix: [start_position]u8 = .{0xD3} ** start_position;
+    var prefix: [start_position]u8 = @splat(0xD3);
 
     {
         var dev = try Dev.createWithOptions(io, path, block_size, options);
@@ -409,7 +409,7 @@ test "FileBlock: reading an appended-but-unwritten block yields zeros" {
     var buf: [64]u8 = undefined;
     @memset(&buf, 0xFF);
     try dev.readBlock(0, &buf);
-    try std.testing.expectEqualSlices(u8, &(.{0} ** 64), &buf);
+    try std.testing.expectEqualSlices(u8, &@as([64]u8, @splat(0)), &buf);
 }
 
 test "FileBlock: truncating purely-appended blocks never touches the file" {

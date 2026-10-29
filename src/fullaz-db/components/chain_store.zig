@@ -10,7 +10,7 @@ const tagged = @import("../file/tagged_fields.zig");
 pub fn chainStore(comptime options: anytype) component.Descriptor {
     const OptionsT = @TypeOf(options);
     const info = @typeInfo(OptionsT);
-    if (info != .@"struct" or info.@"struct".fields.len != 0) {
+    if (info != .@"struct" or info.@"struct".field_names.len != 0) {
         @compileError("fullaz-db.chainStore options must be an empty struct");
     }
 

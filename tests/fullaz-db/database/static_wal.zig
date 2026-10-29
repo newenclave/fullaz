@@ -30,7 +30,7 @@ test "fullaz-db: radix static WAL edits commits and reopens" {
     const image_path = ".zig-cache/static_radix_wal.img";
     const log_path = ".zig-cache/static_radix_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{102} ** 16,
+        .image_id = @as([16]u8, @splat(102)),
         .components = .{ .index = .{} },
     };
     prep(io, image_path);
@@ -204,7 +204,7 @@ test "fullaz-db: WAL static database syncs each file once per commit" {
         std.testing.allocator,
         try CountingMemoryDevice.init(std.testing.allocator, 1024, &counts),
         try CountingMemoryLog.init(std.testing.allocator, &counts),
-        .{ .image_id = [_]u8{3} ** 16, .components = .{} },
+        .{ .image_id = @as([16]u8, @splat(3)), .components = .{} },
     );
     defer database.deinit();
     counts = .{};
@@ -228,7 +228,7 @@ test "fullaz-db: WAL static GC phase does not sync either file" {
         std.testing.allocator,
         try CountingMemoryDevice.init(std.testing.allocator, 1024, &counts),
         try CountingMemoryLog.init(std.testing.allocator, &counts),
-        .{ .image_id = [_]u8{5} ** 16, .components = .{} },
+        .{ .image_id = @as([16]u8, @splat(5)), .components = .{} },
     );
     defer database.deinit();
     counts = .{};
@@ -248,7 +248,7 @@ test "fullaz-db: WAL dynamic database defers sync until commit" {
         std.testing.allocator,
         try CountingMemoryDevice.init(std.testing.allocator, 1024, &counts),
         try CountingMemoryLog.init(std.testing.allocator, &counts),
-        .{ .image_id = [_]u8{4} ** 16 },
+        .{ .image_id = @as([16]u8, @splat(4)) },
     );
     defer database.deinit();
     counts = .{};
@@ -274,7 +274,7 @@ test "fullaz-db: WAL static database reopens chainStore metadata" {
     const image_path = ".zig-cache/static_chain_store_wal.img";
     const log_path = ".zig-cache/static_chain_store_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{12} ** 16,
+        .image_id = @as([16]u8, @splat(12)),
         .components = .{ .blob = .{} },
     };
     prep(io, image_path);
@@ -331,7 +331,7 @@ test "fullaz-db: WAL static database reopens weightedSequence metadata" {
     const image_path = ".zig-cache/static_weighted_sequence_wal.img";
     const log_path = ".zig-cache/static_weighted_sequence_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{14} ** 16,
+        .image_id = @as([16]u8, @splat(14)),
         .components = .{ .sequence = .{} },
     };
     prep(io, image_path);
@@ -387,7 +387,7 @@ test "fullaz-db: WAL static database reopens SlotHeap metadata" {
     const image_path = ".zig-cache/static_slot_heap_wal.img";
     const log_path = ".zig-cache/static_slot_heap_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{5} ** 16,
+        .image_id = @as([16]u8, @splat(5)),
         .components = .{ .heap = .{} },
     };
     prep(io, image_path);
@@ -438,7 +438,7 @@ test "fullaz-db: WAL static database persists BPT and validates WAL identity" {
     const image_path = ".zig-cache/static_database_wal.img";
     const log_path = ".zig-cache/static_database_wal.log";
     const options: Database.InitOptions = .{
-        .image_id = [_]u8{9} ** 16,
+        .image_id = @as([16]u8, @splat(9)),
         .components = .{ .index = .{} },
     };
     prep(io, image_path);
@@ -479,7 +479,7 @@ test "fullaz-db: WAL static database persists BPT and validates WAL identity" {
     }
 
     var bad_options = options;
-    bad_options.image_id = [_]u8{8} ** 16;
+    bad_options.image_id = @as([16]u8, @splat(8));
     try std.testing.expectError(
         error.WalIdentityMismatch,
         Database.open(
@@ -500,7 +500,7 @@ test "fullaz-db: WAL static database recovers a committed WAL page" {
     const io = std.testing.io;
     const image_path = ".zig-cache/static_database_wal_recovery.img";
     const log_path = ".zig-cache/static_database_wal_recovery.log";
-    const options: Database.InitOptions = .{ .image_id = [_]u8{4} ** 16, .components = .{} };
+    const options: Database.InitOptions = .{ .image_id = @as([16]u8, @splat(4)), .components = .{} };
     prep(io, image_path);
     prep(io, log_path);
     defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
@@ -556,7 +556,7 @@ test "fullaz-db: WAL static database ignores an uncommitted WAL tail" {
     const io = std.testing.io;
     const image_path = ".zig-cache/static_database_wal_uncommitted.img";
     const log_path = ".zig-cache/static_database_wal_uncommitted.log";
-    const options: Database.InitOptions = .{ .image_id = [_]u8{13} ** 16, .components = .{} };
+    const options: Database.InitOptions = .{ .image_id = @as([16]u8, @splat(13)), .components = .{} };
     prep(io, image_path);
     prep(io, log_path);
     defer std.Io.Dir.cwd().deleteFile(io, image_path) catch {};
@@ -617,7 +617,7 @@ test "fullaz-db: WAL static database format rejects a nonempty log" {
             std.testing.allocator,
             device,
             log,
-            .{ .image_id = [_]u8{14} ** 16, .components = .{} },
+            .{ .image_id = @as([16]u8, @splat(14)), .components = .{} },
         ),
     );
 }

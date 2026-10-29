@@ -11,17 +11,17 @@ const VirtualDatabase = fullaz_db.VirtualStaticDatabaseWithWal(lab.Schema, Devic
 const DynamicDatabase = fullaz_db.DynamicSchemaDatabaseWithWal(lab.Schema, Device, Log);
 
 const static_options: StaticDatabase.InitOptions = .{
-    .image_id = [_]u8{0x71} ** 16,
+    .image_id = @as([16]u8, @splat(0x71)),
     .cache_frames = 32,
     .components = .{ .catalog = .{ .owner_0 = .{} } },
 };
 const virtual_options: VirtualDatabase.InitOptions = .{
-    .image_id = [_]u8{0x72} ** 16,
+    .image_id = @as([16]u8, @splat(0x72)),
     .cache_frames = 32,
     .components = .{ .catalog = .{ .owner_0 = .{} } },
 };
 const dynamic_options: DynamicDatabase.InitOptions = .{
-    .image_id = [_]u8{0x73} ** 16,
+    .image_id = @as([16]u8, @splat(0x73)),
     .cache_frames = 32,
     .components = .{ .catalog = .{ .owner_0 = .{} } },
 };

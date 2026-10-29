@@ -39,7 +39,7 @@ pub fn SkipList(comptime PageIdT: type, comptime IndexT: type, comptime Endian: 
         value_len: layout.PackedIndex, // todo: do we need this value?
 
         pub fn formatHeader(self: *Self) void {
-            self.reserved = [3]u8{0} ** 3;
+            self.reserved = @as([3]u8, @splat(0));
         }
     };
 

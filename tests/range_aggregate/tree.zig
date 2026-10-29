@@ -104,8 +104,8 @@ test "RangeAggregate insert calls level callbacks with live stored values" {
     };
     const Aggregate = range_aggregate.RangeAggregate(PageCache, ParentManager, i32, .little);
     const Context = struct {
-        inserted: [3]bool = [_]bool{false} ** 3,
-        updated: [3]bool = [_]bool{false} ** 3,
+        inserted: [3]bool = @as([3]bool, @splat(false)),
+        updated: [3]bool = @as([3]bool, @splat(false)),
     };
     const Callbacks = struct {
         fn onInsert(context: *Context, info: range_aggregate.LevelInfo(i32), stored: []u8) void {
@@ -206,7 +206,7 @@ test "RangeAggregate accumulate visits existing B-adic cover buckets" {
     };
     const Aggregate = range_aggregate.RangeAggregate(PageCache, ParentManager, i32, .little);
     const Context = struct {
-        levels: [3]bool = [_]bool{false} ** 3,
+        levels: [3]bool = @as([3]bool, @splat(false)),
         calls: usize = 0,
     };
     const Callbacks = struct {

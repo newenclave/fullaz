@@ -17,7 +17,7 @@ fn box(x0: i64, y0: i64, x1: i64, y1: i64) BB {
 }
 
 const Collector = struct {
-    seen: [128]bool = [_]bool{false} ** 128,
+    seen: [128]bool = @as([128]bool, @splat(false)),
     count: usize = 0,
     fn cb(self: *Collector, _: Key, value: u64) anyerror!void {
         self.seen[value] = true;
@@ -41,7 +41,7 @@ test "Linear splitEntries: separates two well-separated clusters" {
         box(0, 0, 1, 1), box(0, 0, 1, 1), // left cluster: idx 0,1
         box(30, 0, 31, 1), box(30, 0, 31, 1), box(30, 0, 31, 1), // right cluster: idx 2,3,4
     };
-    var assign = [_]u8{9} ** 5;
+    var assign = @as([5]u8, @splat(9));
     Linear.splitEntries(&mbrs, 2, &assign);
 
     try testing.expectEqual(assign[0], assign[1]);
@@ -54,7 +54,7 @@ test "Linear splitEntries: valid partition respects min_fill" {
     const mbrs = [_]BB{
         box(0, 0, 1, 1), box(2, 2, 3, 3), box(4, 4, 5, 5), box(6, 6, 7, 7), box(8, 8, 9, 9),
     };
-    var assign = [_]u8{9} ** 5;
+    var assign = @as([5]u8, @splat(9));
     Linear.splitEntries(&mbrs, 2, &assign);
 
     var c0: usize = 0;
@@ -69,7 +69,7 @@ test "Linear splitEntries: identical boxes still respect min_fill" {
     const mbrs = [_]BB{
         box(0, 0, 1, 1), box(0, 0, 1, 1), box(0, 0, 1, 1), box(0, 0, 1, 1), box(0, 0, 1, 1),
     };
-    var assign = [_]u8{9} ** 5;
+    var assign = @as([5]u8, @splat(9));
     Linear.splitEntries(&mbrs, 2, &assign);
 
     var c0: usize = 0;

@@ -17,7 +17,7 @@ pub const panic = std.debug.FullPanic(struct {
 
 const page_size: usize = 512;
 const options: Database.InitOptions = .{
-    .image_id = [_]u8{0x44} ** 16,
+    .image_id = @as([16]u8, @splat(0x44)),
     .components = .{
         .simulation = .{},
         .orders = .{},

@@ -59,14 +59,14 @@ pub fn requiresFnReturnsAnyError(comptime T: type, comptime name: []const u8, co
     const func_info = @typeInfo(@TypeOf(func)).@"fn";
 
     // Check parameter count (first param is self, so params.len + 1)
-    if (func_info.params.len != params.len + 1) {
+    if (func_info.param_types.len != params.len + 1) {
         @compileError(@typeName(T) ++ "." ++ name ++
             " expected " ++ std.fmt.comptimePrint("{}", .{params.len + 1}) ++
-            " params, got " ++ std.fmt.comptimePrint("{}", .{func_info.params.len}));
+            " params, got " ++ std.fmt.comptimePrint("{}", .{func_info.param_types.len}));
     }
 
     inline for (params, 0..) |ExpectedParamType, i| {
-        const ActualParamType = func_info.params[i + 1].type.?;
+        const ActualParamType = func_info.param_types[i + 1].?;
         if (ActualParamType != ExpectedParamType) {
             @compileError(@typeName(T) ++ "." ++
                 name ++ " param " ++

@@ -125,7 +125,7 @@ test "Zync observer: spin synchronization serializes concurrent subscriptions" {
     var observer = SpinObserver.init(.init(), .{});
     defer observer.deinit();
 
-    var totals = [_]u32{0} ** 4;
+    var totals = @as([4]u32, @splat(0));
     var subscribers: [totals.len]SpinSubscriber = undefined;
     var threads: [totals.len]std.Thread = undefined;
 
